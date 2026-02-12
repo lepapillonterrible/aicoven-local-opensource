@@ -44,18 +44,25 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
             struct Candidate: Decodable {
                 struct Content: Decodable {
                     struct Part: Decodable { let text: String? }
-                    let parts: [Part]
+                    let parts: [Part]?
                 }
-                let content: Content
+                let content: Content?
+                let finishReason: String?
             }
             struct UsageMetadata: Decodable {
                 let promptTokenCount: Int?
                 let candidatesTokenCount: Int?
                 let totalTokenCount: Int?
             }
-            let candidates: [Candidate]
+            let candidates: [Candidate]?
             let modelVersion: String?
             let usageMetadata: UsageMetadata?
+            // Gemini may return an error object instead of candidates.
+            let error: GeminiError?
+            struct GeminiError: Decodable {
+                let message: String?
+                let code: Int?
+            }
         }
 
         // Gemini's REST API expects paths like
@@ -92,11 +99,37 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
             throw NSError(domain: "GeminiLLMClient", code: -2,
                           userInfo: [NSLocalizedDescriptionKey: "Gemini returned an empty response body."])
         }
-        let decoded = try JSONDecoder().decode(ResponseBody.self, from: data)
-        guard let first = decoded.candidates.first else {
+        
+        let decoded: ResponseBody
+        do {
+            decoded = try JSONDecoder().decode(ResponseBody.self, from: data)
+        } catch {
+            #if DEBUG
+            let bodySnippet = String(data: data.prefix(500), encoding: .utf8) ?? "<non-utf8>"
+            AppErrorReporter.log(message: "Gemini decode failed: \(error.localizedDescription)\nResponse: \(bodySnippet)", context: "GeminiLLMClient.completeChat")
+            #endif
+            throw error
+        }
+        
+        // Handle API-level errors returned in the response body.
+        if let apiError = decoded.error {
+            let message = "Gemini API error \(apiError.code ?? -1): \(apiError.message ?? "unknown")"
+            throw NSError(domain: "GeminiLLMClient", code: apiError.code ?? -1,
+                          userInfo: [NSLocalizedDescriptionKey: message])
+        }
+        
+        guard let first = decoded.candidates?.first else {
             throw NSError(domain: "GeminiLLMClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No candidates in response"])
         }
-        let text = first.content.parts.compactMap { $0.text }.joined(separator: "\n")
+        
+        // Handle safety-filtered or empty responses.
+        guard let parts = first.content?.parts else {
+            let reason = first.finishReason ?? "unknown"
+            throw NSError(domain: "GeminiLLMClient", code: -3,
+                          userInfo: [NSLocalizedDescriptionKey: "Gemini response had no content (finishReason: \(reason))"])
+        }
+        
+        let text = parts.compactMap { $0.text }.joined(separator: "\n")
         let msg = LLMMessage(role: .assistant, content: text)
         let modelVersion = decoded.modelVersion ?? model
         
