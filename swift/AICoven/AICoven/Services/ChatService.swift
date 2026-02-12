@@ -411,6 +411,10 @@ actor ChatService {
         var finalText: String?
         var finalUsage: TokenUsage?
         var streamedAnswer = false
+        
+        // Local models (MLX, Ollama) get a shorter, more assertive prompt.
+        let isLocalModel = ["mlx", "ollama"].contains(descriptor.providerID)
+        let toolConfig: ContextBuilder.ToolConfig = isLocalModel ? .mlxTools : .allTools
 
         // ── Context-aware repeat detection (ported from backend) ──────────
         // Tracks tool-call signatures across loop iterations so we can
@@ -450,6 +454,10 @@ actor ChatService {
                 // When we have accumulated tool results, include a brief
                 // instruction so the model knows to incorporate them.
                 composedUserMessage += "\n\nYou have tool results below. Use them to answer the user's question. If you need more information, call another tool. Otherwise, provide your final answer in natural language.\n\n" + toolContextLog
+            } else if isLocalModel {
+                // For local models on the first step (no tool results yet),
+                // inject a brief reminder to use tools.
+                composedUserMessage += "\n\nRemember: if you need current time, file contents, or web data, respond with ONLY a JSON tool call like {\"tool\": \"tool_name\", \"input\": {...}, \"reason\": \"...\"}. Do NOT explain what you would do — just call the tool."
             }
             
             // Build LLM context using the shared ContextBuilder, which will pull
@@ -461,7 +469,7 @@ actor ChatService {
                 threadID: threadId,
                 userMessage: composedUserMessage,
                 maxContextTokens: promptBudget,
-                toolConfig: .allTools
+                toolConfig: toolConfig
             )
             
             do {
@@ -659,7 +667,7 @@ actor ChatService {
                 threadID: threadId,
                 userMessage: composedUserMessage,
                 maxContextTokens: promptBudget,
-                toolConfig: .allTools
+                toolConfig: toolConfig
             )
             
             do {

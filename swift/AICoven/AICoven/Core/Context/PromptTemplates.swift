@@ -224,6 +224,63 @@ enum PromptTemplates {
     
     /// Instructions for how the agent should call tools.
     /// Supports JSON, angle-bracket, and square-bracket formats.
+    // MARK: - MLX-Optimized Tool Instructions (for small local models)
+    
+    /// Shorter, more directive tool-calling instructions optimized for small
+    /// models (4B-7B) that struggle with long prompts. Uses assertive language 
+    /// and few-shot examples to maximize compliance.
+    static let mlxToolProtocolInstructions: String = """
+    CRITICAL TOOL-CALLING RULES:
+
+    When you need information you don't have (current time, file contents, web data), you MUST respond with ONLY a JSON object. Do NOT write any other text before or after the JSON.
+
+    JSON FORMAT:
+    {"tool": "tool_name", "input": {"param": "value"}, "reason": "brief reason"}
+
+    EXAMPLES OF CORRECT BEHAVIOR:
+
+    User: What time is it in London?
+    Correct response: {"tool": "current_time", "input": {"timezone": "Europe/London"}, "reason": "Get London time"}
+
+    User: List files in /Users/me/Documents
+    Correct response: {"tool": "file.list", "input": {"path": "/Users/me/Documents"}, "reason": "List directory contents"}
+
+    User: Read the file at /Users/me/readme.txt
+    Correct response: {"tool": "file.read", "input": {"path": "/Users/me/readme.txt"}, "reason": "Read file contents"}
+
+    User: Search the web for Swift concurrency
+    Correct response: {"tool": "web_search", "input": {"query": "Swift concurrency"}, "reason": "Search for information"}
+
+    User: What is 2+2?
+    Correct response: 2+2 = 4 (no tool needed, answer directly)
+
+    RULES:
+    - If the user asks about time, dates, or schedules → use current_time tool
+    - If the user mentions a file path or directory → use file.read or file.list tool
+    - If the user asks to search or look up something online → use web_search tool
+    - Call ONE tool at a time, wait for the result
+    - After receiving a tool result, answer the user's question using that data
+    """
+    
+    /// Generate a lean system prompt for MLX models with only essential sections.
+    static func generateMLXAgentPrompt(enabledTools: Set<String>) -> String {
+        var sections: [String] = []
+        
+        // Brief role description
+        sections.append("You are a helpful AI assistant running locally. You have tools to help you answer questions that need real-time or external data.")
+        
+        // Tool documentation — only enabled tools
+        let enabledDefs = toolDefinitions.filter { enabledTools.contains($0.name) }
+        if !enabledDefs.isEmpty {
+            sections.append(generateToolDocumentation(for: enabledDefs))
+        }
+        
+        // MLX-optimized protocol
+        sections.append(mlxToolProtocolInstructions)
+        
+        return sections.joined(separator: "\n\n")
+    }
+    
     static let toolProtocolInstructions: String = """
     TOOL-CALLING PROTOCOL:
     

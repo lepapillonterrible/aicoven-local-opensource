@@ -176,105 +176,112 @@ struct EditRoleView: View {
                             // Model configuration
                             GlassCard {
                                 VStack(spacing: Spacing.md) {
-                                    // Provider
-                                    VStack(alignment: .leading, spacing: Spacing.sm) {
-                                        Text("Provider")
-                                            .font(.aicovenH3)
-                                            .foregroundColor(.aicovenTextPrimary)
-                                        
-                                        ForEach(providerOptions, id: \.0) { option in
-                                            Button {
-                                                provider = option.0
-                                                providerAccountId = nil
-
-                                                if let firstModel = availableModels.first {
-                                                    model = firstModel.0
-                                                }
-                                            } label: {
-                                                HStack {
-                                                    Text(option.1)
-                                                        .font(.aicovenBody)
-                                                        .foregroundColor(.aicovenTextPrimary)
-                                                    
-                                                    Spacer()
-                                                    
-                                                    if provider == option.0 {
-                                                        Image(systemName: "checkmark.circle.fill")
-                                                            .foregroundColor(.aicovenTeal)
-                                                    }
-                                                }
-                                                .padding(Spacing.sm)
-                                                .background(provider == option.0 ? Color.aicovenGlass : Color.clear)
-                                                .cornerRadius(BorderRadius.sm)
-                                            }
-                                            .buttonStyle(.plain)
-                                        }
-                                    }
-                                    
-                                    // Provider Account (API key selection)
+                                    // Provider Account selection - shows all accounts grouped by provider,
+                                    // allowing the user to switch between cloud providers and local models.
                                     VStack(alignment: .leading, spacing: Spacing.sm) {
                                         Text("Provider Account")
                                             .font(.aicovenH3)
                                             .foregroundColor(.aicovenTextPrimary)
                                         
-                                        Text("Choose which API key this role should use")
+                                        Text("Select which API key to use for this role")
                                             .font(.aicovenCaption)
                                             .foregroundColor(.aicovenTextTertiary)
                                         
-                                        if isLocalProvider {
-                                            HStack(spacing: Spacing.sm) {
-                                                Image(systemName: "desktopcomputer")
-                                                    .foregroundColor(.aicovenTeal)
-                                                Text(provider == "mlx" ? "Running on-device via Apple Silicon" : "Running locally via Ollama")
-                                                    .font(.aicovenBody)
-                                                    .foregroundColor(.aicovenTextSecondary)
-                                            }
-                                            .padding(Spacing.sm)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .background(Color.aicovenGlass)
-                                            .cornerRadius(BorderRadius.sm)
-                                        } else if loadingAccounts {
+                                        if loadingAccounts {
                                             ProgressView()
                                                 .padding(Spacing.md)
-                                        } else if providerAccounts.isEmpty {
-                                            Text("No provider accounts found. Add one in Settings.")
-                                                .font(.aicovenBody)
-                                                .foregroundColor(.aicovenTextTertiary)
-                                                .padding(Spacing.md)
                                         } else {
-                                            let matchingAccounts = providerAccounts.filter { $0.provider.lowercased() == provider.lowercased() }
-                                            let accountsToShow = matchingAccounts.isEmpty ? providerAccounts : matchingAccounts
-
-                                            ForEach(accountsToShow) { account in
-                                                Button {
-                                                    providerAccountId = account.id
-                                                    provider = account.provider
-                                                    Task {
-                                                        await loadModelsForAccount(account)
-                                                    }
-                                                } label: {
-                                                    HStack {
-                                                        VStack(alignment: .leading, spacing: Spacing.xxs) {
-                                                            Text(account.displayName)
-                                                                .font(.aicovenBody)
-                                                                .foregroundColor(.aicovenTextPrimary)
-                                                            if let modelLabel = accountModelOptions[account.id]?.first(where: { $0.0 == account.defaultModel })?.1 ?? account.defaultModel {
-                                                                Text("Model: \(modelLabel)")
-                                                                    .font(.aicovenCaption)
-                                                                    .foregroundColor(.aicovenTextTertiary)
+                                            // Group accounts by provider and show all available options
+                                            let accountsByProvider = Dictionary(grouping: providerAccounts) { $0.provider.lowercased() }
+                                            ForEach(providerOptions, id: \.0) { option in
+                                                let accountsForProvider = accountsByProvider[option.0] ?? []
+                                                
+                                                // Show cloud provider accounts if any exist
+                                                if !accountsForProvider.isEmpty {
+                                                    VStack(alignment: .leading, spacing: Spacing.xs) {
+                                                        Text(option.1)
+                                                            .font(.aicovenH3)
+                                                            .foregroundColor(.aicovenTextSecondary)
+                                                            .padding(.top, Spacing.sm)
+                                                        ForEach(accountsForProvider) { account in
+                                                            Button {
+                                                                providerAccountId = account.id
+                                                                provider = account.provider
+                                                                Task {
+                                                                    await loadModelsForAccount(account)
+                                                                }
+                                                            } label: {
+                                                                HStack {
+                                                                    VStack(alignment: .leading, spacing: Spacing.xxs) {
+                                                                        Text(account.displayName)
+                                                                            .font(.aicovenBody)
+                                                                            .foregroundColor(.aicovenTextPrimary)
+                                                                        if let modelLabel = accountModelOptions[account.id]?.first(where: { $0.0 == account.defaultModel })?.1 ?? account.defaultModel {
+                                                                            Text("Model: \(modelLabel)")
+                                                                                .font(.aicovenCaption)
+                                                                                .foregroundColor(.aicovenTextTertiary)
+                                                                        }
+                                                                    }
+                                                                    
+                                                                    Spacer()
+                                                                    
+                                                                    if providerAccountId == account.id {
+                                                                        Image(systemName: "checkmark.circle.fill")
+                                                                            .foregroundColor(.aicovenTeal)
+                                                                    }
+                                                                }
+                                                                .padding(Spacing.sm)
+                                                                .background(providerAccountId == account.id ? Color.aicovenGlass : Color.clear)
+                                                                .cornerRadius(BorderRadius.sm)
                                                             }
-                                                        }
-                                                        Spacer()
-                                                        if providerAccountId == account.id {
-                                                            Image(systemName: "checkmark.circle.fill")
-                                                                .foregroundColor(.aicovenTeal)
+                                                            .buttonStyle(.plain)
                                                         }
                                                     }
-                                                    .padding(Spacing.sm)
-                                                    .background(providerAccountId == account.id ? Color.aicovenGlass : Color.clear)
-                                                    .cornerRadius(BorderRadius.sm)
                                                 }
-                                                .buttonStyle(.plain)
+                                                
+                                                // Show local provider options (MLX and Ollama) even without accounts
+                                                if option.0 == "mlx" || option.0 == "ollama" {
+                                                    VStack(alignment: .leading, spacing: Spacing.xs) {
+                                                        Text(option.1)
+                                                            .font(.aicovenH3)
+                                                            .foregroundColor(.aicovenTextSecondary)
+                                                            .padding(.top, Spacing.sm)
+                                                        Button {
+                                                            provider = option.0
+                                                            providerAccountId = nil
+                                                            if let firstModel = availableModels.first {
+                                                                model = firstModel.0
+                                                            }
+                                                        } label: {
+                                                            HStack {
+                                                                Image(systemName: "desktopcomputer")
+                                                                    .foregroundColor(.aicovenTeal)
+                                                                Text(option.0 == "mlx" ? "Run on-device via Apple Silicon" : "Run locally via Ollama")
+                                                                    .font(.aicovenBody)
+                                                                    .foregroundColor(.aicovenTextPrimary)
+                                                                
+                                                                Spacer()
+                                                                
+                                                                if provider == option.0 && providerAccountId == nil {
+                                                                    Image(systemName: "checkmark.circle.fill")
+                                                                        .foregroundColor(.aicovenTeal)
+                                                                }
+                                                            }
+                                                            .padding(Spacing.sm)
+                                                            .background((provider == option.0 && providerAccountId == nil) ? Color.aicovenGlass : Color.clear)
+                                                            .cornerRadius(BorderRadius.sm)
+                                                        }
+                                                        .buttonStyle(.plain)
+                                                    }
+                                                }
+                                            }
+                                            
+                                            // Show hint if no cloud accounts are available
+                                            if providerAccounts.isEmpty {
+                                                Text("Add API keys in Settings to use cloud providers.")
+                                                    .font(.aicovenCaption)
+                                                    .foregroundColor(.aicovenTextTertiary)
+                                                    .padding(.top, Spacing.sm)
                                             }
                                         }
                                     }

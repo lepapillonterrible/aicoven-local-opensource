@@ -36,13 +36,17 @@ struct ContextBuilder {
         let includeScratchpad: Bool
         /// Whether to include memory write instructions.
         let includeMemoryWrite: Bool
+        /// Whether the provider is a local model (MLX/Ollama), which needs
+        /// shorter, more directive prompts.
+        let isLocalModel: Bool
         
         /// Default configuration with basic chat tools enabled.
         static let `default` = ToolConfig(
             enabledTools: PromptTemplates.basicChatTools,
             includeThoughtBlocks: true,
             includeScratchpad: true,
-            includeMemoryWrite: true
+            includeMemoryWrite: true,
+            isLocalModel: false
         )
         
         /// Configuration with no tools enabled.
@@ -50,7 +54,8 @@ struct ContextBuilder {
             enabledTools: [],
             includeThoughtBlocks: false,
             includeScratchpad: false,
-            includeMemoryWrite: false
+            includeMemoryWrite: false,
+            isLocalModel: false
         )
         
         /// Configuration with all tools enabled.
@@ -58,7 +63,20 @@ struct ContextBuilder {
             enabledTools: PromptTemplates.allTools,
             includeThoughtBlocks: true,
             includeScratchpad: true,
-            includeMemoryWrite: true
+            includeMemoryWrite: true,
+            isLocalModel: false
+        )
+        
+        /// Configuration optimized for small local models (MLX, Ollama).
+        /// Uses fewer tools and no thought/scratchpad/memory instructions.
+        static let mlxTools = ToolConfig(
+            enabledTools: PromptTemplates.basicChatTools
+                .union(PromptTemplates.fileTools)
+                .union(PromptTemplates.shellTools),
+            includeThoughtBlocks: false,
+            includeScratchpad: false,
+            includeMemoryWrite: false,
+            isLocalModel: true
         )
     }
 
@@ -104,13 +122,20 @@ struct ContextBuilder {
         // Layer 1: system contract (with tool documentation if tools are enabled)
         let systemPrompt: String
         if !toolConfig.enabledTools.isEmpty {
-            // Generate full agent prompt with tool documentation
-            systemPrompt = PromptTemplates.generateAgentPrompt(
-                enabledTools: toolConfig.enabledTools,
-                includeThoughtBlocks: toolConfig.includeThoughtBlocks,
-                includeScratchpad: toolConfig.includeScratchpad,
-                includeMemoryWrite: toolConfig.includeMemoryWrite
-            )
+            if toolConfig.isLocalModel {
+                // Use lean MLX-optimized prompt for small local models
+                systemPrompt = PromptTemplates.generateMLXAgentPrompt(
+                    enabledTools: toolConfig.enabledTools
+                )
+            } else {
+                // Generate full agent prompt with tool documentation
+                systemPrompt = PromptTemplates.generateAgentPrompt(
+                    enabledTools: toolConfig.enabledTools,
+                    includeThoughtBlocks: toolConfig.includeThoughtBlocks,
+                    includeScratchpad: toolConfig.includeScratchpad,
+                    includeMemoryWrite: toolConfig.includeMemoryWrite
+                )
+            }
         } else {
             // Basic prompt without tool instructions
             systemPrompt = "You are a local-first assistant running entirely on the user's device. " +
