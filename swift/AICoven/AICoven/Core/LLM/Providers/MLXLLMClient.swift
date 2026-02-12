@@ -34,7 +34,9 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
     // MARK: - LLMClient (full response)
 
     func completeChat(messages: [LLMMessage], model: String, options: ChatOptions) async throws -> LLMChatResponse {
+        print("🧠 [MLXLLMClient.completeChat] called with model=\(model), messages=\(messages.count)")
         #if canImport(MLXLLM)
+        print("🧠 [MLXLLMClient.completeChat] MLXLLM is available, loading model...")
         let container = try await ensureModelLoaded()
         let session = ChatSession(container)
 
@@ -63,6 +65,7 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
             usage: nil // MLX doesn't expose token counts through ChatSession
         )
         #else
+        print("❌ [MLXLLMClient.completeChat] MLXLLM package NOT available — canImport(MLXLLM) is false")
         throw MLXClientError.packageNotAvailable
         #endif
     }
