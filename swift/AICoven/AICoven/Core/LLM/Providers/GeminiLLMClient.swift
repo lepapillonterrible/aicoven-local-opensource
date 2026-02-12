@@ -33,9 +33,22 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
     func completeChat(messages: [LLMMessage], model: String, options: ChatOptions) async throws -> LLMChatResponse {
         struct Part: Encodable { let text: String }
         struct Content: Encodable { let role: String; let parts: [Part] }
+        struct FunctionCallingConfig: Encodable { let mode: String }
+        struct ToolConfig: Encodable {
+            let functionCallingConfig: FunctionCallingConfig
+            enum CodingKeys: String, CodingKey {
+                case functionCallingConfig = "function_calling_config"
+            }
+        }
         struct RequestBody: Encodable {
             let contents: [Content]
             let generationConfig: GenerationConfig
+            let toolConfig: ToolConfig
+            enum CodingKeys: String, CodingKey {
+                case contents
+                case generationConfig
+                case toolConfig = "tool_config"
+            }
         }
         struct GenerationConfig: Encodable {
             let temperature: Double
@@ -85,7 +98,14 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
             Content(role: msg.role == .user ? "user" : "model",
                     parts: [Part(text: msg.content)])
         }
-        let body = RequestBody(contents: contents, generationConfig: GenerationConfig(temperature: options.temperature))
+        // Disable native function calling so Gemini responds with plain text.
+        // Our tool protocol uses text-based JSON; native function calls conflict
+        // (causing MALFORMED_FUNCTION_CALL errors).
+        let body = RequestBody(
+            contents: contents,
+            generationConfig: GenerationConfig(temperature: options.temperature),
+            toolConfig: ToolConfig(functionCallingConfig: FunctionCallingConfig(mode: "NONE"))
+        )
         request.httpBody = try JSONEncoder().encode(body)
 
         let (data, response) = try await urlSession.data(for: request)
