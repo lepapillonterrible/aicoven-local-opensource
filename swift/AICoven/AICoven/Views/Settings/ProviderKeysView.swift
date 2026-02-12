@@ -130,6 +130,7 @@ struct ProviderAccountCard: View {
         case "anthropic": return ("🟣", "Anthropic", .aicovenPurple)
         case "cohere": return ("🧠", "Cohere", .aicovenPink)
         case "mistral": return ("🌬️", "Mistral AI", .cyan)
+        case "ollama": return ("🦙", "Ollama (Local)", .orange)
         default: return ("🔑", account.provider, .aicovenTeal)
         }
     }
@@ -263,14 +264,22 @@ struct AddProviderKeySheet: View {
     @State private var selectedProvider = "openai"
     @State private var displayName = ""
     @State private var apiKey = ""
+    @State private var baseURL = "http://localhost:11434"
     @State private var saving = false
+    @State private var isLoadingModels = false
+    @State private var ollamaModels: [OllamaLLMClient.OllamaModel] = []
+    @State private var selectedOllamaModel: String = ""
+    @State private var connectionTestResult: (success: Bool, message: String)? = nil
+    
+    private var isOllama: Bool { selectedProvider == "ollama" }
     
     let providers = [
         ("openai", "OpenAI", "🤖"),
         ("anthropic", "Anthropic Claude", "🟣"),
         ("google", "Google Gemini", "🔵"),
         ("mistral", "Mistral AI", "🌬️"),
-        ("cohere", "Cohere", "🧠")
+        ("cohere", "Cohere", "🧠"),
+        ("ollama", "Ollama (Local)", "🦙")
     ]
     
     var body: some View {
@@ -286,6 +295,11 @@ struct AddProviderKeySheet: View {
                         ForEach(providers, id: \.0) { provider in
                             Button {
                                 selectedProvider = provider.0
+                                // Reset Ollama state when switching
+                                if provider.0 != "ollama" {
+                                    ollamaModels = []
+                                    connectionTestResult = nil
+                                }
                             } label: {
                                 HStack {
                                     Text(provider.2)
@@ -318,7 +332,7 @@ struct AddProviderKeySheet: View {
                             .font(.aicovenH3)
                             .foregroundColor(.aicovenTextPrimary)
                         
-                        TextField("My API Key", text: $displayName)
+                        TextField(isOllama ? "My Ollama" : "My API Key", text: $displayName)
                             .font(.aicovenBody)
                             .foregroundColor(.aicovenTextPrimary)
                             .padding(Spacing.md)
@@ -326,31 +340,35 @@ struct AddProviderKeySheet: View {
                             .cornerRadius(BorderRadius.md)
                     }
                     
-                    // API key
-                    VStack(alignment: .leading, spacing: Spacing.sm) {
-                        Text("API Key")
-                            .font(.aicovenH3)
-                            .foregroundColor(.aicovenTextPrimary)
-                        
-                        SecureField("sk-...", text: $apiKey)
-                            .font(.aicovenBody)
-                            .foregroundColor(.aicovenTextPrimary)
-                            .padding(Spacing.md)
-                            .background(Color.aicovenGlass)
-                            .cornerRadius(BorderRadius.md)
-                        
-                        Text("🔒 Your API key is encrypted and stored securely")
-                            .font(.aicovenCaption)
-                            .foregroundColor(.aicovenTextSecondary)
+                    if isOllama {
+                        ollamaConfigSection
+                    } else {
+                        // API key (cloud providers)
+                        VStack(alignment: .leading, spacing: Spacing.sm) {
+                            Text("API Key")
+                                .font(.aicovenH3)
+                                .foregroundColor(.aicovenTextPrimary)
+                            
+                            SecureField("sk-...", text: $apiKey)
+                                .font(.aicovenBody)
+                                .foregroundColor(.aicovenTextPrimary)
+                                .padding(Spacing.md)
+                                .background(Color.aicovenGlass)
+                                .cornerRadius(BorderRadius.md)
+                            
+                            Text("🔒 Your API key is encrypted and stored securely")
+                                .font(.aicovenCaption)
+                                .foregroundColor(.aicovenTextSecondary)
+                        }
                     }
                     
                     // Save button
-                    GradientButton("Add Provider Key", icon: "checkmark.circle.fill", style: .primary) {
+                    GradientButton(isOllama ? "Add Ollama" : "Add Provider Key", icon: "checkmark.circle.fill", style: .primary) {
                         Task {
                             await saveProviderKey()
                         }
                     }
-                    .disabled(displayName.isEmpty || apiKey.isEmpty || saving)
+                    .disabled(saveDisabled)
                 }
                 .padding(Spacing.lg)
             }
@@ -366,19 +384,166 @@ struct AddProviderKeySheet: View {
         }
     }
     
+    private var saveDisabled: Bool {
+        if saving { return true }
+        if displayName.isEmpty { return true }
+        if isOllama {
+            return baseURL.isEmpty || selectedOllamaModel.isEmpty
+        } else {
+            return apiKey.isEmpty
+        }
+    }
+    
+    // MARK: - Ollama config section
+    
+    private var ollamaConfigSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            // Base URL
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                Text("Server URL")
+                    .font(.aicovenH3)
+                    .foregroundColor(.aicovenTextPrimary)
+                
+                HStack(spacing: Spacing.sm) {
+                    TextField("http://localhost:11434", text: $baseURL)
+                        .font(.aicovenBody)
+                        .foregroundColor(.aicovenTextPrimary)
+                        .padding(Spacing.md)
+                        .background(Color.aicovenGlass)
+                        .cornerRadius(BorderRadius.md)
+                        .autocorrectionDisabled()
+                    
+                    Button {
+                        Task { await testOllamaConnection() }
+                    } label: {
+                        HStack(spacing: Spacing.xs) {
+                            if isLoadingModels {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                    .tint(.aicovenTextPrimary)
+                            }
+                            Text("Connect")
+                        }
+                        .font(.aicovenBodySmall)
+                        .foregroundColor(.aicovenTextPrimary)
+                        .padding(.horizontal, Spacing.md)
+                        .padding(.vertical, Spacing.sm)
+                        .background(Color.aicovenGlass)
+                        .cornerRadius(BorderRadius.md)
+                    }
+                    .disabled(isLoadingModels || baseURL.isEmpty)
+                }
+                
+                Text("🏠 Make sure Ollama is running on your machine")
+                    .font(.aicovenCaption)
+                    .foregroundColor(.aicovenTextSecondary)
+            }
+            
+            // Connection test result
+            if let result = connectionTestResult {
+                HStack {
+                    Image(systemName: result.success ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .foregroundColor(result.success ? .green : .red)
+                    Text(result.message)
+                        .font(.aicovenCaption)
+                        .foregroundColor(result.success ? .green : .red)
+                }
+                .padding(.vertical, Spacing.xs)
+            }
+            
+            // Model picker (shown after successful connection)
+            if !ollamaModels.isEmpty {
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text("Model")
+                        .font(.aicovenH3)
+                        .foregroundColor(.aicovenTextPrimary)
+                    
+                    Text("Select a model to use as the default")
+                        .font(.aicovenCaption)
+                        .foregroundColor(.aicovenTextSecondary)
+                    
+                    ForEach(ollamaModels) { model in
+                        Button {
+                            selectedOllamaModel = model.name
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(model.name)
+                                        .font(.aicovenBody)
+                                        .foregroundColor(.aicovenTextPrimary)
+                                    
+                                    if let size = model.formattedSize {
+                                        Text(size)
+                                            .font(.aicovenCaption)
+                                            .foregroundColor(.aicovenTextTertiary)
+                                    }
+                                }
+                                
+                                Spacer()
+                                
+                                if selectedOllamaModel == model.name {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.aicovenTeal)
+                                }
+                            }
+                            .padding(Spacing.sm)
+                            .background(
+                                RoundedRectangle(cornerRadius: BorderRadius.sm)
+                                    .fill(selectedOllamaModel == model.name ? Color.aicovenGlass : Color.clear)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+    
+    private func testOllamaConnection() async {
+        isLoadingModels = true
+        defer { isLoadingModels = false }
+        
+        let client = OllamaLLMClient(baseURL: URL(string: baseURL) ?? OllamaLLMClient.defaultBaseURL)
+        let connected = await client.testConnection()
+        
+        if connected {
+            do {
+                let models = try await client.discoverModels()
+                ollamaModels = models
+                if let first = models.first {
+                    selectedOllamaModel = first.name
+                }
+                connectionTestResult = (true, "Connected! Found \(models.count) model(s).")
+            } catch {
+                connectionTestResult = (false, "Connected but failed to list models: \(error.localizedDescription)")
+            }
+        } else {
+            connectionTestResult = (false, "Cannot connect to \(baseURL). Is Ollama running?")
+        }
+    }
+    
     // Save provider key
     private func saveProviderKey() async {
         saving = true
         defer { saving = false }
         
         do {
-            _ = try await ProviderAccountService.shared.createProviderAccount(
-                provider: selectedProvider,
-                displayName: displayName,
-                apiKey: apiKey,
-                scopes: ["chat"],
-                defaultModel: nil
-            )
+            if isOllama {
+                let name = displayName.isEmpty ? "My Ollama" : displayName
+                _ = try await ProviderAccountService.shared.createOllamaAccount(
+                    displayName: name,
+                    baseURL: baseURL,
+                    defaultModel: selectedOllamaModel.isEmpty ? nil : selectedOllamaModel
+                )
+            } else {
+                _ = try await ProviderAccountService.shared.createProviderAccount(
+                    provider: selectedProvider,
+                    displayName: displayName,
+                    apiKey: apiKey,
+                    scopes: ["chat"],
+                    defaultModel: nil
+                )
+            }
             
             onComplete()
             dismiss()

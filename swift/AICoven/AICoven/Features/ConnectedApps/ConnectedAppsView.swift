@@ -18,6 +18,10 @@ struct ConnectedAppsView: View {
     @State private var deviceVerificationUrl: String = ""
     @State private var deviceFlowTask: Task<Void, Never>?
     
+    // Google Picker state
+    @State private var showingGooglePicker = false
+    @State private var pickedFiles: [GooglePickerFile] = []
+    
     // OAuth client IDs - users should configure their own OAuth apps
     // See settings section below or the README for setup instructions
     @AppStorage("github_oauth_client_id") private var githubClientId = ""
@@ -57,11 +61,42 @@ struct ConnectedAppsView: View {
                             account: accounts.first { $0.provider == provider && $0.status == .connected },
                             isConnecting: connectingProvider == provider,
                             onConnect: { await connect(provider: provider) },
-                            onDisconnect: { await disconnect(provider: provider) }
+                            onDisconnect: { await disconnect(provider: provider) },
+                            onBrowseDrive: provider == .googleDrive ? { showingGooglePicker = true } : nil
                         )
                     }
                 }
                 .padding(.horizontal)
+                
+                // Show recently picked files if any
+                if !pickedFiles.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Recently Picked Files")
+                            .font(.headline)
+                        ForEach(pickedFiles) { file in
+                            HStack {
+                                Image(systemName: "doc.fill")
+                                    .foregroundColor(.blue)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(file.name)
+                                        .font(.subheadline)
+                                    Text(file.id)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                            }
+                            .padding(8)
+                            #if os(macOS)
+                            .background(Color(NSColor.controlBackgroundColor))
+                            #else
+                            .background(Color(UIColor.secondarySystemBackground))
+                            #endif
+                            .cornerRadius(8)
+                        }
+                    }
+                    .padding(.horizontal)
+                }
                 
                 // OAuth configuration section
                 configurationSection
@@ -98,6 +133,22 @@ struct ConnectedAppsView: View {
                     connectingProvider = nil
                 }
             )
+        }
+        .sheet(isPresented: $showingGooglePicker) {
+            if let account = accounts.first(where: { $0.provider == .googleDrive && $0.status == .connected }) {
+                GooglePickerSheet(
+                    accountId: account.id,
+                    apiKey: Bundle.main.infoDictionary?["GOOGLE_PICKER_API_KEY"] as? String ?? "",
+                    appId: Bundle.main.infoDictionary?["GOOGLE_PICKER_APP_ID"] as? String ?? "",
+                    onFilesPicked: { files in
+                        pickedFiles = files
+                        showingGooglePicker = false
+                    },
+                    onCancel: {
+                        showingGooglePicker = false
+                    }
+                )
+            }
         }
     }
     
@@ -186,7 +237,7 @@ struct ConnectedAppsView: View {
                 TextField("Client ID", text: $googleClientId)
                     .textFieldStyle(.roundedBorder)
                 
-                Text("Uses PKCE flow - no client secret needed")
+                Text("Uses PKCE flow - no client secret needed. Picker API Key and App ID are configured in xcconfig.")
                     .font(.caption2)
                     .foregroundColor(.secondary)
                 
@@ -355,6 +406,7 @@ struct ConnectedAppRow: View {
     let isConnecting: Bool
     let onConnect: () async -> Void
     let onDisconnect: () async -> Void
+    let onBrowseDrive: (() -> Void)?
     
     var isConnected: Bool { account != nil }
     
@@ -389,16 +441,25 @@ struct ConnectedAppRow: View {
             
             Spacer()
             
-            // Action button
+            // Action buttons
             if isConnecting {
                 ProgressView()
                     .scaleEffect(0.8)
             } else if isConnected {
-                Button("Disconnect") {
-                    Task { await onDisconnect() }
+                HStack(spacing: 8) {
+                    if let onBrowseDrive = onBrowseDrive {
+                        Button("Browse Files") {
+                            onBrowseDrive()
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.blue)
+                    }
+                    Button("Disconnect") {
+                        Task { await onDisconnect() }
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
                 }
-                .buttonStyle(.bordered)
-                .tint(.red)
             } else {
                 Button("Connect") {
                     Task { await onConnect() }
@@ -420,6 +481,68 @@ struct ConnectedAppRow: View {
         switch provider {
         case .github: return .purple
         case .googleDrive: return .blue
+        }
+    }
+}
+
+// MARK: - Google Picker Sheet
+
+/// Wrapper that fetches the access token from Keychain and
+/// presents the GooglePickerView with it.
+struct GooglePickerSheet: View {
+    let accountId: String
+    let apiKey: String
+    let appId: String
+    let onFilesPicked: ([GooglePickerFile]) -> Void
+    let onCancel: () -> Void
+
+    @State private var accessToken: String?
+    @State private var isLoading = true
+    @State private var error: String?
+
+    var body: some View {
+        Group {
+            if isLoading {
+                VStack(spacing: 16) {
+                    ProgressView()
+                    Text("Preparing Drive access…")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let error = error {
+                VStack(spacing: 16) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.largeTitle)
+                        .foregroundColor(.orange)
+                    Text(error)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                    Button("Cancel") { onCancel() }
+                        .buttonStyle(.bordered)
+                }
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let token = accessToken {
+                GooglePickerView(
+                    accessToken: token,
+                    apiKey: apiKey,
+                    appId: appId,
+                    onFilesPicked: onFilesPicked,
+                    onCancel: onCancel
+                )
+            }
+        }
+        .task {
+            do {
+                let token = try await ConnectedAccountsService.shared.getAccessToken(forAccountId: accountId)
+                accessToken = token
+                isLoading = false
+            } catch {
+                self.error = "Failed to get access token: \(error.localizedDescription)"
+                isLoading = false
+            }
         }
     }
 }

@@ -173,11 +173,18 @@ struct ProviderAccount: Codable, Identifiable {
     let status: String
     let scopes: [String]
     let defaultModel: String?
+    let baseURL: String?
     let isHealthy: Bool?
     let lastHealthCheck: Date?
     let lastHealthCheckAt: Date?
     let quotaHint: String?
     let createdAt: Date?
+    
+    /// Whether this account represents a local provider (e.g. Ollama) that
+    /// doesn't require an API key and talks to a server on the user's machine.
+    var isLocalProvider: Bool {
+        provider.lowercased() == "ollama"
+    }
     
     enum CodingKeys: String, CodingKey {
         case id
@@ -188,6 +195,7 @@ struct ProviderAccount: Codable, Identifiable {
         case status
         case scopes
         case defaultModel = "default_model"
+        case baseURL = "base_url"
         case isHealthy = "is_healthy"
         case lastHealthCheck = "last_health_check"
         case lastHealthCheckAt = "last_health_check_at"
@@ -233,4 +241,5 @@ enum AIProvider: String, Codable {
     case anthropic
     case google
     case mistral
+    case ollama
 }

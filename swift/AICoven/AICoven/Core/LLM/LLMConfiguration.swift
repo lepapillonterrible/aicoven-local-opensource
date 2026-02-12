@@ -33,6 +33,11 @@ struct LLMConfiguration: Sendable {
             result["google"] = GeminiLLMClient(apiKey: geminiKey)
         }
 
+        // Ollama: no API key needed, just a base URL (defaults to localhost:11434).
+        if let ollamaURL = defaults.string(forKey: UserScope.scopedKey("ollama_base_url")), !ollamaURL.isEmpty {
+            result["ollama"] = OllamaLLMClient(baseURL: URL(string: ollamaURL) ?? OllamaLLMClient.defaultBaseURL)
+        }
+
         return result
     }
 

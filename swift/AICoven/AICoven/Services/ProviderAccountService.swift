@@ -11,6 +11,7 @@ struct LocalProviderAccount: Codable {
     let displayName: String
     let scopes: [String]
     let defaultModel: String?
+    let baseURL: String?
     let status: String
     let createdAt: Date
 }
@@ -27,6 +28,7 @@ extension ProviderAccount {
             status: local.status,
             scopes: local.scopes,
             defaultModel: local.defaultModel,
+            baseURL: local.baseURL,
             isHealthy: local.status == "healthy",
             lastHealthCheck: nil,
             lastHealthCheckAt: nil,
@@ -133,6 +135,7 @@ actor ProviderAccountService {
             displayName: displayName,
             scopes: scopes,
             defaultModel: defaultModel,
+            baseURL: nil,
             status: "healthy",
             createdAt: now
         )
@@ -143,6 +146,36 @@ actor ProviderAccountService {
         // existing ChatService clients (OpenAI/Anthropic/Gemini) can read it.
         try KeychainHelper.save(key: keychainKey(for: id), value: apiKey)
         updateGlobalAPIKeyCache(provider: provider, apiKey: apiKey)
+
+        return ProviderAccount(from: local)
+    }
+
+    /// Create a local Ollama provider account. No API key is needed;
+    /// we store the base URL and default model instead.
+    @discardableResult
+    func createOllamaAccount(
+        displayName: String,
+        baseURL: String,
+        defaultModel: String?
+    ) async throws -> ProviderAccount {
+        var locals = try loadLocalAccounts()
+        let now = Date()
+        let id = UUID().uuidString
+        let local = LocalProviderAccount(
+            id: id,
+            provider: "ollama",
+            displayName: displayName,
+            scopes: ["chat"],
+            defaultModel: defaultModel,
+            baseURL: baseURL,
+            status: "healthy",
+            createdAt: now
+        )
+        locals.append(local)
+        try saveLocalAccounts(locals)
+
+        // Cache base URL so LLMConfiguration can build the OllamaLLMClient.
+        updateGlobalAPIKeyCache(provider: "ollama", apiKey: baseURL)
 
         return ProviderAccount(from: local)
     }
@@ -331,6 +364,9 @@ extension ProviderAccountService {
             defaults.set(apiKey, forKey: UserScope.scopedKey("anthropic_api_key"))
         case "google", "gemini":
             defaults.set(apiKey, forKey: UserScope.scopedKey("gemini_api_key"))
+        case "ollama":
+            // For Ollama we cache the base URL rather than an API key.
+            defaults.set(apiKey, forKey: UserScope.scopedKey("ollama_base_url"))
         default:
             break
         }
@@ -345,6 +381,8 @@ extension ProviderAccountService {
             defaults.removeObject(forKey: UserScope.scopedKey("anthropic_api_key"))
         case "google", "gemini":
             defaults.removeObject(forKey: UserScope.scopedKey("gemini_api_key"))
+        case "ollama":
+            defaults.removeObject(forKey: UserScope.scopedKey("ollama_base_url"))
         default:
             break
         }
@@ -442,6 +480,19 @@ extension ProviderAccountService {
                     name: name,
                     provider: "google",
                     contextLength: nil
+                )
+            }
+        case "ollama":
+            // Ollama model discovery via /api/tags
+            let urlStr = account.baseURL ?? "http://localhost:11434"
+            let client = OllamaLLMClient(baseURL: URL(string: urlStr) ?? OllamaLLMClient.defaultBaseURL)
+            let models = try await client.discoverModels()
+            return models.map { model in
+                ProviderInitializationStatus.ModelMetadata(
+                    id: model.name,
+                    name: model.name,
+                    provider: "ollama",
+                    contextLength: 128_000  // Ollama doesn't report context length via tags
                 )
             }
         default:

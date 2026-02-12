@@ -1,14 +1,15 @@
 # AICoven Local (Open Source Swift Client)
 
-AICoven Local is a Swift client that lets you run an AI assistant with **no dependency on a custom backend**. All app state (chats, documents, settings) is stored locally on your device. The only network calls are directly to the model providers you configure (e.g. OpenAI, Anthropic, Gemini) using your own API keys.
+AICoven Local is a Swift client that lets you run an AI assistant with **no dependency on a custom backend**. All app state (chats, documents, settings) is stored locally on your device. The only network calls are directly to the model providers you configure (e.g. OpenAI, Anthropic, Gemini) using your own API keys — or to a **local LLM server** like [Ollama](https://ollama.com) running on your machine.
 
 For the cloud version of the app go to https://aicoven.ai/
 
 ## Goals
 
-- **No backend required**: everything happens on device. The onli API calls are made to ai model providers.
+- **No backend required**: everything happens on device. The only API calls are made to AI model providers.
 - **Local-first data**: chats, documents, and settings live on-device.
 - **User-provided API keys**: you bring your own keys for LLM/embedding providers.
+- **Local LLM support**: run models on your own machine via [Ollama](https://ollama.com) — no API key needed.
 - **Simple default assistant**: a single configurable assistant that "just works" out of the box.
 
 ## Current status
@@ -83,6 +84,7 @@ The local-first client is functional for core workflows but some features are st
 - Basic chat UI with thread management
 - Shell command tools with approval flow
 - Connected apps: GitHub and Google Drive integrations
+- Local LLM support via Ollama with automatic model discovery
 - StoreKit 2 in-app purchases with community edition bypass
 - SwiftLint configuration (`.swiftlint.yml`) and CI workflow
 
@@ -158,6 +160,24 @@ For a complete documentation index, see [`docs/README.md`](docs/README.md).
 4. Set a unique bundle identifier and configure signing for your account if needed.
 5. Build & run.
 6. In the app, open Settings → Provider Keys and add your own API keys (e.g. OpenAI, Anthropic, Gemini). The app will then route LLM and embedding calls through those providers.
+
+### Using Ollama (Local LLMs)
+
+You can run models entirely on your machine with [Ollama](https://ollama.com) — no API key or cloud account needed.
+
+1. Install Ollama:
+   ```bash
+   brew install ollama
+   ```
+2. Start the server and pull a model:
+   ```bash
+   ollama serve          # leave running in a terminal
+   ollama pull llama3.2  # or any model you prefer
+   ```
+3. In the app, go to **Settings → Provider Keys → Add Provider Key**.
+4. Select **Ollama (Local)**, enter the server URL (default `http://localhost:11434`), and tap **Connect**.
+5. The app will discover available models automatically — select one and tap **Add Ollama**.
+6. Start chatting! Requests go directly to Ollama on your machine; nothing leaves your network.
 
 ## Development Workflow
 
