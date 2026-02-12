@@ -23,8 +23,11 @@ struct StrixSettingsView: View {
     /// (web_search/current_time) before it must return a natural-language
     /// answer. Persisted via UserDefaults (chat_max_tool_steps).
     @State private var chatMaxToolStepsText: String = "3"
-    @State private var model: String = "gpt-4o"
-    @State private var provider: String = "openai"
+    /// Model and provider are left empty by default; they will be populated
+    /// when settings are loaded or a provider account is selected. This avoids
+    /// showing "gpt-4o" in the sidebar when no OpenAI key is configured.
+    @State private var model: String = ""
+    @State private var provider: String = ""
     @State private var providerAccountId: String? = nil
 
     // Provider accounts state
@@ -431,8 +434,11 @@ struct StrixSettingsView: View {
                 if let plannerSeconds = settings.plannerMaxSeconds {
                     self.plannerMaxSecondsText = String(format: "%.0f", plannerSeconds)
                 }
-                self.model = settings.model ?? "gpt-4o"
-                self.provider = settings.provider ?? "openai"
+                // Only use persisted model/provider if they exist; otherwise leave
+                // as placeholders that will be populated when a provider account is selected.
+                // This prevents showing "gpt-4o" in the sidebar when no OpenAI key is configured.
+                self.model = settings.model ?? ""
+                self.provider = settings.provider ?? ""
                 self.providerAccountId = settings.providerAccountId
             }
 
@@ -518,11 +524,16 @@ struct StrixSettingsView: View {
         let rawPlannerSeconds = Double(plannerMaxSecondsText) ?? 30.0
         let plannerSeconds = max(5.0, min(120.0, rawPlannerSeconds))
 
+        // Only persist model/provider if they are non-empty; otherwise pass nil
+        // so that the sidebar doesn't show a hardcoded default like "gpt-4o".
+        let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedProvider = provider.trimmingCharacters(in: .whitespacesAndNewlines)
+        
         do {
             _ = try await StrixSettingsService.shared.updatePersonalStrix(
                 systemPrompt: trimmedPrompt.isEmpty ? nil : trimmedPrompt,
-                model: model,
-                provider: provider,
+                model: trimmedModel.isEmpty ? nil : trimmedModel,
+                provider: trimmedProvider.isEmpty ? nil : trimmedProvider,
                 providerAccountId: providerAccountId,
                 autonomousMode: autonomousMode,
                 autonomousMaxSteps: steps,

@@ -22,8 +22,8 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
     static let providerID = "mlx"
 
     #if canImport(MLXLLM)
-    private var session: ChatSession?
-    private var model: (any LLMModel)?
+    /// The loaded model container (thread-safe, actor-isolated).
+    private var modelContainer: ModelContainer?
     private let lock = NSLock()
     #endif
 
@@ -35,25 +35,29 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
 
     func completeChat(messages: [LLMMessage], model: String, options: ChatOptions) async throws -> LLMChatResponse {
         #if canImport(MLXLLM)
-        let loadedModel = try await ensureModelLoaded()
-        let session = ChatSession(loadedModel)
+        let container = try await ensureModelLoaded()
+        let session = ChatSession(container)
 
-        // Feed system + history messages, get final response.
-        var lastContent = ""
-        for msg in messages {
-            if msg.role == .system {
-                // ChatSession handles system prompt via model config;
-                // we skip explicit system messages and prepend to first user.
-                continue
-            }
-            if msg.role == .user || msg.role == .tool {
-                lastContent = try await session.respond(to: msg.content)
-            }
-            // Assistant messages are part of history context managed by ChatSession.
+        // Build system instructions from system messages.
+        let systemPrompt = messages
+            .filter { $0.role == .system }
+            .map(\.content)
+            .joined(separator: "\n")
+        if !systemPrompt.isEmpty {
+            session.instructions = systemPrompt
         }
 
+        // Find last user message.
+        guard let userMessage = messages.last(where: { $0.role == .user })?.content else {
+            throw MLXClientError.noUserMessage
+        }
+
+        print("🧠 [MLXLLMClient] Generating response for: \(userMessage.prefix(80))...")
+        let response = try await session.respond(to: userMessage)
+        print("🧠 [MLXLLMClient] Response complete (\(response.count) chars)")
+
         return LLMChatResponse(
-            message: LLMMessage(role: .assistant, content: lastContent),
+            message: LLMMessage(role: .assistant, content: response),
             providerID: Self.providerID,
             modelID: modelID,
             usage: nil // MLX doesn't expose token counts through ChatSession
@@ -70,8 +74,17 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
             Task {
                 #if canImport(MLXLLM)
                 do {
-                    let loadedModel = try await ensureModelLoaded()
-                    let session = ChatSession(loadedModel)
+                    let container = try await ensureModelLoaded()
+                    let session = ChatSession(container)
+
+                    // Build system instructions from system messages.
+                    let systemPrompt = messages
+                        .filter { $0.role == .system }
+                        .map(\.content)
+                        .joined(separator: "\n")
+                    if !systemPrompt.isEmpty {
+                        session.instructions = systemPrompt
+                    }
 
                     // Find the last user message.
                     guard let userMessage = messages.last(where: { $0.role == .user })?.content else {
@@ -79,18 +92,23 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
                         return
                     }
 
+                    print("🧠 [MLXLLMClient] Streaming response for: \(userMessage.prefix(80))...")
+
                     // Stream response token by token.
                     let stream = session.streamResponse(to: userMessage)
-                    var fullText = ""
+                    var tokenCount = 0
                     for try await token in stream {
-                        fullText += token
+                        tokenCount += 1
                         continuation.yield(LLMStreamDelta(text: token))
                     }
+
+                    print("🧠 [MLXLLMClient] Stream complete (\(tokenCount) tokens)")
 
                     // Final delta with completion marker.
                     continuation.yield(LLMStreamDelta(text: "", isFinished: true, usage: nil))
                     continuation.finish()
                 } catch {
+                    print("❌ [MLXLLMClient] Stream error: \(error)")
                     continuation.finish(throwing: error)
                 }
                 #else
@@ -114,11 +132,31 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
     // MARK: - Model loading
 
     #if canImport(MLXLLM)
-    private func ensureModelLoaded() async throws -> any LLMModel {
-        if let model = model { return model }
-        let loaded = try await MLXLMCommon.loadModel(id: modelID)
-        self.model = loaded
-        return loaded
+    private func ensureModelLoaded() async throws -> ModelContainer {
+        // Fast path: already loaded.
+        lock.lock()
+        if let existing = modelContainer {
+            lock.unlock()
+            return existing
+        }
+        lock.unlock()
+
+        print("🧠 [MLXLLMClient] Loading model \(modelID)... (first load downloads from HuggingFace)")
+
+        let container = try await loadModelContainer(id: modelID) { progress in
+            let pct = Int(progress.fractionCompleted * 100)
+            if pct % 10 == 0 {
+                print("🧠 [MLXLLMClient] Download progress: \(pct)%")
+            }
+        }
+
+        print("✅ [MLXLLMClient] Model loaded: \(modelID)")
+
+        lock.lock()
+        modelContainer = container
+        lock.unlock()
+
+        return container
     }
     #endif
 }
