@@ -167,5 +167,9 @@
 	<string>$(GOOGLE_PICKER_APP_ID)</string>
 	<key>ServerRSAPublicKey</key>
 	<string>$(SERVER_RSA_PUBLIC_KEY)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<true/>
+	<key>ITSEncryptionExportComplianceCode</key>
+	<string>6bc71f25-8aaa-4bbe-a167-e112342eec07</string>
 </dict>
 </plist>
