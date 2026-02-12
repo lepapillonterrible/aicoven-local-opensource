@@ -329,6 +329,22 @@ actor ProviderAccountService {
             }
         }
 
+        // ── MLX local models ─────────────────────────────────────────────
+        // MLX models don't come from a remote API, so inject descriptors
+        // for any active/downloaded model directly.
+        if let activeMLX = UserDefaults.standard.string(forKey: "MLXModelManager.activeModelID"), !activeMLX.isEmpty {
+            descriptors.append(
+                ModelDescriptor(
+                    providerID: "mlx",
+                    modelID: activeMLX,
+                    maxContextTokens: 8_192,
+                    supportsTools: true,
+                    supportsEmbeddings: false,
+                    costClass: .free
+                )
+            )
+        }
+
         return descriptors
     }
 

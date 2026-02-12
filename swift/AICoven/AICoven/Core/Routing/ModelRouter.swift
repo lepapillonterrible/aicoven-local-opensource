@@ -4,6 +4,7 @@ import Foundation
 /// Conforms to Sendable since all properties are value types.
 public struct ModelDescriptor: Hashable, Sendable {
     public enum CostClass {
+        case free
         case cheap
         case medium
         case expensive
@@ -132,6 +133,7 @@ public final class HeuristicModelRouter: ModelRouter, @unchecked Sendable {
 private extension ModelDescriptor {
     var costClassWeight: Int {
         switch costClass {
+        case .free: return -1
         case .cheap: return 0
         case .medium: return 1
         case .expensive: return 2

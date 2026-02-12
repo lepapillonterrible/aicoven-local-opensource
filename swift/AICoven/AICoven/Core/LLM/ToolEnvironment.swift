@@ -90,6 +90,7 @@ private extension ModelDescriptor {
     /// components can make similar quality/cost tradeoffs.
     var costClassWeight: Int {
         switch costClass {
+        case .free: return -1
         case .cheap: return 0
         case .medium: return 1
         case .expensive: return 2

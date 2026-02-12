@@ -864,7 +864,7 @@ actor ChatService {
             let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("gemini_model")) ?? "gemini-1.5-pro"
             return ("google", model)
         case "mlx":
-            let model = UserDefaults.standard.string(forKey: "mlx_active_model") ?? "mlx-community/Qwen3-4B-4bit"
+            let model = UserDefaults.standard.string(forKey: "MLXModelManager.activeModelID") ?? "mlx-community/Qwen3-4B-4bit"
             return ("mlx", model)
         case "ollama":
             let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model")) ?? "llama3.2"

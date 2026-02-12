@@ -15,32 +15,34 @@ import MLXLMCommon
 /// management. Without the package it compiles but returns an error.
 final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
 
-    /// The Hugging Face model ID (e.g. "mlx-community/Qwen3-4B-4bit").
-    let modelID: String
+    /// Default fallback model ID.
+    let defaultModelID: String
 
     /// Provider identifier for routing.
     static let providerID = "mlx"
 
     #if canImport(MLXLLM)
-    /// The loaded model container (thread-safe, actor-isolated).
-    private var modelContainer: ModelContainer?
+    /// Cache: loaded model container keyed by model ID.
+    private var loadedContainers: [String: ModelContainer] = [:]
     private let lock = NSLock()
     #endif
 
     init(modelID: String) {
-        self.modelID = modelID
+        self.defaultModelID = modelID
     }
 
     // MARK: - LLMClient (full response)
 
     func completeChat(messages: [LLMMessage], model: String, options: ChatOptions) async throws -> LLMChatResponse {
-        print("🧠 [MLXLLMClient.completeChat] called with model=\(model), messages=\(messages.count)")
+        let effectiveModel = model.isEmpty ? defaultModelID : model
+        print("🧠 [MLXLLMClient.completeChat] model=\(effectiveModel), messages=\(messages.count)")
+
         #if canImport(MLXLLM)
-        print("🧠 [MLXLLMClient.completeChat] MLXLLM is available, loading model...")
-        let container = try await ensureModelLoaded()
+        let container = try await ensureModelLoaded(effectiveModel)
         let session = ChatSession(container)
 
-        // Build system instructions from system messages.
+        // Build system instructions from system messages — this includes
+        // tool documentation injected by ContextBuilder.
         let systemPrompt = messages
             .filter { $0.role == .system }
             .map(\.content)
@@ -61,11 +63,11 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
         return LLMChatResponse(
             message: LLMMessage(role: .assistant, content: response),
             providerID: Self.providerID,
-            modelID: modelID,
-            usage: nil // MLX doesn't expose token counts through ChatSession
+            modelID: effectiveModel,
+            usage: nil
         )
         #else
-        print("❌ [MLXLLMClient.completeChat] MLXLLM package NOT available — canImport(MLXLLM) is false")
+        print("❌ [MLXLLMClient] MLXLLM package NOT available")
         throw MLXClientError.packageNotAvailable
         #endif
     }
@@ -73,14 +75,16 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
     // MARK: - StreamingLLMClient (token-by-token)
 
     func streamChat(messages: [LLMMessage], model: String, options: ChatOptions) -> AsyncThrowingStream<LLMStreamDelta, Error> {
-        AsyncThrowingStream { continuation in
+        let effectiveModel = model.isEmpty ? defaultModelID : model
+
+        return AsyncThrowingStream { continuation in
             Task {
                 #if canImport(MLXLLM)
                 do {
-                    let container = try await ensureModelLoaded()
+                    let container = try await self.ensureModelLoaded(effectiveModel)
                     let session = ChatSession(container)
 
-                    // Build system instructions from system messages.
+                    // System prompt (includes tool docs from ContextBuilder).
                     let systemPrompt = messages
                         .filter { $0.role == .system }
                         .map(\.content)
@@ -89,15 +93,13 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
                         session.instructions = systemPrompt
                     }
 
-                    // Find the last user message.
                     guard let userMessage = messages.last(where: { $0.role == .user })?.content else {
                         continuation.finish(throwing: MLXClientError.noUserMessage)
                         return
                     }
 
-                    print("🧠 [MLXLLMClient] Streaming response for: \(userMessage.prefix(80))...")
+                    print("🧠 [MLXLLMClient] Streaming \(effectiveModel): \(userMessage.prefix(80))...")
 
-                    // Stream response token by token.
                     let stream = session.streamResponse(to: userMessage)
                     var tokenCount = 0
                     for try await token in stream {
@@ -106,8 +108,6 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
                     }
 
                     print("🧠 [MLXLLMClient] Stream complete (\(tokenCount) tokens)")
-
-                    // Final delta with completion marker.
                     continuation.yield(LLMStreamDelta(text: "", isFinished: true, usage: nil))
                     continuation.finish()
                 } catch {
@@ -124,39 +124,34 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
     // MARK: - Embeddings
 
     func embed(texts: [String], model: String) async throws -> [[Float]] {
-        #if canImport(MLXEmbedders)
-        // TODO: Implement using MLXEmbedders when local embedding support ships.
         throw MLXClientError.embeddingsNotSupported
-        #else
-        throw MLXClientError.packageNotAvailable
-        #endif
     }
 
     // MARK: - Model loading
 
     #if canImport(MLXLLM)
-    private func ensureModelLoaded() async throws -> ModelContainer {
+    private func ensureModelLoaded(_ modelID: String) async throws -> ModelContainer {
         // Fast path: already loaded.
         lock.lock()
-        if let existing = modelContainer {
+        if let existing = loadedContainers[modelID] {
             lock.unlock()
             return existing
         }
         lock.unlock()
 
-        print("🧠 [MLXLLMClient] Loading model \(modelID)... (first load downloads from HuggingFace)")
+        print("🧠 [MLXLLMClient] Loading \(modelID)... (first load downloads from HuggingFace)")
 
         let container = try await loadModelContainer(id: modelID) { progress in
             let pct = Int(progress.fractionCompleted * 100)
-            if pct % 10 == 0 {
-                print("🧠 [MLXLLMClient] Download progress: \(pct)%")
+            if pct % 25 == 0 {
+                print("🧠 [MLXLLMClient] \(modelID) download: \(pct)%")
             }
         }
 
         print("✅ [MLXLLMClient] Model loaded: \(modelID)")
 
         lock.lock()
-        modelContainer = container
+        loadedContainers[modelID] = container
         lock.unlock()
 
         return container

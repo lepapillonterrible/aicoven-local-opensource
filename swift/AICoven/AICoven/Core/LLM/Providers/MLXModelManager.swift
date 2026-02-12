@@ -1,6 +1,11 @@
 import Foundation
 internal import Combine
 
+#if canImport(MLXLLM)
+import MLXLLM
+import MLXLMCommon
+#endif
+
 // MARK: - MLX Model Catalog
 
 /// Metadata for a model available in the MLX curated catalog.
@@ -148,7 +153,7 @@ final class MLXModelManager: ObservableObject {
             // Progress is not directly observable in the current API,
             // so we show indeterminate and then mark complete.
             downloadStates[modelID] = .downloading(progress: 0.5)
-            let _ = try await MLXLMCommon.loadModel(id: modelID)
+            let _ = try await loadModelContainer(id: modelID)
             downloadStates[modelID] = .downloaded
             persistDownloadedModel(modelID)
         } catch {
