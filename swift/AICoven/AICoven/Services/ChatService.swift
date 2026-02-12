@@ -345,11 +345,24 @@ actor ChatService {
         // been added or changed after ChatService was first initialized.
         await ensureEnvironment()
         
-        // Try to honour the user's preferred provider + model from Strix
-        // settings (stored in UserDefaults by StrixSettingsService). If the
-        // router's dynamic model list contains an exact match, use it;
-        // otherwise fall back to the heuristic cost-class routing.
-        let (prefProvider, prefModel) = resolveProviderAndModel()
+        // Resolve provider + model: prefer role-specific settings when a
+        // roleId is provided (coven agent threads), otherwise fall back to
+        // the user's global preference from UserDefaults.
+        let prefProvider: String
+        let prefModel: String
+        
+        if let roleId,
+           let role = try? await RoleService.shared.getRole(roleId: roleId),
+           let roleProvider = role.provider, !roleProvider.isEmpty,
+           let roleModel = role.model, !roleModel.isEmpty {
+            prefProvider = roleProvider.lowercased()
+            prefModel = roleModel
+        } else {
+            let (globalProvider, globalModel) = resolveProviderAndModel()
+            prefProvider = globalProvider
+            prefModel = globalModel
+        }
+        
         let descriptor: ModelDescriptor
         let client: LLMClient
 
@@ -934,7 +947,22 @@ struct ChatToolInvocation: Codable {
     let reason: String?
     
     static func from(jsonString: String) -> ChatToolInvocation? {
-        let trimmed = jsonString.trimmingCharacters(in: .whitespacesAndNewlines)
+        var trimmed = jsonString.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Strip <think>...</think> blocks emitted by reasoning models (e.g. Qwen3).
+        // These appear before the tool-call JSON and prevent parsing.
+        while let thinkStart = trimmed.range(of: "<think>"),
+              let thinkEnd = trimmed.range(of: "</think>") {
+            trimmed = String(trimmed[..<thinkStart.lowerBound] + trimmed[thinkEnd.upperBound...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        // Also handle unclosed <think> tags (model started thinking but response was cut off).
+        if let thinkStart = trimmed.range(of: "<think>"),
+           trimmed.range(of: "</think>") == nil {
+            trimmed = String(trimmed[..<thinkStart.lowerBound])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        
         let decoder = JSONDecoder()
         
         // Fast path: whole string is a JSON object.

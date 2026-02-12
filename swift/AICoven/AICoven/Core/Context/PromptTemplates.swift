@@ -232,18 +232,18 @@ enum PromptTemplates {
     static let mlxToolProtocolInstructions: String = """
     CRITICAL TOOL-CALLING RULES:
 
-    When you need information you don't have (current time, file contents, web data), you MUST respond with ONLY a JSON object. Do NOT write any other text before or after the JSON.
+    You have access to the tools listed in AVAILABLE TOOLS above. When you need information you don't have (current time, file contents, web data), you MUST respond with ONLY a JSON object. Do NOT write any other text before or after the JSON. Do NOT use tools that are not listed in AVAILABLE TOOLS.
 
     JSON FORMAT:
     {"tool": "tool_name", "input": {"param": "value"}, "reason": "brief reason"}
 
     EXAMPLES OF CORRECT BEHAVIOR:
 
-    User: What time is it in London?
-    Correct response: {"tool": "current_time", "input": {"timezone": "Europe/London"}, "reason": "Get London time"}
+    User: What time is it?
+    Correct response: {"tool": "current_time", "input": {"timezone": "UTC"}, "reason": "Get current time"}
 
-    User: List files in /Users/me/Documents
-    Correct response: {"tool": "file.list", "input": {"path": "/Users/me/Documents"}, "reason": "List directory contents"}
+    User: Tell me about the project at /Users/me/myproject
+    Correct response: {"tool": "file.list", "input": {"path": "/Users/me/myproject"}, "reason": "List project files"}
 
     User: Read the file at /Users/me/readme.txt
     Correct response: {"tool": "file.read", "input": {"path": "/Users/me/readme.txt"}, "reason": "Read file contents"}
@@ -251,15 +251,21 @@ enum PromptTemplates {
     User: Search the web for Swift concurrency
     Correct response: {"tool": "web_search", "input": {"query": "Swift concurrency"}, "reason": "Search for information"}
 
+    User: Run ls -la in /Users/me
+    Correct response: {"tool": "shell.execute", "input": {"command": "ls -la /Users/me"}, "reason": "List directory with details"}
+
     User: What is 2+2?
     Correct response: 2+2 = 4 (no tool needed, answer directly)
 
     RULES:
-    - If the user asks about time, dates, or schedules → use current_time tool
-    - If the user mentions a file path or directory → use file.read or file.list tool
-    - If the user asks to search or look up something online → use web_search tool
+    - ONLY use tools from the AVAILABLE TOOLS list above. Do NOT invent tools.
+    - If the user asks about time, dates, or schedules → use current_time
+    - If the user mentions a file path or directory → use file.read or file.list
+    - If the user asks to search something online → use web_search
+    - If the user asks to run a command → use shell.execute
     - Call ONE tool at a time, wait for the result
     - After receiving a tool result, answer the user's question using that data
+    - Do NOT wrap your response in <think> or any XML tags
     """
     
     /// Generate a lean system prompt for MLX models with only essential sections.
