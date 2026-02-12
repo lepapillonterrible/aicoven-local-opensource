@@ -410,6 +410,7 @@ actor ChatService {
         var toolContextLog = ""
         var finalText: String?
         var finalUsage: TokenUsage?
+        var streamedAnswer = false
 
         // ── Context-aware repeat detection (ported from backend) ──────────
         // Tracks tool-call signatures across loop iterations so we can
@@ -662,21 +663,50 @@ actor ChatService {
             )
             
             do {
-                let options = ChatOptions(temperature: 0.7, maxTokens: nil, stream: false)
-                let response = try await client.completeChat(messages: contextMessages,
-                                                             model: descriptor.modelID,
-                                                             options: options)
-                let rawText = response.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                #if DEBUG
-                AppErrorReporter.log(message: "provider response (final phase, truncated): \(rawText.prefix(200))", context: "ChatService.streamMessage.finalPhase")
-                #endif
-                let usage = response.usage.map { core in
-                    TokenUsage(promptTokens: core.promptTokens,
-                               completionTokens: core.completionTokens,
-                               totalTokens: core.totalTokens)
+                // If the client supports streaming, use token-by-token delivery
+                // for the final answer so the user sees text appear in real time.
+                if let streamingClient = client as? StreamingLLMClient {
+                    let options = ChatOptions(temperature: 0.7, maxTokens: nil, stream: true)
+                    onPlanningDelta("")
+                    var accumulated = ""
+                    let stream = streamingClient.streamChat(
+                        messages: contextMessages,
+                        model: descriptor.modelID,
+                        options: options
+                    )
+                    for try await delta in stream {
+                        if !delta.text.isEmpty {
+                            accumulated += delta.text
+                            onAnswerDelta(delta.text)
+                        }
+                        if let usage = delta.usage {
+                            finalUsage = TokenUsage(
+                                promptTokens: usage.promptTokens,
+                                completionTokens: usage.completionTokens,
+                                totalTokens: usage.totalTokens
+                            )
+                        }
+                    }
+                    // Mark streaming final answer so we skip the post-loop emission.
+                    finalText = accumulated
+                    streamedAnswer = true
+                } else {
+                    let options = ChatOptions(temperature: 0.7, maxTokens: nil, stream: false)
+                    let response = try await client.completeChat(messages: contextMessages,
+                                                                  model: descriptor.modelID,
+                                                                  options: options)
+                    let rawText = response.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                    #if DEBUG
+                    AppErrorReporter.log(message: "provider response (final phase, truncated): \(rawText.prefix(200))", context: "ChatService.streamMessage.finalPhase")
+                    #endif
+                    let usage = response.usage.map { core in
+                        TokenUsage(promptTokens: core.promptTokens,
+                                   completionTokens: core.completionTokens,
+                                   totalTokens: core.totalTokens)
+                    }
+                    finalUsage = usage
+                    finalText = rawText
                 }
-                finalUsage = usage
-                finalText = rawText
             } catch {
                 let msg: String
                 let errorCode: String
@@ -734,7 +764,11 @@ actor ChatService {
         
         AppErrorReporter.log(message: "streamMessage completed with answer length=\(answer.count) provider=\(descriptor.providerID) model=\(descriptor.modelID) usedTools=\(maxToolSteps - remainingToolSteps)", context: "ChatService.streamMessage")
         onPlanningDelta("")
-        onAnswerDelta(answer)
+        // Only emit the full answer if we haven't already streamed it
+        // token-by-token via StreamingLLMClient.
+        if !streamedAnswer {
+            onAnswerDelta(answer)
+        }
 
         // Persist a lightweight usage entry so the local Budgets & Usage
         // dashboard can approximate spend per provider.

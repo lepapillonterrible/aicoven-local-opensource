@@ -131,6 +131,7 @@ struct ProviderAccountCard: View {
         case "cohere": return ("🧠", "Cohere", .aicovenPink)
         case "mistral": return ("🌬️", "Mistral AI", .cyan)
         case "ollama": return ("🦙", "Ollama (Local)", .orange)
+        case "mlx": return ("🧠", "MLX (On-Device)", .purple)
         default: return ("🔑", account.provider, .aicovenTeal)
         }
     }
@@ -270,8 +271,10 @@ struct AddProviderKeySheet: View {
     @State private var ollamaModels: [OllamaLLMClient.OllamaModel] = []
     @State private var selectedOllamaModel: String = ""
     @State private var connectionTestResult: (success: Bool, message: String)? = nil
+    @State private var selectedMLXModelID: String = ""
     
     private var isOllama: Bool { selectedProvider == "ollama" }
+    private var isMLX: Bool { selectedProvider == "mlx" }
     
     let providers = [
         ("openai", "OpenAI", "🤖"),
@@ -279,7 +282,8 @@ struct AddProviderKeySheet: View {
         ("google", "Google Gemini", "🔵"),
         ("mistral", "Mistral AI", "🌬️"),
         ("cohere", "Cohere", "🧠"),
-        ("ollama", "Ollama (Local)", "🦙")
+        ("ollama", "Ollama (Local)", "🦙"),
+        ("mlx", "MLX (On-Device)", "🧠")
     ]
     
     var body: some View {
@@ -295,10 +299,13 @@ struct AddProviderKeySheet: View {
                         ForEach(providers, id: \.0) { provider in
                             Button {
                                 selectedProvider = provider.0
-                                // Reset Ollama state when switching
+                                // Reset state when switching providers
                                 if provider.0 != "ollama" {
                                     ollamaModels = []
                                     connectionTestResult = nil
+                                }
+                                if provider.0 != "mlx" {
+                                    selectedMLXModelID = ""
                                 }
                             } label: {
                                 HStack {
@@ -332,7 +339,7 @@ struct AddProviderKeySheet: View {
                             .font(.aicovenH3)
                             .foregroundColor(.aicovenTextPrimary)
                         
-                        TextField(isOllama ? "My Ollama" : "My API Key", text: $displayName)
+                        TextField(isOllama ? "My Ollama" : isMLX ? "My Local LLM" : "My API Key", text: $displayName)
                             .font(.aicovenBody)
                             .foregroundColor(.aicovenTextPrimary)
                             .padding(Spacing.md)
@@ -342,6 +349,8 @@ struct AddProviderKeySheet: View {
                     
                     if isOllama {
                         ollamaConfigSection
+                    } else if isMLX {
+                        mlxConfigSection
                     } else {
                         // API key (cloud providers)
                         VStack(alignment: .leading, spacing: Spacing.sm) {
@@ -363,7 +372,7 @@ struct AddProviderKeySheet: View {
                     }
                     
                     // Save button
-                    GradientButton(isOllama ? "Add Ollama" : "Add Provider Key", icon: "checkmark.circle.fill", style: .primary) {
+                    GradientButton(isOllama ? "Add Ollama" : isMLX ? "Add MLX Model" : "Add Provider Key", icon: "checkmark.circle.fill", style: .primary) {
                         Task {
                             await saveProviderKey()
                         }
@@ -389,6 +398,8 @@ struct AddProviderKeySheet: View {
         if displayName.isEmpty { return true }
         if isOllama {
             return baseURL.isEmpty || selectedOllamaModel.isEmpty
+        } else if isMLX {
+            return selectedMLXModelID.isEmpty
         } else {
             return apiKey.isEmpty
         }
@@ -499,6 +510,77 @@ struct AddProviderKeySheet: View {
         }
     }
     
+    // MARK: - MLX config section
+    
+    private var mlxConfigSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            if !MLXModelManager.isSupported {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                    Text("MLX requires Apple Silicon (M1 or newer). This Mac is not supported.")
+                        .font(.aicovenCaption)
+                        .foregroundColor(.orange)
+                }
+                .padding(.vertical, Spacing.xs)
+            } else {
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text("Select a Model")
+                        .font(.aicovenH3)
+                        .foregroundColor(.aicovenTextPrimary)
+                    
+                    Text("Models run entirely on your device. Downloaded from Hugging Face on first use.")
+                        .font(.aicovenCaption)
+                        .foregroundColor(.aicovenTextSecondary)
+                    
+                    ForEach(MLXModelManager.defaultCatalog) { model in
+                        Button {
+                            selectedMLXModelID = model.id
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(model.displayName)
+                                        .font(.aicovenBody)
+                                        .foregroundColor(.aicovenTextPrimary)
+                                    
+                                    Text(model.summary)
+                                        .font(.aicovenCaption)
+                                        .foregroundColor(.aicovenTextSecondary)
+                                        .lineLimit(2)
+                                    
+                                    HStack(spacing: Spacing.sm) {
+                                        Label(model.formattedDownloadSize, systemImage: "arrow.down.circle")
+                                        Label("\(model.minRAMGB) GB RAM", systemImage: "memorychip")
+                                        Label(model.quantization, systemImage: "cube")
+                                    }
+                                    .font(.aicovenCaption)
+                                    .foregroundColor(.aicovenTextTertiary)
+                                }
+                                
+                                Spacer()
+                                
+                                if selectedMLXModelID == model.id {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.aicovenTeal)
+                                }
+                            }
+                            .padding(Spacing.sm)
+                            .background(
+                                RoundedRectangle(cornerRadius: BorderRadius.sm)
+                                    .fill(selectedMLXModelID == model.id ? Color.aicovenGlass : Color.clear)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                
+                Text("🧠 No server or API key needed — runs natively on Apple Silicon")
+                    .font(.aicovenCaption)
+                    .foregroundColor(.aicovenTextSecondary)
+            }
+        }
+    }
+    
     private func testOllamaConnection() async {
         isLoadingModels = true
         defer { isLoadingModels = false }
@@ -534,6 +616,12 @@ struct AddProviderKeySheet: View {
                     displayName: name,
                     baseURL: baseURL,
                     defaultModel: selectedOllamaModel.isEmpty ? nil : selectedOllamaModel
+                )
+            } else if isMLX {
+                let name = displayName.isEmpty ? "My Local LLM" : displayName
+                _ = try await ProviderAccountService.shared.createMLXAccount(
+                    displayName: name,
+                    modelID: selectedMLXModelID
                 )
             } else {
                 _ = try await ProviderAccountService.shared.createProviderAccount(

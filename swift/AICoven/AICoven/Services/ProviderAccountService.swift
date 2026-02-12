@@ -180,6 +180,35 @@ actor ProviderAccountService {
         return ProviderAccount(from: local)
     }
 
+    /// Create a local MLX provider account. No API key or server needed;
+    /// we store the Hugging Face model ID.
+    @discardableResult
+    func createMLXAccount(
+        displayName: String,
+        modelID: String
+    ) async throws -> ProviderAccount {
+        var locals = try loadLocalAccounts()
+        let now = Date()
+        let id = UUID().uuidString
+        let local = LocalProviderAccount(
+            id: id,
+            provider: "mlx",
+            displayName: displayName,
+            scopes: ["chat"],
+            defaultModel: modelID,
+            baseURL: nil,
+            status: "healthy",
+            createdAt: now
+        )
+        locals.append(local)
+        try saveLocalAccounts(locals)
+
+        // Set the active MLX model so LLMConfiguration picks it up.
+        await MLXModelManager.shared.setActiveModel(modelID)
+
+        return ProviderAccount(from: local)
+    }
+
     /// Delete a local provider account and its associated API key.
     func deleteProviderAccount(id: String) async throws {
         var locals = try loadLocalAccounts()
@@ -383,6 +412,9 @@ extension ProviderAccountService {
             defaults.removeObject(forKey: UserScope.scopedKey("gemini_api_key"))
         case "ollama":
             defaults.removeObject(forKey: UserScope.scopedKey("ollama_base_url"))
+        case "mlx":
+            defaults.removeObject(forKey: "MLXModelManager.activeModelID")
+            defaults.removeObject(forKey: "MLXModelManager.downloadedModelIDs")
         default:
             break
         }
@@ -493,6 +525,16 @@ extension ProviderAccountService {
                     name: model.name,
                     provider: "ollama",
                     contextLength: 128_000  // Ollama doesn't report context length via tags
+                )
+            }
+        case "mlx":
+            // MLX: return curated catalog models as static metadata.
+            return MLXModelManager.defaultCatalog.map { info in
+                ProviderInitializationStatus.ModelMetadata(
+                    id: info.id,
+                    name: info.displayName,
+                    provider: "mlx",
+                    contextLength: 128_000
                 )
             }
         default:

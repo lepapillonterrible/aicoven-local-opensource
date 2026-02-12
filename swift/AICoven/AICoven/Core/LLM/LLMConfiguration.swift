@@ -38,6 +38,12 @@ struct LLMConfiguration: Sendable {
             result["ollama"] = OllamaLLMClient(baseURL: URL(string: ollamaURL) ?? OllamaLLMClient.defaultBaseURL)
         }
 
+        // MLX: on-device Apple Silicon inference, no API key or server needed.
+        if MLXModelManager.isSupported,
+           let mlxModelID = defaults.string(forKey: "MLXModelManager.activeModelID"), !mlxModelID.isEmpty {
+            result["mlx"] = MLXLLMClient(modelID: mlxModelID)
+        }
+
         return result
     }
 

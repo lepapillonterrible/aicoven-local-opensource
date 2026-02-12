@@ -183,7 +183,8 @@ struct ProviderAccount: Codable, Identifiable {
     /// Whether this account represents a local provider (e.g. Ollama) that
     /// doesn't require an API key and talks to a server on the user's machine.
     var isLocalProvider: Bool {
-        provider.lowercased() == "ollama"
+        let p = provider.lowercased()
+        return p == "ollama" || p == "mlx"
     }
     
     enum CodingKeys: String, CodingKey {
@@ -242,4 +243,5 @@ enum AIProvider: String, Codable {
     case google
     case mistral
     case ollama
+    case mlx
 }

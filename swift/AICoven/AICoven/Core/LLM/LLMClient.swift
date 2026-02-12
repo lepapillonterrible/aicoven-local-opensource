@@ -74,3 +74,50 @@ public protocol LLMClient: Sendable {
     /// Computes embeddings for one or more texts using the specified embedding model.
     func embed(texts: [String], model: String) async throws -> [[Float]]
 }
+
+// MARK: - Streaming
+
+/// A single delta in a streaming chat completion.
+public struct LLMStreamDelta: Sendable {
+    /// Incremental text content (may be a single token).
+    public let text: String
+    /// `true` when this is the final delta (stream is about to end).
+    public let isFinished: Bool
+    /// Token usage, provided on the final delta when available.
+    public let usage: LLMTokenUsage?
+
+    public init(text: String, isFinished: Bool = false, usage: LLMTokenUsage? = nil) {
+        self.text = text
+        self.isFinished = isFinished
+        self.usage = usage
+    }
+}
+
+/// Protocol for LLM clients that support true token-by-token streaming.
+/// Clients that don't implement this will fall back to the default
+/// implementation which wraps `completeChat()`.
+public protocol StreamingLLMClient: LLMClient {
+    /// Streams chat completion token-by-token.
+    func streamChat(messages: [LLMMessage], model: String, options: ChatOptions) -> AsyncThrowingStream<LLMStreamDelta, Error>
+}
+
+/// Default streaming implementation: wraps `completeChat()` and emits the
+/// full response as a single delta. Clients that natively stream should
+/// override this with a real implementation.
+extension StreamingLLMClient {
+    public func streamChat(messages: [LLMMessage], model: String, options: ChatOptions) -> AsyncThrowingStream<LLMStreamDelta, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    let response = try await completeChat(messages: messages, model: model, options: options)
+                    continuation.yield(LLMStreamDelta(text: response.message.content,
+                                                       isFinished: true,
+                                                       usage: response.usage))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+}
