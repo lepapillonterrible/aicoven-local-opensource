@@ -369,7 +369,7 @@ struct PersonalChatView: View {
                                     HStack(spacing: 6) {
                                         Image(systemName: "sparkles")
                                         // Show "Strix" for the default personal assistant
-                                        Text(thread.agentName ?? "Strix")
+                                        Text(thread.agentName ?? "AI Assistant")
                                     }
                                     .font(.caption)
                                     .foregroundStyle(Color.aicovenTeal)
@@ -733,6 +733,10 @@ struct PersonalChatView: View {
                         if let model {
                             meta["model"] = AnyJSONValue(model)
                         }
+                        // Persist the agent name so history loads show the correct role
+                        if let agentName = thread.agentName {
+                            meta["role_name"] = AnyJSONValue(agentName)
+                        }
                         if let usage = tokenUsage {
                             var usageDict: [String: Any] = [:]
                             if let p = usage.promptTokens { usageDict["prompt_tokens"] = p }
@@ -890,8 +894,8 @@ struct PersonalChatHeader: View {
                 HStack(spacing: 6) {
                     Image(systemName: "sparkles")
                         .font(.system(size: 10))
-                    // Show thread's agent name or "Strix" for personal assistant
-                    Text(thread.agentName ?? "Strix")
+                    // Show thread's agent name or generic label
+                    Text(thread.agentName ?? "AI Assistant")
                         .font(.aicovenCaption)
                 }
                 .foregroundColor(.aicovenTextSecondary)

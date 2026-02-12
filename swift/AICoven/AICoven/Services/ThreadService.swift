@@ -91,19 +91,20 @@ actor ThreadService {
     ///   - includeArchived: Whether to include archived threads
     /// - Returns: List of threads
     func loadThreads(covenId: String? = nil, includeArchived: Bool = false) async throws -> [Thread] {
+        let filtered: [Thread]
         if let covenId = covenId {
-            // Legacy coven threads are not used in the local-first client.
-            // Return an empty list so callers do not attempt any backend
-            // access, but still behave gracefully.
-            AppErrorReporter.log(message: "loadThreads(covenId: \(covenId)) called in local-only build – returning empty list.", context: "ThreadService.loadThreads")
-            return []
+            // Return locally persisted threads that belong to this coven.
+            filtered = personalThreads.filter { $0.covenId == covenId }
+            AppErrorReporter.log(message: "Loading coven threads (covenId: \(covenId)) from local store (\(filtered.count) found)", context: "ThreadService.loadThreads")
         } else {
-            AppErrorReporter.log(message: "Loading personal threads from local store (\(personalThreads.count) total)", context: "ThreadService.loadThreads")
-            if includeArchived {
-                return personalThreads
-            } else {
-                return personalThreads.filter { !$0.isArchived }
-            }
+            // Personal threads have no covenId.
+            filtered = personalThreads.filter { $0.covenId == nil }
+            AppErrorReporter.log(message: "Loading personal threads from local store (\(filtered.count) total)", context: "ThreadService.loadThreads")
+        }
+        if includeArchived {
+            return filtered
+        } else {
+            return filtered.filter { !$0.isArchived }
         }
     }
     
@@ -113,10 +114,10 @@ actor ThreadService {
     ///   - covenId: The coven ID (nil for personal thread)
     ///   - agentId: AI agent/role ID (optional)
     /// - Returns: The created thread
-    func createThread(title: String? = nil, covenId: String? = nil, agentId: String? = nil) async throws -> Thread {
+    func createThread(title: String? = nil, covenId: String? = nil, agentId: String? = nil, agentName: String? = nil) async throws -> Thread {
         if let covenId = covenId {
-            // Legacy coven threads are not supported in the local-first client.
-            AppErrorReporter.log(message: "createThread(covenId: \(covenId)) called in local-only build – returning stub thread.", context: "ThreadService.createThread")
+            // Coven threads are persisted locally just like personal threads.
+            AppErrorReporter.log(message: "Creating coven thread (covenId: \(covenId)) in local store", context: "ThreadService.createThread")
             let now = Date()
             let thread = Thread(
                 id: UUID().uuidString,
@@ -124,7 +125,7 @@ actor ThreadService {
                 covenId: covenId,
                 title: title ?? "Coven Chat",
                 agentId: agentId,
-                agentName: nil,
+                agentName: agentName,
                 agentModel: nil,
                 isPinned: false,
                 isArchived: false,
@@ -133,6 +134,9 @@ actor ThreadService {
                 updatedAt: now,
                 lastMessageAt: nil
             )
+            personalThreads.append(thread)
+            persistPersonalThreads()
+            AnalyticsService.shared.trackThreadCreated(covenId: covenId, agentId: agentId)
             return thread
         } else {
             AppErrorReporter.log(message: "Creating personal thread in local store", context: "ThreadService.createThread")
@@ -143,7 +147,7 @@ actor ThreadService {
                 covenId: nil,
                 title: title ?? "New Chat",
                 agentId: agentId,
-                agentName: nil,
+                agentName: agentName,
                 agentModel: nil,
                 isPinned: false,
                 isArchived: false,
