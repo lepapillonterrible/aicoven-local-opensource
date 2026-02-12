@@ -73,6 +73,11 @@ actor FileToolService {
     func readFile(path: String, workingDir: String? = nil) async -> ToolExecutionResult {
         let resolvedPath = resolvePath(path, workingDir: workingDir)
         
+        // Check folder authorization
+        if let denied = await checkFolderAuthorization(resolvedPath, tool: "file.read") {
+            return denied
+        }
+        
         // Check if path is blocked
         if isPathBlocked(resolvedPath) {
             return .permissionDenied(
@@ -176,6 +181,11 @@ actor FileToolService {
     ) async -> ToolExecutionResult {
         let resolvedPath = resolvePath(path, workingDir: workingDir)
         
+        // Check folder authorization
+        if let denied = await checkFolderAuthorization(resolvedPath, tool: "file.write") {
+            return denied
+        }
+        
         // Check if path is blocked
         if isPathBlocked(resolvedPath) {
             return .permissionDenied(
@@ -249,6 +259,11 @@ actor FileToolService {
         maxItems: Int = 100
     ) async -> ToolExecutionResult {
         let resolvedPath = resolvePath(path, workingDir: workingDir)
+        
+        // Check folder authorization
+        if let denied = await checkFolderAuthorization(resolvedPath, tool: "file.list") {
+            return denied
+        }
         
         // Check if path is blocked
         if isPathBlocked(resolvedPath) {
@@ -486,5 +501,35 @@ actor FileToolService {
         } else {
             return String(format: "%.1f GB", Double(bytes) / (1024 * 1024 * 1024))
         }
+    }
+    
+    // MARK: - Folder Authorization
+    
+    /// Check whether the resolved path is under a user-authorized folder.
+    /// Returns a denial result if not authorized, nil if OK.
+    private func checkFolderAuthorization(_ resolvedPath: String, tool: String) async -> ToolExecutionResult? {
+        let accessible = await MainActor.run {
+            FileAccessManager.shared.isPathAccessible(resolvedPath)
+        }
+        
+        if !accessible {
+            // Post notification for auto-prompt
+            await MainActor.run {
+                NotificationCenter.default.post(
+                    name: FileAccessManager.requestFolderAccessNotification,
+                    object: nil,
+                    userInfo: ["path": resolvedPath, "tool": tool]
+                )
+            }
+            
+            return .error(
+                tool: tool,
+                message: "Access to '\(resolvedPath)' has not been granted. Please add this folder in Settings > File Access, or grant access when prompted.",
+                errorType: "folder_not_authorized",
+                isRetryable: true
+            )
+        }
+        
+        return nil
     }
 }

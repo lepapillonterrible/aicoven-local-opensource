@@ -138,6 +138,10 @@ struct EnhancedSettingsView: View {
                     }
                     .padding(.horizontal, Spacing.lg)
                     
+                    #if os(macOS)
+                    // File Access section
+                    FileAccessSettingsSection()
+                    #endif
 
                     // Integrations section
                     VStack(spacing: Spacing.md) {
