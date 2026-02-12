@@ -22,10 +22,14 @@ struct ConnectedAppsView: View {
     @State private var showingGooglePicker = false
     @State private var pickedFiles: [GooglePickerFile] = []
     
-    // OAuth client IDs - users should configure their own OAuth apps
-    // See settings section below or the README for setup instructions
-    @AppStorage("github_oauth_client_id") private var githubClientId = ""
-    @AppStorage("google_oauth_client_id") private var googleClientId = ""
+    // OAuth client IDs – pre-configured with AICoven's apps via Info.plist / xcconfig.
+    // Developers who fork the repo can override these in their own xcconfig.
+    private var githubClientId: String {
+        Bundle.main.infoDictionary?["GITHUB_OAUTH_CLIENT_ID"] as? String ?? "Iv23liJu04XRFISDVMBO"
+    }
+    private var googleClientId: String {
+        Bundle.main.infoDictionary?["GOOGLE_OAUTH_CLIENT_ID"] as? String ?? "870439799161-1c7u8utd0t0kh3ote5kugh8cj9961ugb.apps.googleusercontent.com"
+    }
     
     var body: some View {
         ScrollView {
@@ -98,9 +102,7 @@ struct ConnectedAppsView: View {
                     .padding(.horizontal)
                 }
                 
-                // OAuth configuration section
-                configurationSection
-                
+
                 Spacer(minLength: 40)
             }
         }
@@ -201,60 +203,7 @@ struct ConnectedAppsView: View {
         .padding(.horizontal)
     }
     
-    /// Configuration section for OAuth credentials
-    private var configurationSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("OAuth Configuration")
-                .font(.headline)
-            
-            Text("Pre-configured with AICoven's OAuth apps. You can use your own Client IDs if preferred.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-            
-            // GitHub config
-            VStack(alignment: .leading, spacing: 8) {
-                Text("GitHub OAuth App")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                
-                TextField("Client ID", text: $githubClientId)
-                    .textFieldStyle(.roundedBorder)
-                
-                Text("Uses Device Flow - no client secret needed")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                
-                Link("Create GitHub OAuth App →", destination: URL(string: "https://github.com/settings/developers")!)
-                    .font(.caption2)
-            }
-            
-            // Google config
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Google OAuth (PKCE)")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                
-                TextField("Client ID", text: $googleClientId)
-                    .textFieldStyle(.roundedBorder)
-                
-                Text("Uses PKCE flow - no client secret needed. Picker API Key and App ID are configured in xcconfig.")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                
-                Link("Create Google OAuth Client →", destination: URL(string: "https://console.cloud.google.com/apis/credentials")!)
-                    .font(.caption2)
-            }
-        }
-        .padding()
-        #if os(macOS)
-        .background(Color(NSColor.controlBackgroundColor))
-        #else
-        .background(Color(UIColor.secondarySystemBackground))
-        #endif
-        .cornerRadius(12)
-        .padding(.horizontal)
-    }
-    
+
     // MARK: - Actions
     
     /// Load accounts from ConnectedAccountsService
@@ -275,11 +224,6 @@ struct ConnectedAppsView: View {
             
             switch provider {
             case .github:
-                guard !githubClientId.isEmpty else {
-                    errorMessage = "Please configure GitHub Client ID first"
-                    connectingProvider = nil
-                    return
-                }
                 
                 // Use Device Flow for GitHub (no client secret needed)
                 let flow = GitHubDeviceFlow(clientId: githubClientId)
@@ -310,11 +254,6 @@ struct ConnectedAppsView: View {
                 metadata["login"] = displayName
                 
             case .googleDrive:
-                guard !googleClientId.isEmpty else {
-                    errorMessage = "Please configure Google Client ID first"
-                    connectingProvider = nil
-                    return
-                }
                 
                 let flow = await GoogleOAuthFlow(clientId: googleClientId)
                 tokenBundle = try await flow.authenticate()

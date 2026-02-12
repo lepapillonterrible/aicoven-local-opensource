@@ -236,10 +236,11 @@ actor ConnectedAccountsService {
     
     /// Refresh a Google OAuth token
     private func refreshGoogleToken(refreshToken: String, currentScopes: [String]) async throws -> OAuthTokenBundle {
-        // Get client ID from settings
-        guard let clientId = UserDefaults.standard.string(forKey: "google_oauth_client_id"),
-              !clientId.isEmpty else {
-            throw ConnectedAccountError.missingConfiguration(key: "google_oauth_client_id")
+        // Get client ID from Info.plist (set via xcconfig)
+        let clientId = Bundle.main.infoDictionary?["GOOGLE_OAUTH_CLIENT_ID"] as? String
+            ?? "870439799161-1c7u8utd0t0kh3ote5kugh8cj9961ugb.apps.googleusercontent.com"
+        guard !clientId.isEmpty else {
+            throw ConnectedAccountError.missingConfiguration(key: "GOOGLE_OAUTH_CLIENT_ID")
         }
         
         let url = URL(string: "https://oauth2.googleapis.com/token")!

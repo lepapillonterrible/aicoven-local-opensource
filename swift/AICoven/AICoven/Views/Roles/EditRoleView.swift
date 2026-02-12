@@ -48,10 +48,25 @@ struct EditRoleView: View {
         ("openai", "OpenAI"),
         ("anthropic", "Anthropic"),
         ("google", "Google AI"),
-        ("mistral", "Mistral AI"),
+        ("ollama", "Ollama (Local)"),
+        ("mlx", "MLX (On-Device)")
     ]
     
+    /// Whether the selected provider is local (no API key needed).
+    var isLocalProvider: Bool {
+        provider == "mlx" || provider == "ollama"
+    }
+
     var availableModels: [(String, String)] {
+        // Local providers: return models from local catalog.
+        if provider == "mlx" {
+            return MLXModelManager.defaultCatalog.map { ($0.id, $0.displayName) }
+        }
+        if provider == "ollama" {
+            let ollamaModel = UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model")) ?? "llama3.2"
+            return [(ollamaModel, ollamaModel)]
+        }
+        // Cloud providers: use dynamically discovered models.
         if let accountId = providerAccountId,
            let dynamic = accountModelOptions[accountId],
            !dynamic.isEmpty {
@@ -206,7 +221,19 @@ struct EditRoleView: View {
                                             .font(.aicovenCaption)
                                             .foregroundColor(.aicovenTextTertiary)
                                         
-                                        if loadingAccounts {
+                                        if isLocalProvider {
+                                            HStack(spacing: Spacing.sm) {
+                                                Image(systemName: "desktopcomputer")
+                                                    .foregroundColor(.aicovenTeal)
+                                                Text(provider == "mlx" ? "Running on-device via Apple Silicon" : "Running locally via Ollama")
+                                                    .font(.aicovenBody)
+                                                    .foregroundColor(.aicovenTextSecondary)
+                                            }
+                                            .padding(Spacing.sm)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .background(Color.aicovenGlass)
+                                            .cornerRadius(BorderRadius.sm)
+                                        } else if loadingAccounts {
                                             ProgressView()
                                                 .padding(Spacing.md)
                                         } else if providerAccounts.isEmpty {

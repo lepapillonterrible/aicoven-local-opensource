@@ -280,8 +280,6 @@ struct AddProviderKeySheet: View {
         ("openai", "OpenAI", "🤖"),
         ("anthropic", "Anthropic Claude", "🟣"),
         ("google", "Google Gemini", "🔵"),
-        ("mistral", "Mistral AI", "🌬️"),
-        ("cohere", "Cohere", "🧠"),
         ("ollama", "Ollama (Local)", "🦙"),
         ("mlx", "MLX (On-Device)", "🧠")
     ]

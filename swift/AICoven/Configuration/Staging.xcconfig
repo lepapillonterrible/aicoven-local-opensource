@@ -15,6 +15,14 @@ FIREBASE_AUTH_DOMAIN = aicoven.firebaseapp.com
 FIREBASE_STORAGE_BUCKET = aicoven.firebasestorage.app
 FIREBASE_MESSAGING_SENDER_ID = 870439799161
 
+// Google Drive Picker
+GOOGLE_PICKER_API_KEY = AIzaSyAkBw0uENipal61vfkhA0bjlgsoEHNWgGU
+GOOGLE_PICKER_APP_ID = 870439799161
+
+// Connected Apps – OAuth Client IDs (Device Flow / PKCE, no secrets needed)
+GITHUB_OAUTH_CLIENT_ID = Iv23liJu04XRFISDVMBO
+GOOGLE_OAUTH_CLIENT_ID = 870439799161-1c7u8utd0t0kh3ote5kugh8cj9961ugb.apps.googleusercontent.com
+
 // App Identifiers
 PRODUCT_BUNDLE_IDENTIFIER_IOS = com.aicoven.com.staging
 PRODUCT_BUNDLE_IDENTIFIER_MACOS = com.aicoven.com.staging

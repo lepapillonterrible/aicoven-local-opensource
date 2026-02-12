@@ -50,11 +50,26 @@ struct AddRoleView: View {
         ("openai", "OpenAI"),
         ("anthropic", "Anthropic"),
         ("google", "Google AI"),
-        ("mistral", "Mistral AI")
+        ("ollama", "Ollama (Local)"),
+        ("mlx", "MLX (On-Device)")
     ]
     
+    /// Whether the selected provider is local (no API key needed).
+    var isLocalProvider: Bool {
+        provider == "mlx" || provider == "ollama"
+    }
+
     var availableModels: [(String, String)] {
-        // Use dynamically discovered models for the selected provider account
+        // Local providers: return models from local catalog.
+        if provider == "mlx" {
+            return MLXModelManager.defaultCatalog.map { ($0.id, $0.displayName) }
+        }
+        if provider == "ollama" {
+            // Ollama models are dynamic — for now show the configured model.
+            let ollamaModel = UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model")) ?? "llama3.2"
+            return [(ollamaModel, ollamaModel)]
+        }
+        // Cloud providers: use dynamically discovered models.
         if let accountId = providerAccountId,
            let dynamic = accountModelOptions[accountId],
            !dynamic.isEmpty {
@@ -240,7 +255,20 @@ struct AddRoleView: View {
                                     .font(.aicovenCaption)
                                     .foregroundColor(.aicovenTextTertiary)
                                 
-                                if loadingAccounts {
+                                if isLocalProvider {
+                                    // Local providers don't need account selection.
+                                    HStack(spacing: Spacing.sm) {
+                                        Image(systemName: "desktopcomputer")
+                                            .foregroundColor(.aicovenTeal)
+                                        Text(provider == "mlx" ? "Running on-device via Apple Silicon" : "Running locally via Ollama")
+                                            .font(.aicovenBody)
+                                            .foregroundColor(.aicovenTextSecondary)
+                                    }
+                                    .padding(Spacing.sm)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color.aicovenGlass)
+                                    .cornerRadius(BorderRadius.sm)
+                                } else if loadingAccounts {
                                     ProgressView()
                                         .padding(Spacing.md)
                                 } else if providerAccounts.isEmpty {
