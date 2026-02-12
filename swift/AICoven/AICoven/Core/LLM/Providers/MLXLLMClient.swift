@@ -51,13 +51,16 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
             session.instructions = systemPrompt
         }
 
-        // Find last user message.
-        guard let userMessage = messages.last(where: { $0.role == .user })?.content else {
+        // Compose entire conversation history (non-system messages) so the
+        // model sees prior user/assistant exchanges including tool results
+        // that ChatService appends during the tool loop.
+        let composedPrompt = Self.composeConversationPrompt(from: messages)
+        guard !composedPrompt.isEmpty else {
             throw MLXClientError.noUserMessage
         }
 
-        print("🧠 [MLXLLMClient] Generating response for: \(userMessage.prefix(80))...")
-        let response = try await session.respond(to: userMessage)
+        print("🧠 [MLXLLMClient] Generating response for: \(composedPrompt.prefix(80))...")
+        let response = try await session.respond(to: composedPrompt)
         print("🧠 [MLXLLMClient] Response complete (\(response.count) chars)")
 
         return LLMChatResponse(
@@ -93,14 +96,15 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
                         session.instructions = systemPrompt
                     }
 
-                    guard let userMessage = messages.last(where: { $0.role == .user })?.content else {
+                    let composedPrompt = Self.composeConversationPrompt(from: messages)
+                    guard !composedPrompt.isEmpty else {
                         continuation.finish(throwing: MLXClientError.noUserMessage)
                         return
                     }
 
-                    print("🧠 [MLXLLMClient] Streaming \(effectiveModel): \(userMessage.prefix(80))...")
+                    print("🧠 [MLXLLMClient] Streaming \(effectiveModel): \(composedPrompt.prefix(80))...")
 
-                    let stream = session.streamResponse(to: userMessage)
+                    let stream = session.streamResponse(to: composedPrompt)
                     var tokenCount = 0
                     for try await token in stream {
                         tokenCount += 1
@@ -157,6 +161,30 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
         return container
     }
     #endif
+    // MARK: - Conversation prompt composition
+
+    /// Compose all non-system messages into a single prompt with role labels.
+    /// When there is only one user message (the common case), we return it
+    /// as-is to avoid unnecessary formatting. For multi-turn conversations
+    /// (e.g., during the tool loop) we label each turn so the model can
+    /// distinguish its own prior output from user input.
+    private static func composeConversationPrompt(from messages: [LLMMessage]) -> String {
+        let nonSystem = messages.filter { $0.role != .system }
+        guard !nonSystem.isEmpty else { return "" }
+
+        // Fast path: single user message — no labelling needed.
+        if nonSystem.count == 1, nonSystem[0].role == .user {
+            return nonSystem[0].content
+        }
+
+        return nonSystem.map { msg in
+            switch msg.role {
+            case .user:      return "User: \(msg.content)"
+            case .assistant: return "Assistant: \(msg.content)"
+            default:         return msg.content
+            }
+        }.joined(separator: "\n\n")
+    }
 }
 
 // MARK: - Errors
