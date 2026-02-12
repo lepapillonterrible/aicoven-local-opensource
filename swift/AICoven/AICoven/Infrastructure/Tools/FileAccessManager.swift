@@ -1,5 +1,5 @@
 import Foundation
-import Combine
+internal import Combine
 #if os(macOS)
 import AppKit
 #endif
