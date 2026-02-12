@@ -357,10 +357,16 @@ actor ChatService {
            let roleModel = role.model, !roleModel.isEmpty {
             prefProvider = roleProvider.lowercased()
             prefModel = roleModel
+            #if DEBUG
+            AppErrorReporter.log(message: "Role '\(role.name)' resolved provider=\(prefProvider) model=\(prefModel)", context: "ChatService.streamMessage.roleResolution")
+            #endif
         } else {
             let (globalProvider, globalModel) = resolveProviderAndModel()
             prefProvider = globalProvider
             prefModel = globalModel
+            #if DEBUG
+            AppErrorReporter.log(message: "No role override (roleId=\(roleId ?? "nil")); using global provider=\(prefProvider) model=\(prefModel)", context: "ChatService.streamMessage.roleResolution")
+            #endif
         }
         
         let descriptor: ModelDescriptor

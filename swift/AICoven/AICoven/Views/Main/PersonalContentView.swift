@@ -675,7 +675,7 @@ struct PersonalChatView: View {
             try await ChatService.shared.streamMessage(
                 threadId: thread.id,
                 message: fullTextForLLM,
-                roleId: nil, // Personal threads don't have explicit roles
+                roleId: thread.agentId,
                 attachmentIds: attachmentIds.isEmpty ? nil : attachmentIds,
                 onPlanningDelta: { delta in
                     Task { @MainActor in
