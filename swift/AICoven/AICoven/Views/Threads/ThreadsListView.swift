@@ -131,7 +131,7 @@ struct ThreadRow: View {
                         Text("• \(agentName)")
                             .fontWeight(.medium)
                     } else if isPersonal {
-                        Text("• AI Assistant")
+                        Text("• Strix")
                             .fontWeight(.medium)
                     }
                     

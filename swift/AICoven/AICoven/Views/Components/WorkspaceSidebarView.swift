@@ -5,6 +5,7 @@ struct WorkspaceSidebarView: View {
     @Binding var selectedCoven: Coven?
     @Binding var openTabs: [WorkspaceTab]
     @Binding var activeTabId: String?
+    @Binding var threadRefreshTrigger: Bool
     let roles: [Role]
     let onAddRole: (String) -> Void
     let onEditRole: (Role) -> Void
@@ -104,6 +105,13 @@ struct WorkspaceSidebarView: View {
         .onChange(of: selectedCoven) { _, newValue in
             Task {
                 if let covenId = newValue?.id {
+                    await loadThreads(covenId: covenId)
+                }
+            }
+        }
+        .onChange(of: threadRefreshTrigger) { _, _ in
+            Task {
+                if let covenId = selectedCoven?.id {
                     await loadThreads(covenId: covenId)
                 }
             }

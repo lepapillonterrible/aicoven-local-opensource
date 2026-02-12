@@ -369,7 +369,7 @@ struct PersonalChatView: View {
                                     HStack(spacing: 6) {
                                         Image(systemName: "sparkles")
                                         // Show "Strix" for the default personal assistant
-                                        Text(thread.agentName ?? "AI Assistant")
+                                        Text(thread.agentName ?? "Strix")
                                     }
                                     .font(.caption)
                                     .foregroundStyle(Color.aicovenTeal)
@@ -895,7 +895,7 @@ struct PersonalChatHeader: View {
                     Image(systemName: "sparkles")
                         .font(.system(size: 10))
                     // Show thread's agent name or generic label
-                    Text(thread.agentName ?? "AI Assistant")
+                    Text(thread.agentName ?? "Strix")
                         .font(.aicovenCaption)
                 }
                 .foregroundColor(.aicovenTextSecondary)

@@ -91,8 +91,8 @@ struct RichMessageBubble: View {
     @ViewBuilder private var header: some View {
         HStack(spacing: 6) {
             Image(systemName: "sparkles")
-            // Default to "AI Assistant" when no agent role is provided
-            Text(message.agentRole ?? "AI Assistant")
+            // Default to "Strix" for personal threads when no agent role is provided
+            Text(message.agentRole ?? "Strix")
             if let model = message.model { Text(model).font(.caption2).padding(.horizontal, 6).padding(.vertical, 2).background(Color.secondary.opacity(0.15)).clipShape(Capsule()) }
         }
         .font(.caption)
@@ -116,7 +116,7 @@ struct RichMessageBubble_Previews: PreviewProvider {
                 threadId: "t",
                 role: "assistant",
                 content: "**Hello** world!\n\n```swift\nprint(\"Hi\")\n```",
-                agentRole: "AI Assistant",
+                agentRole: "Strix",
                 model: "gpt-5.2",
                 provider: "openai",
                 tokens: 123,

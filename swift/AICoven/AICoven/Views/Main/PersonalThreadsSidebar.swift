@@ -200,7 +200,7 @@ struct PersonalThreadRow: View {
                         .lineLimit(1)
                     
                     // Show agent name and model (if available)
-                    let agentName = thread.agentName ?? "AI Assistant"
+                    let agentName = thread.agentName ?? "Strix"
                     if let model = displayModel {
                         Text("\(agentName) • \(model)")
                             .font(.aicovenCaption)

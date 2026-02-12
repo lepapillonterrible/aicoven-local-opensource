@@ -13,6 +13,7 @@ struct WorkspaceView: View {
     @State private var openTabs: [WorkspaceTab] = []
     @State private var activeTabId: String?
     @State private var roles: [Role] = []
+    @State private var threadRefreshTrigger = false
     
     private let analytics = AnalyticsService.shared
     
@@ -30,6 +31,7 @@ struct WorkspaceView: View {
                     selectedCoven: $selectedCoven,
                     openTabs: $openTabs,
                     activeTabId: $activeTabId,
+                    threadRefreshTrigger: $threadRefreshTrigger,
                     roles: roles,
                     onAddRole: handleAddRole,
                     onEditRole: handleEditRole,
@@ -130,13 +132,15 @@ struct WorkspaceView: View {
                 let thread = try await ThreadService.shared.createThread(
                     title: "Chat with \(role.name)",
                     covenId: coven.id,
-                    agentId: role.id
+                    agentId: role.id,
+                    agentName: role.name
                 )
                 analytics.trackThreadCreate(threadId: thread.id, covenId: coven.id, hasTitle: true)
                 analytics.trackRoleAssign(roleId: role.id, threadId: thread.id)
                 let tab = WorkspaceTab.thread(thread)
                 openTabs.append(tab)
                 activeTabId = tab.id
+                threadRefreshTrigger.toggle()
             } catch {
                 AppErrorReporter.log(error: error, context: "WorkspaceView.handleTapRole")
                 analytics.trackError(errorType: "thread_create", errorMessage: error.localizedDescription, context: "WorkspaceView")
