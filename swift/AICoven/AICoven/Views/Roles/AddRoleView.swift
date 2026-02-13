@@ -39,6 +39,9 @@ struct AddRoleView: View {
     /// Keyed by provider account ID.
     @State private var accountModelOptions: [String: [(String, String)]] = [:]
     
+    /// Dynamically discovered Ollama models (from /api/tags).
+    @State private var ollamaModels: [(String, String)] = []
+    
     // Tools state
     @State private var selectedTools: Set<String> = Set(DEFAULT_ALLOWED_TOOLS)
     
@@ -65,7 +68,10 @@ struct AddRoleView: View {
             return MLXModelManager.defaultCatalog.map { ($0.id, $0.displayName) }
         }
         if provider == "ollama" {
-            // Ollama models are dynamic — for now show the configured model.
+            if !ollamaModels.isEmpty {
+                return ollamaModels
+            }
+            // Fallback to the configured default while discovery is in progress
             let ollamaModel = UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model")) ?? "llama3.2"
             return [(ollamaModel, ollamaModel)]
         }
@@ -537,6 +543,7 @@ struct AddRoleView: View {
             analytics.trackScreenView(screenName: "AddRoleView", screenClass: "AddRoleView")
             Task {
                 await loadData()
+                await discoverOllamaModels()
             }
         }
     }
@@ -566,6 +573,24 @@ struct AddRoleView: View {
             print("❌ Failed to load provider accounts: \(error.localizedDescription)")
         }
         loadingAccounts = false
+    }
+    
+    /// Discover locally available Ollama models via /api/tags.
+    private func discoverOllamaModels() async {
+        let client = OllamaLLMClient()
+        do {
+            let models = try await client.discoverModels()
+            if !models.isEmpty {
+                ollamaModels = models.map { m in (m.name, m.formattedSize.map { s in "\(m.name) (\(s))" } ?? m.name) }
+                // If current model isn't in the discovered list, default to first
+                if provider == "ollama", !ollamaModels.contains(where: { $0.0 == model }) {
+                    model = ollamaModels.first?.0 ?? model
+                }
+            }
+        } catch {
+            // Ollama not running or unreachable — keep fallback
+            print("⚠️ Could not discover Ollama models: \(error.localizedDescription)")
+        }
     }
     
     /// Load initialization metadata for a provider account
