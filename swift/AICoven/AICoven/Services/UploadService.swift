@@ -7,11 +7,11 @@ import Foundation
 /// local-only.
 actor UploadService {
     static let shared = UploadService()
-    
+
     /// Feature flag for upload functionality (set to true to enable uploads).
     /// In the local-only client this is `false` so we never talk to the
     /// legacy backend and instead treat attachments as local files.
-    nonisolated private static let uploadEnabled = false
+    private nonisolated static let uploadEnabled = false
 
     /// Upload a file and return attachment detail.
     ///

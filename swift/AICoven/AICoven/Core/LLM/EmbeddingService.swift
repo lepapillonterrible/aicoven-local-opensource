@@ -18,38 +18,44 @@ actor EmbeddingService {
     init(memoryRepository: MemoryRepository = .shared) {
         self.memoryRepository = memoryRepository
         let env = LLMConfiguration.makeEnvironment()
-        self.modelRouter = HeuristicModelRouter(availableModels: env.models)
-        self.llmClients = env.clients
+        modelRouter = HeuristicModelRouter(availableModels: env.models)
+        llmClients = env.clients
     }
 
     /// Indexes a new memory chunk:
     /// - Picks an embedding-capable model via the router.
     /// - Computes an embedding for the given text.
     /// - Stores the memory+embedding via MemoryRepository.
-    func indexMemory(scope: String,
-                     text: String,
-                     tags: [String],
-                     pii: Bool,
-                     createdBy: String?,
-                     source: String?) async throws -> LocalMemoryChunk {
+    func indexMemory(
+        scope: String,
+        text: String,
+        tags: [String],
+        pii: Bool,
+        createdBy: String?,
+        source: String?
+    ) async throws -> LocalMemoryChunk {
         let embedding = try await embedText(text)
-        return try await memoryRepository.storeMemory(scope: scope,
-                                                      text: text,
-                                                      tags: tags,
-                                                      pii: pii,
-                                                      createdBy: createdBy,
-                                                      source: source,
-                                                      embedding: embedding)
+        return try await memoryRepository.storeMemory(
+            scope: scope,
+            text: text,
+            tags: tags,
+            pii: pii,
+            createdBy: createdBy,
+            source: source,
+            embedding: embedding
+        )
     }
 
     /// Computes an embedding for ad-hoc queries (e.g., search prompts).
     func embedText(_ text: String) async throws -> [Float]? {
         guard !llmClients.isEmpty else { return nil }
 
-        let ctx = RoutingContext(task: .embed,
-                                 requireLocalOnly: false,
-                                 requireLongContext: false,
-                                 preferHighQuality: false)
+        let ctx = RoutingContext(
+            task: .embed,
+            requireLocalOnly: false,
+            requireLongContext: false,
+            preferHighQuality: false
+        )
         guard let descriptor = modelRouter.route(for: ctx),
               descriptor.supportsEmbeddings,
               let client = llmClients[descriptor.providerID] else {
@@ -69,22 +75,23 @@ actor EmbeddingService {
     ///
     /// If no provider is configured for embeddings and no lexical overlap is
     /// found, falls back to recency-based retrieval.
-    func searchRelevantMemories(query: String,
-                                scope: String? = nil,
-                                topK: Int = 16,
-                                candidateLimit: Int = 200,
-                                includePII: Bool = false,
-                                similarityThreshold: Float = 0.15) async throws -> [LocalMemoryChunk] {
+    func searchRelevantMemories(
+        query: String,
+        scope: String? = nil,
+        topK: Int = 16,
+        candidateLimit: Int = 200,
+        includePII: Bool = false,
+        similarityThreshold: Float = 0.15
+    ) async throws -> [LocalMemoryChunk] {
         let lowercasedQuery = query.lowercased()
         let queryTokens = tokenize(lowercasedQuery)
 
         let queryEmbedding = try await embedText(query)
         let allCandidates = try await memoryRepository.loadMemories(scope: scope, limit: candidateLimit)
-        let candidates: [LocalMemoryChunk]
-        if includePII {
-            candidates = allCandidates
+        let candidates: [LocalMemoryChunk] = if includePII {
+            allCandidates
         } else {
-            candidates = allCandidates.filter { !$0.pii }
+            allCandidates.filter { !$0.pii }
         }
 
         // Blend semantic similarity (if available) with a cheap lexical score
@@ -108,13 +115,12 @@ actor EmbeddingService {
             }
 
             // Semantic score via cosine similarity if we have embeddings.
-            let semanticScore: Float
-            if let qEmb = queryEmbedding,
-               let emb = chunk.embedding,
-               emb.count == qEmb.count {
-                semanticScore = cosineSimilarity(qEmb, emb)
+            let semanticScore: Float = if let qEmb = queryEmbedding,
+                                          let emb = chunk.embedding,
+                                          emb.count == qEmb.count {
+                cosineSimilarity(qEmb, emb)
             } else {
-                semanticScore = 0
+                0
             }
 
             let combined = alpha * semanticScore + (1 - alpha) * lexicalScore
@@ -175,7 +181,7 @@ actor EmbeddingService {
         var dot: Float = 0
         var normA: Float = 0
         var normB: Float = 0
-        for i in 0..<count {
+        for i in 0 ..< count {
             let va = a[i]
             let vb = b[i]
             dot += va * vb

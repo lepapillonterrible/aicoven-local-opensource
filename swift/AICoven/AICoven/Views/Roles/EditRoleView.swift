@@ -3,11 +3,11 @@ import SwiftUI
 /// View for editing an existing agent role
 struct EditRoleView: View {
     let roleId: String
-    let roles: [Role]  // All roles for collaborator selection
+    let roles: [Role] // All roles for collaborator selection
     let onComplete: () -> Void
-    
+
     private let analytics = AnalyticsService.shared
-    
+
     @State private var loading = true
     @State private var role: Role?
     @State private var name = ""
@@ -28,30 +28,45 @@ struct EditRoleView: View {
     @State private var showEmojiPicker = false
     @State private var showDeleteConfirmation = false
     @State private var deleting = false
-    
+
     // Provider accounts state
     @State private var providerAccounts: [ProviderAccount] = []
     @State private var loadingAccounts = false
-    
+
     /// Per-account model options derived from initialization metadata.
     /// Keyed by provider account ID.
     @State private var accountModelOptions: [String: [(String, String)]] = [:]
-    
-    // Tools state
+
+    /// Tools state
     @State private var selectedTools: Set<String> = []
-    
-    // Collaborators state
+
+    /// Collaborators state
     @State private var selectedCollaborators: Set<String> = []
-    
+
     let emojiOptions = ["🤖", "🧠", "💡", "🎨", "📝", "🔍", "⚙️", "📊", "🚀", "💬", "🎯", "🔬", "📚", "✨", "🌟", "🎭"]
     let providerOptions = [
         ("openai", "OpenAI"),
         ("anthropic", "Anthropic"),
         ("google", "Google AI"),
-        ("mistral", "Mistral AI"),
+        ("ollama", "Ollama (Local)"),
+        ("mlx", "MLX (On-Device)")
     ]
-    
+
+    /// Whether the selected provider is local (no API key needed).
+    var isLocalProvider: Bool {
+        provider == "mlx" || provider == "ollama"
+    }
+
     var availableModels: [(String, String)] {
+        // Local providers: return models from local catalog.
+        if provider == "mlx" {
+            return MLXModelManager.defaultCatalog.map { ($0.id, $0.displayName) }
+        }
+        if provider == "ollama" {
+            let ollamaModel = UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model")) ?? "llama3.2"
+            return [(ollamaModel, ollamaModel)]
+        }
+        // Cloud providers: use dynamically discovered models.
         if let accountId = providerAccountId,
            let dynamic = accountModelOptions[accountId],
            !dynamic.isEmpty {
@@ -59,7 +74,7 @@ struct EditRoleView: View {
         }
         return []
     }
-    
+
     var body: some View {
         Group {
             if loading {
@@ -76,17 +91,17 @@ struct EditRoleView: View {
                         // Header
                         VStack(spacing: Spacing.sm) {
                             IconBadge(icon: "pencil.circle", size: 60, color: .aicovenPurple)
-                            
+
                             Text("Edit Agent Role")
                                 .font(.aicovenDisplaySmall)
                                 .foregroundColor(.aicovenTextPrimary)
-                            
+
                             Text("Update role configuration")
                                 .font(.aicovenBody)
                                 .foregroundColor(.aicovenTextSecondary)
                         }
                         .padding(.top, Spacing.xl)
-                        
+
                         // Form
                         VStack(spacing: Spacing.lg) {
                             // Basic info
@@ -97,7 +112,7 @@ struct EditRoleView: View {
                                         Text("Icon")
                                             .font(.aicovenH3)
                                             .foregroundColor(.aicovenTextPrimary)
-                                        
+
                                         Button {
                                             showEmojiPicker.toggle()
                                         } label: {
@@ -108,7 +123,7 @@ struct EditRoleView: View {
                                                 .cornerRadius(BorderRadius.md)
                                         }
                                         .buttonStyle(.plain)
-                                        
+
                                         if showEmojiPicker {
                                             FlowLayout(spacing: Spacing.sm) {
                                                 ForEach(emojiOptions, id: \.self) { option in
@@ -127,22 +142,22 @@ struct EditRoleView: View {
                                             }
                                         }
                                     }
-                                    
+
                                     // Name
                                     FormField(label: "Name", text: $name, placeholder: "Code Assistant")
-                                    
+
                                     // Description
                                     FormField(label: "Description", text: $description, placeholder: "Helps with coding tasks and reviews", multiline: true)
                                 }
                             }
-                            
+
                             // System prompt
                             GlassCard {
                                 VStack(spacing: Spacing.sm) {
                                     Text("System Prompt")
                                         .font(.aicovenH3)
                                         .foregroundColor(.aicovenTextPrimary)
-                                    
+
                                     TextEditor(text: $systemPrompt)
                                         .font(.aicovenBody)
                                         .foregroundColor(.aicovenTextPrimary)
@@ -151,113 +166,132 @@ struct EditRoleView: View {
                                         .background(Color.aicovenGlass)
                                         .cornerRadius(BorderRadius.md)
                                         .scrollContentBackground(.hidden)
-                                    
+
                                     Text("Define the role's behavior, personality, and capabilities")
                                         .font(.aicovenCaption)
                                         .foregroundColor(.aicovenTextTertiary)
                                 }
                             }
-                            
+
                             // Model configuration
                             GlassCard {
                                 VStack(spacing: Spacing.md) {
-                                    // Provider
-                                    VStack(alignment: .leading, spacing: Spacing.sm) {
-                                        Text("Provider")
-                                            .font(.aicovenH3)
-                                            .foregroundColor(.aicovenTextPrimary)
-                                        
-                                        ForEach(providerOptions, id: \.0) { option in
-                                            Button {
-                                                provider = option.0
-                                                providerAccountId = nil
-
-                                                if let firstModel = availableModels.first {
-                                                    model = firstModel.0
-                                                }
-                                            } label: {
-                                                HStack {
-                                                    Text(option.1)
-                                                        .font(.aicovenBody)
-                                                        .foregroundColor(.aicovenTextPrimary)
-                                                    
-                                                    Spacer()
-                                                    
-                                                    if provider == option.0 {
-                                                        Image(systemName: "checkmark.circle.fill")
-                                                            .foregroundColor(.aicovenTeal)
-                                                    }
-                                                }
-                                                .padding(Spacing.sm)
-                                                .background(provider == option.0 ? Color.aicovenGlass : Color.clear)
-                                                .cornerRadius(BorderRadius.sm)
-                                            }
-                                            .buttonStyle(.plain)
-                                        }
-                                    }
-                                    
-                                    // Provider Account (API key selection)
+                                    // Provider Account selection - shows all accounts grouped by provider,
+                                    // allowing the user to switch between cloud providers and local models.
                                     VStack(alignment: .leading, spacing: Spacing.sm) {
                                         Text("Provider Account")
                                             .font(.aicovenH3)
                                             .foregroundColor(.aicovenTextPrimary)
-                                        
-                                        Text("Choose which API key this role should use")
+
+                                        Text("Select which API key to use for this role")
                                             .font(.aicovenCaption)
                                             .foregroundColor(.aicovenTextTertiary)
-                                        
+
                                         if loadingAccounts {
                                             ProgressView()
                                                 .padding(Spacing.md)
-                                        } else if providerAccounts.isEmpty {
-                                            Text("No provider accounts found. Add one in Settings.")
-                                                .font(.aicovenBody)
-                                                .foregroundColor(.aicovenTextTertiary)
-                                                .padding(Spacing.md)
                                         } else {
-                                            let matchingAccounts = providerAccounts.filter { $0.provider.lowercased() == provider.lowercased() }
-                                            let accountsToShow = matchingAccounts.isEmpty ? providerAccounts : matchingAccounts
+                                            // Group accounts by provider and show all available options
+                                            let accountsByProvider = Dictionary(grouping: providerAccounts) { $0.provider.lowercased() }
+                                            ForEach(providerOptions, id: \.0) { option in
+                                                let accountsForProvider = accountsByProvider[option.0] ?? []
 
-                                            ForEach(accountsToShow) { account in
-                                                Button {
-                                                    providerAccountId = account.id
-                                                    provider = account.provider
-                                                    Task {
-                                                        await loadModelsForAccount(account)
-                                                    }
-                                                } label: {
-                                                    HStack {
-                                                        VStack(alignment: .leading, spacing: Spacing.xxs) {
-                                                            Text(account.displayName)
-                                                                .font(.aicovenBody)
-                                                                .foregroundColor(.aicovenTextPrimary)
-                                                            if let modelLabel = accountModelOptions[account.id]?.first(where: { $0.0 == account.defaultModel })?.1 ?? account.defaultModel {
-                                                                Text("Model: \(modelLabel)")
-                                                                    .font(.aicovenCaption)
-                                                                    .foregroundColor(.aicovenTextTertiary)
+                                                // Show cloud provider accounts if any exist
+                                                if !accountsForProvider.isEmpty {
+                                                    VStack(alignment: .leading, spacing: Spacing.xs) {
+                                                        Text(option.1)
+                                                            .font(.aicovenH3)
+                                                            .foregroundColor(.aicovenTextSecondary)
+                                                            .padding(.top, Spacing.sm)
+                                                        ForEach(accountsForProvider) { account in
+                                                            Button {
+                                                                providerAccountId = account.id
+                                                                provider = account.provider
+                                                                Task {
+                                                                    await loadModelsForAccount(account)
+                                                                }
+                                                            } label: {
+                                                                HStack {
+                                                                    VStack(alignment: .leading, spacing: Spacing.xxs) {
+                                                                        Text(account.displayName)
+                                                                            .font(.aicovenBody)
+                                                                            .foregroundColor(.aicovenTextPrimary)
+                                                                        if let modelLabel = accountModelOptions[account.id]?.first(where: { $0.0 == account.defaultModel })?.1 ?? account.defaultModel {
+                                                                            Text("Model: \(modelLabel)")
+                                                                                .font(.aicovenCaption)
+                                                                                .foregroundColor(.aicovenTextTertiary)
+                                                                        }
+                                                                    }
+
+                                                                    Spacer()
+
+                                                                    if providerAccountId == account.id {
+                                                                        Image(systemName: "checkmark.circle.fill")
+                                                                            .foregroundColor(.aicovenTeal)
+                                                                    }
+                                                                }
+                                                                .padding(Spacing.sm)
+                                                                .background(providerAccountId == account.id ? Color.aicovenGlass : Color.clear)
+                                                                .cornerRadius(BorderRadius.sm)
                                                             }
-                                                        }
-                                                        Spacer()
-                                                        if providerAccountId == account.id {
-                                                            Image(systemName: "checkmark.circle.fill")
-                                                                .foregroundColor(.aicovenTeal)
+                                                            .buttonStyle(.plain)
                                                         }
                                                     }
-                                                    .padding(Spacing.sm)
-                                                    .background(providerAccountId == account.id ? Color.aicovenGlass : Color.clear)
-                                                    .cornerRadius(BorderRadius.sm)
                                                 }
-                                                .buttonStyle(.plain)
+
+                                                // Show local provider options (MLX and Ollama) even without accounts
+                                                if option.0 == "mlx" || option.0 == "ollama" {
+                                                    VStack(alignment: .leading, spacing: Spacing.xs) {
+                                                        Text(option.1)
+                                                            .font(.aicovenH3)
+                                                            .foregroundColor(.aicovenTextSecondary)
+                                                            .padding(.top, Spacing.sm)
+                                                        Button {
+                                                            provider = option.0
+                                                            providerAccountId = nil
+                                                            if let firstModel = availableModels.first {
+                                                                model = firstModel.0
+                                                            }
+                                                        } label: {
+                                                            HStack {
+                                                                Image(systemName: "desktopcomputer")
+                                                                    .foregroundColor(.aicovenTeal)
+                                                                Text(option.0 == "mlx" ? "Run on-device via Apple Silicon" : "Run locally via Ollama")
+                                                                    .font(.aicovenBody)
+                                                                    .foregroundColor(.aicovenTextPrimary)
+
+                                                                Spacer()
+
+                                                                if provider == option.0, providerAccountId == nil {
+                                                                    Image(systemName: "checkmark.circle.fill")
+                                                                        .foregroundColor(.aicovenTeal)
+                                                                }
+                                                            }
+                                                            .padding(Spacing.sm)
+                                                            .background((provider == option.0 && providerAccountId == nil) ? Color.aicovenGlass : Color.clear)
+                                                            .cornerRadius(BorderRadius.sm)
+                                                        }
+                                                        .buttonStyle(.plain)
+                                                    }
+                                                }
+                                            }
+
+                                            // Show hint if no cloud accounts are available
+                                            if providerAccounts.isEmpty {
+                                                Text("Add API keys in Settings to use cloud providers.")
+                                                    .font(.aicovenCaption)
+                                                    .foregroundColor(.aicovenTextTertiary)
+                                                    .padding(.top, Spacing.sm)
                                             }
                                         }
                                     }
-                                    
+
                                     // Model
                                     VStack(alignment: .leading, spacing: Spacing.sm) {
                                         Text("Model")
                                             .font(.aicovenH3)
                                             .foregroundColor(.aicovenTextPrimary)
-                                        
+
                                         Menu {
                                             ForEach(availableModels, id: \.0) { option in
                                                 Button(option.1) {
@@ -279,29 +313,29 @@ struct EditRoleView: View {
                                             .cornerRadius(BorderRadius.sm)
                                         }
                                     }
-                                    
+
                                     // Temperature
                                     VStack(alignment: .leading, spacing: Spacing.sm) {
                                         HStack {
                                             Text("Temperature")
                                                 .font(.aicovenH3)
                                                 .foregroundColor(.aicovenTextPrimary)
-                                            
+
                                             Spacer()
-                                            
+
                                             Text(String(format: "%.1f", temperature))
                                                 .font(.aicovenBody)
                                                 .foregroundColor(.aicovenTextSecondary)
                                         }
-                                        
-                                        Slider(value: $temperature, in: 0...2, step: 0.1)
+
+                                        Slider(value: $temperature, in: 0 ... 2, step: 0.1)
                                             .tint(.aicovenTeal)
-                                        
+
                                         Text("Lower = more focused, Higher = more creative")
                                             .font(.aicovenCaption)
                                             .foregroundColor(.aicovenTextTertiary)
                                     }
-                                    
+
                                     // Max tokens
                                     FormField(label: "Max Tokens", text: $maxTokens, placeholder: "2000")
 
@@ -361,7 +395,7 @@ struct EditRoleView: View {
                             }
                         }
                         .padding(.horizontal, Spacing.lg)
-                        
+
                         // Action buttons
                         VStack(spacing: Spacing.md) {
                             // Save button
@@ -371,7 +405,7 @@ struct EditRoleView: View {
                                 }
                             }
                             .disabled(name.isEmpty || saving)
-                            
+
                             // Delete button
                             Button {
                                 showDeleteConfirmation = true
@@ -416,26 +450,26 @@ struct EditRoleView: View {
             Text("Are you sure you want to delete this role? This action cannot be undone.")
         }
     }
-    
+
     /// Load role data
     private func loadRole() async {
         print("🔍 EditRoleView loading role with ID: \(roleId)")
         loading = true
-        
+
         // Load provider accounts
         do {
             providerAccounts = try await ProviderAccountService.shared.loadProviderAccounts()
         } catch {
             print("❌ Failed to load provider accounts: \(error.localizedDescription)")
         }
-        
+
         // Load role
         do {
             role = try await RoleService.shared.getRole(roleId: roleId)
             print("✅ Loaded role: \(role?.name ?? "unknown") with ID: \(role?.id ?? "unknown")")
-            
+
             // Populate form fields
-            if let role = role {
+            if let role {
                 name = role.name
                 emoji = role.emoji ?? "🤖"
                 description = role.description ?? ""
@@ -445,7 +479,7 @@ struct EditRoleView: View {
                 providerAccountId = role.providerAccountId
                 temperature = role.temperature ?? 0.7
                 maxTokens = String(role.maxTokens ?? 2000)
-                
+
                 // Populate tools, collaborators, and autonomous config from settings
                 if let settings = role.settings {
                     if let tools = settings.allowedTools {
@@ -467,7 +501,7 @@ struct EditRoleView: View {
                         plannerMaxSeconds = String(format: "%.0f", plannerSeconds)
                     }
                 }
-                
+
                 // Hydrate dynamic model options for the linked provider account
                 if let accountId = providerAccountId,
                    let account = providerAccounts.first(where: { $0.id == accountId }) {
@@ -477,10 +511,10 @@ struct EditRoleView: View {
         } catch {
             print("❌ Failed to load role: \(error.localizedDescription)")
         }
-        
+
         loading = false
     }
-    
+
     /// Load initialization metadata for a provider account
     private func loadModelsForAccount(_ account: ProviderAccount) async {
         do {
@@ -502,14 +536,14 @@ struct EditRoleView: View {
             print("⚠️ Failed to load initialization status for account \(account.id): \(error.localizedDescription)")
         }
     }
-    
+
     /// Save role changes
     private func saveRole() async {
         guard let maxTokensInt = Int(maxTokens) else { return }
-        
+
         saving = true
         defer { saving = false }
-        
+
         do {
             let stepsInt = Int(autonomousMaxSteps) ?? 5
             let rawPlannerTasks = Int(plannerMaxTasks) ?? 5
@@ -534,7 +568,7 @@ struct EditRoleView: View {
                 plannerMaxTasks: plannerTasksInt,
                 plannerMaxSeconds: plannerSecondsDouble
             )
-            
+
             analytics.trackRoleUpdate(roleId: roleId, field: "all")
             onComplete()
         } catch {
@@ -542,12 +576,12 @@ struct EditRoleView: View {
             analytics.trackError(errorType: "role_update", errorMessage: error.localizedDescription, context: "EditRoleView")
         }
     }
-    
+
     /// Delete role
     private func deleteRole() async {
         deleting = true
         defer { deleting = false }
-        
+
         do {
             try await RoleService.shared.deleteRole(roleId: roleId)
             analytics.trackRoleDelete(roleId: roleId)

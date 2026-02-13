@@ -1,0 +1,43 @@
+# SwiftFormat configuration for AICoven
+# https://github.com/nicklockwood/SwiftFormat
+
+--swiftversion 6.0
+
+# --- Rules ---
+
+# Disable rules that conflict with project style or are too aggressive
+--disable blankLinesAtStartOfScope
+--disable blankLinesAtEndOfScope
+--disable trailingCommas
+--disable wrapMultilineStatementBraces
+
+# Keep existing grouping style for numbers
+--disable numberFormatting
+
+# Don't reorder imports — Xcode ordering is fine
+--disable sortImports
+
+# Indentation
+--indent 4
+--indentcase false
+--ifdef no-indent
+
+# Wrapping
+--maxwidth none
+--wraparguments before-first
+--wrapparameters before-first
+--wrapcollections before-first
+
+# Braces
+--allman false
+
+# Semicolons
+--semicolons never
+
+# Misc
+--self remove
+--stripunusedargs closure-only
+--commas inline
+
+# Exclude generated/vendored code
+--exclude Pods,**/*.generated.swift,DerivedData

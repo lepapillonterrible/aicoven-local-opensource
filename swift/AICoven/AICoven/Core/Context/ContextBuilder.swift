@@ -24,7 +24,7 @@ struct ContextBuilder {
         let maxRecentMessages: Int
         let maxRecentMemories: Int
     }
-    
+
     /// Configuration for tool-enabled prompts.
     /// Conforms to Sendable since all properties are value types.
     struct ToolConfig: Sendable {
@@ -36,39 +36,59 @@ struct ContextBuilder {
         let includeScratchpad: Bool
         /// Whether to include memory write instructions.
         let includeMemoryWrite: Bool
-        
+        /// Whether the provider is a local model (MLX/Ollama), which needs
+        /// shorter, more directive prompts.
+        let isLocalModel: Bool
+
         /// Default configuration with basic chat tools enabled.
         static let `default` = ToolConfig(
             enabledTools: PromptTemplates.basicChatTools,
             includeThoughtBlocks: true,
             includeScratchpad: true,
-            includeMemoryWrite: true
+            includeMemoryWrite: true,
+            isLocalModel: false
         )
-        
+
         /// Configuration with no tools enabled.
         static let noTools = ToolConfig(
             enabledTools: [],
             includeThoughtBlocks: false,
             includeScratchpad: false,
-            includeMemoryWrite: false
+            includeMemoryWrite: false,
+            isLocalModel: false
         )
-        
+
         /// Configuration with all tools enabled.
         static let allTools = ToolConfig(
             enabledTools: PromptTemplates.allTools,
             includeThoughtBlocks: true,
             includeScratchpad: true,
-            includeMemoryWrite: true
+            includeMemoryWrite: true,
+            isLocalModel: false
+        )
+
+        /// Configuration optimized for small local models (MLX, Ollama).
+        /// Uses fewer tools and no thought/scratchpad/memory instructions.
+        static let mlxTools = ToolConfig(
+            enabledTools: PromptTemplates.basicChatTools
+                .union(PromptTemplates.fileTools)
+                .union(PromptTemplates.shellTools),
+            includeThoughtBlocks: false,
+            includeScratchpad: false,
+            includeMemoryWrite: false,
+            isLocalModel: true
         )
     }
 
     let limits: Limits
 
-    init(threadRepository: ThreadRepository = .shared,
-         memoryRepository: MemoryRepository = .shared,
-         embeddingService: EmbeddingService = .shared,
-         toolService: ToolService = .shared,
-         limits: Limits = .init(maxRecentMessages: 16, maxRecentMemories: 16)) {
+    init(
+        threadRepository: ThreadRepository = .shared,
+        memoryRepository: MemoryRepository = .shared,
+        embeddingService: EmbeddingService = .shared,
+        toolService: ToolService = .shared,
+        limits: Limits = .init(maxRecentMessages: 16, maxRecentMemories: 16)
+    ) {
         self.threadRepository = threadRepository
         self.memoryRepository = memoryRepository
         self.embeddingService = embeddingService
@@ -89,10 +109,12 @@ struct ContextBuilder {
     ///     few turns while dropping older context first.
     ///   - toolConfig: Configuration for which tools are enabled and what
     ///     instructions to include. Defaults to basic chat tools.
-    func buildContext(threadID: String?,
-                      userMessage: String,
-                      maxContextTokens: Int? = nil,
-                      toolConfig: ToolConfig = .default) async throws -> [LLMMessage] {
+    func buildContext(
+        threadID: String?,
+        userMessage: String,
+        maxContextTokens: Int? = nil,
+        toolConfig: ToolConfig = .default
+    ) async throws -> [LLMMessage] {
         // Split combined user text into the visible question and any
         // tool-generated context block appended by the composer/tools layer.
         let split = Self.splitUserAndToolContext(from: userMessage)
@@ -102,18 +124,24 @@ struct ContextBuilder {
         var segments = ContextSegments()
 
         // Layer 1: system contract (with tool documentation if tools are enabled)
-        let systemPrompt: String
-        if !toolConfig.enabledTools.isEmpty {
-            // Generate full agent prompt with tool documentation
-            systemPrompt = PromptTemplates.generateAgentPrompt(
-                enabledTools: toolConfig.enabledTools,
-                includeThoughtBlocks: toolConfig.includeThoughtBlocks,
-                includeScratchpad: toolConfig.includeScratchpad,
-                includeMemoryWrite: toolConfig.includeMemoryWrite
-            )
+        let systemPrompt: String = if !toolConfig.enabledTools.isEmpty {
+            if toolConfig.isLocalModel {
+                // Use lean MLX-optimized prompt for small local models
+                PromptTemplates.generateMLXAgentPrompt(
+                    enabledTools: toolConfig.enabledTools
+                )
+            } else {
+                // Generate full agent prompt with tool documentation
+                PromptTemplates.generateAgentPrompt(
+                    enabledTools: toolConfig.enabledTools,
+                    includeThoughtBlocks: toolConfig.includeThoughtBlocks,
+                    includeScratchpad: toolConfig.includeScratchpad,
+                    includeMemoryWrite: toolConfig.includeMemoryWrite
+                )
+            }
         } else {
             // Basic prompt without tool instructions
-            systemPrompt = "You are a local-first assistant running entirely on the user's device. " +
+            "You are a local-first assistant running entirely on the user's device. " +
                 "Use the provided memories and conversation context to respond helpfully."
         }
         segments.system.append(LLMMessage(role: .system, content: systemPrompt))
@@ -125,7 +153,7 @@ struct ContextBuilder {
 
         // Layer 3: policies – include explicit guidance around PII and memory.
         let policies = "Treat all information as private to this device. Do not expose sensitive personal data (PII) from memories unless the user has explicitly brought the same details into the current question. " +
-        "When uncertain, ask clarifying questions. When you propose new memories, present them as suggestions for the user to confirm; do not assume they are persisted."
+            "When uncertain, ask clarifying questions. When you propose new memories, present them as suggestions for the user to confirm; do not assume they are persisted."
         segments.system.append(LLMMessage(role: .system, content: policies))
 
         // Layer 4: memories – embedding-based when possible. For personal
@@ -232,13 +260,13 @@ private extension ContextBuilder {
     /// Logical segments of the context sandwich so we can apply truncation
     /// decisions (e.g. "keep last 6 turns") without guessing from raw indices.
     struct ContextSegments {
-        var system: [LLMMessage] = []        // Layers 1–3
-        var memories: [LLMMessage] = []      // Layer 4 (header + lines)
-        var summary: [LLMMessage] = []       // Layer 5
-        var recents: [LLMMessage] = []       // Layer 6
-        var toolContext: [LLMMessage] = []   // Tool-generated context
-        var user: [LLMMessage] = []          // Layer 7
-        var checklist: [LLMMessage] = []     // Layer 8
+        var system: [LLMMessage] = [] // Layers 1–3
+        var memories: [LLMMessage] = [] // Layer 4 (header + lines)
+        var summary: [LLMMessage] = [] // Layer 5
+        var recents: [LLMMessage] = [] // Layer 6
+        var toolContext: [LLMMessage] = [] // Tool-generated context
+        var user: [LLMMessage] = [] // Layer 7
+        var checklist: [LLMMessage] = [] // Layer 8
     }
 
     /// Mirror the splitting logic used by PersonalChatView so that any
@@ -280,13 +308,13 @@ private extension ContextBuilder {
 
     /// Assemble segments back into the final ordered message list.
     static func assemble(segments: ContextSegments) -> [LLMMessage] {
-        return segments.system
-        + segments.memories
-        + segments.summary
-        + segments.recents
-        + segments.toolContext
-        + segments.user
-        + segments.checklist
+        segments.system
+            + segments.memories
+            + segments.summary
+            + segments.recents
+            + segments.toolContext
+            + segments.user
+            + segments.checklist
     }
 
     /// Apply truncation rules under a soft token limit. We always preserve:

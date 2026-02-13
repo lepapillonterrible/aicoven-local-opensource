@@ -4,11 +4,13 @@ import XCTest
 /// Tests for GeminiLLMClient using a mocked URLSession.
 final class GeminiLLMClientTests: XCTestCase {
 
-    private func makeClient(withResponseBody body: Data,
-                            statusCode: Int = 200,
-                            expectedPathSuffix: String,
-                            expectedQueryItemName: String = "key",
-                            expectedQueryItemValue: String = "TEST_KEY") -> GeminiLLMClient {
+    private func makeClient(
+        withResponseBody body: Data,
+        statusCode: Int = 200,
+        expectedPathSuffix: String,
+        expectedQueryItemName: String = "key",
+        expectedQueryItemValue: String = "TEST_KEY"
+    ) -> GeminiLLMClient {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
 
@@ -29,9 +31,11 @@ final class GeminiLLMClientTests: XCTestCase {
         }
 
         let session = URLSession(configuration: config)
-        return GeminiLLMClient(apiKey: "TEST_KEY",
-                               baseURL: URL(string: "https://example.com/v1")!,
-                               urlSession: session)
+        return GeminiLLMClient(
+            apiKey: "TEST_KEY",
+            baseURL: URL(string: "https://example.com/v1")!,
+            urlSession: session
+        )
     }
 
     func testCompleteChat_decodesSuccessfulResponse() async throws {
@@ -51,15 +55,19 @@ final class GeminiLLMClientTests: XCTestCase {
         """.data(using: .utf8)!
 
         let modelName = "models/gemini-pro"
-        let client = makeClient(withResponseBody: json,
-                                expectedPathSuffix: "/v1/\(modelName):generateContent")
+        let client = makeClient(
+            withResponseBody: json,
+            expectedPathSuffix: "/v1/\(modelName):generateContent"
+        )
 
         let messages = [LLMMessage(role: .user, content: "Hi")]
         let options = ChatOptions(temperature: 0.5, maxTokens: nil, stream: false)
 
-        let response = try await client.completeChat(messages: messages,
-                                                      model: modelName,
-                                                      options: options)
+        let response = try await client.completeChat(
+            messages: messages,
+            model: modelName,
+            options: options
+        )
 
         XCTAssertEqual(response.message.content, "Hello from Gemini")
         XCTAssertEqual(response.providerID, "google")
@@ -67,9 +75,11 @@ final class GeminiLLMClientTests: XCTestCase {
         XCTAssertNil(response.usage)
     }
 
-    func testEmbed_throwsUnsupportedError() async {
-        let client = GeminiLLMClient(apiKey: "TEST_KEY",
-                                     baseURL: URL(string: "https://example.com/v1")!)
+    func testEmbed_throwsUnsupportedError() async throws {
+        let client = try GeminiLLMClient(
+            apiKey: "TEST_KEY",
+            baseURL: XCTUnwrap(URL(string: "https://example.com/v1"))
+        )
         do {
             _ = try await client.embed(texts: ["hello"], model: "test-model")
             XCTFail("Expected embed(texts:model:) to throw for GeminiLLMClient")

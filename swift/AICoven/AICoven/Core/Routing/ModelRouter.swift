@@ -4,6 +4,7 @@ import Foundation
 /// Conforms to Sendable since all properties are value types.
 public struct ModelDescriptor: Hashable, Sendable {
     public enum CostClass {
+        case free
         case cheap
         case medium
         case expensive
@@ -17,12 +18,14 @@ public struct ModelDescriptor: Hashable, Sendable {
     public let supportsEmbeddings: Bool
     public let costClass: CostClass
 
-    public init(providerID: String,
-                modelID: String,
-                maxContextTokens: Int,
-                supportsTools: Bool,
-                supportsEmbeddings: Bool,
-                costClass: CostClass) {
+    public init(
+        providerID: String,
+        modelID: String,
+        maxContextTokens: Int,
+        supportsTools: Bool,
+        supportsEmbeddings: Bool,
+        costClass: CostClass
+    ) {
         self.providerID = providerID
         self.modelID = modelID
         self.maxContextTokens = maxContextTokens
@@ -47,10 +50,12 @@ public struct RoutingContext: Sendable {
     public let requireLongContext: Bool
     public let preferHighQuality: Bool
 
-    public init(task: TaskType,
-                requireLocalOnly: Bool = false,
-                requireLongContext: Bool = false,
-                preferHighQuality: Bool = true) {
+    public init(
+        task: TaskType,
+        requireLocalOnly: Bool = false,
+        requireLongContext: Bool = false,
+        preferHighQuality: Bool = true
+    ) {
         self.task = task
         self.requireLocalOnly = requireLocalOnly
         self.requireLongContext = requireLongContext
@@ -65,9 +70,11 @@ public protocol ModelRouter: Sendable {
     func findExact(providerID: String, modelID: String) -> ModelDescriptor?
 }
 
-extension ModelRouter {
+public extension ModelRouter {
     /// Default implementation returns nil (no match).
-    public func findExact(providerID: String, modelID: String) -> ModelDescriptor? { nil }
+    func findExact(providerID: String, modelID: String) -> ModelDescriptor? {
+        nil
+    }
 }
 
 /// Minimal heuristic router implementation. In a real app this would read
@@ -101,12 +108,10 @@ public final class HeuristicModelRouter: ModelRouter, @unchecked Sendable {
     }
 
     public func route(for context: RoutingContext) -> ModelDescriptor? {
-        let candidates: [ModelDescriptor]
-
-        if context.requireLocalOnly {
-            candidates = availableModels.filter { $0.providerID == "local" }
+        let candidates: [ModelDescriptor] = if context.requireLocalOnly {
+            availableModels.filter { $0.providerID == "local" }
         } else {
-            candidates = availableModels
+            availableModels
         }
 
         guard !candidates.isEmpty else { return nil }
@@ -114,7 +119,7 @@ public final class HeuristicModelRouter: ModelRouter, @unchecked Sendable {
         switch context.task {
         case .embed:
             // Prefer the cheapest model that explicitly supports embeddings.
-            let embedders = candidates.filter { $0.supportsEmbeddings }
+            let embedders = candidates.filter(\.supportsEmbeddings)
             return embedders.min(by: { $0.costClassWeight < $1.costClassWeight })
         case .judge, .agentStep:
             // Prefer cheaper / smaller models for control tasks.
@@ -132,9 +137,10 @@ public final class HeuristicModelRouter: ModelRouter, @unchecked Sendable {
 private extension ModelDescriptor {
     var costClassWeight: Int {
         switch costClass {
-        case .cheap: return 0
-        case .medium: return 1
-        case .expensive: return 2
+        case .free: -1
+        case .cheap: 0
+        case .medium: 1
+        case .expensive: 2
         }
     }
 }

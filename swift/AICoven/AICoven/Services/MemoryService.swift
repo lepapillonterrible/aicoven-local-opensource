@@ -16,7 +16,7 @@ struct MemoryProposal: Codable, Identifiable {
     let createdAt: Date
     let reviewedAt: Date?
     let title: String?
-    
+
     enum CodingKeys: String, CodingKey {
         case id
         case eventId = "event_id"
@@ -39,7 +39,7 @@ struct MemoryProposal: Codable, Identifiable {
 struct MemorySearchResponse: Codable {
     let chunks: [Memory]
     let totalCount: Int
-    
+
     enum CodingKeys: String, CodingKey {
         case chunks
         case totalCount = "total_count"
@@ -55,7 +55,7 @@ struct CreateMemoryRequest: Codable {
     let tags: [String]?
     let sourceMessageId: String?
     let isPinned: Bool
-    
+
     enum CodingKeys: String, CodingKey {
         case covenId = "coven_id"
         case scope
@@ -74,7 +74,7 @@ struct UpdateMemoryRequest: Codable {
     let tags: [String]?
     let scope: String?
     let isPinned: Bool?
-    
+
     enum CodingKeys: String, CodingKey {
         case title
         case content
@@ -93,18 +93,18 @@ struct ReviewMemoryRequest: Codable {
 /// Service for managing memory operations
 actor MemoryService {
     static let shared = MemoryService()
-    
+
     /// Abstraction over long-term memory persistence so higher-level features
     /// do not depend directly on the GRDB-backed repository.
     private let memoryStore: MemoryStore
-    
+
     /// Internal initializer so tests can inject a mock MemoryStore.
     init(memoryStore: MemoryStore = MemoryRepository.shared) {
         self.memoryStore = memoryStore
     }
-    
+
     // MARK: - Memory Search and Retrieval (Local-only)
-    
+
     /// Search memory chunks using the local SQLite store and embeddings. This
     /// replaces the original backend search API in the open-source client.
     func searchMemory(
@@ -125,10 +125,9 @@ actor MemoryService {
             return covenId == nil ? "user" : "coven"
         }()
 
-        let chunks: [LocalMemoryChunk]
-        if let queryText = query, !queryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        let chunks: [LocalMemoryChunk] = if let queryText = query, !queryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // Use embedding+lexical hybrid search for text queries.
-            chunks = try await EmbeddingService.shared.searchRelevantMemories(
+            try await EmbeddingService.shared.searchRelevantMemories(
                 query: queryText,
                 scope: effectiveScope,
                 topK: limit,
@@ -137,7 +136,7 @@ actor MemoryService {
             )
         } else {
             // Fallback: most recent memories for the scope.
-            chunks = try await memoryStore.loadMemories(scope: effectiveScope, limit: limit)
+            try await memoryStore.loadMemories(scope: effectiveScope, limit: limit)
         }
 
         // Local store does not yet support tag- or pin-based filtering beyond
@@ -159,7 +158,7 @@ actor MemoryService {
             )
         }
     }
-    
+
     /// Get a specific memory chunk by ID from the local store.
     func getMemory(memoryId: String) async throws -> Memory {
         guard let chunk = try await memoryStore.loadMemory(id: memoryId) else {
@@ -180,9 +179,9 @@ actor MemoryService {
             updatedAt: nil
         )
     }
-    
+
     // MARK: - Memory Creation and Updates (Local-only)
-    
+
     /// Create a new memory chunk in the local encrypted store.
     func createMemory(
         covenId: String?,
@@ -218,7 +217,7 @@ actor MemoryService {
             updatedAt: nil
         )
     }
-    
+
     /// Update an existing memory chunk in the local store.
     func updateMemory(
         memoryId: String,
@@ -282,12 +281,12 @@ actor MemoryService {
             updatedAt: Date()
         )
     }
-    
+
     /// Delete a memory chunk from the local store.
     func deleteMemory(memoryId: String) async throws {
         try await memoryStore.deleteMemory(id: memoryId)
     }
-    
+
     /// Pin or unpin a memory chunk. In the local-only client we treat this as
     /// a purely in-memory flag and do not persist it yet.
     func togglePin(memoryId: String, isPinned: Bool) async throws -> Memory {
@@ -307,9 +306,9 @@ actor MemoryService {
             updatedAt: base.updatedAt
         )
     }
-    
+
     // MARK: - Memory Proposals (local-only)
-    
+
     /// Map a low-level GRDB record into the public MemoryProposal model used by
     /// the views and (legacy) service APIs.
     private func mapRecordToProposal(_ rec: MemoryProposalRecord) -> MemoryProposal {
@@ -325,7 +324,7 @@ actor MemoryService {
         } else {
             tags = nil
         }
-        
+
         return MemoryProposal(
             id: rec.id,
             eventId: rec.eventId ?? "",
@@ -343,7 +342,7 @@ actor MemoryService {
             title: rec.title
         )
     }
-    
+
     /// List memory proposals from the local SQLite store. The default
     /// `status = "pending"` matches the UI's initial filter; passing "all"
     /// disables status filtering.
@@ -358,7 +357,7 @@ actor MemoryService {
         )
         return records.map(mapRecordToProposal)
     }
-    
+
     /// Review a proposal by updating its status and, when approved, creating a
     /// real memory chunk in the local encrypted store.
     func reviewProposal(
@@ -367,22 +366,21 @@ actor MemoryService {
         feedback: String? = nil
     ) async throws -> MemoryProposal {
         // Normalize the new status from the requested action.
-        let newStatus: String
-        switch action.lowercased() {
+        let newStatus: String = switch action.lowercased() {
         case "approve":
-            newStatus = "approved"
+            "approved"
         case "reject":
-            newStatus = "rejected"
+            "rejected"
         default:
-            newStatus = action
+            action
         }
-        
+
         // Load the current proposal so we can both validate it exists and, for
         // approvals, create a corresponding memory chunk.
         guard let existing = try await MemoryProposalRepository.shared.loadProposal(id: proposalId) else {
             throw APIError.backendUnavailable
         }
-        
+
         // If the proposal is being approved, create a local memory entry using
         // the proposed content, tags, and scope. This ensures that "Approve"
         // behaves as "save this as memory" in the local-only client.
@@ -409,14 +407,14 @@ actor MemoryService {
                 source: existing.sourceMessageId
             )
         }
-        
+
         let updated = try await MemoryProposalRepository.shared.updateStatus(
             id: proposalId,
             status: newStatus,
             reviewedBy: "local-user",
             reviewFeedback: feedback
         )
-        
+
         return mapRecordToProposal(updated)
     }
 }

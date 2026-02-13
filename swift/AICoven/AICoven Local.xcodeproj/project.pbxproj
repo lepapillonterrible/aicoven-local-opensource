@@ -23,6 +23,10 @@
 		BE26DA1F2F35E8F700814AD6 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = BE26DA1E2F35E8F700814AD6 /* GoogleService-Info.plist */; };
 		BE26DA202F35E8F700814AD6 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = BE26DA1E2F35E8F700814AD6 /* GoogleService-Info.plist */; };
 		BE40E37A2F1F48DD00184E2D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BE40E3702F1F48DD00184E2D /* Assets.xcassets */; };
+		BE43C94E2F3D70A000D85430 /* MLXEmbedders in Frameworks */ = {isa = PBXBuildFile; productRef = BE43C94D2F3D70A000D85430 /* MLXEmbedders */; };
+		BE43C9502F3D70A000D85430 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = BE43C94F2F3D70A000D85430 /* MLXLLM */; };
+		BE43C9522F3D70A000D85430 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = BE43C9512F3D70A000D85430 /* MLXLMCommon */; };
+		BE43C9542F3D70A000D85430 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = BE43C9532F3D70A000D85430 /* MLXVLM */; };
 		BE5AC8DA2F3AD62C0053997B /* FirebaseCrashlytics in Frameworks */ = {isa = PBXBuildFile; productRef = BE5AC8D92F3AD62C0053997B /* FirebaseCrashlytics */; };
 		BE5AC8DC2F3AD6340053997B /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = BE5AC8DB2F3AD6340053997B /* FirebaseMessaging */; };
 		BE7BEB1A2F1CEEE500096E97 /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = BE7BEB192F1CEEE500096E97 /* FirebaseAnalytics */; };
@@ -123,6 +127,7 @@
 				BE1E1CB52F1F4CDE00CB393D /* FirebaseAnalyticsIdentitySupport in Frameworks */,
 				BE5AC8DC2F3AD6340053997B /* FirebaseMessaging in Frameworks */,
 				BE241E992F1BA8F400978BF3 /* FirebaseAnalytics in Frameworks */,
+				BE43C9522F3D70A000D85430 /* MLXLMCommon in Frameworks */,
 				BE7BEB362F1CF4FD00096E97 /* FirebaseCrashlytics in Frameworks */,
 				BE7BEB282F1CEEE500096E97 /* FirebaseRemoteConfig in Frameworks */,
 				BE7BEB1E2F1CEEE500096E97 /* FirebaseAnalyticsIdentitySupport in Frameworks */,
@@ -139,9 +144,12 @@
 				BE1E1CB12F1F4CDE00CB393D /* FirebaseAnalytics in Frameworks */,
 				BE9ABF712F298CEB00655DCB /* FirebaseAuthCombine-Community in Frameworks */,
 				BE7BEB382F1CF4FD00096E97 /* FirebaseRemoteConfig in Frameworks */,
+				BE43C94E2F3D70A000D85430 /* MLXEmbedders in Frameworks */,
+				BE43C9502F3D70A000D85430 /* MLXLLM in Frameworks */,
 				BE7BEB222F1CEEE500096E97 /* FirebaseAuthCombine-Community in Frameworks */,
 				BE7BEB2A2F1CF4FD00096E97 /* FirebaseAnalytics in Frameworks */,
 				BE1E1CBB2F1F4CDE00CB393D /* FirebaseCore in Frameworks */,
+				BE43C9542F3D70A000D85430 /* MLXVLM in Frameworks */,
 				BE9ABF752F298CEB00655DCB /* FirebaseCrashlytics in Frameworks */,
 				BE241EA32F1BA8F400978BF3 /* FirebaseCore in Frameworks */,
 				BE9ABF772F298CEB00655DCB /* FirebaseRemoteConfig in Frameworks */,
@@ -347,6 +355,7 @@
 			packageReferences = (
 				BE241E972F1BA8F400978BF3 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 				BE0F0F0F2F3C4D5E00112233 /* XCRemoteSwiftPackageReference "GRDB.swift" */,
+				BE43C94C2F3D70A000D85430 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = BE19521F2F1B9DA000168C79 /* Products */;
@@ -580,7 +589,6 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "COMMUNITY_EDITION $(inherited)";
 				SWIFT_COMPILATION_MODE = wholemodule;
 			};
 			name = Release;
@@ -654,10 +662,10 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "Resources/AICoven-iOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "Resources/AICoven-macOS.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 63;
+				CURRENT_PROJECT_VERSION = 73;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = H99A45HA22;
-				ENABLE_APP_SANDBOX = YES;
+				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
@@ -858,6 +866,14 @@
 				minimumVersion = 12.8.0;
 			};
 		};
+		BE43C94C2F3D70A000D85430 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.30.3;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -925,6 +941,26 @@
 			isa = XCSwiftPackageProductDependency;
 			package = BE241E972F1BA8F400978BF3 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseCore;
+		};
+		BE43C94D2F3D70A000D85430 /* MLXEmbedders */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BE43C94C2F3D70A000D85430 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXEmbedders;
+		};
+		BE43C94F2F3D70A000D85430 /* MLXLLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BE43C94C2F3D70A000D85430 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXLLM;
+		};
+		BE43C9512F3D70A000D85430 /* MLXLMCommon */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BE43C94C2F3D70A000D85430 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXLMCommon;
+		};
+		BE43C9532F3D70A000D85430 /* MLXVLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = BE43C94C2F3D70A000D85430 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXVLM;
 		};
 		BE5AC8D92F3AD62C0053997B /* FirebaseCrashlytics */ = {
 			isa = XCSwiftPackageProductDependency;

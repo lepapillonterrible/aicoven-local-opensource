@@ -7,14 +7,14 @@ struct MemoryProposalsView: View {
     let covenId: String?
     @Binding var openTabs: [WorkspaceTab]
     @Binding var activeTabId: String?
-    
+
     @State private var proposals: [MemoryProposal] = []
     @State private var selectedStatus = "pending"
     @State private var isLoading = false
     @State private var errorMessage: String?
-    
+
     let statuses = ["pending", "approved", "rejected", "all"]
-    
+
     var body: some View {
         VStack(spacing: 0) {
             // Header
@@ -23,10 +23,10 @@ struct MemoryProposalsView: View {
                     Text("Memory Proposals")
                         .font(.aicovenH2)
                         .foregroundColor(.aicovenTextPrimary)
-                    
+
                     Spacer()
                 }
-                
+
                 // Status filter
                 HStack(spacing: Spacing.xs) {
                     ForEach(statuses, id: \.self) { status in
@@ -51,9 +51,9 @@ struct MemoryProposalsView: View {
                 }
             }
             .padding(Spacing.lg)
-            
+
             GradientDivider()
-            
+
             // Content area
             if isLoading {
                 LoadingView(message: "Loading proposals...")
@@ -102,14 +102,14 @@ struct MemoryProposalsView: View {
             await loadProposals()
         }
     }
-    
+
     // MARK: - Actions
-    
+
     /// Load proposals from API
     private func loadProposals() async {
         isLoading = true
         errorMessage = nil
-        
+
         do {
             proposals = try await MemoryService.shared.listProposals(
                 covenId: covenId,
@@ -118,10 +118,10 @@ struct MemoryProposalsView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
-        
+
         isLoading = false
     }
-    
+
     /// Review a proposal (approve/reject only – used by the Approve/Reject
     /// buttons. Edit/save/delete flows are handled separately below.)
     private func reviewProposal(_ proposal: MemoryProposal, action: String) async {
@@ -135,14 +135,14 @@ struct MemoryProposalsView: View {
                 proposals[index] = updated
             }
             // If we are showing only pending proposals, remove non-pending ones
-            if selectedStatus == "pending" && updated.status != "pending" {
+            if selectedStatus == "pending", updated.status != "pending" {
                 proposals.removeAll { $0.id == updated.id }
             }
         } catch {
             errorMessage = "Failed to \(action) proposal: \(error.localizedDescription)"
         }
     }
-    
+
     /// Save the (possibly edited) proposal content as a real memory chunk and
     /// mark the underlying proposal as rejected so it no longer appears as
     /// pending. This lets users treat proposals as editable drafts without
@@ -150,7 +150,7 @@ struct MemoryProposalsView: View {
     private func saveProposalAsMemory(_ proposal: MemoryProposal, editedContent: String) async {
         let trimmed = editedContent.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-            do {
+        do {
             // Derive title from first line if not already present
             let firstLine = trimmed.split(separator: "\n").first.map(String.init) ?? ""
             let title = firstLine.isEmpty ? proposal.title : firstLine
@@ -193,7 +193,7 @@ struct MemoryProposalsView: View {
             errorMessage = "Failed to save memory: \(error.localizedDescription)"
         }
     }
-    
+
     /// Delete (reject) a proposal and remove it from the current list.
     private func deleteProposal(_ proposal: MemoryProposal) async {
         do {
@@ -225,17 +225,17 @@ struct ProposalCard: View {
     let onSaveAsMemory: (String) -> Void
     /// Called when user chooses to delete (reject) the proposal entirely.
     let onDelete: () -> Void
-    
+
     @State private var isEditing: Bool = false
     @State private var draftContent: String = ""
-    
+
     /// Trimmed version of the draft used for validation/disabled state. This
     /// lets users see clearly when the current content is considered "empty"
     /// without silently falling back to the original proposal text.
     private var trimmedDraftContent: String {
         draftContent.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-    
+
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             // Header
@@ -246,11 +246,11 @@ struct ProposalCard: View {
                             .font(.aicovenH3)
                             .foregroundColor(.aicovenTextPrimary)
                     }
-                    
+
                     HStack(spacing: Spacing.xs) {
                         // Status badge
                         StatusBadge(status: proposal.status)
-                        
+
                         // Scope badge
                         if let scope = proposal.scope {
                             Text(scope.capitalized)
@@ -261,16 +261,16 @@ struct ProposalCard: View {
                                 .background(Color.aicovenGlass)
                                 .cornerRadius(BorderRadius.sm)
                         }
-                        
+
                         // Date
                         Text(proposal.createdAt, style: .relative)
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextTertiary)
                     }
                 }
-                
+
                 Spacer()
-                
+
                 // Actions (only for pending proposals)
                 if proposal.status == "pending" {
                     HStack(spacing: Spacing.xs) {
@@ -279,7 +279,7 @@ struct ProposalCard: View {
                             onApprove()
                         }
                         .frame(width: 100)
-                        
+
                         // Reject button
                         GradientButton("Reject", icon: "xmark", style: .secondary) {
                             onReject()
@@ -288,7 +288,7 @@ struct ProposalCard: View {
                     }
                 }
             }
-            
+
             // Content (editable when in edit mode)
             if isEditing {
                 TextEditor(text: $draftContent)
@@ -304,14 +304,14 @@ struct ProposalCard: View {
                     .foregroundColor(.aicovenTextSecondary)
                     .lineLimit(5)
             }
-            
+
             // Reason (if provided)
             if let reason = proposal.reason {
                 HStack(spacing: Spacing.xs) {
                     Image(systemName: "info.circle")
                         .font(.system(size: 10))
                         .foregroundColor(.aicovenTeal)
-                    
+
                     Text(reason)
                         .font(.aicovenCaption)
                         .foregroundColor(.aicovenTextSecondary)
@@ -321,7 +321,7 @@ struct ProposalCard: View {
                 .background(Color.aicovenGlass.opacity(0.5))
                 .cornerRadius(BorderRadius.sm)
             }
-            
+
             // Tags
             if let tags = proposal.proposedTags, !tags.isEmpty {
                 HStack(spacing: Spacing.xxs) {
@@ -336,7 +336,7 @@ struct ProposalCard: View {
                     }
                 }
             }
-            
+
             // Actions (only for pending proposals)
             if proposal.status == "pending" {
                 HStack(spacing: Spacing.xs) {
@@ -349,7 +349,7 @@ struct ProposalCard: View {
                         // empty; this avoids silently reusing the original
                         // proposal text when the user has cleared the field.
                         .disabled(trimmedDraftContent.isEmpty)
-                        
+
                         Button("Cancel") {
                             isEditing = false
                             draftContent = proposal.proposedContent
@@ -362,12 +362,12 @@ struct ProposalCard: View {
                             onApprove()
                         }
                         .frame(width: 100)
-                        
+
                         GradientButton("Reject", icon: "xmark", style: .secondary) {
                             onReject()
                         }
                         .frame(width: 100)
-                        
+
                         Button {
                             isEditing = true
                             if draftContent.isEmpty {
@@ -383,7 +383,7 @@ struct ProposalCard: View {
                         }
                         .buttonStyle(.plain)
                     }
-                    
+
                     Button(role: .destructive) {
                         onDelete()
                     } label: {
@@ -417,16 +417,16 @@ struct ProposalCard: View {
 /// Status badge component
 struct StatusBadge: View {
     let status: String
-    
+
     var statusColor: Color {
         switch status {
-        case "pending": return .orange
-        case "approved": return .green
-        case "rejected": return .red
-        default: return .gray
+        case "pending": .orange
+        case "approved": .green
+        case "rejected": .red
+        default: .gray
         }
     }
-    
+
     var body: some View {
         Text(status.capitalized)
             .font(.aicovenCaption)
@@ -443,23 +443,22 @@ struct EmptyProposalsState: View {
     var body: some View {
         VStack(spacing: Spacing.lg) {
             Spacer()
-            
+
             IconBadge(icon: "doc.text.magnifyingglass", size: 60, color: .aicovenTeal)
-            
+
             Text("No Proposals")
                 .font(.aicovenH2)
                 .foregroundColor(.aicovenTextPrimary)
-            
+
             Text("Memory write proposals will appear here for review")
                 .font(.aicovenBodySmall)
                 .foregroundColor(.aicovenTextSecondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, Spacing.xl)
-            
+
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(Spacing.xl)
     }
 }
-

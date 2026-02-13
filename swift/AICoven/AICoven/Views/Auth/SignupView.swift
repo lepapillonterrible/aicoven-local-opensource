@@ -4,7 +4,7 @@ import SwiftUI
 struct SignupView: View {
     @Environment(\.dismiss) private var dismiss: DismissAction
     @EnvironmentObject var authService: AuthService
-    
+
     @State private var firstName = ""
     @State private var lastName = ""
     @State private var email = ""
@@ -13,16 +13,16 @@ struct SignupView: View {
     @State private var isLoading = false
     @State private var showError = false
     @State private var errorMessage = ""
-    
+
     /// Explicit initializer for SwiftUI previews
     init() {}
-    
+
     var body: some View {
         NavigationStack {
             ZStack {
                 // Match overall visual style of login/onboarding
                 NebulaBackground()
-                
+
                 ScrollView {
                     VStack(spacing: Spacing.xl) {
                         // Brand header
@@ -30,13 +30,13 @@ struct SignupView: View {
                             Text("Create your account")
                                 .font(.aicovenDisplayMedium)
                                 .foregroundColor(.aicovenTextPrimary)
-                            
+
                             Text("Join the circle of intelligences")
                                 .font(.aicovenBody)
                                 .foregroundColor(.aicovenTextSecondary)
                         }
                         .padding(.top, Spacing.xl)
-                        
+
                         // Form card
                         VStack(spacing: Spacing.md) {
                             // First / Last name
@@ -52,7 +52,7 @@ struct SignupView: View {
                                         .background(Color.aicovenGlass)
                                         .cornerRadius(BorderRadius.md)
                                 }
-                                
+
                                 VStack(alignment: .leading, spacing: Spacing.xs) {
                                     Text("Last Name")
                                         .font(.aicovenH3)
@@ -65,40 +65,40 @@ struct SignupView: View {
                                         .cornerRadius(BorderRadius.md)
                                 }
                             }
-                            
+
                             // Email
                             VStack(alignment: .leading, spacing: Spacing.xs) {
                                 Text("Email address")
                                     .font(.aicovenH3)
                                     .foregroundColor(.aicovenTextPrimary)
-                                
+
                                 HStack(spacing: Spacing.sm) {
                                     Image(systemName: "envelope")
                                         .foregroundColor(.aicovenTextTertiary)
-                                    
+
                                     TextField("you@example.com", text: $email)
                                         .textContentType(.emailAddress)
-                                        #if os(iOS)
+                                    #if os(iOS)
                                         .keyboardType(.emailAddress)
                                         .autocapitalization(.none)
-                                        #endif
+                                    #endif
                                         .foregroundColor(.aicovenTextPrimary)
                                 }
                                 .padding(Spacing.md)
                                 .background(Color.aicovenGlass)
                                 .cornerRadius(BorderRadius.md)
                             }
-                            
+
                             // Password
                             VStack(alignment: .leading, spacing: Spacing.xs) {
                                 Text("Password")
                                     .font(.aicovenH3)
                                     .foregroundColor(.aicovenTextPrimary)
-                                
+
                                 HStack(spacing: Spacing.sm) {
                                     Image(systemName: "lock")
                                         .foregroundColor(.aicovenTextTertiary)
-                                    
+
                                     SecureField("At least 12 characters", text: $password)
                                         .textContentType(.newPassword)
                                         .foregroundColor(.aicovenTextPrimary)
@@ -107,17 +107,17 @@ struct SignupView: View {
                                 .background(Color.aicovenGlass)
                                 .cornerRadius(BorderRadius.md)
                             }
-                            
+
                             // Confirm password
                             VStack(alignment: .leading, spacing: Spacing.xs) {
                                 Text("Confirm Password")
                                     .font(.aicovenH3)
                                     .foregroundColor(.aicovenTextPrimary)
-                                
+
                                 HStack(spacing: Spacing.sm) {
                                     Image(systemName: "lock.shield")
                                         .foregroundColor(.aicovenTextTertiary)
-                                    
+
                                     SecureField("Confirm your password", text: $confirmPassword)
                                         .textContentType(.newPassword)
                                         .foregroundColor(.aicovenTextPrimary)
@@ -126,7 +126,7 @@ struct SignupView: View {
                                 .background(Color.aicovenGlass)
                                 .cornerRadius(BorderRadius.md)
                             }
-                            
+
                             // Submit
                             Button(action: handleSignup) {
                                 HStack {
@@ -163,7 +163,7 @@ struct SignupView: View {
                         .frame(maxWidth: 500)
                         .padding(.horizontal, Spacing.lg)
                         .padding(.bottom, Spacing.xl)
-                        
+
                         // Already have account
                         HStack(spacing: Spacing.xs) {
                             Text("Already have an account?")
@@ -187,27 +187,27 @@ struct SignupView: View {
             }
             .navigationTitle("")
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
+                .navigationBarTitleDisplayMode(.inline)
             #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        // Track signup cancellation
-                        AnalyticsService.shared.track(
-                            event: "signup_cancelled",
-                            properties: [
-                                "form_completion": calculateFormCompletion()
-                            ]
-                        )
-                        dismiss()
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            // Track signup cancellation
+                            AnalyticsService.shared.track(
+                                event: "signup_cancelled",
+                                properties: [
+                                    "form_completion": calculateFormCompletion()
+                                ]
+                            )
+                            dismiss()
+                        }
                     }
                 }
-            }
-            .alert("Error", isPresented: $showError) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(errorMessage)
-            }
+                .alert("Error", isPresented: $showError) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text(errorMessage)
+                }
         }
         .onAppear {
             // Track signup view appearance
@@ -217,32 +217,32 @@ struct SignupView: View {
             )
         }
     }
-    
+
     /// Check if form is valid
     private var isFormValid: Bool {
         !firstName.isEmpty && !lastName.isEmpty && !email.isEmpty && !password.isEmpty &&
-        password == confirmPassword && password.count >= 6
+            password == confirmPassword && password.count >= 6
     }
-    
+
     /// Calculate form completion percentage for analytics
     private func calculateFormCompletion() -> Double {
         var completedFields = 0
         let totalFields = 5
-        
+
         if !firstName.isEmpty { completedFields += 1 }
         if !lastName.isEmpty { completedFields += 1 }
         if !email.isEmpty { completedFields += 1 }
         if !password.isEmpty { completedFields += 1 }
         if !confirmPassword.isEmpty { completedFields += 1 }
-        
+
         return Double(completedFields) / Double(totalFields)
     }
-    
+
     /// Handle signup action
     private func handleSignup() {
         isLoading = true
         let fullName = firstName + " " + lastName
-        
+
         // Track signup attempt (no PII)
         AnalyticsService.shared.track(
             event: "signup_attempt",
@@ -251,19 +251,19 @@ struct SignupView: View {
                 "has_name": true
             ]
         )
-        
+
         Task {
             do {
                 try await authService.signUp(email: email, password: password, name: fullName)
-                
+
                 // Track successful signup
                 AnalyticsService.shared.trackSignUp(method: "email")
-                
+
                 dismiss()
             } catch {
                 errorMessage = error.localizedDescription
                 showError = true
-                
+
                 // Track signup failure (no PII)
                 AnalyticsService.shared.trackAuthError(
                     error: error.localizedDescription,

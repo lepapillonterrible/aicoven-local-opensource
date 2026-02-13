@@ -11,8 +11,8 @@ final class AppStateTests: XCTestCase {
         try await super.tearDown()
     }
 
-    func testHandleDeepLink_parsesConnectedAppsURL() {
-        let url = URL(string: "aicoven://settings/connected-apps")!
+    func testHandleDeepLink_parsesConnectedAppsURL() throws {
+        let url = try XCTUnwrap(URL(string: "aicoven://settings/connected-apps"))
         AppState.shared.handleDeepLink(url)
 
         let target = AppState.shared.consumeDeepLink()

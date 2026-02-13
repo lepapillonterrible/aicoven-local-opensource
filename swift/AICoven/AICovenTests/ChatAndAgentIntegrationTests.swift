@@ -10,29 +10,30 @@ final class ChatAndAgentIntegrationTests: XCTestCase {
     /// natural-language answer. This lets us exercise the AgentRunner.run tool
     /// loop end-to-end without touching real providers.
     private final class MockLLMClient: LLMClient {
-        nonisolated(unsafe) private var callCount = 0
+        private nonisolated(unsafe) var callCount = 0
 
         func completeChat(messages: [LLMMessage], model: String, options: ChatOptions) async throws -> LLMChatResponse {
             callCount += 1
 
-            let content: String
-            if callCount == 1 {
+            let content = if callCount == 1 {
                 // First response: ask the agent to call the current_time tool.
-                content = "{" + "\"tool\":\"current_time\",\"input\":null,\"reason\":\"test run\"" + "}"
+                "{" + "\"tool\":\"current_time\",\"input\":null,\"reason\":\"test run\"" + "}"
             } else {
                 // Second response: final natural-language answer.
-                content = "This is the final answer after using tools."
+                "This is the final answer after using tools."
             }
 
             let message = LLMMessage(role: .assistant, content: content)
-            return LLMChatResponse(message: message,
-                                   providerID: "test-provider",
-                                   modelID: model,
-                                   usage: nil)
+            return LLMChatResponse(
+                message: message,
+                providerID: "test-provider",
+                modelID: model,
+                usage: nil
+            )
         }
 
         func embed(texts: [String], model: String) async throws -> [[Float]] {
-            return Array(repeating: Array(repeating: 0.0, count: 3), count: texts.count)
+            Array(repeating: Array(repeating: 0.0, count: 3), count: texts.count)
         }
     }
 
@@ -78,10 +79,12 @@ final class ChatAndAgentIntegrationTests: XCTestCase {
 
         // Start a short run with maxSteps = 2 so we expect: one tool call + one
         // final answer.
-        await runner.run(profile: profile,
-                         threadID: nil,
-                         maxSteps: 2,
-                         userMessage: "Test goal: check current time and answer.")
+        await runner.run(
+            profile: profile,
+            threadID: nil,
+            maxSteps: 2,
+            userMessage: "Test goal: check current time and answer."
+        )
 
         // Verify that at least one thread was created for the run. If the
         // database is unavailable or the run failed early, this call will
@@ -93,7 +96,7 @@ final class ChatAndAgentIntegrationTests: XCTestCase {
     /// Mock tool service for ChatService integration tests.
     private actor MockChatToolService: ChatToolService {
         func webSearch(query: String, maxResults: Int) async throws -> [ToolService.WebSearchResult] {
-            return [
+            [
                 ToolService.WebSearchResult(
                     title: "Test result for \(query)",
                     url: URL(string: "https://example.com")!,
@@ -107,7 +110,7 @@ final class ChatAndAgentIntegrationTests: XCTestCase {
         }
 
         nonisolated func currentTime(timezone: TimeZone) -> ToolService.TimeInfo {
-            return ToolService.TimeInfo(
+            ToolService.TimeInfo(
                 utcISO8601: "2025-01-01T00:00:00Z",
                 timezoneIdentifier: timezone.identifier,
                 localISO8601: "2025-01-01T00:00:00Z"

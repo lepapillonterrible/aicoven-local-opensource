@@ -4,7 +4,7 @@ import SwiftUI
 struct WorkspaceTabBar: View {
     @Binding var openTabs: [WorkspaceTab]
     @Binding var activeTabId: String?
-    
+
     var body: some View {
         GeometryReader { geometry in
             HStack(spacing: Spacing.xxs) {
@@ -25,24 +25,24 @@ struct WorkspaceTabBar: View {
             .padding(.horizontal, Spacing.xs)
         }
     }
-    
+
     /// Calculate maximum width for each tab based on available space
     private func maxTabWidth(availableWidth: CGFloat) -> CGFloat {
         let padding = Spacing.xs * 2 // horizontal padding
         let spacing = Spacing.xxs * CGFloat(max(0, openTabs.count - 1)) // spacing between tabs
         let usableWidth = availableWidth - padding - spacing
         let tabCount = CGFloat(openTabs.count)
-        
+
         // Each tab gets equal width, minimum 80pt, maximum 200pt
         let calculatedWidth = usableWidth / tabCount
         return min(max(calculatedWidth, 80), 200)
     }
-    
+
     /// Close a tab
     private func closeTab(_ tab: WorkspaceTab) {
         // Remove from open tabs
         openTabs.removeAll { $0.id == tab.id }
-        
+
         // If closing the active tab, switch to another
         if activeTabId == tab.id {
             activeTabId = openTabs.first?.id
@@ -56,7 +56,7 @@ struct ThreadTab: View {
     let isActive: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
-    
+
     var body: some View {
         HStack(spacing: Spacing.xs) {
             // Thread name
@@ -64,7 +64,7 @@ struct ThreadTab: View {
                 .font(.aicovenBodySmall)
                 .foregroundColor(isActive ? .aicovenTextPrimary : .aicovenTextSecondary)
                 .lineLimit(1)
-            
+
             // Close button
             Button(action: onClose) {
                 Image(systemName: "xmark")
@@ -91,7 +91,7 @@ struct ThreadTab: View {
         .onTapGesture {
             onSelect()
         }
-        .onHover { hovering in
+        .onHover { _ in
             // Show close button on hover would need UIViewRepresentable
             // For now, close button is always visible
         }
@@ -107,9 +107,9 @@ struct WorkspaceTabView: View {
     let maxWidth: CGFloat
     let onSelect: () -> Void
     let onClose: () -> Void
-    
+
     @State private var isHovering = false
-    
+
     var body: some View {
         HStack(spacing: Spacing.xs) {
             // Tab title
@@ -118,7 +118,7 @@ struct WorkspaceTabView: View {
                 .foregroundColor(isActive ? .aicovenTextPrimary : .aicovenTextSecondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
-            
+
             // Close button (show on hover or when active)
             if isHovering || isActive {
                 Button(action: onClose) {
@@ -126,7 +126,7 @@ struct WorkspaceTabView: View {
                         Circle()
                             .fill(Color.aicovenTextTertiary.opacity(0.2))
                             .frame(width: 16, height: 16)
-                        
+
                         Image(systemName: "xmark")
                             .font(.system(size: 8, weight: .medium))
                             .foregroundColor(.aicovenTextPrimary)
@@ -179,7 +179,7 @@ struct WorkspaceTabView: View {
             ]),
             activeTabId: .constant("1")
         )
-        
+
         Spacer()
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)

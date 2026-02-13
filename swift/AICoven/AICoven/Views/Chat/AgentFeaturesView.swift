@@ -9,8 +9,8 @@ import UIKit
 struct AgentFeaturesView: View {
     let thoughts: [String]?
     let toolCalls: [ToolCallDetail]?
-    var onApprove: ((String) -> Void)? = nil
-    var onReject: ((String) -> Void)? = nil
+    var onApprove: ((String) -> Void)?
+    var onReject: ((String) -> Void)?
 
     @State private var showThoughts: Bool = false
     @State private var showToolCalls: Bool = false
@@ -23,8 +23,8 @@ struct AgentFeaturesView: View {
         guard let thoughts, !thoughts.isEmpty else { return [] }
         // If we have many very short entries (typical for streaming deltas),
         // collapse them into a single paragraph.
-        let averageLength = Double(thoughts.map { $0.count }.reduce(0, +)) / Double(thoughts.count)
-        if thoughts.count > 6 && averageLength < 40 {
+        let averageLength = Double(thoughts.map(\.count).reduce(0, +)) / Double(thoughts.count)
+        if thoughts.count > 6, averageLength < 40 {
             let joined = thoughts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
             return joined.isEmpty ? thoughts : [joined]
         }
@@ -131,8 +131,8 @@ private struct ToolCallCard: View {
     let call: ToolCallDetail
     var onApprove: ((String) -> Void)?
     var onReject: ((String) -> Void)?
-    
-    // Helper to convert AnyJSONValue to plain Swift types
+
+    /// Helper to convert AnyJSONValue to plain Swift types
     private func unwrapAnyJSON(_ value: Any) -> Any {
         if let wrapped = value as? AnyJSONValue {
             return unwrapAnyJSON(wrapped.value)
@@ -145,11 +145,11 @@ private struct ToolCallCard: View {
         }
         return value
     }
-    
-    // Helper to format result as text (handles dict, string, or other types)
+
+    /// Helper to format result as text (handles dict, string, or other types)
     private func formatResultText(_ result: AnyJSONValue) -> String {
         let unwrapped = unwrapAnyJSON(result.value)
-        
+
         // If it's a string, return it directly
         if let str = unwrapped as? String {
             return str
@@ -168,8 +168,8 @@ private struct ToolCallCard: View {
         // Fallback: show string representation
         return String(describing: unwrapped)
     }
-    
-    // Helper to format args dictionary as compact JSON
+
+    /// Helper to format args dictionary as compact JSON
     private func formatArgsText(_ args: [String: AnyJSONValue]) -> String {
         let plain = args.mapValues { unwrapAnyJSON($0.value) }
         if JSONSerialization.isValidJSONObject(plain),
@@ -217,7 +217,7 @@ private struct ToolCallCard: View {
                     let filename = (dict["filename"] as? String) ?? "Generated file"
                     let fileURLString =
                         (dict["file_url"] as? String)
-                        ?? (dict["url"] as? String)
+                            ?? (dict["url"] as? String)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Generated file")
                             .font(.system(size: 11, weight: .semibold))
@@ -229,7 +229,7 @@ private struct ToolCallCard: View {
                                 .font(.system(size: 13, weight: .medium))
                                 .lineLimit(1)
                             Spacer()
-#if os(macOS)
+                            #if os(macOS)
                             if let fileURLString,
                                let url = URL(string: fileURLString) {
                                 Button("Open") {
@@ -237,7 +237,7 @@ private struct ToolCallCard: View {
                                 }
                                 .buttonStyle(.bordered)
                             }
-#elseif os(iOS)
+                            #elseif os(iOS)
                             if let fileURLString,
                                let url = URL(string: fileURLString) {
                                 Button("Open") {
@@ -245,7 +245,7 @@ private struct ToolCallCard: View {
                                 }
                                 .buttonStyle(.bordered)
                             }
-#endif
+                            #endif
                         }
                     }
                 } else {
@@ -301,13 +301,14 @@ private struct StatusPill: View {
             .foregroundStyle(.white)
             .clipShape(Capsule())
     }
+
     private var background: Color {
         switch status {
-        case .pending: return .orange
-        case .approved: return .blue
-        case .rejected: return .red
-        case .completed: return .green
-        case .failed: return .gray
+        case .pending: .orange
+        case .approved: .blue
+        case .rejected: .red
+        case .completed: .green
+        case .failed: .gray
         }
     }
 }

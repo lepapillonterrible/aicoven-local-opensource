@@ -9,14 +9,14 @@ struct User: Codable, Identifiable {
     let settings: UserSettings?
     let createdAt: Date?
     let updatedAt: Date?
-    
+
     enum CodingKeys: String, CodingKey {
         case id, email, name, profile, settings
         case createdAt = "created_at"
         case updatedAt = "updated_at"
     }
-    
-    // Memberwise initializer
+
+    /// Memberwise initializer
     init(id: String, email: String, name: String?, profile: UserProfile?, settings: UserSettings?, createdAt: Date?, updatedAt: Date?) {
         self.id = id
         self.email = email
@@ -26,17 +26,17 @@ struct User: Codable, Identifiable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
-    
-    // Custom decoder to handle JSONB fields that come as strings
+
+    /// Custom decoder to handle JSONB fields that come as strings
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        
+
         id = try container.decode(String.self, forKey: .id)
         email = try container.decode(String.self, forKey: .email)
         name = try container.decodeIfPresent(String.self, forKey: .name)
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt)
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt)
-        
+
         // Decode profile - can be object or JSON string
         if let profileObj = try? container.decodeIfPresent(UserProfile.self, forKey: .profile) {
             profile = profileObj
@@ -47,7 +47,7 @@ struct User: Codable, Identifiable {
         } else {
             profile = nil
         }
-        
+
         // Decode settings - can be object or JSON string
         if let settingsObj = try? container.decodeIfPresent(UserSettings.self, forKey: .settings) {
             settings = settingsObj
@@ -67,7 +67,7 @@ struct UserProfile: Codable {
     let role: String?
     let bio: String?
     let avatarUrl: String?
-    
+
     enum CodingKeys: String, CodingKey {
         case organization, role, bio
         case avatarUrl = "avatar_url"
@@ -83,7 +83,7 @@ struct UserSettings: Codable {
     /// Whether this user has completed FTUE onboarding (account-level).
     let hasCompletedOnboarding: Bool?
     let animatedBackgrounds: Bool?
-    
+
     enum CodingKeys: String, CodingKey {
         case theme, language, notifications
         case emailNotifications = "email_notifications"
@@ -98,7 +98,7 @@ struct UserStats: Codable {
     let messagesCount: Int
     let totalCost: Double
     let totalTokens: Int
-    
+
     enum CodingKeys: String, CodingKey {
         case sessionsCount = "sessions_count"
         case messagesCount = "messages_count"

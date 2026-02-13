@@ -13,7 +13,11 @@ struct EnhancedProfileView: View {
     @State private var editedOrganization = ""
     @State private var editedRole = ""
     @State private var saving = false
-    
+    @State private var showDeleteConfirmation = false
+    @State private var showFinalDeleteConfirmation = false
+    @State private var isDeleting = false
+    @State private var deleteError: String?
+
     var userInitials: String {
         guard let name = userInfo?.name ?? userInfo?.email else { return "?" }
         let components = name.components(separatedBy: " ")
@@ -22,7 +26,7 @@ struct EnhancedProfileView: View {
         }
         return String(name.prefix(2)).uppercased()
     }
-    
+
     var body: some View {
         ScrollView {
             VStack(spacing: Spacing.xl) {
@@ -52,29 +56,29 @@ struct EnhancedProfileView: View {
                                 )
                                 .frame(width: 100, height: 100)
                                 .glowEffect(color: .aicovenTeal, radius: 20, intensity: 0.4)
-                            
+
                             Text(userInitials)
                                 .font(.system(size: 36, weight: .bold))
                                 .foregroundColor(.white)
                         }
-                        
+
                         Text(user.name ?? user.email)
                             .font(.aicovenH1)
                             .foregroundColor(.aicovenTextPrimary)
-                        
+
                         Text(user.email)
                             .font(.aicovenBody)
                             .foregroundColor(.aicovenTextSecondary)
                     }
                     .padding(.top, Spacing.xl)
-                    
+
                     // Stats section
-                    if let stats = stats {
+                    if let stats {
                         VStack(spacing: Spacing.md) {
                             Text("Usage This Month")
                                 .font(.aicovenH3)
                                 .foregroundColor(.aicovenTextPrimary)
-                            
+
                             HStack(spacing: Spacing.md) {
                                 StatCard(
                                     icon: "dollarsign.circle.fill",
@@ -82,14 +86,14 @@ struct EnhancedProfileView: View {
                                     label: "Spent",
                                     color: .aicovenTeal
                                 )
-                                
+
                                 StatCard(
                                     icon: "message.fill",
                                     value: "\(stats.messagesCount)",
                                     label: "Messages",
                                     color: .aicovenPurple
                                 )
-                                
+
                                 StatCard(
                                     icon: "brain.fill",
                                     value: "\(covenCount)",
@@ -100,16 +104,16 @@ struct EnhancedProfileView: View {
                         }
                         .padding(.horizontal, Spacing.lg)
                     }
-                    
+
                     // Profile info section
                     VStack(spacing: Spacing.md) {
                         HStack {
                             Text("Profile Information")
                                 .font(.aicovenH3)
                                 .foregroundColor(.aicovenTextPrimary)
-                            
+
                             Spacer()
-                            
+
                             Button {
                                 if isEditing {
                                     // Cancel editing
@@ -131,7 +135,7 @@ struct EnhancedProfileView: View {
                             }
                             .buttonStyle(.plain)
                         }
-                        
+
                         GlassCard {
                             VStack(spacing: Spacing.md) {
                                 if isEditing {
@@ -139,7 +143,7 @@ struct EnhancedProfileView: View {
                                     ProfileEditField(label: "Name", text: $editedName)
                                     ProfileEditField(label: "Organization", text: $editedOrganization)
                                     ProfileEditField(label: "Role", text: $editedRole)
-                                    
+
                                     GradientButton("Save Changes", icon: "checkmark.circle.fill", style: .primary) {
                                         Task {
                                             await saveProfile()
@@ -157,9 +161,10 @@ struct EnhancedProfileView: View {
                         }
                     }
                     .padding(.horizontal, Spacing.lg)
-                    
-                    // Sign out button
+
+                    // Account actions section
                     VStack(spacing: Spacing.sm) {
+                        // Sign out button
                         Button {
                             Task {
                                 do {
@@ -181,6 +186,37 @@ struct EnhancedProfileView: View {
                             .cornerRadius(BorderRadius.md)
                         }
                         .buttonStyle(.plain)
+
+                        // Delete account button
+                        Button {
+                            showDeleteConfirmation = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "trash")
+                                Text("Delete Account")
+                                if isDeleting {
+                                    Spacer()
+                                    ProgressView()
+                                        .tint(.red)
+                                }
+                            }
+                            .font(.aicovenBody)
+                            .foregroundColor(.red)
+                            .frame(maxWidth: .infinity)
+                            .padding(Spacing.md)
+                            .background(Color.aicovenGlass)
+                            .cornerRadius(BorderRadius.md)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isDeleting)
+
+                        // Show error if deletion failed
+                        if let error = deleteError {
+                            Text(error)
+                                .font(.aicovenCaption)
+                                .foregroundColor(.red)
+                                .padding(.top, Spacing.xs)
+                        }
                     }
                     .padding(.horizontal, Spacing.lg)
                     .padding(.bottom, Spacing.xl)
@@ -188,7 +224,7 @@ struct EnhancedProfileView: View {
                     // Local-only empty state when no user profile exists
                     VStack(spacing: Spacing.lg) {
                         IconBadge(icon: "person.crop.circle", size: 80, color: .aicovenTeal)
-                        
+
                         VStack(spacing: Spacing.sm) {
                             Text("Local Profile")
                                 .font(.aicovenH1)
@@ -199,20 +235,20 @@ struct EnhancedProfileView: View {
                                 .multilineTextAlignment(.center)
                                 .frame(maxWidth: 420)
                         }
-                        
+
                         GlassCard {
                             VStack(spacing: Spacing.sm) {
                                 Text("You can still customize your experience from Settings and Provider Keys.")
                                     .font(.aicovenBodySmall)
                                     .foregroundColor(.aicovenTextSecondary)
                                     .multilineTextAlignment(.center)
-                                
+
                                 HStack(spacing: Spacing.md) {
                                     NavigationLink(destination: EnhancedSettingsView()) {
                                         Label("Settings", systemImage: "gearshape")
                                     }
                                     .buttonStyle(.bordered)
-                                    
+
                                     NavigationLink(destination: ProviderKeysView()) {
                                         Label("Provider Keys", systemImage: "key.fill")
                                     }
@@ -232,6 +268,26 @@ struct EnhancedProfileView: View {
         .task {
             await loadProfile()
         }
+        // First delete confirmation
+        .alert("Delete Account?", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Continue", role: .destructive) {
+                showFinalDeleteConfirmation = true
+            }
+        } message: {
+            Text("This will permanently delete your account and all your local data including conversations, memories, and settings. This action cannot be undone.")
+        }
+        // Final delete confirmation
+        .alert("Are you absolutely sure?", isPresented: $showFinalDeleteConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete My Account", role: .destructive) {
+                Task {
+                    await deleteAccount()
+                }
+            }
+        } message: {
+            Text("Your account will be permanently deleted. You will be signed out immediately.")
+        }
         .onReceive(authService.$currentUser) { newValue in
             userInfo = newValue
             if let user = newValue, !isEditing {
@@ -241,8 +297,8 @@ struct EnhancedProfileView: View {
             }
         }
     }
-    
-    // Load user profile and stats (local-only)
+
+    /// Load user profile and stats (local-only)
     private func loadProfile() async {
         loading = true
         defer { loading = false }
@@ -253,14 +309,14 @@ struct EnhancedProfileView: View {
         stats = nil
         covenCount = 0
     }
-    
-    // Save profile changes (local-only)
+
+    /// Save profile changes (local-only)
     private func saveProfile() async {
         guard let existing = userInfo ?? authService.currentUser else { return }
-        
+
         saving = true
         defer { saving = false }
-        
+
         // Construct a new User value with updated name/profile metadata and
         // store it in AuthService so other views stay in sync. No network call.
         let updatedProfile = UserProfile(
@@ -282,6 +338,22 @@ struct EnhancedProfileView: View {
         authService.currentUser = updatedUser
         isEditing = false
     }
+
+    /// Deletes the user's account and signs out
+    private func deleteAccount() async {
+        isDeleting = true
+        deleteError = nil
+
+        do {
+            try await authService.deleteAccount()
+            // User is now signed out; the auth state listener will handle UI transition
+        } catch {
+            deleteError = "Failed to delete account. Please try again."
+            AppErrorReporter.log(error: error, context: "EnhancedProfileView.deleteAccount")
+        }
+
+        isDeleting = false
+    }
 }
 
 /// Stat card component
@@ -290,17 +362,17 @@ struct StatCard: View {
     let value: String
     let label: String
     let color: Color
-    
+
     var body: some View {
         VStack(spacing: Spacing.sm) {
             Image(systemName: icon)
                 .font(.system(size: 24))
                 .foregroundColor(color)
-            
+
             Text(value)
                 .font(.aicovenH2)
                 .foregroundColor(.aicovenTextPrimary)
-            
+
             Text(label)
                 .font(.aicovenCaption)
                 .foregroundColor(.aicovenTextSecondary)
@@ -315,15 +387,15 @@ struct StatCard: View {
 struct ProfileInfoRow: View {
     let label: String
     let value: String
-    
+
     var body: some View {
         HStack {
             Text(label)
                 .font(.aicovenBodySmall)
                 .foregroundColor(.aicovenTextSecondary)
-            
+
             Spacer()
-            
+
             Text(value)
                 .font(.aicovenBody)
                 .foregroundColor(.aicovenTextPrimary)
@@ -336,13 +408,13 @@ struct ProfileInfoRow: View {
 struct ProfileEditField: View {
     let label: String
     @Binding var text: String
-    
+
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
             Text(label)
                 .font(.aicovenCaption)
                 .foregroundColor(.aicovenTextSecondary)
-            
+
             TextField("", text: $text)
                 .font(.aicovenBody)
                 .foregroundColor(.aicovenTextPrimary)

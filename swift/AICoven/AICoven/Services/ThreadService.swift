@@ -8,28 +8,28 @@ import Foundation
 /// empty results so legacy code can compile without surfacing coven UI.
 actor ThreadService {
     static let shared = ThreadService()
-    
+
     /// Local store for personal threads (covenId == nil).
     /// Backed by a simple JSON file on disk so that threads persist
     /// across app launches.
     private var personalThreads: [Thread] = []
-    
+
     /// Location on disk where we persist personal threads.
     private var persistenceURL: URL
-    
+
     private init() {
-        self.persistenceURL = ThreadService.makePersistenceURL()
-        self.personalThreads = ThreadService.loadThreadsFromDisk(persistenceURL: persistenceURL)
+        persistenceURL = ThreadService.makePersistenceURL()
+        personalThreads = ThreadService.loadThreadsFromDisk(persistenceURL: persistenceURL)
     }
-    
+
     /// Reload threads for the current user. Call after user switch.
     func reloadForCurrentUser() {
-        self.persistenceURL = ThreadService.makePersistenceURL()
-        self.personalThreads = ThreadService.loadThreadsFromDisk(persistenceURL: persistenceURL)
+        persistenceURL = ThreadService.makePersistenceURL()
+        personalThreads = ThreadService.loadThreadsFromDisk(persistenceURL: persistenceURL)
     }
-    
+
     // MARK: - Persistence helpers
-    
+
     /// Compute the URL where the threads JSON file should live.
     private static func makePersistenceURL() -> URL {
         let fileManager = FileManager.default
@@ -51,7 +51,7 @@ actor ThreadService {
         let filename = UserScope.scopedFilename("personal_threads", extension: "json")
         return appDir.appendingPathComponent(filename, isDirectory: false)
     }
-    
+
     /// Load any previously-saved personal threads from disk.
     ///
     /// Marked as `internal` so tests can exercise the decode-error path and
@@ -72,7 +72,7 @@ actor ThreadService {
             return []
         }
     }
-    
+
     /// Persist the current in-memory personal threads to disk.
     private func persistPersonalThreads() {
         do {
@@ -84,66 +84,48 @@ actor ThreadService {
             AppErrorReporter.log(error: error, context: "ThreadService.persistPersonalThreads")
         }
     }
-    
+
     /// Load threads for a coven or personal threads
     /// - Parameters:
     ///   - covenId: The coven ID (nil for personal threads)
     ///   - includeArchived: Whether to include archived threads
     /// - Returns: List of threads
     func loadThreads(covenId: String? = nil, includeArchived: Bool = false) async throws -> [Thread] {
-        if let covenId = covenId {
-            // Legacy coven threads are not used in the local-first client.
-            // Return an empty list so callers do not attempt any backend
-            // access, but still behave gracefully.
-            AppErrorReporter.log(message: "loadThreads(covenId: \(covenId)) called in local-only build – returning empty list.", context: "ThreadService.loadThreads")
-            return []
+        let filtered: [Thread]
+        if let covenId {
+            // Return locally persisted threads that belong to this coven.
+            filtered = personalThreads.filter { $0.covenId == covenId }
+            AppErrorReporter.log(message: "Loading coven threads (covenId: \(covenId)) from local store (\(filtered.count) found)", context: "ThreadService.loadThreads")
         } else {
-            AppErrorReporter.log(message: "Loading personal threads from local store (\(personalThreads.count) total)", context: "ThreadService.loadThreads")
-            if includeArchived {
-                return personalThreads
-            } else {
-                return personalThreads.filter { !$0.isArchived }
-            }
+            // Personal threads have no covenId.
+            filtered = personalThreads.filter { $0.covenId == nil }
+            AppErrorReporter.log(message: "Loading personal threads from local store (\(filtered.count) total)", context: "ThreadService.loadThreads")
+        }
+        if includeArchived {
+            return filtered
+        } else {
+            return filtered.filter { !$0.isArchived }
         }
     }
-    
+
     /// Create a new thread in a coven or personal
     /// - Parameters:
     ///   - title: Thread title (optional)
     ///   - covenId: The coven ID (nil for personal thread)
     ///   - agentId: AI agent/role ID (optional)
     /// - Returns: The created thread
-    func createThread(title: String? = nil, covenId: String? = nil, agentId: String? = nil) async throws -> Thread {
-        if let covenId = covenId {
-            // Legacy coven threads are not supported in the local-first client.
-            AppErrorReporter.log(message: "createThread(covenId: \(covenId)) called in local-only build – returning stub thread.", context: "ThreadService.createThread")
+    func createThread(title: String? = nil, covenId: String? = nil, agentId: String? = nil, agentName: String? = nil) async throws -> Thread {
+        if let covenId {
+            // Coven threads are persisted locally just like personal threads.
+            AppErrorReporter.log(message: "Creating coven thread (covenId: \(covenId)) in local store", context: "ThreadService.createThread")
             let now = Date()
-            let thread = Thread(
+            let thread = await Thread(
                 id: UUID().uuidString,
-                userId: await AuthService.shared.currentUser?.id ?? "local-user",
+                userId: AuthService.shared.currentUser?.id ?? "local-user",
                 covenId: covenId,
                 title: title ?? "Coven Chat",
                 agentId: agentId,
-                agentName: nil,
-                agentModel: nil,
-                isPinned: false,
-                isArchived: false,
-                messageCount: 0,
-                createdAt: now,
-                updatedAt: now,
-                lastMessageAt: nil
-            )
-            return thread
-        } else {
-            AppErrorReporter.log(message: "Creating personal thread in local store", context: "ThreadService.createThread")
-            let now = Date()
-            let thread = Thread(
-                id: UUID().uuidString,
-                userId: await AuthService.shared.currentUser?.id ?? "local-user",
-                covenId: nil,
-                title: title ?? "New Chat",
-                agentId: agentId,
-                agentName: nil,
+                agentName: agentName,
                 agentModel: nil,
                 isPinned: false,
                 isArchived: false,
@@ -154,14 +136,36 @@ actor ThreadService {
             )
             personalThreads.append(thread)
             persistPersonalThreads()
-            
+            AnalyticsService.shared.trackThreadCreated(covenId: covenId, agentId: agentId)
+            return thread
+        } else {
+            AppErrorReporter.log(message: "Creating personal thread in local store", context: "ThreadService.createThread")
+            let now = Date()
+            let thread = await Thread(
+                id: UUID().uuidString,
+                userId: AuthService.shared.currentUser?.id ?? "local-user",
+                covenId: nil,
+                title: title ?? "New Chat",
+                agentId: agentId,
+                agentName: agentName,
+                agentModel: nil,
+                isPinned: false,
+                isArchived: false,
+                messageCount: 0,
+                createdAt: now,
+                updatedAt: now,
+                lastMessageAt: nil
+            )
+            personalThreads.append(thread)
+            persistPersonalThreads()
+
             // Track analytics
             AnalyticsService.shared.trackThreadCreated(covenId: nil, agentId: agentId)
-            
+
             return thread
         }
     }
-    
+
     /// Get a specific thread
     /// - Parameter threadId: The thread ID
     /// - Returns: The thread
@@ -174,9 +178,9 @@ actor ThreadService {
         // be used.
         AppErrorReporter.log(message: "getThread(\(threadId)) called in local-only build – returning placeholder thread.", context: "ThreadService.getThread")
         let now = Date()
-        return Thread(
+        return await Thread(
             id: threadId,
-            userId: await AuthService.shared.currentUser?.id ?? "local-user",
+            userId: AuthService.shared.currentUser?.id ?? "local-user",
             covenId: nil,
             title: "Chat",
             agentId: nil,
@@ -190,7 +194,7 @@ actor ThreadService {
             lastMessageAt: nil
         )
     }
-    
+
     /// Update a thread
     /// - Parameters:
     ///   - threadId: The thread ID
@@ -211,7 +215,7 @@ actor ThreadService {
             let agentId: String?
             let isPinned: Bool?
             let isArchived: Bool?
-            
+
             enum CodingKeys: String, CodingKey {
                 case title
                 case agentId = "agent_id"
@@ -219,7 +223,7 @@ actor ThreadService {
                 case isArchived = "is_archived"
             }
         }
-        
+
         // Update in-memory personal thread if present. We ignore coven
         // threads in the local-first client.
         if let index = personalThreads.firstIndex(where: { $0.id == threadId }) {
@@ -247,13 +251,13 @@ actor ThreadService {
             persistPersonalThreads()
             return updated
         }
-        
+
         // If no local thread found, just return a synthesized placeholder so
         // callers have something to work with.
         print("📝 updateThread(\(threadId)) called for unknown thread in local-only build – returning placeholder.")
         return try await getThread(threadId: threadId)
     }
-    
+
     /// Delete a thread
     /// - Parameter threadId: The thread ID
     func deleteThread(threadId: String) async throws {
@@ -261,7 +265,7 @@ actor ThreadService {
             personalThreads.remove(at: index)
             persistPersonalThreads()
             print("🗑️ Deleted personal thread \(threadId) from local store")
-            
+
             // Track analytics
             AnalyticsService.shared.trackThreadDeleted(threadId: threadId)
         } else {

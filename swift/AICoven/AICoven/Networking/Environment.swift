@@ -9,7 +9,7 @@ enum AppEnvironment {
     case development
     case staging
     case production
-    
+
     /// Current environment (set via build configuration)
     static var current: AppEnvironment {
         #if DEBUG
@@ -25,16 +25,15 @@ enum AppEnvironment {
         return .production
         #endif
     }
-    
+
     /// API base URL — unused in the local-first client.
     /// If you connect to a custom backend, set the URL here.
     var apiBaseURL: String {
-        return ""
+        ""
     }
-    
+
     /// Full API URL with /api/v1 path
     var apiURL: String {
-        return "\(apiBaseURL)/api/v1"
+        "\(apiBaseURL)/api/v1"
     }
 }
-

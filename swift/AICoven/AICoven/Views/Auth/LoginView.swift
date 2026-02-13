@@ -3,7 +3,7 @@ import SwiftUI
 /// Enhanced login screen with improved UX and visual design
 struct LoginView: View {
     @EnvironmentObject var authService: AuthService
-    
+
     @State private var mode: AuthMode = .signin
     @State private var firstName = ""
     @State private var lastName = ""
@@ -19,11 +19,11 @@ struct LoginView: View {
     @State private var confirmPasswordFieldFocused = false
     @State private var isPasswordVisible = false
     @State private var isConfirmPasswordVisible = false
-    
+
     enum AuthMode {
         case signin, signup
     }
-    
+
     var body: some View {
         ZStack {
             Color.aicovenDark
@@ -44,8 +44,7 @@ struct LoginView: View {
             ForgotPasswordView()
         }
     }
-    
-    
+
     /// Fallback app icon with enhanced styling
     private var appIconFallback: some View {
         ZStack {
@@ -58,7 +57,7 @@ struct LoginView: View {
                     )
                 )
                 .frame(width: 80, height: 80)
-            
+
             Image(systemName: "sparkles")
                 .font(.system(size: 36))
                 .foregroundStyle(
@@ -71,8 +70,8 @@ struct LoginView: View {
         }
         .shadow(color: Color.aicovenTeal.opacity(0.5), radius: 20, x: 0, y: 0)
     }
-    
-    /// Load app icon from resources
+
+    // Load app icon from resources
     #if os(iOS)
     private func loadAppIcon() -> UIImage? {
         // Try loading from asset catalog first
@@ -85,6 +84,7 @@ struct LoginView: View {
         }
         return nil
     }
+
     #elseif os(macOS)
     private func loadAppIcon() -> NSImage? {
         // Try loading from asset catalog first
@@ -98,27 +98,29 @@ struct LoginView: View {
         return nil
     }
     #else
-    private func loadAppIcon() -> Void { return nil }
+    private func loadAppIcon() {
+        nil
+    }
     #endif
-    
+
     /// Check if form is valid
     private var isFormValid: Bool {
         if mode == .signin {
-            return !email.isEmpty && !password.isEmpty
+            !email.isEmpty && !password.isEmpty
         } else {
-            return !firstName.isEmpty && !lastName.isEmpty && !email.isEmpty &&
+            !firstName.isEmpty && !lastName.isEmpty && !email.isEmpty &&
                 passwordRequirementsMet && password == confirmPassword
         }
     }
 
     private var passwordRequirementsMet: Bool {
         password.count >= 8 &&
-        password.containsUppercase &&
-        password.containsLowercase &&
-        password.containsNumber &&
-        password.containsSpecialCharacter
+            password.containsUppercase &&
+            password.containsLowercase &&
+            password.containsNumber &&
+            password.containsSpecialCharacter
     }
-    
+
     /// Handle form submission
     private func handleSubmit() {
         isLoading = true
@@ -132,9 +134,9 @@ struct LoginView: View {
                             "method": "email"
                         ]
                     )
-                    
+
                     try await authService.signIn(email: email, password: password)
-                    
+
                     // Track successful login
                     AnalyticsService.shared.trackLogin(method: "email")
                 } else {
@@ -143,7 +145,7 @@ struct LoginView: View {
                     let components = [trimmedFirst, trimmedLast].filter { !$0.isEmpty }
                     let fullName = components.joined(separator: " ")
                     let nameParam: String? = fullName.isEmpty ? nil : fullName
-                    
+
                     // Track signup attempt (no PII)
                     AnalyticsService.shared.track(
                         event: "signup_attempt",
@@ -152,16 +154,16 @@ struct LoginView: View {
                             "has_name": nameParam != nil
                         ]
                     )
-                    
+
                     try await authService.signUp(email: email, password: password, name: nameParam)
-                    
+
                     // Track successful signup
                     AnalyticsService.shared.trackSignUp(method: "email")
                 }
             } catch {
                 errorMessage = error.localizedDescription
                 showError = true
-                
+
                 // Track authentication failure (no PII)
                 AnalyticsService.shared.trackAuthError(
                     error: error.localizedDescription,
@@ -181,11 +183,11 @@ struct AuthModeButton: View {
     let isSelected: Bool
     let position: Position
     let action: () -> Void
-    
+
     enum Position {
         case left, right
     }
-    
+
     var body: some View {
         Button(action: action) {
             Text(title)
@@ -228,7 +230,7 @@ struct AuthModeButton: View {
 // MARK: - Signup Tutorial Layout
 
 private extension LoginView {
-    // Signup content styled to match sign-in page (no hero banner or stepper)
+    /// Signup content styled to match sign-in page (no hero banner or stepper)
     var signupContent: some View {
         ScrollView {
             VStack(spacing: 0) {
@@ -285,8 +287,8 @@ private extension LoginView {
                         )
                         .textContentType(.emailAddress)
                         #if os(iOS)
-                        .keyboardType(.emailAddress)
-                        .autocapitalization(.none)
+                            .keyboardType(.emailAddress)
+                            .autocapitalization(.none)
                         #endif
 
                         SignupTextField(
@@ -409,10 +411,10 @@ private extension LoginView {
 
                                 TextField("", text: $email, prompt: Text("Enter your email").foregroundColor(.aicovenTextTertiary))
                                     .textContentType(.emailAddress)
-                                    #if os(iOS)
+                                #if os(iOS)
                                     .keyboardType(.emailAddress)
                                     .autocapitalization(.none)
-                                    #endif
+                                #endif
                                     .foregroundColor(.aicovenTextPrimary)
                                     .disabled(isLoading)
                             }
@@ -538,9 +540,9 @@ private struct SignupTextField: View {
     let label: String
     let placeholder: String
     @Binding var text: String
-    var icon: String? = nil
+    var icon: String?
     var isSecure = false
-    var isSecureVisible: Binding<Bool>? = nil
+    var isSecureVisible: Binding<Bool>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {

@@ -4,7 +4,7 @@ import SwiftUI
 struct MainTabView: View {
     @EnvironmentObject var authService: AuthService
     @EnvironmentObject var appState: AppState
-    
+
     var body: some View {
         TabView {
             // Home/Threads tab
@@ -12,7 +12,7 @@ struct MainTabView: View {
                 .tabItem {
                     Label("Threads", systemImage: "message")
                 }
-            
+
             // Profile tab
             ProfileView()
                 .tabItem {
@@ -38,7 +38,6 @@ struct ThreadsView: View {
         }
     }
 }
-
 
 #Preview {
     MainTabView()

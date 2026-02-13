@@ -15,14 +15,16 @@ final class MemoryServiceTests: XCTestCase {
         var memoriesToReturn: [LocalMemoryChunk] = []
         var memoryByID: LocalMemoryChunk?
 
-        func storeMemory(scope: String,
-                         text: String,
-                         tags: [String],
-                         pii: Bool,
-                         createdBy: String?,
-                         source: String?,
-                         embedding: [Float]?) async throws -> LocalMemoryChunk {
-            let chunk = LocalMemoryChunk(
+        func storeMemory(
+            scope: String,
+            text: String,
+            tags: [String],
+            pii: Bool,
+            createdBy: String?,
+            source: String?,
+            embedding: [Float]?
+        ) async throws -> LocalMemoryChunk {
+            LocalMemoryChunk(
                 id: UUID().uuidString,
                 scope: scope,
                 text: text,
@@ -33,7 +35,6 @@ final class MemoryServiceTests: XCTestCase {
                 source: source,
                 embedding: embedding
             )
-            return chunk
         }
 
         func loadMemories(scope: String?, limit: Int) async throws -> [LocalMemoryChunk] {
@@ -42,16 +43,18 @@ final class MemoryServiceTests: XCTestCase {
         }
 
         func loadMemory(id: String) async throws -> LocalMemoryChunk? {
-            return memoryByID
+            memoryByID
         }
 
         func deleteMemory(id: String) async throws {}
 
-        func updateMemory(id: String,
-                          newText: String,
-                          newTags: [String],
-                          newEmbedding: [Float]?) async throws -> LocalMemoryChunk? {
-            return LocalMemoryChunk(
+        func updateMemory(
+            id: String,
+            newText: String,
+            newTags: [String],
+            newEmbedding: [Float]?
+        ) async throws -> LocalMemoryChunk? {
+            LocalMemoryChunk(
                 id: id,
                 scope: "user",
                 text: newText,
@@ -82,11 +85,13 @@ final class MemoryServiceTests: XCTestCase {
         ]
         let service = MemoryService(memoryStore: mockStore)
 
-        let result = try await service.searchMemory(covenId: nil,
-                                                    query: nil,
-                                                    scope: nil,
-                                                    tags: nil,
-                                                    limit: 10)
+        let result = try await service.searchMemory(
+            covenId: nil,
+            query: nil,
+            scope: nil,
+            tags: nil,
+            limit: 10
+        )
 
         XCTAssertEqual(result.count, 1)
         XCTAssertEqual(result.first?.content, "Note")

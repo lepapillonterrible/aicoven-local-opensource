@@ -8,9 +8,9 @@ struct MemoryCard: View {
     let onEdit: () -> Void
     let onDelete: () -> Void
     let onTogglePin: (Bool) -> Void
-    
+
     @State private var isHovering = false
-    
+
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             // Header with title and actions
@@ -21,27 +21,27 @@ struct MemoryCard: View {
                             .font(.aicovenH3)
                             .foregroundColor(.aicovenTextPrimary)
                     }
-                    
+
                     HStack(spacing: Spacing.xs) {
                         // Scope badge
                         ScopeBadge(scope: memory.scope)
-                        
+
                         // Pinned indicator
                         if memory.isPinned {
                             Image(systemName: "pin.fill")
                                 .font(.system(size: 10))
                                 .foregroundColor(.aicovenTeal)
                         }
-                        
+
                         // Date
                         Text(memory.createdAt, style: .relative)
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextTertiary)
                     }
                 }
-                
+
                 Spacer()
-                
+
                 // Actions
                 HStack(spacing: Spacing.xs) {
                     #if os(iOS)
@@ -52,13 +52,13 @@ struct MemoryCard: View {
                         } label: {
                             Label(memory.isPinned ? "Unpin" : "Pin", systemImage: memory.isPinned ? "pin.slash" : "pin")
                         }
-                        
+
                         Button {
                             onEdit()
                         } label: {
                             Label("Edit", systemImage: "pencil")
                         }
-                        
+
                         Button(role: .destructive) {
                             onDelete()
                         } label: {
@@ -83,7 +83,7 @@ struct MemoryCard: View {
                             .foregroundColor(.aicovenTextSecondary)
                     }
                     .buttonStyle(.plain)
-                    
+
                     // Edit button
                     Button {
                         onEdit()
@@ -93,7 +93,7 @@ struct MemoryCard: View {
                             .foregroundColor(.aicovenTextSecondary)
                     }
                     .buttonStyle(.plain)
-                    
+
                     // Delete button
                     Button {
                         onDelete()
@@ -109,13 +109,13 @@ struct MemoryCard: View {
                 .opacity(isHovering ? 1 : 0)
                 #endif
             }
-            
+
             // Content preview
             Text(memory.content)
                 .font(.aicovenBodySmall)
                 .foregroundColor(.aicovenTextSecondary)
                 .lineLimit(3)
-            
+
             // Tags
             if let tags = memory.tags, !tags.isEmpty {
                 HStack(spacing: Spacing.xxs) {
@@ -144,15 +144,15 @@ struct MemoryCard: View {
 /// Scope badge component
 struct ScopeBadge: View {
     let scope: MemoryScope
-    
+
     var scopeColor: Color {
         switch scope {
-        case .user: return .blue
-        case .coven: return .aicovenTeal
-        case .agent: return .aicovenPurple
+        case .user: .blue
+        case .coven: .aicovenTeal
+        case .agent: .aicovenPurple
         }
     }
-    
+
     var body: some View {
         Text(scope.rawValue.capitalized)
             .font(.aicovenCaption)
@@ -168,32 +168,31 @@ struct ScopeBadge: View {
 struct EmptyMemoryState: View {
     let covenId: String?
     let onAddMemory: () -> Void
-    
+
     var body: some View {
         VStack(spacing: Spacing.lg) {
             Spacer()
-            
+
             IconBadge(icon: "brain", size: 60, color: .aicovenTeal)
-            
+
             Text("No Memories Yet")
                 .font(.aicovenH2)
                 .foregroundColor(.aicovenTextPrimary)
-            
+
             Text(covenId != nil ? "Add shared knowledge for this coven" : "Add personal memories to save important information")
                 .font(.aicovenBodySmall)
                 .foregroundColor(.aicovenTextSecondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, Spacing.xl)
-            
+
             GradientButton("Add Memory", icon: "plus", style: .primary) {
                 onAddMemory()
             }
             .frame(width: 160)
-            
+
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(Spacing.xl)
     }
 }
-

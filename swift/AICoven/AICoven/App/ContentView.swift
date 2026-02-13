@@ -7,7 +7,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var authService: AuthService
     @EnvironmentObject var appState: AppState
-    
+
     var body: some View {
         Group {
             if authService.isLoading {

@@ -9,8 +9,8 @@ final class CapturingErrorReporter: ErrorReporter {
         let message: String
     }
 
-    nonisolated(unsafe) private(set) var errors: [LoggedError] = []
-    nonisolated(unsafe) private(set) var messages: [LoggedError] = []
+    private(set) nonisolated(unsafe) var errors: [LoggedError] = []
+    private(set) nonisolated(unsafe) var messages: [LoggedError] = []
 
     func log(error: Error, context: String) {
         errors.append(LoggedError(context: context, message: String(describing: error)))
@@ -49,7 +49,7 @@ final class ErrorReportingTests: XCTestCase {
         )
     }
 
-    func testPricingUpdateService_logsDecodeErrorAndReturnsEmpty() async throws {
+    func testPricingUpdateService_logsDecodeErrorAndReturnsEmpty() throws {
         let reporter = CapturingErrorReporter()
         AppErrorReporter.use(reporter)
 
@@ -76,7 +76,7 @@ final class ErrorReportingTests: XCTestCase {
         )
     }
 
-    func testThreadService_logsDecodeErrorOnCorruptJSON() async throws {
+    func testThreadService_logsDecodeErrorOnCorruptJSON() throws {
         let reporter = CapturingErrorReporter()
         AppErrorReporter.use(reporter)
 
@@ -107,7 +107,7 @@ final class ErrorReportingTests: XCTestCase {
         )
     }
 
-    func testDatabaseManager_logsErrorOnFailedMigration() async throws {
+    func testDatabaseManager_logsErrorOnFailedMigration() {
         let reporter = CapturingErrorReporter()
         AppErrorReporter.use(reporter)
 

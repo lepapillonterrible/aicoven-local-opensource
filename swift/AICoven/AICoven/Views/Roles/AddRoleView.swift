@@ -3,11 +3,11 @@ import SwiftUI
 /// View for creating a new agent role
 struct AddRoleView: View {
     let covenId: String
-    let roles: [Role]  // Existing roles for collaborator selection
+    let roles: [Role] // Existing roles for collaborator selection
     let onComplete: () -> Void
-    
+
     private let analytics = AnalyticsService.shared
-    
+
     // Basic fields
     @State private var name = ""
     @State private var emoji = "🤖"
@@ -25,36 +25,57 @@ struct AddRoleView: View {
     @State private var plannerMaxTasks = "5"
     @State private var plannerMaxSeconds = "30"
     @State private var showEmojiPicker = false
-    
+
     // Template state
     @State private var templates: [RoleTemplate] = []
     @State private var selectedTemplateId: String? = nil
     @State private var loadingTemplates = false
-    
+
     // Provider accounts state
     @State private var providerAccounts: [ProviderAccount] = []
     @State private var loadingAccounts = false
-    
+
     /// Per-account model options derived from initialization metadata.
     /// Keyed by provider account ID.
     @State private var accountModelOptions: [String: [(String, String)]] = [:]
-    
-    // Tools state
+
+    /// Dynamically discovered Ollama models (from /api/tags).
+    @State private var ollamaModels: [(String, String)] = []
+
+    /// Tools state
     @State private var selectedTools: Set<String> = Set(DEFAULT_ALLOWED_TOOLS)
-    
-    // Collaborators state
+
+    /// Collaborators state
     @State private var selectedCollaborators: Set<String> = []
-    
+
     let emojiOptions = ["🤖", "🧠", "💡", "🎨", "📝", "🔍", "⚙️", "📊", "🚀", "💬", "🎯", "🔬", "📚", "✨", "🌟", "🎭"]
     let providerOptions = [
         ("openai", "OpenAI"),
         ("anthropic", "Anthropic"),
         ("google", "Google AI"),
-        ("mistral", "Mistral AI")
+        ("ollama", "Ollama (Local)"),
+        ("mlx", "MLX (On-Device)")
     ]
-    
+
+    /// Whether the selected provider is local (no API key needed).
+    var isLocalProvider: Bool {
+        provider == "mlx" || provider == "ollama"
+    }
+
     var availableModels: [(String, String)] {
-        // Use dynamically discovered models for the selected provider account
+        // Local providers: return models from local catalog.
+        if provider == "mlx" {
+            return MLXModelManager.defaultCatalog.map { ($0.id, $0.displayName) }
+        }
+        if provider == "ollama" {
+            if !ollamaModels.isEmpty {
+                return ollamaModels
+            }
+            // Fallback to the configured default while discovery is in progress
+            let ollamaModel = UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model")) ?? "llama3.2"
+            return [(ollamaModel, ollamaModel)]
+        }
+        // Cloud providers: use dynamically discovered models.
         if let accountId = providerAccountId,
            let dynamic = accountModelOptions[accountId],
            !dynamic.isEmpty {
@@ -62,24 +83,24 @@ struct AddRoleView: View {
         }
         return []
     }
-    
+
     var body: some View {
         ScrollView {
             VStack(spacing: Spacing.xl) {
                 // Header
                 VStack(spacing: Spacing.sm) {
                     IconBadge(icon: "person.badge.plus", size: 60, color: .aicovenTeal)
-                    
+
                     Text("Create Agent Role")
                         .font(.aicovenDisplaySmall)
                         .foregroundColor(.aicovenTextPrimary)
-                    
+
                     Text("Configure a new AI agent for this coven")
                         .font(.aicovenBody)
                         .foregroundColor(.aicovenTextSecondary)
                 }
                 .padding(.top, Spacing.xl)
-                
+
                 // Form
                 VStack(spacing: Spacing.lg) {
                     // Basic info
@@ -90,7 +111,7 @@ struct AddRoleView: View {
                                 Text("Icon")
                                     .font(.aicovenH3)
                                     .foregroundColor(.aicovenTextPrimary)
-                                
+
                                 Button {
                                     showEmojiPicker.toggle()
                                 } label: {
@@ -101,7 +122,7 @@ struct AddRoleView: View {
                                         .cornerRadius(BorderRadius.md)
                                 }
                                 .buttonStyle(.plain)
-                                
+
                                 if showEmojiPicker {
                                     FlowLayout(spacing: Spacing.sm) {
                                         ForEach(emojiOptions, id: \.self) { option in
@@ -120,26 +141,26 @@ struct AddRoleView: View {
                                     }
                                 }
                             }
-                            
+
                             // Name
                             FormField(label: "Name", text: $name, placeholder: "Code Assistant")
-                            
+
                             // Description
                             FormField(label: "Description", text: $description, placeholder: "Helps with coding tasks and reviews", multiline: true)
                         }
                     }
-                    
+
                     // Template selector
                     GlassCard {
                         VStack(alignment: .leading, spacing: Spacing.sm) {
                             Text("Role Template (Optional)")
                                 .font(.aicovenH3)
                                 .foregroundColor(.aicovenTextPrimary)
-                            
+
                             Text("Start from a pre-made template or build from scratch")
                                 .font(.aicovenCaption)
                                 .foregroundColor(.aicovenTextTertiary)
-                            
+
                             if loadingTemplates {
                                 ProgressView()
                                     .padding(Spacing.md)
@@ -171,7 +192,7 @@ struct AddRoleView: View {
                                             )
                                         }
                                         .buttonStyle(.plain)
-                                        
+
                                         ForEach(templates) { template in
                                             Button {
                                                 selectedTemplateId = template.id
@@ -204,14 +225,14 @@ struct AddRoleView: View {
                             }
                         }
                     }
-                    
+
                     // System prompt
                     GlassCard {
                         VStack(spacing: Spacing.sm) {
                             Text("System Prompt")
                                 .font(.aicovenH3)
                                 .foregroundColor(.aicovenTextPrimary)
-                            
+
                             TextEditor(text: $systemPrompt)
                                 .font(.aicovenBody)
                                 .foregroundColor(.aicovenTextPrimary)
@@ -220,13 +241,13 @@ struct AddRoleView: View {
                                 .background(Color.aicovenGlass)
                                 .cornerRadius(BorderRadius.md)
                                 .scrollContentBackground(.hidden)
-                            
+
                             Text("Define the role's behavior, personality, and capabilities")
                                 .font(.aicovenCaption)
                                 .foregroundColor(.aicovenTextTertiary)
                         }
                     }
-                    
+
                     // Model configuration
                     GlassCard {
                         VStack(spacing: Spacing.md) {
@@ -235,12 +256,25 @@ struct AddRoleView: View {
                                 Text("Provider Account")
                                     .font(.aicovenH3)
                                     .foregroundColor(.aicovenTextPrimary)
-                                
+
                                 Text("Select which API key to use for this role")
                                     .font(.aicovenCaption)
                                     .foregroundColor(.aicovenTextTertiary)
-                                
-                                if loadingAccounts {
+
+                                if isLocalProvider {
+                                    // Local providers don't need account selection.
+                                    HStack(spacing: Spacing.sm) {
+                                        Image(systemName: "desktopcomputer")
+                                            .foregroundColor(.aicovenTeal)
+                                        Text(provider == "mlx" ? "Running on-device via Apple Silicon" : "Running locally via Ollama")
+                                            .font(.aicovenBody)
+                                            .foregroundColor(.aicovenTextSecondary)
+                                    }
+                                    .padding(Spacing.sm)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color.aicovenGlass)
+                                    .cornerRadius(BorderRadius.sm)
+                                } else if loadingAccounts {
                                     ProgressView()
                                         .padding(Spacing.md)
                                 } else if providerAccounts.isEmpty {
@@ -277,9 +311,9 @@ struct AddRoleView: View {
                                                                         .foregroundColor(.aicovenTextTertiary)
                                                                 }
                                                             }
-                                                            
+
                                                             Spacer()
-                                                            
+
                                                             if providerAccountId == account.id {
                                                                 Image(systemName: "checkmark.circle.fill")
                                                                     .foregroundColor(.aicovenTeal)
@@ -296,13 +330,13 @@ struct AddRoleView: View {
                                     }
                                 }
                             }
-                            
+
                             // Model
                             VStack(alignment: .leading, spacing: Spacing.sm) {
                                 Text("Model")
                                     .font(.aicovenH3)
                                     .foregroundColor(.aicovenTextPrimary)
-                                
+
                                 Menu {
                                     ForEach(availableModels, id: \.0) { option in
                                         Button(option.1) {
@@ -324,29 +358,29 @@ struct AddRoleView: View {
                                     .cornerRadius(BorderRadius.sm)
                                 }
                             }
-                            
+
                             // Temperature
                             VStack(alignment: .leading, spacing: Spacing.sm) {
                                 HStack {
                                     Text("Temperature")
                                         .font(.aicovenH3)
                                         .foregroundColor(.aicovenTextPrimary)
-                                    
+
                                     Spacer()
-                                    
+
                                     Text(String(format: "%.1f", temperature))
                                         .font(.aicovenBody)
                                         .foregroundColor(.aicovenTextSecondary)
                                 }
-                                
-                                Slider(value: $temperature, in: 0...2, step: 0.1)
+
+                                Slider(value: $temperature, in: 0 ... 2, step: 0.1)
                                     .tint(.aicovenTeal)
-                                
+
                                 Text("Lower = more focused, Higher = more creative")
                                     .font(.aicovenCaption)
                                     .foregroundColor(.aicovenTextTertiary)
                             }
-                            
+
                             // Max tokens
                             FormField(label: "Max Tokens", text: $maxTokens, placeholder: "2000")
 
@@ -402,25 +436,25 @@ struct AddRoleView: View {
                             }
                         }
                     }
-                    
+
                     // Tools
                     GlassCard {
                         VStack(alignment: .leading, spacing: Spacing.sm) {
                             Text("Allowed Tools")
                                 .font(.aicovenH3)
                                 .foregroundColor(.aicovenTextPrimary)
-                            
+
                             Text("Select which tools this role can use when acting on your behalf")
                                 .font(.aicovenCaption)
                                 .foregroundColor(.aicovenTextTertiary)
-                            
+
                             ForEach(groupToolsByFamily(), id: \.family) { group in
                                 VStack(alignment: .leading, spacing: Spacing.xs) {
                                     Text(group.family.replacingOccurrences(of: "_", with: " ").capitalized)
                                         .font(.aicovenH3)
                                         .foregroundColor(.aicovenTextSecondary)
                                         .padding(.top, Spacing.sm)
-                                    
+
                                     ForEach(group.tools) { tool in
                                         Button {
                                             if selectedTools.contains(tool.id) {
@@ -432,11 +466,11 @@ struct AddRoleView: View {
                                             HStack(spacing: Spacing.sm) {
                                                 Image(systemName: selectedTools.contains(tool.id) ? "checkmark.square.fill" : "square")
                                                     .foregroundColor(selectedTools.contains(tool.id) ? .aicovenTeal : .aicovenTextTertiary)
-                                                
+
                                                 Text(tool.label)
                                                     .font(.aicovenBody)
                                                     .foregroundColor(.aicovenTextPrimary)
-                                                
+
                                                 Spacer()
                                             }
                                             .padding(.vertical, Spacing.xs)
@@ -447,7 +481,7 @@ struct AddRoleView: View {
                             }
                         }
                     }
-                    
+
                     // Collaborators
                     if !roles.isEmpty {
                         GlassCard {
@@ -455,11 +489,11 @@ struct AddRoleView: View {
                                 Text("Collaborator Roles")
                                     .font(.aicovenH3)
                                     .foregroundColor(.aicovenTextPrimary)
-                                
+
                                 Text("Select which other roles this agent can coordinate with")
                                     .font(.aicovenCaption)
                                     .foregroundColor(.aicovenTextTertiary)
-                                
+
                                 ForEach(roles) { role in
                                     Button {
                                         if selectedCollaborators.contains(role.id) {
@@ -471,16 +505,16 @@ struct AddRoleView: View {
                                         HStack(spacing: Spacing.sm) {
                                             Image(systemName: selectedCollaborators.contains(role.id) ? "checkmark.square.fill" : "square")
                                                 .foregroundColor(selectedCollaborators.contains(role.id) ? .aicovenTeal : .aicovenTextTertiary)
-                                            
+
                                             if let emoji = role.emoji {
                                                 Text(emoji)
                                                     .font(.system(size: 16))
                                             }
-                                            
+
                                             Text(role.name)
                                                 .font(.aicovenBody)
                                                 .foregroundColor(.aicovenTextPrimary)
-                                            
+
                                             Spacer()
                                         }
                                         .padding(.vertical, Spacing.xs)
@@ -492,7 +526,7 @@ struct AddRoleView: View {
                     }
                 }
                 .padding(.horizontal, Spacing.lg)
-                
+
                 // Save button
                 GradientButton("Create Agent Role", icon: "checkmark.circle.fill", style: .primary) {
                     Task {
@@ -509,10 +543,11 @@ struct AddRoleView: View {
             analytics.trackScreenView(screenName: "AddRoleView", screenClass: "AddRoleView")
             Task {
                 await loadData()
+                await discoverOllamaModels()
             }
         }
     }
-    
+
     /// Load templates and provider accounts
     private func loadData() async {
         // Load templates
@@ -523,7 +558,7 @@ struct AddRoleView: View {
             print("❌ Failed to load templates: \(error.localizedDescription)")
         }
         loadingTemplates = false
-        
+
         // Load provider accounts
         loadingAccounts = true
         do {
@@ -539,7 +574,25 @@ struct AddRoleView: View {
         }
         loadingAccounts = false
     }
-    
+
+    /// Discover locally available Ollama models via /api/tags.
+    private func discoverOllamaModels() async {
+        let client = OllamaLLMClient()
+        do {
+            let models = try await client.discoverModels()
+            if !models.isEmpty {
+                ollamaModels = models.map { m in (m.name, m.formattedSize.map { s in "\(m.name) (\(s))" } ?? m.name) }
+                // If current model isn't in the discovered list, default to first
+                if provider == "ollama", !ollamaModels.contains(where: { $0.0 == model }) {
+                    model = ollamaModels.first?.0 ?? model
+                }
+            }
+        } catch {
+            // Ollama not running or unreachable — keep fallback
+            print("⚠️ Could not discover Ollama models: \(error.localizedDescription)")
+        }
+    }
+
     /// Load initialization metadata for a provider account
     private func loadModelsForAccount(_ account: ProviderAccount) async {
         do {
@@ -561,7 +614,7 @@ struct AddRoleView: View {
             print("⚠️ Failed to load initialization status for account \(account.id): \(error.localizedDescription)")
         }
     }
-    
+
     /// Load template and populate form
     private func loadTemplate(_ templateId: String) async {
         do {
@@ -570,7 +623,7 @@ struct AddRoleView: View {
             emoji = template.role.emoji ?? "🤖"
             description = template.purpose.joined(separator: "\n")
             systemPrompt = template.systemPrompt ?? ""
-            
+
             // Extract tools from tool policy
             if let toolPolicy = template.toolPolicy {
                 var tools: [String] = []
@@ -584,14 +637,14 @@ struct AddRoleView: View {
             print("❌ Failed to load template: \(error.localizedDescription)")
         }
     }
-    
+
     /// Save the new role
     private func saveRole() async {
         guard let maxTokensInt = Int(maxTokens) else { return }
-        
+
         saving = true
         defer { saving = false }
-        
+
         do {
             let stepsInt = Int(autonomousMaxSteps) ?? 5
             let rawPlannerTasks = Int(plannerMaxTasks) ?? 5
@@ -616,7 +669,7 @@ struct AddRoleView: View {
                 plannerMaxTasks: plannerTasksInt,
                 plannerMaxSeconds: plannerSecondsDouble
             )
-            
+
             analytics.trackRoleCreate(roleId: createdRole.id, templateId: selectedTemplateId, isCustom: selectedTemplateId == nil)
             onComplete()
         } catch {
@@ -632,13 +685,13 @@ struct FormField: View {
     @Binding var text: String
     let placeholder: String
     var multiline: Bool = false
-    
+
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             Text(label)
                 .font(.aicovenH3)
                 .foregroundColor(.aicovenTextPrimary)
-            
+
             if multiline {
                 TextEditor(text: $text)
                     .font(.aicovenBody)

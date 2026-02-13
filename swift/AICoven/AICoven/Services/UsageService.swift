@@ -3,10 +3,11 @@ import Foundation
 actor UsageService {
     static let shared = UsageService()
 
-    // User-scoped local storage keys
+    /// User-scoped local storage keys
     private var entriesKey: String {
         UserScope.scopedKey("local_usage.entries.v1")
     }
+
     private var budgetsKey: String {
         UserScope.scopedKey("local_usage.budgets.v1")
     }
@@ -16,7 +17,7 @@ actor UsageService {
     private init() {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        self.isoFormatter = formatter
+        isoFormatter = formatter
     }
 
     // MARK: - Public API
@@ -62,12 +63,11 @@ actor UsageService {
 
         let now = Date()
         let effectiveEnd = endDate ?? now
-        let effectiveStart: Date
-        if let startDate {
-            effectiveStart = startDate
+        let effectiveStart: Date = if let startDate {
+            startDate
         } else {
             // Default window: last 30 days
-            effectiveStart = Calendar.current.date(byAdding: .day, value: -30, to: effectiveEnd) ?? now
+            Calendar.current.date(byAdding: .day, value: -30, to: effectiveEnd) ?? now
         }
 
         var totalTokens = 0
@@ -78,7 +78,7 @@ actor UsageService {
 
         for entry in entries {
             guard let createdAtDate = isoFormatter.date(from: entry.createdAt) else { continue }
-            guard createdAtDate >= effectiveStart && createdAtDate <= effectiveEnd else { continue }
+            guard createdAtDate >= effectiveStart, createdAtDate <= effectiveEnd else { continue }
 
             totalTokens += entry.totalTokens
             promptTokens += entry.promptTokens
@@ -112,7 +112,7 @@ actor UsageService {
 
         let start = min(max(0, offset), entries.count)
         let end = min(entries.count, start + limit)
-        return Array(entries[start..<end])
+        return Array(entries[start ..< end])
     }
 
     /// Get remaining budget for a provider for the current calendar month.
@@ -137,11 +137,10 @@ actor UsageService {
         }
 
         let budgetUsd = matchingBudget?.amountUsd
-        let remainingUsd: Double?
-        if let budgetUsd {
-            remainingUsd = max(0, budgetUsd - usageThisMonth)
+        let remainingUsd: Double? = if let budgetUsd {
+            max(0, budgetUsd - usageThisMonth)
         } else {
-            remainingUsd = nil
+            nil
         }
 
         // Simple threshold: notify at 75% and 90% if a budget exists.
@@ -272,16 +271,15 @@ actor UsageService {
 
         // Fallback: simple per-provider flat rate using total tokens.
         let totalTokens = Double(usage.totalTokens ?? 0)
-        let perThousand: Double
-        switch provider.lowercased() {
+        let perThousand = switch provider.lowercased() {
         case "openai":
-            perThousand = 0.01
+            0.01
         case "anthropic":
-            perThousand = 0.012
+            0.012
         case "google", "gemini":
-            perThousand = 0.008
+            0.008
         default:
-            perThousand = 0.0
+            0.0
         }
         return (totalTokens / 1000.0) * perThousand
     }

@@ -15,7 +15,7 @@ struct Thread: Codable, Identifiable, Hashable {
     let createdAt: Date
     let updatedAt: Date?
     let lastMessageAt: Date?
-    
+
     enum CodingKeys: String, CodingKey {
         case id, title
         case userId = "user_id"
@@ -30,8 +30,8 @@ struct Thread: Codable, Identifiable, Hashable {
         case updatedAt = "updated_at"
         case lastMessageAt = "last_message_at"
     }
-    
-    // Memberwise initializer for testing/previews
+
+    /// Memberwise initializer for testing/previews
     init(
         id: String,
         userId: String,
@@ -61,11 +61,11 @@ struct Thread: Codable, Identifiable, Hashable {
         self.updatedAt = updatedAt
         self.lastMessageAt = lastMessageAt
     }
-    
-    // Custom decoder to handle defaults
+
+    /// Custom decoder to handle defaults
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        
+
         id = try container.decode(String.self, forKey: .id)
         userId = try container.decode(String.self, forKey: .userId)
         covenId = try container.decodeIfPresent(String.self, forKey: .covenId)
@@ -91,7 +91,7 @@ struct Message: Codable, Identifiable {
     let content: String
     let metadata: MessageMetadata?
     let createdAt: Date
-    
+
     enum CodingKeys: String, CodingKey {
         case id
         case threadId = "thread_id"
@@ -115,7 +115,7 @@ struct MessageMetadata: Codable {
     let model: String?
     let tokensUsed: Int?
     let cost: Double?
-    
+
     enum CodingKeys: String, CodingKey {
         case attachments
         case toolCalls = "tool_calls"
@@ -132,7 +132,7 @@ struct Attachment: Codable, Identifiable {
     let fileType: String
     let fileSize: Int
     let url: String?
-    
+
     enum CodingKeys: String, CodingKey {
         case id
         case fileName = "file_name"

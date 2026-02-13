@@ -20,19 +20,19 @@ enum APIError: Error, LocalizedError {
     case noAuthToken
     /// Local-only open source build: backend API is not available
     case backendUnavailable
-    
+
     var errorDescription: String? {
         switch self {
         case .invalidURL:
             return "Invalid URL"
-        case .networkError(let error):
+        case let .networkError(error):
             return "Network error: \(error.localizedDescription)"
         case .invalidResponse:
             return "Invalid server response"
-        case .httpError(let statusCode, let message):
+        case let .httpError(statusCode, message):
             let messageText = message ?? "Unknown error"
             return "HTTP \(statusCode): \(messageText)"
-        case .decodingError(let error):
+        case let .decodingError(error):
             return "Failed to decode response: \(error.localizedDescription)"
         case .unauthorized:
             return "Unauthorized - please sign in again"
@@ -47,52 +47,52 @@ enum APIError: Error, LocalizedError {
 /// Core API client for making authenticated requests
 actor APIClient {
     static let shared = APIClient()
-    
+
     private let urlSession: URLSession
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
-    
+
     private init() {
         // Configure URLSession with timeout
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 120
         config.timeoutIntervalForResource = 300
-        self.urlSession = URLSession(configuration: config)
-        
+        urlSession = URLSession(configuration: config)
+
         // Configure JSON decoder
         // Note: We use explicit CodingKeys in models, so no automatic snake_case conversion
-        self.decoder = JSONDecoder()
-        
+        decoder = JSONDecoder()
+
         // Use custom date decoding to handle multiple formats
         let isoFormatter = ISO8601DateFormatter()
         isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        
+
         let isoFormatterNoFraction = ISO8601DateFormatter()
         isoFormatterNoFraction.formatOptions = [.withInternetDateTime]
-        
-        self.decoder.dateDecodingStrategy = .custom { decoder in
+
+        decoder.dateDecodingStrategy = .custom { decoder in
             let container = try decoder.singleValueContainer()
             let dateString = try container.decode(String.self)
-            
+
             // Try ISO8601 with fractional seconds
             if let date = isoFormatter.date(from: dateString) {
                 return date
             }
-            
+
             // Try ISO8601 without fractional seconds
             if let date = isoFormatterNoFraction.date(from: dateString) {
                 return date
             }
-            
+
             throw DecodingError.dataCorruptedError(in: container, debugDescription: "Cannot decode date from: \(dateString)")
         }
-        
+
         // Configure JSON encoder
         // Note: We use explicit CodingKeys in models, so no automatic snake_case conversion
-        self.encoder = JSONEncoder()
-        self.encoder.dateEncodingStrategy = .iso8601
+        encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
     }
-    
+
     /// Make authenticated API request
     /// - Parameters:
     ///   - endpoint: API endpoint path (e.g., "/auth/me")

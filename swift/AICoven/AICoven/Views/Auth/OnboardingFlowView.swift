@@ -23,17 +23,21 @@ struct OnboardingFlowView: View {
         case routing
         case memory
 
-        var index: Int { rawValue + 1 }
+        var index: Int {
+            rawValue + 1
+        }
 
-        static var totalCount: Int { Self.allCases.count }
-        
+        static var totalCount: Int {
+            allCases.count
+        }
+
         var name: String {
             switch self {
-            case .privacy: return "privacy"
-            case .keys: return "keys"
-            case .agents: return "agents"
-            case .routing: return "routing"
-            case .memory: return "memory"
+            case .privacy: "privacy"
+            case .keys: "keys"
+            case .agents: "agents"
+            case .routing: "routing"
+            case .memory: "memory"
             }
         }
     }
@@ -165,41 +169,41 @@ struct OnboardingFlowView: View {
 
     private var nextButtonTitle: String {
         switch step {
-        case .privacy: return "Continue"
-        case .keys: return "Continue"
-        case .agents: return "Continue"
-        case .routing: return "Continue"
-        case .memory: return "Start Using AICoven"
+        case .privacy: "Continue"
+        case .keys: "Continue"
+        case .agents: "Continue"
+        case .routing: "Continue"
+        case .memory: "Start Using AICoven"
         }
     }
 
     private var nextButtonIcon: String {
         switch step {
         case .privacy:
-            return "chevron.right"
+            "chevron.right"
         case .keys:
-            return "chevron.right"
+            "chevron.right"
         case .agents:
-            return "chevron.right"
+            "chevron.right"
         case .routing:
-            return "chevron.right"
+            "chevron.right"
         case .memory:
-            return "sparkles"
+            "sparkles"
         }
     }
 
     private var canAdvance: Bool {
         switch step {
         case .privacy:
-            return acceptedPrivacy
+            acceptedPrivacy
         case .keys:
-            return acceptedBilling
+            acceptedBilling
         case .agents:
-            return true
+            true
         case .routing:
-            return true
+            true
         case .memory:
-            return true
+            true
         }
     }
 
@@ -292,7 +296,7 @@ struct OnboardingFlowView: View {
             event: "onboarding_completed",
             properties: ["total_steps": OnboardingStep.totalCount]
         )
-        
+
         // Persist onboarding completion at the account level.
         // When the server update succeeds, AuthService will update
         // AppState.hasCompletedOnboarding, and ContentView will
@@ -625,16 +629,8 @@ private struct MemoryStepView: View {
 
 private struct TutorialTwoColumn<Left: View, Right: View>: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    let left: Left
-    let right: Right
-
-    init(
-        @ViewBuilder left: () -> Left,
-        @ViewBuilder right: () -> Right
-    ) {
-        self.left = left()
-        self.right = right()
-    }
+    @ViewBuilder let left: Left
+    @ViewBuilder let right: Right
 
     var body: some View {
         if horizontalSizeClass == .compact {
@@ -677,7 +673,6 @@ private struct TutorialScreenshot: View {
         .frame(maxWidth: .infinity, alignment: .center)
     }
 }
-
 
 // MARK: - Reusable Components
 

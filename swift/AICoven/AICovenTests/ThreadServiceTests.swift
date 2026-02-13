@@ -11,7 +11,7 @@ final class ThreadServiceTests: XCTestCase {
 
         // Capture existing IDs so we can look for the newly-created one.
         let existing = try await service.loadThreads(covenId: nil)
-        let existingIDs = Set(existing.map { $0.id })
+        let existingIDs = Set(existing.map(\.id))
 
         let title = "Test Thread " + UUID().uuidString
         let thread = try await service.createThread(title: title, covenId: nil, agentId: nil)

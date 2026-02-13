@@ -5,17 +5,17 @@ struct PersonalThreadsSidebar: View {
     @Binding var threads: [Thread]
     @Binding var selectedThread: Thread?
     @Binding var isExpanded: Bool
-    
+
     @State private var showStrixSettings = false
-    
-    // Strix settings for displaying the preferred model in thread rows
+
+    /// Strix settings for displaying the preferred model in thread rows
     @State private var strixSettings: LocalStrixSettings?
-    
+
     let onNewThread: () -> Void
     let onSelectThread: (Thread) -> Void
     let onDeleteThread: (Thread) -> Void
     var onSwitchToCovens: (() -> Void)?
-    
+
     var body: some View {
         VStack(spacing: 0) {
             // Header with actions
@@ -31,7 +31,7 @@ struct PersonalThreadsSidebar: View {
                             .foregroundColor(.aicovenTextPrimary)
                     }
                     Spacer()
-                    
+
                     if isExpanded {
                         // Strix settings button
                         Button(action: { showStrixSettings = true }) {
@@ -42,7 +42,7 @@ struct PersonalThreadsSidebar: View {
                         }
                         .buttonStyle(.plain)
                     }
-                    
+
                     // Collapse button
                     Button(action: { isExpanded.toggle() }) {
                         Image(systemName: isExpanded ? "sidebar.left" : "sidebar.right")
@@ -52,7 +52,7 @@ struct PersonalThreadsSidebar: View {
                     }
                     .buttonStyle(.plain)
                 }
-                
+
                 // Action buttons (only show when expanded)
                 if isExpanded {
                     VStack(spacing: Spacing.xs) {
@@ -77,7 +77,7 @@ struct PersonalThreadsSidebar: View {
                             .cornerRadius(BorderRadius.md)
                         }
                         .buttonStyle(.plain)
-                        
+
                         // Switch to covens workspace
                         if let onSwitchToCovens {
                             Button(action: onSwitchToCovens) {
@@ -103,9 +103,9 @@ struct PersonalThreadsSidebar: View {
                 }
             }
             .padding(Spacing.md)
-            
+
             GradientDivider()
-            
+
             // Thread list (only show when expanded)
             if isExpanded {
                 ScrollView {
@@ -113,11 +113,11 @@ struct PersonalThreadsSidebar: View {
                         // Empty state
                         VStack(spacing: Spacing.md) {
                             IconBadge(icon: "message", size: 48, color: .aicovenTeal)
-                            
+
                             Text("No conversations yet")
                                 .font(.aicovenBodyMedium)
                                 .foregroundColor(.aicovenTextSecondary)
-                            
+
                             Text("Start a new chat with the default assistant")
                                 .font(.aicovenBodySmall)
                                 .foregroundColor(.aicovenTextTertiary)
@@ -133,7 +133,7 @@ struct PersonalThreadsSidebar: View {
                                     thread: thread,
                                     isSelected: selectedThread?.id == thread.id,
                                     preferredModel: strixSettings?.model,
-                                    onTap: { 
+                                    onTap: {
                                         onSelectThread(thread)
                                     },
                                     onDelete: {
@@ -175,7 +175,7 @@ struct PersonalThreadRow: View {
     let preferredModel: String?
     let onTap: () -> Void
     let onDelete: () -> Void
-    
+
     /// Determines the model name to display:
     /// 1. Thread's agentModel (if available - represents the last model used)
     /// 2. Strix preferred model (if configured)
@@ -183,7 +183,7 @@ struct PersonalThreadRow: View {
     private var displayModel: String? {
         thread.agentModel ?? preferredModel
     }
-    
+
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: Spacing.sm) {
@@ -191,14 +191,14 @@ struct PersonalThreadRow: View {
                 Image(systemName: "message.fill")
                     .font(.system(size: 14))
                     .foregroundColor(isSelected ? .aicovenTeal : .aicovenTextSecondary)
-                
+
                 // Title
                 VStack(alignment: .leading, spacing: 2) {
                     Text(thread.title ?? "Untitled Chat")
                         .font(.aicovenBody)
                         .foregroundColor(isSelected ? .aicovenTextPrimary : .aicovenTextSecondary)
                         .lineLimit(1)
-                    
+
                     // Show agent name and model (if available)
                     let agentName = thread.agentName ?? "Strix"
                     if let model = displayModel {
@@ -210,16 +210,16 @@ struct PersonalThreadRow: View {
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextSecondary)
                     }
-                    
+
                     if let updatedAt = thread.updatedAt {
                         Text(relativeTime(from: updatedAt))
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextTertiary)
                     }
                 }
-                
+
                 Spacer()
-                
+
                 // Pin indicator
                 if thread.isPinned {
                     Image(systemName: "pin.fill")
@@ -247,13 +247,13 @@ struct PersonalThreadRow: View {
             }
         }
     }
-    
+
     /// Format relative time without seconds
     private func relativeTime(from date: Date) -> String {
         let calendar = Calendar.current
         let now = Date()
         let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date, to: now)
-        
+
         if let years = components.year, years > 0 {
             return "\(years)y"
         } else if let months = components.month, months > 0 {

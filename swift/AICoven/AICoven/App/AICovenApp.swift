@@ -6,7 +6,7 @@ import FirebaseCore
 /// personal workspace (Conversations + tabs).
 @main
 struct AICovenApp: App {
-    // Simple splash state
+    /// Simple splash state
     @State private var isShowingSplash = true
     /// Whether the local encryption key has been unlocked for this session.
     @State private var isEncryptionUnlocked = false
@@ -14,7 +14,7 @@ struct AICovenApp: App {
     /// Initialized in init() AFTER Firebase is configured, because
     /// AuthService.shared accesses Auth.auth() which requires Firebase first.
     @ObservedObject private var authService: AuthService
-    
+
     init() {
         // Initialize Firebase only if a valid configuration is available and not
         // already configured, to avoid fatal errors in local/CI builds without
@@ -26,16 +26,16 @@ struct AICovenApp: App {
                 FirebaseApp.configure(options: options)
             }
         }
-        
+
         // NOW it is safe to access AuthService.shared (requires Auth.auth()).
         _authService = ObservedObject(wrappedValue: AuthService.shared)
-        
+
         // Local-only version: no remote auth beyond what Firebase Auth provides if used.
         Self.configureAppearance()
         // Initialize local SQLite database and run migrations.
         DatabaseManager.shared.configureIfNeeded()
     }
-    
+
     var body: some Scene {
         WindowGroup {
             ZStack {
@@ -44,7 +44,7 @@ struct AICovenApp: App {
                         .transition(.opacity)
                 } else if !isEncryptionUnlocked {
                     // First check auth, then unlock encryption with user-scoped keys.
-                    if !authService.isAuthenticated && !authService.isLoading {
+                    if !authService.isAuthenticated, !authService.isLoading {
                         LoginView()
                             .environmentObject(authService)
                             .environmentObject(AppState.shared)
@@ -89,7 +89,7 @@ struct AICovenApp: App {
         }
         #endif
     }
-    
+
     /// Configure global app appearance
     private static func configureAppearance() {
         #if os(iOS)
@@ -98,7 +98,7 @@ struct AICovenApp: App {
         ]
         #endif
     }
-    
+
     /// Check if Firebase options contain valid (non-placeholder) configuration.
     /// Returns false for placeholder configs used in CI builds.
     private static func isValidFirebaseConfig(_ options: FirebaseOptions) -> Bool {

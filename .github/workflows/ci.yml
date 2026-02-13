@@ -14,6 +14,7 @@ on:
       - 'swift/**'
       - 'scripts/**'
       - '.github/workflows/ci.yml'
+      - '.swiftformat'
       - '.swiftlint.yml'
 
   # Run on pushes to main branches
@@ -25,6 +26,7 @@ on:
       - 'swift/**'
       - 'scripts/**'
       - '.github/workflows/ci.yml'
+      - '.swiftformat'
       - '.swiftlint.yml'
 
   # Allow manual triggering
@@ -38,7 +40,7 @@ concurrency:
 jobs:
   lint-build-test:
     name: Lint, Build & Test
-    runs-on: macos-14
+    runs-on: macos-15
 
     steps:
       - name: Checkout repository

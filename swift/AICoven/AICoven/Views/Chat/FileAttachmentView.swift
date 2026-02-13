@@ -44,7 +44,7 @@ struct FileAttachmentView: View {
 struct AttachmentsListView: View {
     let attachments: [FileAttachmentDetail]
     var compact: Bool = false
-    var onRemove: ((String) -> Void)? = nil
+    var onRemove: ((String) -> Void)?
     var showRemove: Bool = false
 
     var body: some View {
