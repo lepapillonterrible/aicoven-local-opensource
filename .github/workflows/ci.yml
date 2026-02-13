@@ -73,6 +73,43 @@ jobs:
       - name: Run SwiftLint
         run: swiftlint --strict
 
+      - name: Create placeholder GoogleService-Info.plist
+        run: |
+          # Create a placeholder Firebase config for CI builds.
+          # The app code detects placeholder values and skips Firebase initialization.
+          cat > swift/AICoven/GoogleService-Info.plist << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>API_KEY</key>
+            <string>placeholder</string>
+            <key>GCM_SENDER_ID</key>
+            <string>000000000000</string>
+            <key>PLIST_VERSION</key>
+            <string>1</string>
+            <key>BUNDLE_ID</key>
+            <string>com.aicoven.local</string>
+            <key>PROJECT_ID</key>
+            <string>placeholder</string>
+            <key>STORAGE_BUCKET</key>
+            <string>placeholder.appspot.com</string>
+            <key>IS_ADS_ENABLED</key>
+            <false/>
+            <key>IS_ANALYTICS_ENABLED</key>
+            <false/>
+            <key>IS_APPINVITE_ENABLED</key>
+            <false/>
+            <key>IS_GCM_ENABLED</key>
+            <false/>
+            <key>IS_SIGNIN_ENABLED</key>
+            <false/>
+            <key>GOOGLE_APP_ID</key>
+            <string>1:000000000000:ios:placeholder</string>
+          </dict>
+          </plist>
+          EOF
+
       - name: Resolve Swift Package dependencies (fresh)
         run: |
           rm -f "swift/AICoven/AICoven Local.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
