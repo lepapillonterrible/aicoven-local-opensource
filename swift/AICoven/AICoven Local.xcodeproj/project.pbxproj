@@ -589,7 +589,6 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "COMMUNITY_EDITION $(inherited)";
 				SWIFT_COMPILATION_MODE = wholemodule;
 			};
 			name = Release;
@@ -663,7 +662,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "Resources/AICoven-iOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "Resources/AICoven-macOS.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 70;
+				CURRENT_PROJECT_VERSION = 71;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = H99A45HA22;
 				ENABLE_APP_SANDBOX = NO;

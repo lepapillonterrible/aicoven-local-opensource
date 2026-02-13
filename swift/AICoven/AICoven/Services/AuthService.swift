@@ -39,6 +39,9 @@ class AuthService: ObservableObject {
                     // Build user profile from Firebase user data (no backend needed)
                     self?.buildLocalUserProfile(from: firebaseUser)
                     self?.isAuthenticated = true
+                    // Reload thread service for the newly signed-in user to ensure
+                    // user-scoped data isolation (prevents seeing other users' threads)
+                    await ThreadService.shared.reloadForCurrentUser()
                 } else {
                     print("❌ No Firebase user - signed out")
                     self?.currentUser = nil
