@@ -129,10 +129,19 @@ extension GooglePickerWebView {
     /// Generate the HTML page that hosts the Google Picker.
     /// We already have the OAuth token so we skip the GIS auth library entirely.
     static func pickerHTML(accessToken: String, apiKey: String, appId: String) -> String {
-        // Escape values for safe JS embedding
-        let escapedToken = accessToken.replacingOccurrences(of: "'", with: "\\'")
-        let escapedKey = apiKey.replacingOccurrences(of: "'", with: "\\'")
-        let escapedAppId = appId.replacingOccurrences(of: "'", with: "\\'")
+        // JSON-encode values for safe JS embedding. JSONEncoder produces
+        // properly escaped strings (handles \, newlines, </script>, etc.)
+        // and wraps them in double quotes, so they can be used directly as
+        // JS string literals.
+        let encoder = JSONEncoder()
+        guard let tokenJSON = try? encoder.encode(accessToken),
+              let keyJSON = try? encoder.encode(apiKey),
+              let appIdJSON = try? encoder.encode(appId),
+              let escapedToken = String(data: tokenJSON, encoding: .utf8),
+              let escapedKey = String(data: keyJSON, encoding: .utf8),
+              let escapedAppId = String(data: appIdJSON, encoding: .utf8) else {
+            return "<html><body>Error: Failed to encode picker parameters</body></html>"
+        }
 
         return """
         <!DOCTYPE html>
@@ -178,9 +187,9 @@ extension GooglePickerWebView {
             </div>
 
             <script>
-                const ACCESS_TOKEN = '\(escapedToken)';
-                const API_KEY = '\(escapedKey)';
-                const APP_ID = '\(escapedAppId)';
+                const ACCESS_TOKEN = \(escapedToken);
+                const API_KEY = \(escapedKey);
+                const APP_ID = \(escapedAppId);
 
                 function onApiLoad() {
                     gapi.load('picker', createPicker);
