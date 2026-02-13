@@ -13,6 +13,10 @@ struct EnhancedProfileView: View {
     @State private var editedOrganization = ""
     @State private var editedRole = ""
     @State private var saving = false
+    @State private var showDeleteConfirmation = false
+    @State private var showFinalDeleteConfirmation = false
+    @State private var isDeleting = false
+    @State private var deleteError: String?
 
     var userInitials: String {
         guard let name = userInfo?.name ?? userInfo?.email else { return "?" }
@@ -158,8 +162,9 @@ struct EnhancedProfileView: View {
                     }
                     .padding(.horizontal, Spacing.lg)
 
-                    // Sign out button
+                    // Account actions section
                     VStack(spacing: Spacing.sm) {
+                        // Sign out button
                         Button {
                             Task {
                                 do {
@@ -181,6 +186,37 @@ struct EnhancedProfileView: View {
                             .cornerRadius(BorderRadius.md)
                         }
                         .buttonStyle(.plain)
+
+                        // Delete account button
+                        Button {
+                            showDeleteConfirmation = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "trash")
+                                Text("Delete Account")
+                                if isDeleting {
+                                    Spacer()
+                                    ProgressView()
+                                        .tint(.red)
+                                }
+                            }
+                            .font(.aicovenBody)
+                            .foregroundColor(.red)
+                            .frame(maxWidth: .infinity)
+                            .padding(Spacing.md)
+                            .background(Color.aicovenGlass)
+                            .cornerRadius(BorderRadius.md)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isDeleting)
+
+                        // Show error if deletion failed
+                        if let error = deleteError {
+                            Text(error)
+                                .font(.aicovenCaption)
+                                .foregroundColor(.red)
+                                .padding(.top, Spacing.xs)
+                        }
                     }
                     .padding(.horizontal, Spacing.lg)
                     .padding(.bottom, Spacing.xl)
@@ -232,6 +268,26 @@ struct EnhancedProfileView: View {
         .task {
             await loadProfile()
         }
+        // First delete confirmation
+        .alert("Delete Account?", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Continue", role: .destructive) {
+                showFinalDeleteConfirmation = true
+            }
+        } message: {
+            Text("This will permanently delete your account and all your local data including conversations, memories, and settings. This action cannot be undone.")
+        }
+        // Final delete confirmation
+        .alert("Are you absolutely sure?", isPresented: $showFinalDeleteConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete My Account", role: .destructive) {
+                Task {
+                    await deleteAccount()
+                }
+            }
+        } message: {
+            Text("Your account will be permanently deleted. You will be signed out immediately.")
+        }
         .onReceive(authService.$currentUser) { newValue in
             userInfo = newValue
             if let user = newValue, !isEditing {
@@ -281,6 +337,22 @@ struct EnhancedProfileView: View {
         userInfo = updatedUser
         authService.currentUser = updatedUser
         isEditing = false
+    }
+
+    /// Deletes the user's account and signs out
+    private func deleteAccount() async {
+        isDeleting = true
+        deleteError = nil
+
+        do {
+            try await authService.deleteAccount()
+            // User is now signed out; the auth state listener will handle UI transition
+        } catch {
+            deleteError = "Failed to delete account. Please try again."
+            AppErrorReporter.log(error: error, context: "EnhancedProfileView.deleteAccount")
+        }
+
+        isDeleting = false
     }
 }
 

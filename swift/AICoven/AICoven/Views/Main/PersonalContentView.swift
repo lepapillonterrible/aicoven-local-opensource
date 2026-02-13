@@ -151,6 +151,8 @@ struct PersonalContentView: View {
             .onAppear { AnalyticsService.shared.trackMemoryProposalViewed() }
         case .store:
             StoreView()
+        case .terms:
+            TermsOfServiceView()
         default:
             EmptyView()
         }
@@ -188,6 +190,8 @@ struct PersonalContentView: View {
             tab = WorkspaceTab.memoryProposals(covenId: covenId)
         case .store:
             tab = .store
+        case .terms:
+            tab = .terms
         default:
             return
         }

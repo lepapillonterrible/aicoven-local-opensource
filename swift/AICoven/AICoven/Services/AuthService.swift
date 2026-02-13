@@ -1,6 +1,7 @@
 import Foundation
 import FirebaseAuth
 internal import Combine
+import GRDB
 
 /// Authentication service using Firebase Auth.
 ///

@@ -50,6 +50,15 @@ struct ProfileMenuView: View {
             } label: {
                 Label("Memory Proposals", systemImage: "doc.text.magnifyingglass")
             }
+
+            Divider()
+
+            // Terms & Conditions
+            Button {
+                onOpenTab?(.terms)
+            } label: {
+                Label("Terms & Conditions", systemImage: "doc.text")
+            }
         } label: {
             // User avatar button
             UserAvatarButton()

@@ -330,6 +330,8 @@ struct WorkspaceContentView: View {
                 openTabs: $openTabs,
                 activeTabId: $activeTabId
             )
+        case .terms:
+            TermsOfServiceView()
         default:
             EmptyView()
         }
@@ -369,6 +371,8 @@ struct WorkspaceContentView: View {
             tab = WorkspaceTab.memoryProposals(covenId: covenId)
         case .store:
             tab = .store
+        case .terms:
+            tab = .terms
         default:
             return
         }

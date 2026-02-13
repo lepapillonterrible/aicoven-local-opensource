@@ -663,7 +663,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "Resources/AICoven-iOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "Resources/AICoven-macOS.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 68;
+				CURRENT_PROJECT_VERSION = 70;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = H99A45HA22;
 				ENABLE_APP_SANDBOX = NO;

@@ -150,11 +150,13 @@ struct MobilePersonalWorkspace: View {
                     onBack: { currentDestination = nil }
                 )
             case let .chat(thread):
+                // Use .id(thread.id) to ensure view refreshes when switching threads
                 PersonalChatView(
                     thread: thread,
                     onEditAgent: { showStrixSettings = true },
                     onBack: { currentDestination = .threadsList }
                 )
+                .id(thread.id)
             case nil:
                 // Root is the welcome screen
                 MobileWelcomeScreen(
