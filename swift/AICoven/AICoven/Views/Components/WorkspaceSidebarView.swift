@@ -6,6 +6,8 @@ struct WorkspaceSidebarView: View {
     @Binding var openTabs: [WorkspaceTab]
     @Binding var activeTabId: String?
     @Binding var threadRefreshTrigger: Bool
+    /// Shared binding for showing the new thread sheet (controlled by parent WorkspaceView)
+    @Binding var showNewThreadSheet: Bool
     let roles: [Role]
     let onAddRole: (String) -> Void
     let onEditRole: (Role) -> Void
@@ -16,7 +18,6 @@ struct WorkspaceSidebarView: View {
     @State private var threads: [Thread] = []
     @State private var searchText = ""
     @State private var showNewCovenSheet = false
-    @State private var showNewThreadSheet = false
     @State private var isExpanded = true // Expanded by default so users can select covens
 
     var body: some View {

@@ -14,6 +14,8 @@ struct WorkspaceView: View {
     @State private var activeTabId: String?
     @State private var roles: [Role] = []
     @State private var threadRefreshTrigger = false
+    /// Controls the new thread sheet presentation (shared between sidebar and content)
+    @State private var showNewThreadSheet = false
 
     private let analytics = AnalyticsService.shared
 
@@ -32,6 +34,7 @@ struct WorkspaceView: View {
                     openTabs: $openTabs,
                     activeTabId: $activeTabId,
                     threadRefreshTrigger: $threadRefreshTrigger,
+                    showNewThreadSheet: $showNewThreadSheet,
                     roles: roles,
                     onAddRole: handleAddRole,
                     onEditRole: handleEditRole,
@@ -50,7 +53,8 @@ struct WorkspaceView: View {
                     selectedCoven: $selectedCoven,
                     openTabs: $openTabs,
                     activeTabId: $activeTabId,
-                    roles: $roles
+                    roles: $roles,
+                    onCreateThread: selectedCoven != nil ? { showNewThreadSheet = true } : nil
                 )
             }
         }
@@ -156,6 +160,8 @@ struct WorkspaceContentView: View {
     @Binding var activeTabId: String?
     @EnvironmentObject var authService: AuthService
     @Binding var roles: [Role]
+    /// Optional callback to create a new thread (passed to empty state CTA)
+    var onCreateThread: (() -> Void)?
 
     var activeTab: WorkspaceTab? {
         openTabs.first(where: { $0.id == activeTabId })
@@ -210,13 +216,27 @@ struct WorkspaceContentView: View {
             if let tab = activeTab {
                 renderTabContent(tab)
             } else if selectedCoven != nil {
-                // Coven selected but no tab open
+                // Coven selected but no tab open - show CTA to create new thread
                 VStack(spacing: Spacing.lg) {
                     Spacer()
                     IconBadge(icon: "message", size: 60, color: .aicovenTeal)
-                    Text("Select a role or start a thread")
-                        .font(.aicovenBody)
-                        .foregroundColor(.aicovenTextSecondary)
+                    VStack(spacing: Spacing.sm) {
+                        Text("Start a Conversation")
+                            .font(.aicovenH2)
+                            .foregroundColor(.aicovenTextPrimary)
+                        Text("Create a new thread to chat with your AI agents")
+                            .font(.aicovenBody)
+                            .foregroundColor(.aicovenTextSecondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 400)
+                    }
+                    // Create Thread CTA button
+                    if let onCreateThread {
+                        GradientButton("New Thread", icon: "plus", style: .primary) {
+                            onCreateThread()
+                        }
+                        .padding(.top, Spacing.md)
+                    }
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
