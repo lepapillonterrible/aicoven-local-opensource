@@ -254,15 +254,23 @@ enum PromptTemplates {
     User: Run ls -la in /Users/me
     Correct response: {"tool": "shell.execute", "input": {"command": "ls -la /Users/me"}, "reason": "List directory with details"}
 
+    User: Write a script that calculates 2+2 and run it
+    Correct response: {"tool": "shell.execute", "input": {"command": "python3 -c 'print(2+2)'"}, "reason": "Calculate 2+2 using Python"}
+
+    User: Run a Node.js script
+    Correct response: {"tool": "shell.execute", "input": {"command": "node -e 'console.log(42)'"}, "reason": "Run Node.js code"}
+
     User: What is 2+2?
     Correct response: 2+2 = 4 (no tool needed, answer directly)
 
     RULES:
     - ONLY use tools from the AVAILABLE TOOLS list above. Do NOT invent tools.
+    - There is NO "python" tool, NO "code" tool, NO "execute" tool. Use shell.execute to run ANY command or script.
+    - Do NOT wrap your JSON in markdown code fences (```). Output raw JSON only.
     - If the user asks about time, dates, or schedules → use current_time
     - If the user mentions a file path or directory → use file.read or file.list
     - If the user asks to search something online → use web_search
-    - If the user asks to run a command → use shell.execute
+    - If the user asks to run a command or script → use shell.execute
     - Call ONE tool at a time, wait for the result
     - After receiving a tool result, answer the user's question using that data
     - Do NOT wrap your response in <think> or any XML tags

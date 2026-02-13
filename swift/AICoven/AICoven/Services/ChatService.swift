@@ -529,7 +529,8 @@ actor ChatService {
                     // Fall back to text parsing for local models or text-based calls
                     toolCall = ChatToolInvocation.from(jsonString: rawText)
                 }
-                if let toolCall = toolCall {
+                // Remap hallucinated tool names (e.g. "python" → "shell.execute")
+                if let toolCall = toolCall?.remapped() {
                     // ── Context-aware repeat detection ────────────────────
                     // Build a stable signature from the tool name + normalized args.
                     let rawInput = extractToolInputString(from: toolCall.input) ?? ""
@@ -990,6 +991,23 @@ struct ChatToolInvocation: Codable {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         }
         
+        // Strip markdown code fences that local models often wrap tool calls in.
+        // Handles ```json, ```JSON, and bare ``` markers.
+        if let fenceStart = trimmed.range(of: "```", options: .literal) {
+            // Remove opening fence line (```json\n or ```\n)
+            let afterFence = trimmed[fenceStart.upperBound...]
+            if let newlineIdx = afterFence.firstIndex(of: "\n") {
+                let afterOpening = String(afterFence[afterFence.index(after: newlineIdx)...])
+                // Remove closing fence
+                if let closingFence = afterOpening.range(of: "```", options: .backwards) {
+                    trimmed = String(afterOpening[..<closingFence.lowerBound])
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                } else {
+                    trimmed = afterOpening.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+        }
+        
         let decoder = JSONDecoder()
         
         // Fast path: whole string is a JSON object.
@@ -1061,6 +1079,99 @@ struct ChatToolInvocation: Codable {
             return call
         }
         return nil
+    }
+    
+    // MARK: - Hallucinated Tool Name Remapping
+    
+    /// Common tool name hallucinations from local models mapped to actual tool names.
+    private static let toolNameRemapping: [String: String] = [
+        // Code execution → shell.execute
+        "python": "shell.execute",
+        "python3": "shell.execute",
+        "code": "shell.execute",
+        "run": "shell.execute",
+        "execute": "shell.execute",
+        "exec": "shell.execute",
+        "bash": "shell.execute",
+        "terminal": "shell.execute",
+        "cmd": "shell.execute",
+        "run_code": "shell.execute",
+        "code_runner": "shell.execute",
+        // Search → web_search
+        "search": "web_search",
+        "google": "web_search",
+        "google_search": "web_search",
+        "internet_search": "web_search",
+        // File operations → file.*
+        "read": "file.read",
+        "read_file": "file.read",
+        "readFile": "file.read",
+        "cat": "file.read",
+        "open": "file.read",
+        "open_file": "file.read",
+        "write": "file.write",
+        "write_file": "file.write",
+        "writeFile": "file.write",
+        "save": "file.write",
+        "save_file": "file.write",
+        "list": "file.list",
+        "list_files": "file.list",
+        "listFiles": "file.list",
+        "ls": "file.list",
+        "dir": "file.list",
+        // Time
+        "time": "current_time",
+        "get_time": "current_time",
+        "datetime": "current_time",
+    ]
+    
+    /// Returns a new invocation with corrected tool name and remapped input keys
+    /// if the model hallucinated a tool name.
+    func remapped() -> ChatToolInvocation {
+        guard let actualTool = Self.toolNameRemapping[tool] else { return self }
+        
+        #if DEBUG
+        AppErrorReporter.log(
+            message: "Remapped hallucinated tool '\(tool)' → '\(actualTool)'",
+            context: "ChatToolInvocation.remapped"
+        )
+        #endif
+        
+        // Remap input keys based on the target tool
+        var remappedInput = input
+        if actualTool == "shell.execute", let inputVal = input {
+            // Model may send "code" key instead of "command"
+            if case .dictionary(var dict) = inputVal {
+                if let code = dict["code"], dict["command"] == nil {
+                    // Wrap code in python3 -c if it came from a "python" tool call
+                    if tool == "python" || tool == "python3" {
+                        if case .string(let codeStr) = code {
+                            dict["command"] = .string("python3 -c '\(codeStr.replacingOccurrences(of: "'", with: "'\\''"))'")
+                        } else {
+                            dict["command"] = code
+                        }
+                    } else {
+                        dict["command"] = code
+                    }
+                    dict.removeValue(forKey: "code")
+                    remappedInput = .dictionary(dict)
+                }
+            }
+        } else if actualTool == "file.read", let inputVal = input {
+            // Model may send "file" or "filename" instead of "path"
+            if case .dictionary(var dict) = inputVal {
+                let fileKey = dict["file"] ?? dict["filename"] ?? dict["file_path"]
+                if let fk = fileKey, dict["path"] == nil {
+                    dict["path"] = fk
+                    dict.removeValue(forKey: "file")
+                    dict.removeValue(forKey: "filename")
+                    dict.removeValue(forKey: "file_path")
+                    remappedInput = .dictionary(dict)
+                }
+            }
+        }
+        
+        return ChatToolInvocation(tool: actualTool, input: remappedInput, reason: reason)
     }
 }
 

@@ -38,9 +38,13 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
             let temperature: Double
         }
         // Native tool calling structures (Gemini format)
+        struct ItemsSchema: Encodable {
+            let type: String
+        }
         struct ParamProperty: Encodable {
             let type: String
             let description: String
+            let items: ItemsSchema?
         }
         struct ParametersSchema: Encodable {
             let type: String
@@ -118,7 +122,20 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
                 var props: [String: ParamProperty] = [:]
                 var requiredParams: [String] = []
                 for param in tool.parameters {
-                    props[param.name] = ParamProperty(type: param.type.uppercased(), description: param.description)
+                    // Map generic types to Gemini schema types:
+                    // https://ai.google.dev/api/caching#Type
+                    let geminiType: String
+                    switch param.type.lowercased() {
+                    case "string": geminiType = "STRING"
+                    case "integer", "int", "number", "float", "double": geminiType = "NUMBER"
+                    case "boolean", "bool": geminiType = "BOOLEAN"
+                    case "array": geminiType = "ARRAY"
+                    case "object": geminiType = "OBJECT"
+                    default: geminiType = "STRING" // safe fallback
+                    }
+                    // Gemini requires ARRAY types to have an `items` field
+                    let items: ItemsSchema? = geminiType == "ARRAY" ? ItemsSchema(type: "STRING") : nil
+                    props[param.name] = ParamProperty(type: geminiType, description: param.description, items: items)
                     if param.required { requiredParams.append(param.name) }
                 }
                 return FunctionDeclaration(
