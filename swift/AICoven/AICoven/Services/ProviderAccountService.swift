@@ -204,6 +204,8 @@ actor ProviderAccountService {
         try saveLocalAccounts(locals)
 
         // Set the active MLX model so LLMConfiguration picks it up.
+        // This is just a preference — the actual model download happens lazily
+        // on first chat via MLXLLMClient.ensureModelLoaded().
         await MLXModelManager.shared.setActiveModel(modelID)
 
         return ProviderAccount(from: local)

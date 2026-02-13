@@ -175,10 +175,19 @@ final class MLXModelManager: ObservableObject {
     /// Delete a downloaded model's cached files to reclaim disk space.
     func deleteModel(_ modelID: String) {
         // Remove from HF Hub cache if possible.
+        // The HF Hub library stores models at:
+        //   ~/Library/Caches/huggingface/hub/models--{org}--{model}/
+        // where slashes in the model ID are replaced with "--".
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
         if let cacheDir = cacheDir {
             let modelDir = cacheDir.appendingPathComponent("huggingface/hub/models--" + modelID.replacingOccurrences(of: "/", with: "--"))
-            try? FileManager.default.removeItem(at: modelDir)
+            if FileManager.default.fileExists(atPath: modelDir.path) {
+                do {
+                    try FileManager.default.removeItem(at: modelDir)
+                } catch {
+                    print("⚠️ Failed to delete cached model at \(modelDir.path): \(error.localizedDescription)")
+                }
+            }
         }
 
         downloadStates[modelID] = .notDownloaded

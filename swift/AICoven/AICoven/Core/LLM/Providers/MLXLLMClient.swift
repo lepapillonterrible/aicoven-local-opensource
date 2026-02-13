@@ -13,6 +13,8 @@ import MLXLMCommon
 /// (token-by-token streaming). When the `MLXLLM` package is available, this
 /// uses `ChatSession` for conversation-aware inference with KV cache
 /// management. Without the package it compiles but returns an error.
+// Safety: @unchecked Sendable is safe because `defaultModelID` is immutable
+// and all access to `loadedContainers` is serialised through `lock`.
 final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
 
     /// Default fallback model ID.
@@ -154,7 +156,13 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
 
         print("✅ [MLXLLMClient] Model loaded: \(modelID)")
 
+        // Re-check under lock in case another task loaded the same model
+        // concurrently. Use whichever was stored first.
         lock.lock()
+        if let existing = loadedContainers[modelID] {
+            lock.unlock()
+            return existing
+        }
         loadedContainers[modelID] = container
         lock.unlock()
 
