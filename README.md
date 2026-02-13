@@ -81,7 +81,7 @@ The local-first client is functional for core workflows but some features are st
 - Autonomous agent runner with bounded multi-step execution
 - Web search via DuckDuckGo (no API key required)
 - Attachment analysis for files and images
-- Basic chat UI with thread management
+- Enhanced chat UI with thread management
 - Shell command tools with approval flow
 - Connected apps: GitHub and Google Drive integrations
 - Local LLM support via Ollama and on-device MLX with automatic model discovery
@@ -97,8 +97,7 @@ The local-first client is functional for core workflows but some features are st
 - Thread rename/pin functionality (UI affordances present but not wired up)
 
 ### ⚠️ Known Limitations
-- Some legacy cloud services (remote auth, file upload) are present but non-functional; covens and roles are actively being reintegrated
-- File upload service is stubbed but unimplemented (not needed for local-first operation)
+- Some legacy cloud services are present but non-functional; they are being removed as they are found
 - Test coverage is moderate (~25% overall) — see [`docs/TEST_COVERAGE.md`](docs/TEST_COVERAGE.md) for details
 
 For detailed code review findings and recommendations, see [`docs/CODE_REVIEW.md`](docs/CODE_REVIEW.md).
