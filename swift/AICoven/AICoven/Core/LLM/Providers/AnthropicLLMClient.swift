@@ -30,21 +30,47 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
     func completeChat(messages: [LLMMessage], model: String, options: ChatOptions) async throws -> LLMChatResponse {
         struct MessageContent: Encodable { let type = "text"; let text: String }
         struct RequestMessage: Encodable { let role: String; let content: [MessageContent] }
+        // Native tool calling structures (Anthropic format)
+        struct SchemaProperty: Encodable {
+            let type: String
+            let description: String
+        }
+        struct InputSchema: Encodable {
+            let type: String
+            let properties: [String: SchemaProperty]
+            let required: [String]
+        }
+        struct ToolDef: Encodable {
+            let name: String
+            let description: String
+            let input_schema: InputSchema
+        }
         struct RequestBody: Encodable {
             let model: String
             let max_tokens: Int
             let messages: [RequestMessage]
             let temperature: Double
+            let tools: [ToolDef]?
+        }
+        // Response structures — Anthropic returns content blocks that can be
+        // "text" or "tool_use"
+        struct ContentBlock: Decodable {
+            let type: String?
+            let text: String?
+            // tool_use fields
+            let id: String?
+            let name: String?
+            let input: [String: AnyJSONValue]?
+        }
+        struct Usage: Decodable {
+            let input_tokens: Int?
+            let output_tokens: Int?
         }
         struct ResponseBody: Decodable {
-            struct ContentBlock: Decodable { let text: String? }
-            struct Usage: Decodable {
-                let input_tokens: Int?
-                let output_tokens: Int?
-            }
             let content: [ContentBlock]
             let model: String
             let usage: Usage?
+            let stop_reason: String?
         }
 
         let url = baseURL.appendingPathComponent("messages")
@@ -60,10 +86,27 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
                 content: [MessageContent(text: msg.content)]
             )
         }
+
+        // Convert LLMToolDefinition → Anthropic native format
+        let toolDefs: [ToolDef]? = options.tools?.isEmpty == false ? options.tools!.map { tool in
+            var props: [String: SchemaProperty] = [:]
+            var requiredParams: [String] = []
+            for param in tool.parameters {
+                props[param.name] = SchemaProperty(type: param.type, description: param.description)
+                if param.required { requiredParams.append(param.name) }
+            }
+            return ToolDef(
+                name: tool.name,
+                description: tool.description,
+                input_schema: InputSchema(type: "object", properties: props, required: requiredParams)
+            )
+        } : nil
+
         let body = RequestBody(model: model,
-                               max_tokens: options.maxTokens ?? 1024,
+                               max_tokens: options.maxTokens ?? 4096,
                                messages: reqMessages,
-                               temperature: options.temperature)
+                               temperature: options.temperature,
+                               tools: toolDefs)
         request.httpBody = try JSONEncoder().encode(body)
 
         let (data, response) = try await urlSession.data(for: request)
@@ -78,7 +121,12 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
                           userInfo: [NSLocalizedDescriptionKey: "Anthropic returned an empty response body."])
         }
         let decoded = try JSONDecoder().decode(ResponseBody.self, from: data)
-        let text = decoded.content.compactMap { $0.text }.joined(separator: "\n")
+
+        // Extract text content
+        let text = decoded.content
+            .filter { $0.type == "text" }
+            .compactMap { $0.text }
+            .joined(separator: "\n")
         let msg = LLMMessage(role: .assistant, content: text)
         
         let usage = decoded.usage.map { u in
@@ -87,8 +135,19 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
                 completionTokens: u.output_tokens ?? 0
             )
         }
+
+        // Parse native tool calls from tool_use content blocks
+        let toolUseBlocks = decoded.content.filter { $0.type == "tool_use" }
+        var toolCalls: [LLMToolCall]? = nil
+        if !toolUseBlocks.isEmpty {
+            toolCalls = toolUseBlocks.compactMap { block in
+                guard let name = block.name else { return nil }
+                return LLMToolCall(name: name, arguments: block.input ?? [:])
+            }
+        }
         
-        return LLMChatResponse(message: msg, providerID: "anthropic", modelID: decoded.model, usage: usage)
+        return LLMChatResponse(message: msg, providerID: "anthropic", modelID: decoded.model,
+                               usage: usage, toolCalls: toolCalls)
     }
 
     func embed(texts: [String], model: String) async throws -> [[Float]] {

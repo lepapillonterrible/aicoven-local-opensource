@@ -492,7 +492,11 @@ actor ChatService {
             )
             
             do {
-                let options = ChatOptions(temperature: 0.7, maxTokens: nil, stream: false)
+                // Pass native tool definitions for API providers (not local models).
+                let nativeTools: [LLMToolDefinition]? = isLocalModel ? nil
+                    : PromptTemplates.llmToolDefinitions(for: toolConfig.enabledTools)
+                let options = ChatOptions(temperature: 0.7, maxTokens: nil, stream: false,
+                                          tools: nativeTools)
                 let response = try await client.completeChat(messages: contextMessages,
                                                              model: descriptor.modelID,
                                                              options: options)
@@ -507,8 +511,25 @@ actor ChatService {
                 }
                 finalUsage = usage
                 
-                // Try to interpret the output as a tool call JSON payload.
-                if let toolCall = ChatToolInvocation.from(jsonString: rawText) {
+                // ── Check for native tool calls first ──────────────────────
+                // API providers (OpenAI, Anthropic, Gemini) return structured
+                // tool calls via response.toolCalls. Convert the first one to
+                // a ChatToolInvocation for the existing execution pipeline.
+                let toolCall: ChatToolInvocation?
+                if let nativeCalls = response.toolCalls, let first = nativeCalls.first {
+                    toolCall = ChatToolInvocation(
+                        tool: first.name,
+                        input: AnyJSONValue(first.arguments),
+                        reason: "Native \(descriptor.providerID) tool call"
+                    )
+                    #if DEBUG
+                    AppErrorReporter.log(message: "Native tool call from \(descriptor.providerID): \(first.name)", context: "ChatService.streamMessage.nativeToolCall")
+                    #endif
+                } else {
+                    // Fall back to text parsing for local models or text-based calls
+                    toolCall = ChatToolInvocation.from(jsonString: rawText)
+                }
+                if let toolCall = toolCall {
                     // ── Context-aware repeat detection ────────────────────
                     // Build a stable signature from the tool name + normalized args.
                     let rawInput = extractToolInputString(from: toolCall.input) ?? ""

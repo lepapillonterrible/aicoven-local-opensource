@@ -5,7 +5,7 @@ import Foundation
 /// Uses an enum for type-safe storage, making it fully `Sendable` without
 /// `@unchecked`. A computed `value: Any` property is provided for backward
 /// compatibility with existing call sites that use `value as? Type` patterns.
-enum AnyJSONValue: Codable, Hashable, Sendable {
+public enum AnyJSONValue: Codable, Hashable, Sendable {
     case string(String)
     case int(Int)
     case double(Double)
@@ -62,7 +62,7 @@ enum AnyJSONValue: Codable, Hashable, Sendable {
 
     // MARK: - Codable
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         // Bool must be decoded before Int to avoid false positives.
         if let v = try? c.decode(Bool.self) { self = .bool(v); return }
@@ -74,7 +74,7 @@ enum AnyJSONValue: Codable, Hashable, Sendable {
         self = .null
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var c = encoder.singleValueContainer()
         switch self {
         case .string(let v): try c.encode(v)

@@ -34,18 +34,50 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
             let role: String
             let content: String
         }
+        // Native tool calling structures (OpenAI format)
+        struct FunctionProperty: Encodable {
+            let type: String
+            let description: String
+        }
+        struct FunctionParameters: Encodable {
+            let type: String
+            let properties: [String: FunctionProperty]
+            let required: [String]
+        }
+        struct FunctionDef: Encodable {
+            let name: String
+            let description: String
+            let parameters: FunctionParameters
+        }
+        struct ToolDef: Encodable {
+            let type: String
+            let function: FunctionDef
+        }
         struct RequestBody: Encodable {
             let model: String
             let messages: [RequestMessage]
             let temperature: Double
+            let tools: [ToolDef]?
+        }
+        // Response structures
+        struct ToolCallResponse: Decodable {
+            struct FunctionCall: Decodable {
+                let name: String
+                let arguments: String  // JSON string
+            }
+            let id: String?
+            let type: String?
+            let function: FunctionCall
         }
         struct ResponseBody: Decodable {
             struct Choice: Decodable {
                 struct Message: Decodable {
                     let role: String
-                    let content: String
+                    let content: String?
+                    let tool_calls: [ToolCallResponse]?
                 }
                 let message: Message
+                let finish_reason: String?
             }
             struct UsageBody: Decodable {
                 let prompt_tokens: Int?
@@ -65,7 +97,27 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
         let reqMessages = messages.map { msg in
             RequestMessage(role: msg.role.rawValue, content: msg.content)
         }
-        let body = RequestBody(model: model, messages: reqMessages, temperature: options.temperature)
+
+        // Convert LLMToolDefinition → OpenAI native format
+        let toolDefs: [ToolDef]? = options.tools?.isEmpty == false ? options.tools!.map { tool in
+            var props: [String: FunctionProperty] = [:]
+            var requiredParams: [String] = []
+            for param in tool.parameters {
+                props[param.name] = FunctionProperty(type: param.type, description: param.description)
+                if param.required { requiredParams.append(param.name) }
+            }
+            return ToolDef(
+                type: "function",
+                function: FunctionDef(
+                    name: tool.name,
+                    description: tool.description,
+                    parameters: FunctionParameters(type: "object", properties: props, required: requiredParams)
+                )
+            )
+        } : nil
+
+        let body = RequestBody(model: model, messages: reqMessages,
+                               temperature: options.temperature, tools: toolDefs)
         request.httpBody = try JSONEncoder().encode(body)
 
         let (data, response) = try await urlSession.data(for: request)
@@ -84,7 +136,7 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
             throw NSError(domain: "OpenAILLMClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No choices in response"])
         }
 
-        let msg = LLMMessage(role: .assistant, content: first.message.content)
+        let msg = LLMMessage(role: .assistant, content: first.message.content ?? "")
         let usage: LLMTokenUsage?
         if let u = decoded.usage {
             usage = LLMTokenUsage(promptTokens: u.prompt_tokens ?? 0, completionTokens: u.completion_tokens ?? 0)
@@ -92,7 +144,20 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
             usage = nil
         }
 
-        return LLMChatResponse(message: msg, providerID: "openai", modelID: decoded.model, usage: usage)
+        // Parse native tool calls
+        var toolCalls: [LLMToolCall]? = nil
+        if let nativeCalls = first.message.tool_calls, !nativeCalls.isEmpty {
+            toolCalls = nativeCalls.compactMap { tc in
+                guard let argsData = tc.function.arguments.data(using: .utf8),
+                      let argsDict = try? JSONDecoder().decode([String: AnyJSONValue].self, from: argsData) else {
+                    return LLMToolCall(name: tc.function.name, arguments: [:])
+                }
+                return LLMToolCall(name: tc.function.name, arguments: argsDict)
+            }
+        }
+
+        return LLMChatResponse(message: msg, providerID: "openai", modelID: decoded.model,
+                               usage: usage, toolCalls: toolCalls)
     }
 
     func embed(texts: [String], model: String) async throws -> [[Float]] {

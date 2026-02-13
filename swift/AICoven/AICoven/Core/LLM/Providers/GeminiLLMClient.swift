@@ -3,7 +3,7 @@ import Foundation
 /// Google Gemini implementation of LLMClient.
 ///
 /// Uses the public Generative Language API with API key passed as a
-/// query parameter.
+/// query parameter. Supports native function calling when tools are provided.
 /// Marked @unchecked Sendable because all stored properties are immutable
 /// after init and URLSession is thread-safe.
 final class GeminiLLMClient: LLMClient, @unchecked Sendable {
@@ -31,60 +31,69 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
     }
 
     func completeChat(messages: [LLMMessage], model: String, options: ChatOptions) async throws -> LLMChatResponse {
-        struct Part: Encodable { let text: String }
-        struct Content: Encodable { let role: String; let parts: [Part] }
-        struct FunctionCallingConfig: Encodable { let mode: String }
-        struct ToolConfig: Encodable {
-            let functionCallingConfig: FunctionCallingConfig
-            enum CodingKeys: String, CodingKey {
-                case functionCallingConfig = "function_calling_config"
-            }
-        }
-        struct RequestBody: Encodable {
-            let contents: [Content]
-            let generationConfig: GenerationConfig
-            let toolConfig: ToolConfig
-            enum CodingKeys: String, CodingKey {
-                case contents
-                case generationConfig
-                case toolConfig = "tool_config"
-            }
-        }
+        // ── Request types ──────────────────────────────────────────────────
+        struct ReqPart: Encodable { let text: String }
+        struct ReqContent: Encodable { let role: String; let parts: [ReqPart] }
         struct GenerationConfig: Encodable {
             let temperature: Double
         }
-        struct ResponseBody: Decodable {
-            struct Candidate: Decodable {
-                struct Content: Decodable {
-                    struct Part: Decodable { let text: String? }
-                    let parts: [Part]?
-                }
-                let content: Content?
-                let finishReason: String?
-            }
-            struct UsageMetadata: Decodable {
-                let promptTokenCount: Int?
-                let candidatesTokenCount: Int?
-                let totalTokenCount: Int?
-            }
-            let candidates: [Candidate]?
-            let modelVersion: String?
-            let usageMetadata: UsageMetadata?
-            // Gemini may return an error object instead of candidates.
-            let error: GeminiError?
-            struct GeminiError: Decodable {
-                let message: String?
-                let code: Int?
-            }
+        // Native tool calling structures (Gemini format)
+        struct ParamProperty: Encodable {
+            let type: String
+            let description: String
+        }
+        struct ParametersSchema: Encodable {
+            let type: String
+            let properties: [String: ParamProperty]
+            let required: [String]
+        }
+        struct FunctionDeclaration: Encodable {
+            let name: String
+            let description: String
+            let parameters: ParametersSchema
+        }
+        struct ToolsBlock: Encodable {
+            let functionDeclarations: [FunctionDeclaration]
+        }
+        struct RequestBody: Encodable {
+            let contents: [ReqContent]
+            let generationConfig: GenerationConfig
+            let tools: [ToolsBlock]?
         }
 
-        // Gemini's REST API expects paths like
-        //   https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent
-        // The ListModels API returns fully-qualified names of the form
-        //   "models/gemini-2.0-flash".
-        // To avoid double-prefix or stripping mistakes, we treat the `model`
-        // argument as the full resource name and append ":generateContent"
-        // directly.
+        // ── Response types ─────────────────────────────────────────────────
+        struct FunctionCallPart: Decodable {
+            let name: String
+            let args: [String: AnyJSONValue]?
+        }
+        struct ResponsePart: Decodable {
+            let text: String?
+            let functionCall: FunctionCallPart?
+        }
+        struct ResponseContent: Decodable {
+            let parts: [ResponsePart]?
+        }
+        struct ResponseCandidate: Decodable {
+            let content: ResponseContent?
+            let finishReason: String?
+        }
+        struct UsageMetadata: Decodable {
+            let promptTokenCount: Int?
+            let candidatesTokenCount: Int?
+            let totalTokenCount: Int?
+        }
+        struct GeminiError: Decodable {
+            let message: String?
+            let code: Int?
+        }
+        struct ResponseBody: Decodable {
+            let candidates: [ResponseCandidate]?
+            let modelVersion: String?
+            let usageMetadata: UsageMetadata?
+            let error: GeminiError?
+        }
+
+        // ── Build request ──────────────────────────────────────────────────
         let path = "\(model):generateContent"
         var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "key", value: apiKey)]
@@ -95,19 +104,40 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
 
         let contents = messages.map { msg in
-            Content(role: msg.role == .user ? "user" : "model",
-                    parts: [Part(text: msg.content)])
+            ReqContent(role: msg.role == .user ? "user" : "model",
+                       parts: [ReqPart(text: msg.content)])
         }
-        // Disable native function calling so Gemini responds with plain text.
-        // Our tool protocol uses text-based JSON; native function calls conflict
-        // (causing MALFORMED_FUNCTION_CALL errors).
+
+        // Convert LLMToolDefinition → Gemini native format (functionDeclarations).
+        // Gemini doesn't allow dots in function names, so we convert
+        // "file.write" → "file_write" for outbound, and reverse on decode.
+        let toolsBlock: [ToolsBlock]? = {
+            guard let tools = options.tools, !tools.isEmpty else { return nil }
+            let declarations = tools.map { tool in
+                let geminiName = tool.name.replacingOccurrences(of: ".", with: "_")
+                var props: [String: ParamProperty] = [:]
+                var requiredParams: [String] = []
+                for param in tool.parameters {
+                    props[param.name] = ParamProperty(type: param.type.uppercased(), description: param.description)
+                    if param.required { requiredParams.append(param.name) }
+                }
+                return FunctionDeclaration(
+                    name: geminiName,
+                    description: tool.description,
+                    parameters: ParametersSchema(type: "OBJECT", properties: props, required: requiredParams)
+                )
+            }
+            return [ToolsBlock(functionDeclarations: declarations)]
+        }()
+
         let body = RequestBody(
             contents: contents,
             generationConfig: GenerationConfig(temperature: options.temperature),
-            toolConfig: ToolConfig(functionCallingConfig: FunctionCallingConfig(mode: "NONE"))
+            tools: toolsBlock
         )
         request.httpBody = try JSONEncoder().encode(body)
 
+        // ── Execute request ────────────────────────────────────────────────
         let (data, response) = try await urlSession.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             let bodyText = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
@@ -139,17 +169,45 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
         }
         
         guard let first = decoded.candidates?.first else {
-            throw NSError(domain: "GeminiLLMClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No candidates in response"])
+            throw NSError(domain: "GeminiLLMClient", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No candidates in response"])
         }
         
-        // Handle safety-filtered or empty responses.
-        guard let parts = first.content?.parts else {
+        // ── Extract text + native tool calls ──────────────────────────────
+        let parts = first.content?.parts ?? []
+        var textPieces: [String] = []
+        var toolCalls: [LLMToolCall] = []
+        
+        for part in parts {
+            if let t = part.text, !t.isEmpty {
+                textPieces.append(t)
+            }
+            if let fc = part.functionCall {
+                // Convert underscores back to dots for our tool naming convention
+                let toolName = fc.name.replacingOccurrences(of: "_", with: ".")
+                let args = fc.args ?? [:]
+                #if DEBUG
+                AppErrorReporter.log(
+                    message: "Native Gemini function call: \(fc.name) → \(toolName)",
+                    context: "GeminiLLMClient.completeChat"
+                )
+                #endif
+                toolCalls.append(LLMToolCall(name: toolName, arguments: args))
+            }
+        }
+        
+        let text = textPieces.joined(separator: "\n")
+        
+        if text.isEmpty && toolCalls.isEmpty {
             let reason = first.finishReason ?? "unknown"
-            throw NSError(domain: "GeminiLLMClient", code: -3,
-                          userInfo: [NSLocalizedDescriptionKey: "Gemini response had no content (finishReason: \(reason))"])
+            #if DEBUG
+            AppErrorReporter.log(
+                message: "Gemini response empty (finishReason: \(reason)); returning empty text.",
+                context: "GeminiLLMClient.completeChat"
+            )
+            #endif
         }
         
-        let text = parts.compactMap { $0.text }.joined(separator: "\n")
         let msg = LLMMessage(role: .assistant, content: text)
         let modelVersion = decoded.modelVersion ?? model
         
@@ -160,7 +218,8 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
             )
         }
         
-        return LLMChatResponse(message: msg, providerID: "google", modelID: modelVersion, usage: usage)
+        return LLMChatResponse(message: msg, providerID: "google", modelID: modelVersion,
+                               usage: usage, toolCalls: toolCalls.isEmpty ? nil : toolCalls)
     }
 
     func embed(texts: [String], model: String) async throws -> [[Float]] {

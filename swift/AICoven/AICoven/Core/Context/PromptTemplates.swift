@@ -504,3 +504,29 @@ struct ToolParameter: Sendable {
     let description: String
     let required: Bool
 }
+
+// MARK: - Conversion to LLMToolDefinition
+
+extension PromptTemplates {
+    /// Convert internal tool definitions to protocol-level `LLMToolDefinition`
+    /// objects for native function calling via `ChatOptions.tools`.
+    static func llmToolDefinitions(for enabledTools: Set<String>) -> [LLMToolDefinition] {
+        toolDefinitions
+            .filter { enabledTools.contains($0.name) }
+            .map { def in
+                LLMToolDefinition(
+                    name: def.name,
+                    description: def.description,
+                    parameters: def.parameters.map { param in
+                        LLMToolParameter(
+                            name: param.name,
+                            type: param.type,
+                            description: param.description,
+                            required: param.required
+                        )
+                    }
+                )
+            }
+    }
+}
+

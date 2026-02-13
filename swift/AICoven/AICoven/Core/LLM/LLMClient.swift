@@ -21,6 +21,53 @@ public struct LLMMessage: Sendable {
     }
 }
 
+// MARK: - Native Tool Calling Types
+
+/// Tool definition for native function calling.
+/// Providers convert this to their native format (OpenAI tools, Anthropic tools,
+/// Gemini functionDeclarations). Local models (MLX/Ollama) ignore these and
+/// rely on text-based tool instructions in the system prompt.
+public struct LLMToolDefinition: Sendable {
+    public let name: String
+    public let description: String
+    public let parameters: [LLMToolParameter]
+
+    public init(name: String, description: String, parameters: [LLMToolParameter]) {
+        self.name = name
+        self.description = description
+        self.parameters = parameters
+    }
+}
+
+/// Parameter definition for a tool.
+public struct LLMToolParameter: Sendable {
+    public let name: String
+    public let type: String
+    public let description: String
+    public let required: Bool
+
+    public init(name: String, type: String, description: String, required: Bool) {
+        self.name = name
+        self.type = type
+        self.description = description
+        self.required = required
+    }
+}
+
+/// A structured tool call returned by native function calling.
+/// ChatService converts these into `ChatToolInvocation` objects for execution.
+public struct LLMToolCall: Sendable {
+    public let name: String
+    public let arguments: [String: AnyJSONValue]
+
+    public init(name: String, arguments: [String: AnyJSONValue]) {
+        self.name = name
+        self.arguments = arguments
+    }
+}
+
+// MARK: - Response
+
 /// High-level result of a chat completion.
 /// Conforms to Sendable since all properties are Sendable.
 public struct LLMChatResponse: Sendable {
@@ -28,12 +75,18 @@ public struct LLMChatResponse: Sendable {
     public let providerID: String
     public let modelID: String
     public let usage: LLMTokenUsage?
+    /// Structured tool calls from native function calling (OpenAI, Anthropic, Gemini).
+    /// `nil` when the provider doesn't support native tool calling or the model
+    /// chose not to call any tools.
+    public let toolCalls: [LLMToolCall]?
 
-    public init(message: LLMMessage, providerID: String, modelID: String, usage: LLMTokenUsage?) {
+    public init(message: LLMMessage, providerID: String, modelID: String,
+                usage: LLMTokenUsage?, toolCalls: [LLMToolCall]? = nil) {
         self.message = message
         self.providerID = providerID
         self.modelID = modelID
         self.usage = usage
+        self.toolCalls = toolCalls
     }
 }
 
@@ -52,16 +105,23 @@ public struct LLMTokenUsage: Sendable {
 }
 
 /// Options for chat completion requests.
-/// Conforms to Sendable since all properties are value types.
+/// Conforms to Sendable since all properties are Sendable.
 public struct ChatOptions: Sendable {
     public let temperature: Double
     public let maxTokens: Int?
     public let stream: Bool
+    /// Tool definitions for native function calling. When non-nil, API clients
+    /// (OpenAI, Anthropic, Gemini) send these as native function declarations.
+    /// Local clients (MLX, Ollama) ignore this — they rely on text-based
+    /// tool instructions in the system prompt.
+    public let tools: [LLMToolDefinition]?
 
-    public init(temperature: Double = 0.7, maxTokens: Int? = nil, stream: Bool = false) {
+    public init(temperature: Double = 0.7, maxTokens: Int? = nil,
+                stream: Bool = false, tools: [LLMToolDefinition]? = nil) {
         self.temperature = temperature
         self.maxTokens = maxTokens
         self.stream = stream
+        self.tools = tools
     }
 }
 
@@ -121,3 +181,4 @@ extension StreamingLLMClient {
         }
     }
 }
+
