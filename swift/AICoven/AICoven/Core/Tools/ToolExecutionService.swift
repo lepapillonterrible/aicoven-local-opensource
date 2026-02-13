@@ -87,7 +87,7 @@ actor ToolExecutionService {
         }
         #endif
         
-        // 3. Routing
+        // 4. Routing
         switch toolCall.name {
             
         // --- File Tools ---
