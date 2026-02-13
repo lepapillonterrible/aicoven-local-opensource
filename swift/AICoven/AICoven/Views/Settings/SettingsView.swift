@@ -6,6 +6,10 @@ struct SettingsView: View {
     @AppStorage("dark_mode_enabled") private var darkModeEnabled = true
     @AppStorage("compact_mode") private var compactMode = false
 
+    // Analytics consent preferences (opt-in model for privacy)
+    @AppStorage("analytics_product_enabled") private var productAnalyticsEnabled = false
+    @AppStorage("analytics_performance_enabled") private var performanceAnalyticsEnabled = false
+
     private let analytics = AnalyticsService.shared
 
     var body: some View {
@@ -61,6 +65,49 @@ struct SettingsView: View {
                     }
                 }
 
+                // Privacy & Analytics section
+                Section {
+                    Toggle(isOn: $productAnalyticsEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Product Analytics", systemImage: "chart.bar")
+                            Text("Help us improve AICoven by sharing anonymized usage patterns")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .onChange(of: productAnalyticsEnabled) { _, newValue in
+                        updateAnalyticsConsent()
+                        if newValue {
+                            analytics.track(
+                                event: "analytics_consent_granted",
+                                properties: ["type": "product"]
+                            )
+                        }
+                    }
+
+                    Toggle(isOn: $performanceAnalyticsEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Performance Monitoring", systemImage: "speedometer")
+                            Text("Help us identify and fix crashes and performance issues")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .onChange(of: performanceAnalyticsEnabled) { _, newValue in
+                        updateAnalyticsConsent()
+                        if newValue {
+                            analytics.track(
+                                event: "analytics_consent_granted",
+                                properties: ["type": "performance"]
+                            )
+                        }
+                    }
+                } header: {
+                    Text("Privacy & Analytics")
+                } footer: {
+                    Text("Analytics data is anonymized and never includes your messages, memories, or personal content. All data stays on your device unless you enable these options.")
+                }
+
                 // About section
                 Section("About") {
                     HStack {
@@ -70,11 +117,11 @@ struct SettingsView: View {
                             .foregroundColor(.secondary)
                     }
 
-                    Link(destination: URL(string: "https://aicoven.com/privacy")!) {
+                    NavigationLink(destination: PrivacyPolicyView()) {
                         Label("Privacy Policy", systemImage: "hand.raised")
                     }
 
-                    Link(destination: URL(string: "https://aicoven.com/terms")!) {
+                    NavigationLink(destination: TermsOfServiceView()) {
                         Label("Terms of Service", systemImage: "doc.text")
                     }
                 }
@@ -97,6 +144,13 @@ struct SettingsView: View {
     private func clearCache() {
         // TODO: Implement cache clearing
         print("Clearing cache...")
+    }
+
+    /// Update analytics consent based on user preferences
+    private func updateAnalyticsConsent() {
+        // Enable analytics only if at least one category is consented to
+        let analyticsEnabled = productAnalyticsEnabled || performanceAnalyticsEnabled
+        analytics.setAnalyticsConsent(analyticsEnabled)
     }
 }
 

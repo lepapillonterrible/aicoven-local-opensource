@@ -27,8 +27,14 @@ final class AnalyticsService {
     }
 
     private init() {
-        // Load saved consent state
-        analyticsConsent = UserDefaults.standard.bool(forKey: "analyticsConsent")
+        // Load saved consent state from granular preferences
+        // Both default to false (opt-in model for privacy)
+        let productAnalyticsEnabled = UserDefaults.standard.bool(forKey: "analytics_product_enabled")
+        let performanceAnalyticsEnabled = UserDefaults.standard.bool(forKey: "analytics_performance_enabled")
+
+        // Enable analytics only if at least one category is consented to
+        analyticsConsent = productAnalyticsEnabled || performanceAnalyticsEnabled
+
         if FirebaseApp.app() != nil {
             Analytics.setAnalyticsCollectionEnabled(analyticsConsent)
         }
