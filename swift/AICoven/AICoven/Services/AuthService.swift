@@ -53,12 +53,13 @@ class AuthService: ObservableObject {
                 self?.isLoading = true
                 if let firebaseUser {
                     print("✅ Firebase user signed in: \(firebaseUser.email ?? "unknown")")
+                    // Clear any previous user's data first
+                    AppState.shared.clearUserData()
                     // Build user profile from Firebase user data (no backend needed)
                     self?.buildLocalUserProfile(from: firebaseUser)
                     self?.isAuthenticated = true
                     // Reload all services for the newly signed-in user to ensure
                     // user-scoped data isolation (prevents seeing other users' data)
-                    AppState.shared.clearUserData()
                     await ThreadService.shared.reloadForCurrentUser()
                     await StoreService.shared.reloadForCurrentUser()
                     await ChatService.shared.reloadForCurrentUser()
