@@ -4,6 +4,7 @@ import SwiftUI
 struct HomeView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var authService: AuthService
+    @ObservedObject private var shellApprovalManager = ShellApprovalManager.shared
     
     private let analytics = AnalyticsService.shared
     
@@ -70,6 +71,14 @@ struct HomeView: View {
             CreateCovenSheet(onCreated: { _ in
                 Task { await loadCovens() }
             })
+        }
+        .sheet(item: $shellApprovalManager.currentRequest) { request in
+            ShellApprovalView(
+                request: request,
+                onDecision: { decision in
+                    shellApprovalManager.handleDecision(decision)
+                }
+            )
         }
     }
     

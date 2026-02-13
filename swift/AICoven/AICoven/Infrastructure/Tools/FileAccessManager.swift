@@ -55,10 +55,8 @@ final class FileAccessManager: ObservableObject {
     /// Check whether a path falls under any user-granted folder.
     /// In non-sandboxed (debug) builds this always returns `true`.
     func isPathAccessible(_ path: String) -> Bool {
-        #if DEBUG
-        // Debug entitlements disable sandbox — allow everything.
+        // When the app is not sandboxed (community/local builds), allow everything.
         if !isAppSandboxed() { return true }
-        #endif
         
         // If no folders are configured, nothing is accessible.
         guard !allowedFolders.isEmpty else { return false }
