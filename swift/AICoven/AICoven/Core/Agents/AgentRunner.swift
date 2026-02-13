@@ -31,12 +31,14 @@ actor AgentRunner {
     private let llmClients: [String: LLMClient] // keyed by providerID
     private let toolExecutionService: ToolExecutionService
 
-    init(agentRunRepository: AgentRunRepository,
-         threadRepository: ThreadRepository,
-         contextBuilder: ContextBuilder,
-         modelRouter: ModelRouter,
-         llmClients: [String: LLMClient],
-         toolExecutionService: ToolExecutionService = .shared) {
+    init(
+        agentRunRepository: AgentRunRepository,
+        threadRepository: ThreadRepository,
+        contextBuilder: ContextBuilder,
+        modelRouter: ModelRouter,
+        llmClients: [String: LLMClient],
+        toolExecutionService: ToolExecutionService = .shared
+    ) {
         self.agentRunRepository = agentRunRepository
         self.threadRepository = threadRepository
         self.contextBuilder = contextBuilder
@@ -51,22 +53,24 @@ actor AgentRunner {
     ///   - threadID: Optional existing thread to work within.
     ///   - maxSteps: User-defined hard cap on steps.
     ///   - userMessage: The initial user instruction or goal.
-    func run(profile: AgentProfile,
-             threadID: String?,
-             maxSteps: Int,
-             userMessage: String) async {
+    func run(
+        profile: AgentProfile,
+        threadID: String?,
+        maxSteps: Int,
+        userMessage: String
+    ) async {
         guard maxSteps > 0 else { return }
 
         // Configure available tools validation for this agent type
         // For now, we allow all tools, but this is where we'd set the whitelist
         // await toolExecutionService.setWhitelist(for: profile.type, tools: ["web_search", "current_time", "file.read"])
-        
+
         let agentGoal = userMessage
         let agentInstruction = """
         You are an autonomous local-first agent running entirely on the user's device.
 
         You have access to tools. Use them to gather information or perform actions.
-        
+
         TOOL PROTOCOL:
         - To use tools, output a specific XML block:
           <TOOL_CALL>
@@ -84,9 +88,11 @@ actor AgentRunner {
         var stepHistory: [String] = [] // Track tool signatures for loop detection
 
         do {
-            let run = try await agentRunRepository.createRun(threadID: threadID,
-                                                              agentType: profile.type,
-                                                              maxSteps: maxSteps)
+            let run = try await agentRunRepository.createRun(
+                threadID: threadID,
+                agentType: profile.type,
+                maxSteps: maxSteps
+            )
 
             var currentThreadID = threadID
             if currentThreadID == nil {
@@ -95,14 +101,16 @@ actor AgentRunner {
             }
 
             // Main loop
-            for stepIndex in 0..<maxSteps {
+            for stepIndex in 0 ..< maxSteps {
                 guard let tID = currentThreadID else { break }
 
                 // Route to model
-                let routingContext = RoutingContext(task: .agentStep,
-                                                    requireLocalOnly: false,
-                                                    requireLongContext: false,
-                                                    preferHighQuality: true)
+                let routingContext = RoutingContext(
+                    task: .agentStep,
+                    requireLocalOnly: false,
+                    requireLongContext: false,
+                    preferHighQuality: true
+                )
                 guard let modelDescriptor = modelRouter.route(for: routingContext),
                       let client = llmClients[modelDescriptor.providerID] else {
                     try await agentRunRepository.updateStatus(runID: run.id, status: "error")
@@ -110,11 +118,10 @@ actor AgentRunner {
                 }
 
                 // Build message
-                let effectiveUserMessage: String
-                if toolContextLog.isEmpty {
-                    effectiveUserMessage = agentInstruction
+                let effectiveUserMessage: String = if toolContextLog.isEmpty {
+                    agentInstruction
                 } else {
-                    effectiveUserMessage = agentInstruction + "\n\n" + toolContextLog
+                    agentInstruction + "\n\n" + toolContextLog
                 }
 
                 // Build context
@@ -126,66 +133,70 @@ actor AgentRunner {
                 )
 
                 let options = ChatOptions(temperature: 0.2, maxTokens: nil, stream: false)
-                let response = try await client.completeChat(messages: contextMessages,
-                                                             model: modelDescriptor.modelID,
-                                                             options: options)
+                let response = try await client.completeChat(
+                    messages: contextMessages,
+                    model: modelDescriptor.modelID,
+                    options: options
+                )
 
                 let outputText = response.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                
+
                 // Parse output
                 let parsed = ToolCallParser.parse(outputText)
-                
+
                 // If thought/scratchpad present, we might want to emit events (future)
                 // For now, checks are done implicitly via parsing
-                
+
                 // Store step
                 // We store the raw tool calls JSON if any exist
                 let toolCallsJSON = parsed.toolCalls.isEmpty ? nil : encodeToolCalls(parsed.toolCalls)
-                
+
                 // Log which tools were called in this step
-                let inputSummary = parsed.toolCalls.isEmpty 
+                let inputSummary = parsed.toolCalls.isEmpty
                     ? "Agent step #\(stepIndex + 1) NO TOOLS for goal: \(agentGoal)"
-                    : "Agent step #\(stepIndex + 1) TOOLS: \(parsed.toolCalls.map { $0.name }.joined(separator: ", "))"
-                
-                _ = try await agentRunRepository.appendStep(runID: run.id,
-                                                            stepIndex: stepIndex,
-                                                            input: inputSummary,
-                                                            output: outputText,
-                                                            toolCallsJSON: toolCallsJSON)
+                    : "Agent step #\(stepIndex + 1) TOOLS: \(parsed.toolCalls.map(\.name).joined(separator: ", "))"
+
+                _ = try await agentRunRepository.appendStep(
+                    runID: run.id,
+                    stepIndex: stepIndex,
+                    input: inputSummary,
+                    output: outputText,
+                    toolCallsJSON: toolCallsJSON
+                )
 
                 if parsed.toolCalls.isEmpty {
                     // Final natural language answer
                     // Strip markup for final display
                     let finalAnswer = parsed.strippedText
-                    
+
                     _ = try await threadRepository.appendMessage(toThreadID: tID, role: "assistant", content: finalAnswer)
                     try await agentRunRepository.updateStatus(runID: run.id, status: "completed")
                     return
                 }
-                
+
                 // Execute tools
                 for toolCall in parsed.toolCalls {
-                // Loop detection - prevent the model from calling the same tool with identical args repeatedly
+                    // Loop detection - prevent the model from calling the same tool with identical args repeatedly
                     // Use canonical JSON encoding with sorted keys for stable signature comparison
                     let signature = canonicalToolSignature(name: toolCall.name, args: toolCall.args)
-                    let loopCount = stepHistory.filter { $0 == signature }.count
+                    let loopCount = stepHistory.count(where: { $0 == signature })
                     if loopCount >= 3 {
-                         // Create error result and use its info in the context log
-                         let errorResult = ToolExecutionResult.error(
-                             tool: toolCall.name,
-                             message: "Loop detected: You have called this tool with these exact arguments 3 times. Stop and try a different approach.",
-                             errorType: "loop_detected"
-                         )
-                         // Use the error message from the result so the model can react appropriately
-                         let block = "[Tool Error: \(errorResult.tool)]\n\(errorResult.error ?? "Loop detected")"
-                         if toolContextLog.isEmpty { toolContextLog = block } else { toolContextLog += "\n\n" + block }
-                         continue
+                        // Create error result and use its info in the context log
+                        let errorResult = ToolExecutionResult.error(
+                            tool: toolCall.name,
+                            message: "Loop detected: You have called this tool with these exact arguments 3 times. Stop and try a different approach.",
+                            errorType: "loop_detected"
+                        )
+                        // Use the error message from the result so the model can react appropriately
+                        let block = "[Tool Error: \(errorResult.tool)]\n\(errorResult.error ?? "Loop detected")"
+                        if toolContextLog.isEmpty { toolContextLog = block } else { toolContextLog += "\n\n" + block }
+                        continue
                     }
                     stepHistory.append(signature)
-                    
+
                     // Execute via Service
                     let result = await toolExecutionService.execute(toolCall: toolCall, agentType: profile.type, threadID: tID)
-                    
+
                     // Accumulate context
                     if let block = result.contextBlock {
                         if toolContextLog.isEmpty {
@@ -202,12 +213,12 @@ actor AgentRunner {
             AppErrorReporter.log(error: error, context: "AgentRunner.run")
         }
     }
-    
+
     private func encodeToolCalls(_ calls: [ParsedToolCall]) -> String? {
         guard let data = try? JSONEncoder().encode(calls) else { return nil }
         return String(data: data, encoding: .utf8)
     }
-    
+
     /// Generate a canonical signature for a tool call that is stable regardless of dictionary key order.
     /// This ensures loop detection works correctly even when args dictionaries have the same content
     /// but different internal ordering.
@@ -217,23 +228,21 @@ actor AgentRunner {
         let canonicalArgs = sortedKeys.map { key -> String in
             let value = args[key]?.value
             // Convert value to a stable string representation
-            let valueString: String
-            if let str = value as? String {
-                valueString = "\"\(str)\""
+            let valueString: String = if let str = value as? String {
+                "\"\(str)\""
             } else if let num = value as? NSNumber {
-                valueString = num.stringValue
+                num.stringValue
             } else if let bool = value as? Bool {
-                valueString = bool ? "true" : "false"
+                bool ? "true" : "false"
             } else if value == nil || value is NSNull {
-                valueString = "null"
+                "null"
             } else {
                 // Fallback: use description but this should be rare
-                valueString = String(describing: value ?? "null")
+                String(describing: value ?? "null")
             }
             return "\(key):\(valueString)"
         }.joined(separator: ",")
-        
+
         return "\(name):{\(canonicalArgs)}"
     }
 }
-

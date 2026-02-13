@@ -3,9 +3,9 @@ import StoreKit
 
 /// Settings screen for configuring the personal default assistant (Strix).
 struct StrixSettingsView: View {
-    // Optional close handler; when embedded in a tab we leave this nil so the
-    // tab close button controls lifecycle, mirroring EditRoleView.
-    var onClose: (() -> Void)? = nil
+    /// Optional close handler; when embedded in a tab we leave this nil so the
+    /// tab close button controls lifecycle, mirroring EditRoleView.
+    var onClose: (() -> Void)?
 
     @EnvironmentObject var storeService: StoreService
     @State private var showStore = false
@@ -23,8 +23,11 @@ struct StrixSettingsView: View {
     /// (web_search/current_time) before it must return a natural-language
     /// answer. Persisted via UserDefaults (chat_max_tool_steps).
     @State private var chatMaxToolStepsText: String = "3"
-    @State private var model: String = "gpt-4o"
-    @State private var provider: String = "openai"
+    /// Model and provider are left empty by default; they will be populated
+    /// when settings are loaded or a provider account is selected. This avoids
+    /// showing "gpt-4o" in the sidebar when no OpenAI key is configured.
+    @State private var model: String = ""
+    @State private var provider: String = ""
     @State private var providerAccountId: String? = nil
 
     // Provider accounts state
@@ -174,113 +177,25 @@ struct StrixSettingsView: View {
                         .padding(.vertical, Spacing.md)
                     } else {
 
-                    if loadingAccounts {
-                        ProgressView()
-                            .padding(Spacing.md)
-                    } else if providerAccounts.isEmpty {
-                        // Fallback UI when no provider accounts exist yet – use
-                        // static provider + free-form model entry.
-                        VStack(alignment: .leading, spacing: Spacing.xs) {
-                            Text("Provider")
-                                .font(.aicovenCaption)
-                                .foregroundColor(.aicovenTextSecondary)
-
-                            Menu {
-                                ForEach(providerOptions, id: \.0) { option in
-                                    Button(option.1) { provider = option.0 }
-                                }
-                            } label: {
-                                HStack {
-                                    let label = providerOptions.first(where: { $0.0 == provider })?.1 ?? provider
-                                    Text(label)
-                                        .font(.aicovenBody)
-                                        .foregroundColor(.aicovenTextPrimary)
-                                    Spacer()
-                                    Image(systemName: "chevron.down")
-                                        .foregroundColor(.aicovenTextSecondary)
-                                }
-                                .padding(Spacing.sm)
-                                .background(Color.aicovenGlass)
-                                .cornerRadius(BorderRadius.sm)
-                            }
-                        }
-
-                        VStack(alignment: .leading, spacing: Spacing.xs) {
-                            Text("Model ID")
-                                .font(.aicovenCaption)
-                                .foregroundColor(.aicovenTextSecondary)
-
-                            TextField("gpt-4o", text: $model)
-                                .font(.aicovenBody)
-                                .foregroundColor(.aicovenTextPrimary)
-                                .padding(Spacing.sm)
-                                .background(Color.aicovenGlass)
-                                .cornerRadius(BorderRadius.sm)
-                                .disableAutocorrection(true)
-                        }
-                    } else {
-                        // Provider account selection backed by the user's BYOK
-                        // accounts. This keeps Strix aligned with a real API
-                        // key and its supported models.
-                        VStack(alignment: .leading, spacing: Spacing.xs) {
-                            Text("Provider Account")
-                                .font(.aicovenCaption)
-                                .foregroundColor(.aicovenTextSecondary)
-
-                            ForEach(providerAccounts) { account in
-                                Button {
-                                    providerAccountId = account.id
-                                    provider = account.provider
-                                    Task {
-                                        await loadModelsForAccount(account)
-                                    }
-                                } label: {
-                                    HStack {
-                                        VStack(alignment: .leading, spacing: Spacing.xxs) {
-                                            Text(account.displayName)
-                                                .font(.aicovenBody)
-                                                .foregroundColor(.aicovenTextPrimary)
-
-                                            if let modelLabel = accountModelOptions[account.id]?.first(where: { $0.0 == account.defaultModel })?.1 ?? account.defaultModel {
-                                                Text("Model: \(modelLabel)")
-                                                    .font(.aicovenCaption)
-                                                    .foregroundColor(.aicovenTextTertiary)
-                                            }
-                                        }
-
-                                        Spacer()
-
-                                        if providerAccountId == account.id {
-                                            Image(systemName: "checkmark.circle.fill")
-                                                .foregroundColor(.aicovenTeal)
-                                        }
-                                    }
-                                    .padding(Spacing.sm)
-                                    .background(providerAccountId == account.id ? Color.aicovenGlass : Color.clear)
-                                    .cornerRadius(BorderRadius.sm)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-
-                        // Model picker; prefers dynamically discovered models
-                        // for the selected account, with static fallbacks.
-                        if !availableModels.isEmpty {
+                        if loadingAccounts {
+                            ProgressView()
+                                .padding(Spacing.md)
+                        } else if providerAccounts.isEmpty {
+                            // Fallback UI when no provider accounts exist yet – use
+                            // static provider + free-form model entry.
                             VStack(alignment: .leading, spacing: Spacing.xs) {
-                                Text("Model")
+                                Text("Provider")
                                     .font(.aicovenCaption)
                                     .foregroundColor(.aicovenTextSecondary)
 
                                 Menu {
-                                    ForEach(availableModels, id: \.0) { option in
-                                        Button(option.1) {
-                                            model = option.0
-                                        }
+                                    ForEach(providerOptions, id: \.0) { option in
+                                        Button(option.1) { provider = option.0 }
                                     }
                                 } label: {
                                     HStack {
-                                        let current = availableModels.first(where: { $0.0 == model })
-                                        Text(current?.1 ?? model)
+                                        let label = providerOptions.first(where: { $0.0 == provider })?.1 ?? provider
+                                        Text(label)
                                             .font(.aicovenBody)
                                             .foregroundColor(.aicovenTextPrimary)
                                         Spacer()
@@ -292,9 +207,7 @@ struct StrixSettingsView: View {
                                     .cornerRadius(BorderRadius.sm)
                                 }
                             }
-                        } else {
-                            // If we don't have any model metadata yet, fall
-                            // back to a free-form text field.
+
                             VStack(alignment: .leading, spacing: Spacing.xs) {
                                 Text("Model ID")
                                     .font(.aicovenCaption)
@@ -308,8 +221,98 @@ struct StrixSettingsView: View {
                                     .cornerRadius(BorderRadius.sm)
                                     .disableAutocorrection(true)
                             }
+                        } else {
+                            // Provider account selection backed by the user's BYOK
+                            // accounts. This keeps Strix aligned with a real API
+                            // key and its supported models.
+                            VStack(alignment: .leading, spacing: Spacing.xs) {
+                                Text("Provider Account")
+                                    .font(.aicovenCaption)
+                                    .foregroundColor(.aicovenTextSecondary)
+
+                                ForEach(providerAccounts) { account in
+                                    Button {
+                                        providerAccountId = account.id
+                                        provider = account.provider
+                                        Task {
+                                            await loadModelsForAccount(account)
+                                        }
+                                    } label: {
+                                        HStack {
+                                            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                                                Text(account.displayName)
+                                                    .font(.aicovenBody)
+                                                    .foregroundColor(.aicovenTextPrimary)
+
+                                                if let modelLabel = accountModelOptions[account.id]?.first(where: { $0.0 == account.defaultModel })?.1 ?? account.defaultModel {
+                                                    Text("Model: \(modelLabel)")
+                                                        .font(.aicovenCaption)
+                                                        .foregroundColor(.aicovenTextTertiary)
+                                                }
+                                            }
+
+                                            Spacer()
+
+                                            if providerAccountId == account.id {
+                                                Image(systemName: "checkmark.circle.fill")
+                                                    .foregroundColor(.aicovenTeal)
+                                            }
+                                        }
+                                        .padding(Spacing.sm)
+                                        .background(providerAccountId == account.id ? Color.aicovenGlass : Color.clear)
+                                        .cornerRadius(BorderRadius.sm)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+
+                            // Model picker; prefers dynamically discovered models
+                            // for the selected account, with static fallbacks.
+                            if !availableModels.isEmpty {
+                                VStack(alignment: .leading, spacing: Spacing.xs) {
+                                    Text("Model")
+                                        .font(.aicovenCaption)
+                                        .foregroundColor(.aicovenTextSecondary)
+
+                                    Menu {
+                                        ForEach(availableModels, id: \.0) { option in
+                                            Button(option.1) {
+                                                model = option.0
+                                            }
+                                        }
+                                    } label: {
+                                        HStack {
+                                            let current = availableModels.first(where: { $0.0 == model })
+                                            Text(current?.1 ?? model)
+                                                .font(.aicovenBody)
+                                                .foregroundColor(.aicovenTextPrimary)
+                                            Spacer()
+                                            Image(systemName: "chevron.down")
+                                                .foregroundColor(.aicovenTextSecondary)
+                                        }
+                                        .padding(Spacing.sm)
+                                        .background(Color.aicovenGlass)
+                                        .cornerRadius(BorderRadius.sm)
+                                    }
+                                }
+                            } else {
+                                // If we don't have any model metadata yet, fall
+                                // back to a free-form text field.
+                                VStack(alignment: .leading, spacing: Spacing.xs) {
+                                    Text("Model ID")
+                                        .font(.aicovenCaption)
+                                        .foregroundColor(.aicovenTextSecondary)
+
+                                    TextField("gpt-4o", text: $model)
+                                        .font(.aicovenBody)
+                                        .foregroundColor(.aicovenTextPrimary)
+                                        .padding(Spacing.sm)
+                                        .background(Color.aicovenGlass)
+                                        .cornerRadius(BorderRadius.sm)
+                                        .disableAutocorrection(true)
+                                }
+                            }
                         }
-                    }
                     } // end else (hasCreator)
                 }
             }
@@ -363,9 +366,9 @@ struct StrixSettingsView: View {
                         TextField("3", text: $chatMaxToolStepsText)
                             .font(.aicovenBody)
                             .foregroundColor(.aicovenTextPrimary)
-                            #if os(iOS)
+                        #if os(iOS)
                             .keyboardType(.numberPad)
-                            #endif
+                        #endif
                             .padding(Spacing.sm)
                             .background(Color.aicovenGlass)
                             .cornerRadius(BorderRadius.sm)
@@ -417,23 +420,26 @@ struct StrixSettingsView: View {
         do {
             let settings = try await StrixSettingsService.shared.loadPersonalStrix()
             await MainActor.run {
-                self.systemPrompt = settings.systemPrompt ?? "You are Strix, a helpful AI assistant."
-                self.autonomousMode = settings.autonomousMode ?? false
+                systemPrompt = settings.systemPrompt ?? "You are Strix, a helpful AI assistant."
+                autonomousMode = settings.autonomousMode ?? false
                 let steps = settings.autonomousMaxSteps ?? 5
-                self.maxStepsText = String(steps)
+                maxStepsText = String(steps)
                 // Hydrate chat tool-step configuration from UserDefaults so the
                 // UI matches the current behavior.
                 let currentChatSteps = ChatService.currentMaxToolSteps()
-                self.chatMaxToolStepsText = String(currentChatSteps)
+                chatMaxToolStepsText = String(currentChatSteps)
                 if let plannerTasks = settings.plannerMaxTasks {
-                    self.plannerMaxTasksText = String(plannerTasks)
+                    plannerMaxTasksText = String(plannerTasks)
                 }
                 if let plannerSeconds = settings.plannerMaxSeconds {
-                    self.plannerMaxSecondsText = String(format: "%.0f", plannerSeconds)
+                    plannerMaxSecondsText = String(format: "%.0f", plannerSeconds)
                 }
-                self.model = settings.model ?? "gpt-4o"
-                self.provider = settings.provider ?? "openai"
-                self.providerAccountId = settings.providerAccountId
+                // Only use persisted model/provider if they exist; otherwise leave
+                // as placeholders that will be populated when a provider account is selected.
+                // This prevents showing "gpt-4o" in the sidebar when no OpenAI key is configured.
+                model = settings.model ?? ""
+                provider = settings.provider ?? ""
+                providerAccountId = settings.providerAccountId
             }
 
             // After loading Strix, hydrate available provider accounts so the
@@ -442,7 +448,7 @@ struct StrixSettingsView: View {
         } catch {
             AppErrorReporter.log(error: error, context: "StrixSettingsView.load")
             await MainActor.run {
-                self.errorMessage = error.localizedDescription
+                errorMessage = error.localizedDescription
             }
         }
     }
@@ -518,11 +524,16 @@ struct StrixSettingsView: View {
         let rawPlannerSeconds = Double(plannerMaxSecondsText) ?? 30.0
         let plannerSeconds = max(5.0, min(120.0, rawPlannerSeconds))
 
+        // Only persist model/provider if they are non-empty; otherwise pass nil
+        // so that the sidebar doesn't show a hardcoded default like "gpt-4o".
+        let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedProvider = provider.trimmingCharacters(in: .whitespacesAndNewlines)
+
         do {
             _ = try await StrixSettingsService.shared.updatePersonalStrix(
                 systemPrompt: trimmedPrompt.isEmpty ? nil : trimmedPrompt,
-                model: model,
-                provider: provider,
+                model: trimmedModel.isEmpty ? nil : trimmedModel,
+                provider: trimmedProvider.isEmpty ? nil : trimmedProvider,
                 providerAccountId: providerAccountId,
                 autonomousMode: autonomousMode,
                 autonomousMaxSteps: steps,
@@ -539,7 +550,7 @@ struct StrixSettingsView: View {
             }
         } catch {
             await MainActor.run {
-                self.errorMessage = error.localizedDescription
+                errorMessage = error.localizedDescription
             }
         }
     }

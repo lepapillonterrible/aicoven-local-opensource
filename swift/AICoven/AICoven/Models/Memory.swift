@@ -14,7 +14,7 @@ struct Memory: Codable, Identifiable {
     let isApproved: Bool
     let createdAt: Date
     let updatedAt: Date?
-    
+
     enum CodingKeys: String, CodingKey {
         case id
         case covenId = "coven_id"

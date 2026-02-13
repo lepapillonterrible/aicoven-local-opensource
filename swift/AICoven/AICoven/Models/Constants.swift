@@ -17,30 +17,30 @@ let AVAILABLE_AGENT_TOOLS: [AgentTool] = [
     AgentTool(id: "github.writeFile", label: "GitHub · Write file (commit)", family: "github"),
     AgentTool(id: "github.createBranch", label: "GitHub · Create branch", family: "github"),
     AgentTool(id: "github.createPR", label: "GitHub · Open pull request", family: "github"),
-    
+
     // Google Drive tools
     AgentTool(id: "google_drive.listFiles", label: "Google Drive · List files", family: "google_drive"),
     AgentTool(id: "google_drive.uploadFile", label: "Google Drive · Upload file", family: "google_drive"),
-    
+
     // Google Docs tools
     AgentTool(id: "google_docs.read", label: "Google Docs · Read document", family: "google_docs"),
     AgentTool(id: "google_docs.update", label: "Google Docs · Update document", family: "google_docs"),
-    
+
     // Google Sheets tools
     AgentTool(id: "google_sheets.read", label: "Google Sheets · Read spreadsheet", family: "google_sheets"),
     AgentTool(id: "google_sheets.readValues", label: "Google Sheets · Read values", family: "google_sheets"),
     AgentTool(id: "google_sheets.updateValues", label: "Google Sheets · Update values", family: "google_sheets"),
     AgentTool(id: "google_sheets.batchUpdate", label: "Google Sheets · Batch update", family: "google_sheets"),
-    
+
     // Google Slides tools
     AgentTool(id: "google_slides.read", label: "Google Slides · Read presentation", family: "google_slides"),
     AgentTool(id: "google_slides.update", label: "Google Slides · Update presentation", family: "google_slides"),
-    
+
     // Generation tools
     AgentTool(id: "image.generate", label: "Image · Generate", family: "image"),
     AgentTool(id: "video.generate", label: "Video · Generate", family: "video"),
     AgentTool(id: "file.generate", label: "File · Generate", family: "file"),
-    
+
     // Web tools
     AgentTool(id: "web.search", label: "Web · Search", family: "web"),
     AgentTool(id: "web.browse", label: "Web · Browse", family: "web"),

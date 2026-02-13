@@ -32,7 +32,7 @@ final class ChatToolingTests: XCTestCase {
         XCTAssertEqual(ChatService.currentMaxToolSteps(), 15)
     }
 
-    func testMaybeForceSearchQuery_forWeatherRefusal() async throws {
+    func testMaybeForceSearchQuery_forWeatherRefusal() async {
         let service = ChatService.shared
         let user = "What is the weather in London right now?"
         let reply = "I do not have access to real-time weather data and cannot tell you the current weather."

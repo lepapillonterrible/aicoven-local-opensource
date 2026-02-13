@@ -21,6 +21,7 @@ struct GeminiListResponse: Decodable {
         let description: String?
         let supportedGenerationMethods: [String]?
     }
+
     let models: [Model]
 }
 
@@ -34,19 +35,19 @@ print("Fetching models from \(urlString.replacingOccurrences(of: apiKey, with: "
 
 let semaphore = DispatchSemaphore(value: 0)
 
-let task = URLSession.shared.dataTask(with: url) { data, response, error in
+let task = URLSession.shared.dataTask(with: url) { data, _, error in
     defer { semaphore.signal() }
-    
-    if let error = error {
+
+    if let error {
         print("Error: \(error.localizedDescription)")
         return
     }
-    
-    guard let data = data else {
+
+    guard let data else {
         print("No data received")
         return
     }
-    
+
     do {
         let decoded = try JSONDecoder().decode(GeminiListResponse.self, from: data)
         print("\nFound \(decoded.models.count) models:")

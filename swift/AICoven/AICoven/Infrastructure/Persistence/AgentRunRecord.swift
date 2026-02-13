@@ -24,13 +24,15 @@ struct AgentRunRecord: Codable, FetchableRecord, PersistableRecord {
     }
 
     /// Memberwise initializer used by repositories when inserting new rows.
-    init(id: String,
-         threadID: String?,
-         agentType: String,
-         maxSteps: Int,
-         status: String,
-         createdAt: Date,
-         updatedAt: Date?) {
+    init(
+        id: String,
+        threadID: String?,
+        agentType: String,
+        maxSteps: Int,
+        status: String,
+        createdAt: Date,
+        updatedAt: Date?
+    ) {
         self.id = id
         self.threadID = threadID
         self.agentType = agentType
@@ -40,7 +42,7 @@ struct AgentRunRecord: Codable, FetchableRecord, PersistableRecord {
         self.updatedAt = updatedAt
     }
 
-    // Custom Row initializer so GRDB can decode from the snake_case schema.
+    /// Custom Row initializer so GRDB can decode from the snake_case schema.
     init(row: Row) {
         id = row[Columns.id]
         threadID = row[Columns.threadID]
@@ -51,8 +53,8 @@ struct AgentRunRecord: Codable, FetchableRecord, PersistableRecord {
         updatedAt = row[Columns.updatedAt]
     }
 
-    // Explicitly map Swift property names to snake_case DB columns so
-    // INSERT/UPDATE statements use the correct column names.
+    /// Explicitly map Swift property names to snake_case DB columns so
+    /// INSERT/UPDATE statements use the correct column names.
     func encode(to container: inout PersistenceContainer) {
         container[Columns.id] = id
         container[Columns.threadID] = threadID
@@ -63,6 +65,7 @@ struct AgentRunRecord: Codable, FetchableRecord, PersistableRecord {
         container[Columns.updatedAt] = updatedAt
     }
 }
+
 /// Low-level GRDB representation of a single agent step.
 struct AgentStepRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "agent_steps"
@@ -83,23 +86,6 @@ struct AgentStepRecord: Codable, FetchableRecord, PersistableRecord {
         case outputCiphertext = "output_ciphertext"
         case toolCallsCiphertext = "tool_calls_ciphertext"
         case createdAt = "created_at"
-    }
-
-    /// Memberwise initializer used by repositories when inserting new rows.
-    init(id: String,
-         runID: String,
-         stepIndex: Int,
-         inputCiphertext: Data,
-         outputCiphertext: Data,
-         toolCallsCiphertext: Data?,
-         createdAt: Date) {
-        self.id = id
-        self.runID = runID
-        self.stepIndex = stepIndex
-        self.inputCiphertext = inputCiphertext
-        self.outputCiphertext = outputCiphertext
-        self.toolCallsCiphertext = toolCallsCiphertext
-        self.createdAt = createdAt
     }
 
     func encode(to container: inout PersistenceContainer) {
@@ -190,11 +176,13 @@ actor AgentRunRepository {
         }
     }
 
-    func appendStep(runID: String,
-                    stepIndex: Int,
-                    input: String,
-                    output: String,
-                    toolCallsJSON: String?) async throws -> LocalAgentStep {
+    func appendStep(
+        runID: String,
+        stepIndex: Int,
+        input: String,
+        output: String,
+        toolCallsJSON: String?
+    ) async throws -> LocalAgentStep {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
         let id = UUID().uuidString
@@ -207,11 +195,10 @@ actor AgentRunRepository {
         let inputCipher = try await DataEncryptionService.shared.encrypt(inputData, purpose: "agent_step")
         let outputCipher = try await DataEncryptionService.shared.encrypt(outputData, purpose: "agent_step")
 
-        let toolCallsCipher: Data?
-        if let toolCallsData {
-            toolCallsCipher = try await DataEncryptionService.shared.encrypt(toolCallsData, purpose: "agent_step")
+        let toolCallsCipher: Data? = if let toolCallsData {
+            try await DataEncryptionService.shared.encrypt(toolCallsData, purpose: "agent_step")
         } else {
-            toolCallsCipher = nil
+            nil
         }
 
         var record = AgentStepRecord(

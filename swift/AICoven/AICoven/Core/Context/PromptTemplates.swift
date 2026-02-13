@@ -5,9 +5,9 @@ import Foundation
 /// Centralized prompt templates for agent instructions, tool documentation, and safety policies.
 /// Used by ContextBuilder and ChatService to construct consistent prompts.
 enum PromptTemplates {
-    
+
     // MARK: - Tool Definitions
-    
+
     /// All available tools with their schemas and descriptions.
     /// This is used to generate dynamic tool documentation in the system prompt.
     static let toolDefinitions: [ToolDefinition] = [
@@ -36,7 +36,7 @@ enum PromptTemplates {
             ],
             example: #"{"tool": "current_time", "input": {"timezone": "Europe/London"}, "reason": "Need to know current time in London"}"#
         ),
-        
+
         // File tools
         ToolDefinition(
             name: "file.read",
@@ -64,7 +64,7 @@ enum PromptTemplates {
             ],
             example: #"{"tool": "file.list", "input": {"path": "/Users/me/Documents", "recursive": false}, "reason": "Explore directory"}"#
         ),
-        
+
         // Shell tools
         ToolDefinition(
             name: "shell.execute",
@@ -74,7 +74,7 @@ enum PromptTemplates {
             ],
             example: #"{"tool": "shell.execute", "input": {"command": "ls -la"}, "reason": "List directory with details"}"#
         ),
-        
+
         // GitHub tools
         ToolDefinition(
             name: "github.listRepos",
@@ -170,7 +170,7 @@ enum PromptTemplates {
             ],
             example: #"{"tool": "github.listPRFiles", "input": {"owner": "user", "repo": "project", "pull_number": 42}, "reason": "See what files changed in PR"}"#
         ),
-        
+
         // Google Drive tools
         ToolDefinition(
             name: "google_drive.listFiles",
@@ -219,58 +219,129 @@ enum PromptTemplates {
             example: #"{"tool": "google_sheets.writeValues", "input": {"spreadsheet_id": "abc123", "range": "Sheet1!A1", "values": [["Name", "Value"], ["Test", "123"]]}, "reason": "Update spreadsheet"}"#
         )
     ]
-    
+
     // MARK: - Tool Protocol Instructions
-    
+
     /// Instructions for how the agent should call tools.
     /// Supports JSON, angle-bracket, and square-bracket formats.
+    // MARK: - MLX-Optimized Tool Instructions (for small local models)
+
+    /// Shorter, more directive tool-calling instructions optimized for small
+    /// models (4B-7B) that struggle with long prompts. Uses assertive language
+    /// and few-shot examples to maximize compliance.
+    static let mlxToolProtocolInstructions: String = """
+    CRITICAL TOOL-CALLING RULES:
+
+    You have access to the tools listed in AVAILABLE TOOLS above. When you need information you don't have (current time, file contents, web data), you MUST respond with ONLY a JSON object. Do NOT write any other text before or after the JSON. Do NOT use tools that are not listed in AVAILABLE TOOLS.
+
+    JSON FORMAT:
+    {"tool": "tool_name", "input": {"param": "value"}, "reason": "brief reason"}
+
+    EXAMPLES OF CORRECT BEHAVIOR:
+
+    User: What time is it?
+    Correct response: {"tool": "current_time", "input": {"timezone": "UTC"}, "reason": "Get current time"}
+
+    User: Tell me about the project at /Users/me/myproject
+    Correct response: {"tool": "file.list", "input": {"path": "/Users/me/myproject"}, "reason": "List project files"}
+
+    User: Read the file at /Users/me/readme.txt
+    Correct response: {"tool": "file.read", "input": {"path": "/Users/me/readme.txt"}, "reason": "Read file contents"}
+
+    User: Search the web for Swift concurrency
+    Correct response: {"tool": "web_search", "input": {"query": "Swift concurrency"}, "reason": "Search for information"}
+
+    User: Run ls -la in /Users/me
+    Correct response: {"tool": "shell.execute", "input": {"command": "ls -la /Users/me"}, "reason": "List directory with details"}
+
+    User: Write a script that calculates 2+2 and run it
+    Correct response: {"tool": "shell.execute", "input": {"command": "python3 -c 'print(2+2)'"}, "reason": "Calculate 2+2 using Python"}
+
+    User: Run a Node.js script
+    Correct response: {"tool": "shell.execute", "input": {"command": "node -e 'console.log(42)'"}, "reason": "Run Node.js code"}
+
+    User: What is 2+2?
+    Correct response: 2+2 = 4 (no tool needed, answer directly)
+
+    RULES:
+    - ONLY use tools from the AVAILABLE TOOLS list above. Do NOT invent tools.
+    - There is NO "python" tool, NO "code" tool, NO "execute" tool. Use shell.execute to run ANY command or script.
+    - Do NOT wrap your JSON in markdown code fences (```). Output raw JSON only.
+    - If the user asks about time, dates, or schedules → use current_time
+    - If the user mentions a file path or directory → use file.read or file.list
+    - If the user asks to search something online → use web_search
+    - If the user asks to run a command or script → use shell.execute
+    - Call ONE tool at a time, wait for the result
+    - After receiving a tool result, answer the user's question using that data
+    - Do NOT wrap your response in <think> or any XML tags
+    """
+
+    /// Generate a lean system prompt for MLX models with only essential sections.
+    static func generateMLXAgentPrompt(enabledTools: Set<String>) -> String {
+        var sections: [String] = []
+
+        // Brief role description
+        sections.append("You are a helpful AI assistant running locally. You have tools to help you answer questions that need real-time or external data.")
+
+        // Tool documentation — only enabled tools
+        let enabledDefs = toolDefinitions.filter { enabledTools.contains($0.name) }
+        if !enabledDefs.isEmpty {
+            sections.append(generateToolDocumentation(for: enabledDefs))
+        }
+
+        // MLX-optimized protocol
+        sections.append(mlxToolProtocolInstructions)
+
+        return sections.joined(separator: "\n\n")
+    }
+
     static let toolProtocolInstructions: String = """
     TOOL-CALLING PROTOCOL:
-    
+
     When you need to use a tool, respond with a tool call in one of these formats:
-    
+
     1. JSON format (preferred):
        {"tool": "tool_name", "input": {"param": "value"}, "reason": "why you need this"}
-    
+
     2. Angle-bracket format:
        <TOOL_CALL>tool_name {"param": "value"}</TOOL_CALL>
-    
+
     3. Square-bracket format:
        [TOOL_CALL: name=tool_name] {"param": "value"} [/TOOL_CALL]
-    
+
     RULES:
     - Call only ONE tool at a time
     - Wait for the result before making another tool call
     - When you have enough information, provide your final answer in natural language
     - Do NOT include tool call syntax in your final answer
     """
-    
+
     // MARK: - Thought Block Instructions
-    
+
     /// Instructions for using <thought> blocks for reasoning visibility.
     static let thoughtBlockInstructions: String = """
     REASONING VISIBILITY:
-    
+
     You may use <thought> blocks to show your reasoning process:
-    
+
     <thought>
     Let me analyze this step by step:
     1. First, I need to understand the user's request...
     2. The relevant information is...
     3. I should use tool X because...
     </thought>
-    
+
     Thought blocks help the user understand your reasoning but are stripped from the final display.
     """
-    
+
     // MARK: - Scratchpad Instructions
-    
+
     /// Instructions for using <scratchpad> blocks to track multi-step tasks.
     static let scratchpadInstructions: String = """
     TASK TRACKING (for multi-step operations):
-    
+
     Use a <scratchpad> block to track progress on complex tasks:
-    
+
     <scratchpad>
     - [x] Step 1: Understand the requirements
     - [x] Step 2: Search for relevant files
@@ -278,35 +349,35 @@ enum PromptTemplates {
     - [ ] Step 4: Make changes
     - [ ] Step 5: Verify the solution
     </scratchpad>
-    
+
     Update the scratchpad as you complete each step. Mark completed items with [x].
     """
-    
+
     // MARK: - Memory Write Instructions
-    
+
     /// Instructions for proposing memory writes.
     static let memoryWriteInstructions: String = """
     MEMORY PROPOSALS:
-    
+
     If you learn important information that should be remembered for future conversations,
     propose a memory write using this format:
-    
+
     [MEMORY_WRITE: scope=user|thread]
     The information to remember as a concise summary.
     [/MEMORY_WRITE]
-    
+
     - Use scope=user for information relevant across all conversations
     - Use scope=thread for information specific to this conversation
     - Keep memories concise and factual
     - Memory proposals require user confirmation before being saved
     """
-    
+
     // MARK: - Safety Policies
-    
+
     /// Safety policies for agent behavior.
     static let safetyPolicies: String = """
     SAFETY POLICIES:
-    
+
     1. PRIVACY: Treat all user data as private. Do not expose sensitive information.
     2. CONFIRMATION: Always confirm before making changes to files or executing commands.
     3. SHELL SAFETY: Shell commands require explicit user approval. Never run destructive commands.
@@ -314,9 +385,9 @@ enum PromptTemplates {
     5. ERROR HANDLING: If a tool fails, explain the error and suggest alternatives.
     6. SCOPE: Stay within the boundaries of what the user has asked.
     """
-    
+
     // MARK: - Full Agent System Prompt
-    
+
     /// Generate a complete agent system prompt with tool documentation.
     /// - Parameters:
     ///   - enabledTools: Set of tool names that are enabled for this agent.
@@ -331,14 +402,14 @@ enum PromptTemplates {
         includeMemoryWrite: Bool = true
     ) -> String {
         var sections: [String] = []
-        
+
         // Base role description
         sections.append("""
         You are a capable AI assistant running locally on the user's device.
         You have access to various tools to help accomplish tasks.
         Use the provided context (memories, conversation history) to respond helpfully.
         """)
-        
+
         // Tool documentation
         if !enabledTools.isEmpty {
             let enabledDefs = toolDefinitions.filter { enabledTools.contains($0.name) }
@@ -347,7 +418,7 @@ enum PromptTemplates {
             }
             sections.append(toolProtocolInstructions)
         }
-        
+
         // Optional sections
         if includeThoughtBlocks {
             sections.append(thoughtBlockInstructions)
@@ -358,22 +429,22 @@ enum PromptTemplates {
         if includeMemoryWrite {
             sections.append(memoryWriteInstructions)
         }
-        
+
         // Safety policies always included
         sections.append(safetyPolicies)
-        
+
         return sections.joined(separator: "\n\n")
     }
-    
+
     /// Generate tool documentation section for enabled tools.
     private static func generateToolDocumentation(for tools: [ToolDefinition]) -> String {
-        var lines: [String] = ["AVAILABLE TOOLS:"]
-        
+        var lines = ["AVAILABLE TOOLS:"]
+
         for tool in tools {
             lines.append("")
             lines.append("## \(tool.name)")
             lines.append(tool.description)
-            
+
             if !tool.parameters.isEmpty {
                 lines.append("Parameters:")
                 for param in tool.parameters {
@@ -381,45 +452,43 @@ enum PromptTemplates {
                     lines.append("  - \(param.name): \(param.type) \(req) - \(param.description)")
                 }
             }
-            
+
             lines.append("Example: \(tool.example)")
         }
-        
+
         return lines.joined(separator: "\n")
     }
-    
+
     // MARK: - Default Tool Sets
-    
+
     /// Basic tools available in all chat contexts.
     static let basicChatTools: Set<String> = ["web_search", "web_browse", "current_time"]
-    
+
     /// File tools for local file operations.
     static let fileTools: Set<String> = ["file.read", "file.write", "file.list"]
-    
+
     /// Shell tools for command execution.
     static let shellTools: Set<String> = ["shell.execute"]
-    
+
     /// GitHub tools for repository operations.
     static let githubTools: Set<String> = [
         "github.listRepos", "github.readFile", "github.writeFile",
         "github.listFiles", "github.createBranch", "github.createPR", "github.searchCode",
         "github.getPR", "github.listPRFiles"
     ]
-    
+
     /// Google Drive/Sheets tools.
     static let googleDriveTools: Set<String> = [
         "google_drive.listFiles", "google_drive.readFile", "google_drive.uploadFile",
         "google_sheets.readValues", "google_sheets.writeValues"
     ]
-    
+
     /// All tools combined.
-    static let allTools: Set<String> = {
-        basicChatTools
-            .union(fileTools)
-            .union(shellTools)
-            .union(githubTools)
-            .union(googleDriveTools)
-    }()
+    static let allTools: Set<String> = basicChatTools
+        .union(fileTools)
+        .union(shellTools)
+        .union(githubTools)
+        .union(googleDriveTools)
 }
 
 // MARK: - Supporting Types
@@ -440,4 +509,29 @@ struct ToolParameter: Sendable {
     let type: String
     let description: String
     let required: Bool
+}
+
+// MARK: - Conversion to LLMToolDefinition
+
+extension PromptTemplates {
+    /// Convert internal tool definitions to protocol-level `LLMToolDefinition`
+    /// objects for native function calling via `ChatOptions.tools`.
+    static func llmToolDefinitions(for enabledTools: Set<String>) -> [LLMToolDefinition] {
+        toolDefinitions
+            .filter { enabledTools.contains($0.name) }
+            .map { def in
+                LLMToolDefinition(
+                    name: def.name,
+                    description: def.description,
+                    parameters: def.parameters.map { param in
+                        LLMToolParameter(
+                            name: param.name,
+                            type: param.type,
+                            description: param.description,
+                            required: param.required
+                        )
+                    }
+                )
+            }
+    }
 }

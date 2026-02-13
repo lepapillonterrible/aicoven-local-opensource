@@ -5,7 +5,7 @@ struct AgentTask: Identifiable, Codable, Equatable {
     let id: String
     let title: String
     var completed: Bool
-    
+
     enum CodingKeys: String, CodingKey {
         case id, title, completed
     }
@@ -22,7 +22,7 @@ struct ChatMessage: Codable, Identifiable, Hashable {
     let createdAt: Date?
     let isEncrypted: Bool?
     let keyFingerprint: String?
-    
+
     enum CodingKeys: String, CodingKey {
         case id
         case threadId = "thread_id"
@@ -32,19 +32,6 @@ struct ChatMessage: Codable, Identifiable, Hashable {
         case isEncrypted = "is_encrypted"
         case keyFingerprint = "key_fingerprint"
     }
-    
-    // Memberwise init for decryption mapping
-    init(id: String, threadId: String, role: String, content: String, metadata: [String: AnyJSONValue]?, tokenUsage: TokenUsage?, createdAt: Date?, isEncrypted: Bool?, keyFingerprint: String?) {
-        self.id = id
-        self.threadId = threadId
-        self.role = role
-        self.content = content
-        self.metadata = metadata
-        self.tokenUsage = tokenUsage
-        self.createdAt = createdAt
-        self.isEncrypted = isEncrypted
-        self.keyFingerprint = keyFingerprint
-    }
 }
 
 /// Token usage information
@@ -52,7 +39,7 @@ struct TokenUsage: Codable, Hashable {
     let promptTokens: Int?
     let completionTokens: Int?
     let totalTokens: Int?
-    
+
     enum CodingKeys: String, CodingKey {
         case promptTokens = "prompt_tokens"
         case completionTokens = "completion_tokens"
@@ -94,7 +81,6 @@ struct ChatStreamEvent: Decodable {
         case args
     }
 }
-
 
 // MARK: - Tool Intent Decision
 
@@ -161,7 +147,7 @@ actor ChatService {
             toolService: ToolService.shared
         )
     }()
-    
+
     private let contextBuilder: ContextBuilder
     private var modelRouter: ModelRouter
     private var llmClients: [String: LLMClient]
@@ -174,30 +160,44 @@ actor ChatService {
     /// from ProviderAccountService on each call. Tests can disable this to
     /// keep injected mock clients and routers.
     private let shouldAutoRefreshEnvironment: Bool
-    
+
     /// In-memory local message store keyed by thread ID. This gives us basic
     /// per-thread history for contextual chat without any backend.
     private var messageStore: [String: [ChatMessage]] = [:]
     /// Maximum number of prior turns to include when building LLM context.
     private let maxContextMessages = 20
-    /// On-disk cache location for message history so threads survive restarts.
-    private let messageStoreURL: URL = {
+
+    /// Whether we've attempted to hydrate the in-memory store from disk.
+    private var hasLoadedFromDisk = false
+
+    /// User-scoped on-disk cache location for message history.
+    private var messageStoreURL: URL {
         let fm = FileManager.default
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fm.urls(for: .documentDirectory, in: .userDomainMask).first!
         let dir = base.appendingPathComponent("AICovenOpen", isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("messages.json", isDirectory: false)
-    }()
-    /// Whether we've attempted to hydrate the in-memory store from disk.
-    private var hasLoadedFromDisk = false
-    
-    init(contextBuilder: ContextBuilder,
-         modelRouter: ModelRouter,
-         llmClients: [String: LLMClient],
-         threadStore: ThreadStore,
-         toolService: ChatToolService,
-         shouldAutoRefreshEnvironment: Bool = true) {
+        // Use user-scoped filename so each user gets their own message history
+        let filename = UserScope.scopedFilename("messages", extension: "json")
+        return dir.appendingPathComponent(filename, isDirectory: false)
+    }
+
+    /// Reload message store for the current user. Call after user switch.
+    func reloadForCurrentUser() {
+        // Clear in-memory cache
+        messageStore = [:]
+        hasLoadedFromDisk = false
+        // Next call to loadMessages will reload from user-scoped file
+    }
+
+    init(
+        contextBuilder: ContextBuilder,
+        modelRouter: ModelRouter,
+        llmClients: [String: LLMClient],
+        threadStore: ThreadStore,
+        toolService: ChatToolService,
+        shouldAutoRefreshEnvironment: Bool = true
+    ) {
         self.contextBuilder = contextBuilder
         self.modelRouter = modelRouter
         self.llmClients = llmClients
@@ -205,7 +205,7 @@ actor ChatService {
         self.toolService = toolService
         self.shouldAutoRefreshEnvironment = shouldAutoRefreshEnvironment
     }
-    
+
     /// Ensure that we have an up-to-date LLM environment based on the latest
     /// provider keys in UserDefaults and the live model lists returned by each
     /// provider. This is important because `ChatService` is initialized once at
@@ -215,7 +215,7 @@ actor ChatService {
 
         // Rebuild the client map from the latest cached API keys.
         let env = LLMConfiguration.makeEnvironment()
-        self.llmClients = env.clients
+        llmClients = env.clients
 
         do {
             // Build dynamic model descriptors from live ListModels responses for
@@ -224,15 +224,15 @@ actor ChatService {
             // Only keep descriptors for providers we actually have clients for.
             let allowed = Set(llmClients.keys)
             let models = allDescriptors.filter { allowed.contains($0.providerID) }
-            self.modelRouter = HeuristicModelRouter(availableModels: models)
+            modelRouter = HeuristicModelRouter(availableModels: models)
         } catch {
             AppErrorReporter.log(error: error, context: "ChatService.ensureEnvironment.loadModelDescriptors")
-            self.modelRouter = HeuristicModelRouter(availableModels: [])
+            modelRouter = HeuristicModelRouter(availableModels: [])
         }
     }
-    
+
     // MARK: - Local message store (memory + disk)
-    
+
     /// Append a message to the local in-memory history for its thread and
     /// persist the updated store to disk.
     func addLocalMessage(_ message: ChatMessage) {
@@ -241,7 +241,7 @@ actor ChatService {
         messageStore[message.threadId] = messages
         saveMessageStoreToDisk()
     }
-    
+
     /// Ensure the in-memory message store is hydrated from disk at most once.
     private func ensureLoadedFromDisk() {
         guard !hasLoadedFromDisk else { return }
@@ -256,7 +256,7 @@ actor ChatService {
             AppErrorReporter.log(error: error, context: "ChatService.ensureLoadedFromDisk")
         }
     }
-    
+
     /// Persist the current in-memory message store to disk.
     private func saveMessageStoreToDisk() {
         do {
@@ -266,7 +266,7 @@ actor ChatService {
             AppErrorReporter.log(error: error, context: "ChatService.saveMessageStoreToDisk")
         }
     }
-    
+
     /// Load messages for a thread
     /// - Parameters:
     ///   - threadId: The thread ID
@@ -277,20 +277,20 @@ actor ChatService {
         ensureLoadedFromDisk()
         let all = messageStore[threadId] ?? []
         guard !all.isEmpty else { return [] }
-        
+
         // Messages are stored in ascending order (oldest first). We support
         // simple pagination using the optional `before` message ID.
         if let beforeId = before, let idx = all.firstIndex(where: { $0.id == beforeId }) {
             let end = idx
             let start = max(0, end - limit)
-            return Array(all[start..<end])
+            return Array(all[start ..< end])
         } else {
             let end = all.count
             let start = max(0, end - limit)
-            return Array(all[start..<end])
+            return Array(all[start ..< end])
         }
     }
-    
+
     /// Send a message and get AI response (non-streaming)
     /// - Parameters:
     ///   - threadId: The thread ID
@@ -323,7 +323,7 @@ actor ChatService {
             metadata: [:]
         )
     }
-    
+
     /// Stream a message using the local LLM client and surface planning/answer phases.
     ///
     /// This uses non-streaming provider SDKs under the hood but can perform a
@@ -344,12 +344,31 @@ actor ChatService {
         // Ensure we see any provider keys and live model lists that may have
         // been added or changed after ChatService was first initialized.
         await ensureEnvironment()
-        
-        // Try to honour the user's preferred provider + model from Strix
-        // settings (stored in UserDefaults by StrixSettingsService). If the
-        // router's dynamic model list contains an exact match, use it;
-        // otherwise fall back to the heuristic cost-class routing.
-        let (prefProvider, prefModel) = resolveProviderAndModel()
+
+        // Resolve provider + model: prefer role-specific settings when a
+        // roleId is provided (coven agent threads), otherwise fall back to
+        // the user's global preference from UserDefaults.
+        let prefProvider: String
+        let prefModel: String
+
+        if let roleId,
+           let role = try? await RoleService.shared.getRole(roleId: roleId),
+           let roleProvider = role.provider, !roleProvider.isEmpty,
+           let roleModel = role.model, !roleModel.isEmpty {
+            prefProvider = roleProvider.lowercased()
+            prefModel = roleModel
+            #if DEBUG
+            AppErrorReporter.log(message: "Role '\(role.name)' resolved provider=\(prefProvider) model=\(prefModel)", context: "ChatService.streamMessage.roleResolution")
+            #endif
+        } else {
+            let (globalProvider, globalModel) = resolveProviderAndModel()
+            prefProvider = globalProvider
+            prefModel = globalModel
+            #if DEBUG
+            AppErrorReporter.log(message: "No role override (roleId=\(roleId ?? "nil")); using global provider=\(prefProvider) model=\(prefModel)", context: "ChatService.streamMessage.roleResolution")
+            #endif
+        }
+
         let descriptor: ModelDescriptor
         let client: LLMClient
 
@@ -359,10 +378,12 @@ actor ChatService {
             client = prefClient
         } else {
             // Fall back to heuristic routing.
-            let routingContext = RoutingContext(task: .chat,
-                                                requireLocalOnly: false,
-                                                requireLongContext: false,
-                                                preferHighQuality: true)
+            let routingContext = RoutingContext(
+                task: .chat,
+                requireLocalOnly: false,
+                requireLongContext: false,
+                preferHighQuality: true
+            )
             guard let fallbackDescriptor = modelRouter.route(for: routingContext),
                   let fallbackClient = llmClients[fallbackDescriptor.providerID] else {
                 let msg = "No configured providers/models available for chat. Add provider keys in Settings."
@@ -374,7 +395,7 @@ actor ChatService {
             descriptor = fallbackDescriptor
             client = fallbackClient
         }
-        
+
         // Give the UI an immediate hint that we're contacting the provider.
         onPlanningDelta("Thinking about your question…")
 
@@ -385,7 +406,7 @@ actor ChatService {
         let intent = ToolIntentDecision.heuristic(for: message)
         let toolsAllowed: Bool
         switch intent {
-        case .noTools(let reason):
+        case let .noTools(reason):
             #if DEBUG
             AppErrorReporter.log(message: "Intent gate: skipping tools — \(reason)", context: "ChatService.streamMessage.intentGate")
             #endif
@@ -396,7 +417,7 @@ actor ChatService {
             // For ambiguous messages, allow tools but the model decides.
             toolsAllowed = true
         }
-        
+
         // Simple tool loop: allow the model a configurable number of tool
         // invocations before we require a natural-language answer. The
         // `chat_max_tool_steps` budget controls how many *tool calls* are
@@ -410,6 +431,11 @@ actor ChatService {
         var toolContextLog = ""
         var finalText: String?
         var finalUsage: TokenUsage?
+        var streamedAnswer = false
+
+        // Local models (MLX, Ollama) get a shorter, more assertive prompt.
+        let isLocalModel = ["mlx", "ollama"].contains(descriptor.providerID)
+        let toolConfig: ContextBuilder.ToolConfig = isLocalModel ? .mlxTools : .allTools
 
         // ── Context-aware repeat detection (ported from backend) ──────────
         // Tracks tool-call signatures across loop iterations so we can
@@ -433,11 +459,11 @@ actor ChatService {
 
         // Track initial message sent
         AnalyticsService.shared.trackMessageSent(threadId: threadId, hasAttachments: !(attachmentIds?.isEmpty ?? true), attachmentCount: attachmentIds?.count ?? 0)
-        
+
         // First phase: while we still have tool budget, let the model decide
         // whether to call a tool. Each successful tool invocation consumes one
         // step from the budget; a direct natural-language reply ends the loop.
-        while remainingToolSteps > 0 && finalText == nil {
+        while remainingToolSteps > 0, finalText == nil {
             stepNumber += 1
             // Build the effective user message. Only append tool protocol
             // instructions when tools are allowed — the system prompt from
@@ -450,7 +476,7 @@ actor ChatService {
                 // instruction so the model knows to incorporate them.
                 composedUserMessage += "\n\nYou have tool results below. Use them to answer the user's question. If you need more information, call another tool. Otherwise, provide your final answer in natural language.\n\n" + toolContextLog
             }
-            
+
             // Build LLM context using the shared ContextBuilder, which will pull
             // in runtime info, policies, memories, and recent turns for this
             // thread. We respect the model's max context tokens with a safety
@@ -460,27 +486,57 @@ actor ChatService {
                 threadID: threadId,
                 userMessage: composedUserMessage,
                 maxContextTokens: promptBudget,
-                toolConfig: .allTools
+                toolConfig: toolConfig
             )
-            
+
             do {
-                let options = ChatOptions(temperature: 0.7, maxTokens: nil, stream: false)
-                let response = try await client.completeChat(messages: contextMessages,
-                                                             model: descriptor.modelID,
-                                                             options: options)
+                // Pass native tool definitions for API providers (not local models).
+                let nativeTools: [LLMToolDefinition]? = isLocalModel ? nil
+                    : PromptTemplates.llmToolDefinitions(for: toolConfig.enabledTools)
+                let options = ChatOptions(
+                    temperature: 0.7,
+                    maxTokens: nil,
+                    stream: false,
+                    tools: nativeTools
+                )
+                let response = try await client.completeChat(
+                    messages: contextMessages,
+                    model: descriptor.modelID,
+                    options: options
+                )
                 let rawText = response.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
                 #if DEBUG
                 AppErrorReporter.log(message: "provider response (tool phase, truncated): \(rawText.prefix(200))", context: "ChatService.streamMessage.toolLoop")
                 #endif
                 let usage = response.usage.map { core in
-                    TokenUsage(promptTokens: core.promptTokens,
-                               completionTokens: core.completionTokens,
-                               totalTokens: core.totalTokens)
+                    TokenUsage(
+                        promptTokens: core.promptTokens,
+                        completionTokens: core.completionTokens,
+                        totalTokens: core.totalTokens
+                    )
                 }
                 finalUsage = usage
-                
-                // Try to interpret the output as a tool call JSON payload.
-                if let toolCall = ChatToolInvocation.from(jsonString: rawText) {
+
+                // ── Check for native tool calls first ──────────────────────
+                // API providers (OpenAI, Anthropic, Gemini) return structured
+                // tool calls via response.toolCalls. Convert the first one to
+                // a ChatToolInvocation for the existing execution pipeline.
+                let toolCall: ChatToolInvocation?
+                if let nativeCalls = response.toolCalls, let first = nativeCalls.first {
+                    toolCall = ChatToolInvocation(
+                        tool: first.name,
+                        input: AnyJSONValue(first.arguments),
+                        reason: "Native \(descriptor.providerID) tool call"
+                    )
+                    #if DEBUG
+                    AppErrorReporter.log(message: "Native tool call from \(descriptor.providerID): \(first.name)", context: "ChatService.streamMessage.nativeToolCall")
+                    #endif
+                } else {
+                    // Fall back to text parsing for local models or text-based calls
+                    toolCall = ChatToolInvocation.from(jsonString: rawText)
+                }
+                // Remap hallucinated tool names (e.g. "python" → "shell.execute")
+                if let toolCall = toolCall?.remapped() {
                     // ── Context-aware repeat detection ────────────────────
                     // Build a stable signature from the tool name + normalized args.
                     let rawInput = extractToolInputString(from: toolCall.input) ?? ""
@@ -500,10 +556,10 @@ actor ChatService {
                     if history.count >= maxConsecutiveSameCalls {
                         let recent = Array(history.suffix(maxConsecutiveSameCalls))
                         let isConsecutive = recent.count == maxConsecutiveSameCalls
-                            && (1..<recent.count).allSatisfy { recent[$0].step == recent[$0 - 1].step + 1 }
+                            && (1 ..< recent.count).allSatisfy { recent[$0].step == recent[$0 - 1].step + 1 }
                         let contextUnchanged = Set(recent.map(\.contextHash)).count == 1
 
-                        if isConsecutive && contextUnchanged {
+                        if isConsecutive, contextUnchanged {
                             #if DEBUG
                             AppErrorReporter.log(
                                 message: "Repeat loop detected: \(toolCall.tool) called \(maxConsecutiveSameCalls)x with unchanged context. Breaking.",
@@ -518,16 +574,16 @@ actor ChatService {
 
                     // Reset continuation counter when the model makes progress
                     continuationCount = 0
-                    
+
                     #if DEBUG
                     AppErrorReporter.log(message: "Parsed chat tool call: \(toolCall.tool) (remaining before decrement=\(remainingToolSteps))", context: "ChatService.streamMessage.toolLoop")
                     #endif
                     // We only honor tool calls while there is remaining budget.
                     remainingToolSteps -= 1
-                    
+
                     // Track tool usage
                     AnalyticsService.shared.trackToolUsed(toolName: toolCall.tool, threadId: threadId)
-                    
+
                     let (summary, contextBlock) = try await executeChatToolCall(toolCall)
                     onToolEvent(summary)
                     if let block = contextBlock {
@@ -568,10 +624,10 @@ actor ChatService {
                         let ctxHash = Self.computeContextHash(toolContextLog)
                         toolCallHistory[signature, default: []].append((step: stepNumber, contextHash: ctxHash))
                         remainingToolSteps -= 1
-                        
+
                         // Track tool usage
                         AnalyticsService.shared.trackToolUsed(toolName: "web_search", threadId: threadId)
-                        
+
                         let (summary, contextBlock) = try await executeChatToolCall(forcedCall)
                         onToolEvent(summary)
                         if let block = contextBlock {
@@ -628,18 +684,18 @@ actor ChatService {
                     msg = error.localizedDescription
                     errorCode = "unknown_error"
                 }
-                
+
                 // Track error with a low-cardinality code; avoid logging full
                 // user-visible error text into analytics.
                 AnalyticsService.shared.trackMessageError(threadId: threadId, errorType: errorCode)
-                
+
                 onPlanningDelta("")
                 onAnswerDelta("Error: \(msg)")
                 onDone(nil, nil, nil)
                 return
             }
         }
-        
+
         // Second phase: if we used up the tool budget without the model ever
         // producing a natural-language answer, give it one final, tool-free
         // chance. On this last attempt we *always* treat the response as the
@@ -652,31 +708,64 @@ actor ChatService {
             if !toolContextLog.isEmpty {
                 composedUserMessage += "\n\n" + toolContextLog
             }
-            
+
             let promptBudget = Int(Double(descriptor.maxContextTokens) * 0.8)
             let contextMessages = try await contextBuilder.buildContext(
                 threadID: threadId,
                 userMessage: composedUserMessage,
                 maxContextTokens: promptBudget,
-                toolConfig: .allTools
+                toolConfig: toolConfig
             )
-            
+
             do {
-                let options = ChatOptions(temperature: 0.7, maxTokens: nil, stream: false)
-                let response = try await client.completeChat(messages: contextMessages,
-                                                             model: descriptor.modelID,
-                                                             options: options)
-                let rawText = response.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                #if DEBUG
-                AppErrorReporter.log(message: "provider response (final phase, truncated): \(rawText.prefix(200))", context: "ChatService.streamMessage.finalPhase")
-                #endif
-                let usage = response.usage.map { core in
-                    TokenUsage(promptTokens: core.promptTokens,
-                               completionTokens: core.completionTokens,
-                               totalTokens: core.totalTokens)
+                // If the client supports streaming, use token-by-token delivery
+                // for the final answer so the user sees text appear in real time.
+                if let streamingClient = client as? StreamingLLMClient {
+                    let options = ChatOptions(temperature: 0.7, maxTokens: nil, stream: true)
+                    onPlanningDelta("")
+                    var accumulated = ""
+                    let stream = streamingClient.streamChat(
+                        messages: contextMessages,
+                        model: descriptor.modelID,
+                        options: options
+                    )
+                    for try await delta in stream {
+                        if !delta.text.isEmpty {
+                            accumulated += delta.text
+                            onAnswerDelta(delta.text)
+                        }
+                        if let usage = delta.usage {
+                            finalUsage = TokenUsage(
+                                promptTokens: usage.promptTokens,
+                                completionTokens: usage.completionTokens,
+                                totalTokens: usage.totalTokens
+                            )
+                        }
+                    }
+                    // Mark streaming final answer so we skip the post-loop emission.
+                    finalText = accumulated
+                    streamedAnswer = true
+                } else {
+                    let options = ChatOptions(temperature: 0.7, maxTokens: nil, stream: false)
+                    let response = try await client.completeChat(
+                        messages: contextMessages,
+                        model: descriptor.modelID,
+                        options: options
+                    )
+                    let rawText = response.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                    #if DEBUG
+                    AppErrorReporter.log(message: "provider response (final phase, truncated): \(rawText.prefix(200))", context: "ChatService.streamMessage.finalPhase")
+                    #endif
+                    let usage = response.usage.map { core in
+                        TokenUsage(
+                            promptTokens: core.promptTokens,
+                            completionTokens: core.completionTokens,
+                            totalTokens: core.totalTokens
+                        )
+                    }
+                    finalUsage = usage
+                    finalText = rawText
                 }
-                finalUsage = usage
-                finalText = rawText
             } catch {
                 let msg: String
                 let errorCode: String
@@ -687,30 +776,30 @@ actor ChatService {
                     msg = error.localizedDescription
                     errorCode = "unknown_error"
                 }
-                
+
                 // Track error with a low-cardinality code; avoid logging full
                 // user-visible error text into analytics.
                 AnalyticsService.shared.trackMessageError(threadId: threadId, errorType: errorCode)
-                
+
                 onPlanningDelta("")
                 onAnswerDelta("Error: \(msg)")
                 onDone(nil, nil, nil)
                 return
             }
         }
-        
+
         // By this point we should always have some text for the user. As a
         // final safeguard, fall back to a generic message if for some reason we
         // still ended up without an answer.
         let rawAnswer = finalText ?? "I wasn't able to finish this request after using tools. Please try rephrasing or asking a simpler version."
-        
+
         // Parse the response to extract memory proposals and strip markup
         // ── Response text deduplication (ported from backend) ────────────
         // Strip duplicate paragraphs that the model sometimes produces.
         let dedupedAnswer = Self.dedupeResponseText(rawAnswer)
         let parseResult = ToolCallParser.parse(dedupedAnswer)
         let answer = parseResult.strippedText.isEmpty ? rawAnswer : parseResult.strippedText
-        
+
         // Process any memory proposals from the LLM
         if !parseResult.memoryProposals.isEmpty {
             for proposal in parseResult.memoryProposals {
@@ -731,10 +820,14 @@ actor ChatService {
                 }
             }
         }
-        
+
         AppErrorReporter.log(message: "streamMessage completed with answer length=\(answer.count) provider=\(descriptor.providerID) model=\(descriptor.modelID) usedTools=\(maxToolSteps - remainingToolSteps)", context: "ChatService.streamMessage")
         onPlanningDelta("")
-        onAnswerDelta(answer)
+        // Only emit the full answer if we haven't already streamed it
+        // token-by-token via StreamingLLMClient.
+        if !streamedAnswer {
+            onAnswerDelta(answer)
+        }
 
         // Persist a lightweight usage entry so the local Budgets & Usage
         // dashboard can approximate spend per provider.
@@ -746,7 +839,7 @@ actor ChatService {
         )
 
         onDone(descriptor.providerID, descriptor.modelID, finalUsage)
-        
+
         // Track message received. We don't currently measure precise
         // end-to-end latency here, so omit response time instead of
         // sending a misleading placeholder.
@@ -783,19 +876,23 @@ actor ChatService {
                 messages.append(LLMMessage(role: role, content: msg.content))
             }
 
-            let routingContext = RoutingContext(task: .chat,
-                                                requireLocalOnly: false,
-                                                requireLongContext: false,
-                                                preferHighQuality: true)
+            let routingContext = RoutingContext(
+                task: .chat,
+                requireLocalOnly: false,
+                requireLongContext: false,
+                preferHighQuality: true
+            )
             guard let descriptor = modelRouter.route(for: routingContext),
                   let client = llmClients[descriptor.providerID] else {
                 return
             }
 
             let options = ChatOptions(temperature: 0.2, maxTokens: nil, stream: false)
-            let response = try await client.completeChat(messages: messages,
-                                                         model: descriptor.modelID,
-                                                         options: options)
+            let response = try await client.completeChat(
+                messages: messages,
+                model: descriptor.modelID,
+                options: options
+            )
             let summary = response.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !summary.isEmpty else { return }
 
@@ -829,6 +926,12 @@ actor ChatService {
         case "google", "gemini":
             let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("gemini_model")) ?? "gemini-1.5-pro"
             return ("google", model)
+        case "mlx":
+            let model = UserDefaults.standard.string(forKey: "MLXModelManager.activeModelID") ?? "mlx-community/Qwen3-4B-4bit"
+            return ("mlx", model)
+        case "ollama":
+            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model")) ?? "llama3.2"
+            return ("ollama", model)
         default:
             let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("openai_model")) ?? "gpt-4o"
             return ("openai", model)
@@ -838,9 +941,9 @@ actor ChatService {
     /// Human-readable label for a provider string.
     private func providerLabel(for provider: String) -> String {
         switch provider {
-        case "anthropic": return "Anthropic"
-        case "google": return "Google Gemini"
-        default: return "OpenAI"
+        case "anthropic": "Anthropic"
+        case "google": "Google Gemini"
+        default: "OpenAI"
         }
     }
 
@@ -864,9 +967,9 @@ private extension LocalChatError {
     var analyticsCode: String {
         switch self {
         case .missingOpenAIAPIKey:
-            return "missing_openai_api_key"
+            "missing_openai_api_key"
         case .invalidResponse:
-            return "invalid_response"
+            "invalid_response"
         }
     }
 }
@@ -884,18 +987,49 @@ struct ChatToolInvocation: Codable {
     let tool: String
     let input: AnyJSONValue?
     let reason: String?
-    
+
     static func from(jsonString: String) -> ChatToolInvocation? {
-        let trimmed = jsonString.trimmingCharacters(in: .whitespacesAndNewlines)
+        var trimmed = jsonString.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Strip <think>...</think> blocks emitted by reasoning models (e.g. Qwen3).
+        // These appear before the tool-call JSON and prevent parsing.
+        trimmed = trimmed.replacingOccurrences(
+            of: "<think>[\\s\\S]*?</think>",
+            with: "",
+            options: .regularExpression
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        // Also handle unclosed <think> tags (model started thinking but response was cut off).
+        if let thinkStart = trimmed.range(of: "<think>") {
+            trimmed = String(trimmed[..<thinkStart.lowerBound])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // Strip markdown code fences that local models often wrap tool calls in.
+        // Handles ```json, ```JSON, and bare ``` markers.
+        if let fenceStart = trimmed.range(of: "```", options: .literal) {
+            // Remove opening fence line (```json\n or ```\n)
+            let afterFence = trimmed[fenceStart.upperBound...]
+            if let newlineIdx = afterFence.firstIndex(of: "\n") {
+                let afterOpening = String(afterFence[afterFence.index(after: newlineIdx)...])
+                // Remove closing fence
+                if let closingFence = afterOpening.range(of: "```", options: .backwards) {
+                    trimmed = String(afterOpening[..<closingFence.lowerBound])
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                } else {
+                    trimmed = afterOpening.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+        }
+
         let decoder = JSONDecoder()
-        
+
         // Fast path: whole string is a JSON object.
         if trimmed.first == "{",
            let data = trimmed.data(using: .utf8),
            let call = try? decoder.decode(ChatToolInvocation.self, from: data) {
             return call
         }
-        
+
         // Fallback 1: many models (especially Gemini) emit reasoning text
         // followed by a JSON object that starts with {"tool": ...}. Try to
         // locate a balanced {...} region beginning at that marker.
@@ -904,28 +1038,30 @@ struct ChatToolInvocation: Codable {
                 return call
             }
         }
-        
+
         // Fallback 2: older formats may still have a JSON object at the end;
         // attempt to parse the last {...} block in the string.
         if let start = trimmed.lastIndex(of: "{"),
            let end = trimmed.lastIndex(of: "}"),
            start < end {
-            let range = start...end
+            let range = start ... end
             let jsonSub = String(trimmed[range])
             if let data = jsonSub.data(using: .utf8),
                let call = try? decoder.decode(ChatToolInvocation.self, from: data) {
                 return call
             }
         }
-        
+
         return nil
     }
-    
+
     /// Helper used by `from(jsonString:)` to slice out a balanced JSON object
     /// starting at a given index and decode it into `ChatToolInvocation`.
-    private static func extractAndDecodeJSON(from text: String,
-                                             startingAt startIndex: String.Index,
-                                             using decoder: JSONDecoder) -> ChatToolInvocation? {
+    private static func extractAndDecodeJSON(
+        from text: String,
+        startingAt startIndex: String.Index,
+        using decoder: JSONDecoder
+    ) -> ChatToolInvocation? {
         var depth = 0
         var endIndex: String.Index?
         var idx = startIndex
@@ -943,12 +1079,12 @@ struct ChatToolInvocation: Codable {
             text.formIndex(after: &idx)
         }
         guard let end = endIndex else { return nil }
-        let jsonSub = String(text[startIndex...end])
+        let jsonSub = String(text[startIndex ... end])
         if let data = jsonSub.data(using: .utf8),
            let call = try? decoder.decode(ChatToolInvocation.self, from: data) {
             return call
         }
-        
+
         // Best-effort fallback: some models may use single quotes instead of
         // double quotes. Replace them and retry, accepting that this is not
         // perfect but dramatically improves robustness.
@@ -959,6 +1095,99 @@ struct ChatToolInvocation: Codable {
         }
         return nil
     }
+
+    // MARK: - Hallucinated Tool Name Remapping
+
+    /// Common tool name hallucinations from local models mapped to actual tool names.
+    private static let toolNameRemapping: [String: String] = [
+        // Code execution → shell.execute
+        "python": "shell.execute",
+        "python3": "shell.execute",
+        "code": "shell.execute",
+        "run": "shell.execute",
+        "execute": "shell.execute",
+        "exec": "shell.execute",
+        "bash": "shell.execute",
+        "terminal": "shell.execute",
+        "cmd": "shell.execute",
+        "run_code": "shell.execute",
+        "code_runner": "shell.execute",
+        // Search → web_search
+        "search": "web_search",
+        "google": "web_search",
+        "google_search": "web_search",
+        "internet_search": "web_search",
+        // File operations → file.*
+        "read": "file.read",
+        "read_file": "file.read",
+        "readFile": "file.read",
+        "cat": "file.read",
+        "open": "file.read",
+        "open_file": "file.read",
+        "write": "file.write",
+        "write_file": "file.write",
+        "writeFile": "file.write",
+        "save": "file.write",
+        "save_file": "file.write",
+        "list": "file.list",
+        "list_files": "file.list",
+        "listFiles": "file.list",
+        "ls": "file.list",
+        "dir": "file.list",
+        // Time
+        "time": "current_time",
+        "get_time": "current_time",
+        "datetime": "current_time",
+    ]
+
+    /// Returns a new invocation with corrected tool name and remapped input keys
+    /// if the model hallucinated a tool name.
+    func remapped() -> ChatToolInvocation {
+        guard let actualTool = Self.toolNameRemapping[tool] else { return self }
+
+        #if DEBUG
+        AppErrorReporter.log(
+            message: "Remapped hallucinated tool '\(tool)' → '\(actualTool)'",
+            context: "ChatToolInvocation.remapped"
+        )
+        #endif
+
+        // Remap input keys based on the target tool
+        var remappedInput = input
+        if actualTool == "shell.execute", let inputVal = input {
+            // Model may send "code" key instead of "command"
+            if case var .dictionary(dict) = inputVal {
+                if let code = dict["code"], dict["command"] == nil {
+                    // Wrap code in python3 -c if it came from a "python" tool call
+                    if tool == "python" || tool == "python3" {
+                        if case let .string(codeStr) = code {
+                            dict["command"] = .string("python3 -c '\(codeStr.replacingOccurrences(of: "'", with: "'\\''"))'")
+                        } else {
+                            dict["command"] = code
+                        }
+                    } else {
+                        dict["command"] = code
+                    }
+                    dict.removeValue(forKey: "code")
+                    remappedInput = .dictionary(dict)
+                }
+            }
+        } else if actualTool == "file.read", let inputVal = input {
+            // Model may send "file" or "filename" instead of "path"
+            if case var .dictionary(dict) = inputVal {
+                let fileKey = dict["file"] ?? dict["filename"] ?? dict["file_path"]
+                if let fk = fileKey, dict["path"] == nil {
+                    dict["path"] = fk
+                    dict.removeValue(forKey: "file")
+                    dict.removeValue(forKey: "filename")
+                    dict.removeValue(forKey: "file_path")
+                    remappedInput = .dictionary(dict)
+                }
+            }
+        }
+
+        return ChatToolInvocation(tool: actualTool, input: remappedInput, reason: reason)
+    }
 }
 
 extension ChatService {
@@ -966,7 +1195,7 @@ extension ChatService {
     /// This replaces the hardcoded chatToolInstruction with dynamic tool documentation.
     static func generateChatToolInstruction(enabledTools: Set<String>) -> String {
         // Generate a concise version for chat (full docs are in system prompt)
-        return """
+        """
         You are the user's personal assistant. You can optionally call tools to
         help answer their question when your built-in knowledge or the local
         context sandwich is not enough.
@@ -978,10 +1207,10 @@ extension ChatService {
         \(PromptTemplates.toolProtocolInstructions)
         """
     }
-    
+
     /// Legacy static instruction for backward compatibility.
     static let chatToolInstruction: String = generateChatToolInstruction(enabledTools: PromptTemplates.allTools)
-    
+
     /// Resolve the maximum number of tool steps to allow in a single chat
     /// turn. This is configurable via UserDefaults under the key
     /// "chat_max_tool_steps"; values <= 0 fall back to a sane default.
@@ -992,7 +1221,7 @@ extension ChatService {
         if stored <= 0 { return 5 }
         return min(stored, 15)
     }
-    
+
     /// Execute a chat tool call using ToolExecutionService and return a short summary
     /// plus an optional context block that can be fed back into the context sandwich.
     /// This enhanced version routes through the central ToolExecutionService for all tools.
@@ -1013,20 +1242,20 @@ extension ChatService {
                 args["input"] = AnyJSONValue(str)
             }
         }
-        
+
         let parsedCall = ParsedToolCall(
             name: call.tool,
             args: args,
             reason: call.reason
         )
-        
+
         // Execute via ToolExecutionService
         let result = await ToolExecutionService.shared.execute(
             toolCall: parsedCall,
-            agentType: "chat",  // Chat context uses "chat" agent type
+            agentType: "chat", // Chat context uses "chat" agent type
             threadID: nil
         )
-        
+
         // Convert ToolExecutionResult to summary/contextBlock format.
         // Summaries are user-facing so use friendly descriptions.
         if result.status == "ok" {
@@ -1043,11 +1272,11 @@ extension ChatService {
             return (summary, "[Tool Error: \(result.tool)]\n\(message)")
         }
     }
-    
+
     /// Execute a parsed tool call directly (used by enhanced streamMessage).
     /// Returns a ToolExecutionResult for more detailed handling.
     nonisolated func executeParsedToolCall(_ call: ParsedToolCall, threadID: String?) async -> ToolExecutionResult {
-        return await ToolExecutionService.shared.execute(
+        await ToolExecutionService.shared.execute(
             toolCall: call,
             agentType: "chat",
             threadID: threadID
@@ -1120,34 +1349,34 @@ extension ChatService {
     /// Human-readable name for a tool identifier, used in user-facing summaries.
     nonisolated static func friendlyToolName(_ tool: String) -> String {
         switch tool.lowercased() {
-        case "web_search":                          return "Web Search"
-        case "web_browse":                          return "Web Browse"
-        case "current_time":                        return "Current Time"
-        case "file.read":                           return "File Read"
-        case "file.write":                          return "File Write"
-        case "file.list":                           return "File List"
-        case "shell.execute":                       return "Shell Command"
-        case _ where tool.hasPrefix("github."):     return "GitHub"
-        case _ where tool.hasPrefix("google_drive"): return "Google Drive"
-        case _ where tool.hasPrefix("google_sheets"): return "Google Sheets"
-        default:                                    return tool
+        case "web_search": "Web Search"
+        case "web_browse": "Web Browse"
+        case "current_time": "Current Time"
+        case "file.read": "File Read"
+        case "file.write": "File Write"
+        case "file.list": "File List"
+        case "shell.execute": "Shell Command"
+        case _ where tool.hasPrefix("github."): "GitHub"
+        case _ where tool.hasPrefix("google_drive"): "Google Drive"
+        case _ where tool.hasPrefix("google_sheets"): "Google Sheets"
+        default: tool
         }
     }
 
     /// User-facing activity string emitted via `onToolEvent` while a tool runs.
     nonisolated static func friendlyToolSummary(for tool: String) -> String {
         switch tool.lowercased() {
-        case "web_search":          return "🔍 Searching the web…"
-        case "web_browse":          return "🌐 Reading webpage…"
-        case "current_time":        return "🕐 Checking current time…"
-        case "file.read":           return "📄 Reading file…"
-        case "file.write":          return "✍️ Writing file…"
-        case "file.list":           return "📂 Listing files…"
-        case "shell.execute":       return "💻 Running command…"
-        case _ where tool.hasPrefix("github."):      return "🐙 Working with GitHub…"
-        case _ where tool.hasPrefix("google_drive"): return "📁 Accessing Google Drive…"
-        case _ where tool.hasPrefix("google_sheets"): return "📊 Working with Sheets…"
-        default:                    return "⚙️ Using \(tool)…"
+        case "web_search": "🔍 Searching the web…"
+        case "web_browse": "🌐 Reading webpage…"
+        case "current_time": "🕐 Checking current time…"
+        case "file.read": "📄 Reading file…"
+        case "file.write": "✍️ Writing file…"
+        case "file.list": "📂 Listing files…"
+        case "shell.execute": "💻 Running command…"
+        case _ where tool.hasPrefix("github."): "🐙 Working with GitHub…"
+        case _ where tool.hasPrefix("google_drive"): "📁 Accessing Google Drive…"
+        case _ where tool.hasPrefix("google_sheets"): "📊 Working with Sheets…"
+        default: "⚙️ Using \(tool)…"
         }
     }
 
@@ -1258,19 +1487,19 @@ extension ChatService {
             + lower.components(separatedBy: "functions.").count - 1
 
         // Many markers but nothing parsed → malformed.
-        if toolMarkerCount >= 2 && !responseText.contains("{") {
+        if toolMarkerCount >= 2, !responseText.contains("{") {
             return true
         }
 
         // Unclosed TOOL_CALL tags.
         let openCount = lower.components(separatedBy: "<tool_call>").count - 1
         let closeCount = lower.components(separatedBy: "</tool_call>").count - 1
-        if openCount > 0 && closeCount == 0 {
+        if openCount > 0, closeCount == 0 {
             return true
         }
 
         // Multiple markers with no JSON objects at all.
-        if lower.contains("<tool_call>") && toolMarkerCount >= 3 && !responseText.contains("{") {
+        if lower.contains("<tool_call>"), toolMarkerCount >= 3, !responseText.contains("{") {
             return true
         }
 
@@ -1284,7 +1513,7 @@ extension ChatService {
         while let openRange = result.range(of: "<tool_call>", options: .caseInsensitive),
               let closeRange = result.range(of: "</tool_call>", options: .caseInsensitive),
               openRange.lowerBound < closeRange.upperBound {
-            result.removeSubrange(openRange.lowerBound..<closeRange.upperBound)
+            result.removeSubrange(openRange.lowerBound ..< closeRange.upperBound)
         }
         // Remove any remaining unclosed <TOOL_CALL> tags.
         result = result.replacingOccurrences(of: "<tool_call>", with: "", options: .caseInsensitive)
@@ -1305,7 +1534,7 @@ struct ChatResponse: Codable {
     let thoughts: [String]?
     let toolCalls: [ChatToolCall]?
     let metadata: [String: AnyJSONValue]
-    
+
     enum CodingKeys: String, CodingKey {
         case messageId = "message_id"
         case content, role, provider, model
@@ -1328,7 +1557,7 @@ struct ChatMemoryProposal: Codable {
 struct ChatToolCall: Codable {
     let name: String
     let args: [String: AnyJSONValue]
-    let result: AnyJSONValue?  // Changed from String? to handle dict/any type
+    let result: AnyJSONValue? // Changed from String? to handle dict/any type
     let error: String?
     let status: String?
 }

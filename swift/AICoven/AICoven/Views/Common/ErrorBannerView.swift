@@ -7,7 +7,7 @@ import SwiftUI
 /// conversation-scoped issues, prefer inline assistant messages.
 struct ErrorBannerView: View {
     let message: String
-    var onClose: (() -> Void)? = nil
+    var onClose: (() -> Void)?
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {

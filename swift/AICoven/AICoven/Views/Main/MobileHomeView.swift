@@ -30,14 +30,14 @@ struct MobileMemoryRootView: View {
     @State private var showProposals = false
     @State private var openTabs: [WorkspaceTab] = []
     @State private var activeTabId: String?
-    
+
     var body: some View {
         NavigationStack {
             ZStack {
                 NebulaBackground()
-                
+
                 MobileMemoryListView(covenId: nil)
-                    #if os(iOS)
+                #if os(iOS)
                     .toolbar {
                         ToolbarItem(placement: .navigationBarTrailing) {
                             Button {
@@ -47,7 +47,7 @@ struct MobileMemoryRootView: View {
                             }
                         }
                     }
-                    #endif
+                #endif
                     .navigationTitle("Memory")
             }
         }
@@ -55,7 +55,7 @@ struct MobileMemoryRootView: View {
             NavigationStack {
                 ZStack {
                     NebulaBackground()
-                    
+
                     // Reuse the desktop proposals view on iOS inside a sheet.
                     MemoryProposalsView(
                         covenId: nil,
@@ -69,9 +69,10 @@ struct MobileMemoryRootView: View {
     }
 }
 
-/// Mobile-optimized home view for iPhone (portrait)
-/// Uses navigation-based layout focused on personal (non-coven) chat
+// Mobile-optimized home view for iPhone (portrait)
+// Uses navigation-based layout focused on personal (non-coven) chat
 // MARK: - Navigation Destination
+
 enum MobilePersonalDestination: Hashable {
     case threadsList
     case chat(Thread)
@@ -86,7 +87,7 @@ struct MobileHomeView: View {
     /// the welcome screen, otherwise we show either the threads list or a
     /// specific chat.
     @State private var currentDestination: MobilePersonalDestination? = nil
-    
+
     var body: some View {
         Group {
             if isLoadingThreads {
@@ -105,12 +106,12 @@ struct MobileHomeView: View {
             await loadPersonalThreads()
         }
     }
-    
+
     @MainActor
     private func loadPersonalThreads() async {
         isLoadingThreads = true
         defer { isLoadingThreads = false }
-        
+
         do {
             personalThreads = try await ThreadService.shared.loadThreads(covenId: nil)
         } catch {
@@ -128,16 +129,16 @@ struct MobilePersonalWorkspace: View {
     /// Simple destination state instead of using `NavigationStack` to avoid
     /// nested UINavigationController issues on iOS.
     @Binding var currentDestination: MobilePersonalDestination?
-    
+
     let onRefreshThreads: () async -> Void
-    
+
     @State private var showProviderKeys = false
     @State private var showStrixSettings = false
-    
+
     var body: some View {
         ZStack {
             NebulaBackground()
-            
+
             switch currentDestination {
             case .threadsList:
                 MobileThreadsList(
@@ -148,12 +149,14 @@ struct MobilePersonalWorkspace: View {
                     onRefresh: onRefreshThreads,
                     onBack: { currentDestination = nil }
                 )
-            case .chat(let thread):
+            case let .chat(thread):
+                // Use .id(thread.id) to ensure view refreshes when switching threads
                 PersonalChatView(
                     thread: thread,
                     onEditAgent: { showStrixSettings = true },
                     onBack: { currentDestination = .threadsList }
                 )
+                .id(thread.id)
             case nil:
                 // Root is the welcome screen
                 MobileWelcomeScreen(
@@ -178,7 +181,7 @@ struct MobilePersonalWorkspace: View {
             }
         }
     }
-    
+
     private func handleNewThread() {
         Task {
             do {
@@ -206,34 +209,34 @@ struct MobileWelcomeScreen: View {
     let onNewChat: () -> Void
     let onShowThreads: () -> Void
     let onOpenProviderKeys: () -> Void
-    
+
     var body: some View {
         VStack(spacing: Spacing.xl) {
             Spacer()
-            
+
             // Icon
             IconBadge(icon: "sparkles", size: 100, color: .aicovenTeal)
-            
+
             // Title & subtitle
             VStack(spacing: Spacing.md) {
                 Text("Welcome to AICoven")
                     .font(.aicovenDisplayMedium)
                     .foregroundColor(.aicovenTextPrimary)
-                
+
                 Text("Start a new conversation with Strix, your personal assistant.")
                     .font(.aicovenBody)
                     .foregroundColor(.aicovenTextSecondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, Spacing.xl)
             }
-            
+
             // Action cards
             VStack(spacing: Spacing.md) {
                 // Start a brand new chat
                 Button(action: onNewChat) {
                     HStack(spacing: Spacing.md) {
                         IconBadge(icon: "message", size: 48, color: .aicovenTeal)
-                        
+
                         VStack(alignment: .leading, spacing: Spacing.xxs) {
                             Text("Personal Chat")
                                 .font(.aicovenH2)
@@ -242,9 +245,9 @@ struct MobileWelcomeScreen: View {
                                 .font(.aicovenBodySmall)
                                 .foregroundColor(.aicovenTextTertiary)
                         }
-                        
+
                         Spacer()
-                        
+
                         Image(systemName: "chevron.right")
                             .foregroundColor(.aicovenTextSecondary)
                     }
@@ -253,12 +256,12 @@ struct MobileWelcomeScreen: View {
                     .glassMorphism(cornerRadius: BorderRadius.lg, padding: 0)
                 }
                 .buttonStyle(.plain)
-                
+
                 // Open existing conversations (replaces the old toolbar hamburger)
                 Button(action: onShowThreads) {
                     HStack(spacing: Spacing.md) {
                         IconBadge(icon: "line.3.horizontal", size: 40, color: .aicovenTeal)
-                        
+
                         VStack(alignment: .leading, spacing: Spacing.xxs) {
                             Text("Your Chats")
                                 .font(.aicovenH3)
@@ -267,9 +270,9 @@ struct MobileWelcomeScreen: View {
                                 .font(.aicovenBodySmall)
                                 .foregroundColor(.aicovenTextTertiary)
                         }
-                        
+
                         Spacer()
-                        
+
                         Image(systemName: "chevron.right")
                             .foregroundColor(.aicovenTextSecondary)
                     }
@@ -278,12 +281,12 @@ struct MobileWelcomeScreen: View {
                     .glassMorphism(cornerRadius: BorderRadius.lg, padding: 0)
                 }
                 .buttonStyle(.plain)
-                
+
                 // Provider keys call-to-action when no keys are configured
                 AddProviderKeysCard(onOpenProviderKeys: onOpenProviderKeys)
             }
             .padding(.horizontal, Spacing.xl)
-            
+
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -299,11 +302,11 @@ struct MobileThreadsList: View {
     /// Optional back handler used on iOS mobile to return to the welcome
     /// screen without relying on a NavigationStack.
     let onBack: (() -> Void)?
-    
+
     var body: some View {
         ZStack {
             NebulaBackground()
-            
+
             VStack(spacing: Spacing.md) {
                 // Lightweight header with an optional back button so users can
                 // return to the welcome screen.
@@ -316,24 +319,24 @@ struct MobileThreadsList: View {
                         }
                         .buttonStyle(.plain)
                     }
-                    
+
                     Text("Your Chats")
                         .font(.aicovenH2)
                         .foregroundColor(.aicovenTextPrimary)
-                    
+
                     Spacer()
                 }
                 .padding(.horizontal, Spacing.lg)
                 .padding(.top, Spacing.lg)
-                
+
                 if threads.isEmpty {
                     VStack(spacing: Spacing.lg) {
                         IconBadge(icon: "message", size: 60, color: .aicovenTeal)
-                        
+
                         Text("No conversations yet")
                             .font(.aicovenH2)
                             .foregroundColor(.aicovenTextPrimary)
-                        
+
                         Text("Start a new chat to begin")
                             .font(.aicovenBody)
                             .foregroundColor(.aicovenTextSecondary)
@@ -350,13 +353,13 @@ struct MobileThreadsList: View {
                                         size: 32,
                                         color: .aicovenTeal
                                     )
-                                    
+
                                     VStack(alignment: .leading, spacing: Spacing.xxs) {
                                         HStack(spacing: 4) {
                                             Text(thread.title ?? "Untitled Chat")
                                                 .font(.aicovenBody)
                                                 .foregroundColor(.aicovenTextPrimary)
-                                            
+
                                             // Concisely show Agent Name if available or fallback
                                             if let agentName = thread.agentName {
                                                 Text("• \(agentName)")
@@ -368,21 +371,21 @@ struct MobileThreadsList: View {
                                                     .foregroundColor(.aicovenTextSecondary)
                                             }
                                         }
-                                        
+
                                         HStack(spacing: 4) {
                                             // Only show model if thread has one stored
                                             if let model = thread.agentModel {
                                                 Text(model)
                                                     .font(.aicovenCaption)
                                                     .foregroundColor(.aicovenTeal)
-                                                
+
                                                 if thread.updatedAt != nil {
                                                     Text("•")
                                                         .font(.aicovenCaption)
                                                         .foregroundColor(.aicovenTextTertiary)
                                                 }
                                             }
-                                            
+
                                             if let updatedAt = thread.updatedAt {
                                                 Text(relativeTime(from: updatedAt))
                                                     .font(.aicovenCaption)
@@ -390,7 +393,7 @@ struct MobileThreadsList: View {
                                             }
                                         }
                                     }
-                                    
+
                                     Spacer()
                                     #if os(iOS)
                                     Image(systemName: "chevron.right")
@@ -409,10 +412,10 @@ struct MobileThreadsList: View {
             }
         }
     }
-    
+
     private func deleteThreads(at offsets: IndexSet) {
         let idsToDelete = offsets.map { threads[$0].id }
-        
+
         Task {
             for id in idsToDelete {
                 do {
@@ -426,12 +429,12 @@ struct MobileThreadsList: View {
             }
         }
     }
-    
+
     private func relativeTime(from date: Date) -> String {
         let calendar = Calendar.current
         let now = Date()
         let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date, to: now)
-        
+
         if let years = components.year, years > 0 {
             return "\(years)y ago"
         } else if let months = components.month, months > 0 {
@@ -619,7 +622,7 @@ struct MobileCovenThreadsView: View {
                                             .foregroundColor(.aicovenTeal)
                                     }
 
-                                    if thread.agentModel != nil && thread.updatedAt != nil {
+                                    if thread.agentModel != nil, thread.updatedAt != nil {
                                         Text("•")
                                             .font(.aicovenCaption)
                                             .foregroundColor(.aicovenTextTertiary)
@@ -647,7 +650,7 @@ struct MobileCovenThreadsView: View {
             }
             .scrollContentBackground(.hidden)
 
-            if !isLoading && threads.isEmpty {
+            if !isLoading, threads.isEmpty {
                 VStack(spacing: Spacing.lg) {
                     IconBadge(icon: "sparkles", size: 60, color: .aicovenTeal)
                     Text("This coven is ready")
@@ -789,9 +792,9 @@ struct MobileCovenMemoryView: View {
         }
         .navigationTitle("Memory")
         #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(.inline)
         #endif
-        .background(NebulaBackground())
+            .background(NebulaBackground())
     }
 }
 
@@ -899,7 +902,6 @@ struct MobileCovenChatView: View {
     }
 }
 
-
 // MARK: - Mobile Profile Root
 
 struct MobileProfileRootView: View {
@@ -907,7 +909,7 @@ struct MobileProfileRootView: View {
         NavigationStack {
             ZStack {
                 NebulaBackground()
-                
+
                 List {
                     Section("Account") {
                         NavigationLink(destination: EnhancedProfileView()) {

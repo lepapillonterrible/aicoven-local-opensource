@@ -15,19 +15,19 @@ struct RoleTemplateDetails: Codable {
     let purpose: [String]
     let systemPrompt: String?
     let toolPolicy: ToolPolicy?
-    
+
     struct RoleInfo: Codable {
         let name: String
         let emoji: String?
         let domain: String?
     }
-    
+
     struct ToolPolicy: Codable {
         let read: [String]?
         let generate: [String]?
         let critique: [String]?
         let proposeOnly: [String]?
-        
+
         enum CodingKeys: String, CodingKey {
             case read
             case generate
@@ -35,7 +35,7 @@ struct RoleTemplateDetails: Codable {
             case proposeOnly = "propose_only"
         }
     }
-    
+
     enum CodingKeys: String, CodingKey {
         case role
         case purpose
@@ -50,9 +50,9 @@ struct RoleTemplateDetails: Codable {
 /// API calls replaced with hardcoded starter templates.
 actor RoleTemplateService {
     static let shared = RoleTemplateService()
-    
+
     private init() {}
-    
+
     /// Hardcoded starter templates for local use
     private static let builtInTemplates: [RoleTemplate] = [
         RoleTemplate(
@@ -98,7 +98,7 @@ actor RoleTemplateService {
             description: "A creative thinking partner that helps generate ideas, explore possibilities, and refine concepts."
         )
     ]
-    
+
     /// Hardcoded template details
     private static let templateDetails: [String: RoleTemplateDetails] = [
         "code-assistant": RoleTemplateDetails(
@@ -138,13 +138,13 @@ actor RoleTemplateService {
             toolPolicy: nil
         )
     ]
-    
+
     /// Load list of available role templates
     /// - Returns: Array of role template summaries
     func loadTemplates() async throws -> [RoleTemplate] {
-        return RoleTemplateService.builtInTemplates
+        RoleTemplateService.builtInTemplates
     }
-    
+
     /// Get full details for a specific template
     /// - Parameter templateId: The template ID
     /// - Returns: Full template details
@@ -158,10 +158,10 @@ actor RoleTemplateService {
 
 enum RoleTemplateError: Error, LocalizedError {
     case templateNotFound
-    
+
     var errorDescription: String? {
         switch self {
-        case .templateNotFound: return "Role template not found"
+        case .templateNotFound: "Role template not found"
         }
     }
 }

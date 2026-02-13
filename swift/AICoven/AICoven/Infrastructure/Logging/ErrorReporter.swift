@@ -15,7 +15,7 @@ protocol ErrorReporter: Sendable {
 /// swap in a different reporter (e.g. tests, analytics) later.
 struct ConsoleErrorReporter: ErrorReporter {
     private let logger = Logger(subsystem: "dev.aicoven.app", category: "errors")
-    
+
     nonisolated func log(error: Error, context: String) {
         logger.error("⚠️ [\(context, privacy: .public)] \(error.localizedDescription, privacy: .public)")
     }
@@ -35,7 +35,7 @@ enum AppErrorReporter {
     /// The active reporter. Uses `nonisolated(unsafe)` because swapping only
     /// happens during test setUp/tearDown on the MainActor, before any
     /// concurrent access begins.
-    nonisolated(unsafe) private static var reporter: ErrorReporter = ConsoleErrorReporter()
+    private nonisolated(unsafe) static var reporter: ErrorReporter = ConsoleErrorReporter()
 
     /// Replace the active reporter. Only call during app setup or test
     /// setUp/tearDown before any concurrent access.

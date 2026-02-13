@@ -27,6 +27,7 @@ actor DataEncryptionService {
     private var metadataKey: String {
         UserScope.scopedKey("com.aicoven.local.encryption.metadata")
     }
+
     private let keychainService = "com.aicoven.local.encryption"
     /// User-scoped Keychain account for device passphrase isolation.
     private var keychainAccount: String {
@@ -52,7 +53,7 @@ actor DataEncryptionService {
         } else {
             // First-time setup: generate K_data and metadata.
             let kData = SymmetricKey(size: .bits256)
-            let salt = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
+            let salt = Data((0 ..< 32).map { _ in UInt8.random(in: 0 ... 255) })
             let kWrap = try deriveWrappingKey(from: passphrase, salt: salt)
 
             let kDataBytes = kData.withUnsafeBytes { Data($0) }
@@ -107,7 +108,7 @@ actor DataEncryptionService {
         } else {
             // First-time setup: generate a random passphrase that never leaves
             // the device and is stored only in the Keychain.
-            let randomBytes = (0..<32).map { _ in UInt8.random(in: 0...255) }
+            let randomBytes = (0 ..< 32).map { _ in UInt8.random(in: 0 ... 255) }
             let passphrase = Data(randomBytes).base64EncodedString()
             try storeDevicePassphraseInKeychain(passphrase)
             try unlock(withPassphrase: passphrase)
@@ -150,11 +151,12 @@ actor DataEncryptionService {
     /// production, consider a PBKDF2/Argon2-based KDF tuned per device.
     private func deriveWrappingKey(from passphrase: String, salt: Data) throws -> SymmetricKey {
         let inputKey = SymmetricKey(data: Data(passphrase.utf8))
-        let derived = HKDF<SHA256>.deriveKey(inputKeyMaterial: inputKey,
-                                             salt: salt,
-                                             info: Data("aicoven-local-wrap".utf8),
-                                             outputByteCount: 32)
-        return derived
+        return HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: inputKey,
+            salt: salt,
+            info: Data("aicoven-local-wrap".utf8),
+            outputByteCount: 32
+        )
     }
 
     private func loadMetadata() throws -> Metadata? {

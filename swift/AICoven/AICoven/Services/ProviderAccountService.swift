@@ -11,6 +11,7 @@ struct LocalProviderAccount: Codable {
     let displayName: String
     let scopes: [String]
     let defaultModel: String?
+    let baseURL: String?
     let status: String
     let createdAt: Date
 }
@@ -27,6 +28,7 @@ extension ProviderAccount {
             status: local.status,
             scopes: local.scopes,
             defaultModel: local.defaultModel,
+            baseURL: local.baseURL,
             isHealthy: local.status == "healthy",
             lastHealthCheck: nil,
             lastHealthCheckAt: nil,
@@ -133,6 +135,7 @@ actor ProviderAccountService {
             displayName: displayName,
             scopes: scopes,
             defaultModel: defaultModel,
+            baseURL: nil,
             status: "healthy",
             createdAt: now
         )
@@ -143,6 +146,67 @@ actor ProviderAccountService {
         // existing ChatService clients (OpenAI/Anthropic/Gemini) can read it.
         try KeychainHelper.save(key: keychainKey(for: id), value: apiKey)
         updateGlobalAPIKeyCache(provider: provider, apiKey: apiKey)
+
+        return ProviderAccount(from: local)
+    }
+
+    /// Create a local Ollama provider account. No API key is needed;
+    /// we store the base URL and default model instead.
+    @discardableResult
+    func createOllamaAccount(
+        displayName: String,
+        baseURL: String,
+        defaultModel: String?
+    ) async throws -> ProviderAccount {
+        var locals = try loadLocalAccounts()
+        let now = Date()
+        let id = UUID().uuidString
+        let local = LocalProviderAccount(
+            id: id,
+            provider: "ollama",
+            displayName: displayName,
+            scopes: ["chat"],
+            defaultModel: defaultModel,
+            baseURL: baseURL,
+            status: "healthy",
+            createdAt: now
+        )
+        locals.append(local)
+        try saveLocalAccounts(locals)
+
+        // Cache base URL so LLMConfiguration can build the OllamaLLMClient.
+        updateGlobalAPIKeyCache(provider: "ollama", apiKey: baseURL)
+
+        return ProviderAccount(from: local)
+    }
+
+    /// Create a local MLX provider account. No API key or server needed;
+    /// we store the Hugging Face model ID.
+    @discardableResult
+    func createMLXAccount(
+        displayName: String,
+        modelID: String
+    ) async throws -> ProviderAccount {
+        var locals = try loadLocalAccounts()
+        let now = Date()
+        let id = UUID().uuidString
+        let local = LocalProviderAccount(
+            id: id,
+            provider: "mlx",
+            displayName: displayName,
+            scopes: ["chat"],
+            defaultModel: modelID,
+            baseURL: nil,
+            status: "healthy",
+            createdAt: now
+        )
+        locals.append(local)
+        try saveLocalAccounts(locals)
+
+        // Set the active MLX model so LLMConfiguration picks it up.
+        // This is just a preference — the actual model download happens lazily
+        // on first chat via MLXLLMClient.ensureModelLoaded().
+        await MLXModelManager.shared.setActiveModel(modelID)
 
         return ProviderAccount(from: local)
     }
@@ -267,6 +331,22 @@ actor ProviderAccountService {
             }
         }
 
+        // ── MLX local models ─────────────────────────────────────────────
+        // MLX models don't come from a remote API, so inject descriptors
+        // for any active/downloaded model directly.
+        if let activeMLX = UserDefaults.standard.string(forKey: "MLXModelManager.activeModelID"), !activeMLX.isEmpty {
+            descriptors.append(
+                ModelDescriptor(
+                    providerID: "mlx",
+                    modelID: activeMLX,
+                    maxContextTokens: 8_192,
+                    supportsTools: true,
+                    supportsEmbeddings: false,
+                    costClass: .free
+                )
+            )
+        }
+
         return descriptors
     }
 
@@ -298,6 +378,7 @@ actor ProviderAccountService {
 }
 
 // MARK: - ProviderAccountService Private Helpers
+
 extension ProviderAccountService {
     private func loadLocalAccounts() throws -> [LocalProviderAccount] {
         let defaults = UserDefaults.standard
@@ -331,6 +412,9 @@ extension ProviderAccountService {
             defaults.set(apiKey, forKey: UserScope.scopedKey("anthropic_api_key"))
         case "google", "gemini":
             defaults.set(apiKey, forKey: UserScope.scopedKey("gemini_api_key"))
+        case "ollama":
+            // For Ollama we cache the base URL rather than an API key.
+            defaults.set(apiKey, forKey: UserScope.scopedKey("ollama_base_url"))
         default:
             break
         }
@@ -345,6 +429,11 @@ extension ProviderAccountService {
             defaults.removeObject(forKey: UserScope.scopedKey("anthropic_api_key"))
         case "google", "gemini":
             defaults.removeObject(forKey: UserScope.scopedKey("gemini_api_key"))
+        case "ollama":
+            defaults.removeObject(forKey: UserScope.scopedKey("ollama_base_url"))
+        case "mlx":
+            defaults.removeObject(forKey: "MLXModelManager.activeModelID")
+            defaults.removeObject(forKey: "MLXModelManager.downloadedModelIDs")
         default:
             break
         }
@@ -363,22 +452,27 @@ extension ProviderAccountService {
             guard let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) else {
                 throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing OpenAI API key for account \(account.id)"])
             }
-            struct OpenAIListResponse: Decodable { struct Item: Decodable { let id: String } ; let data: [Item] }
+            struct OpenAIListResponse: Decodable { struct Item: Decodable { let id: String }
+                let data: [Item]
+            }
             var request = URLRequest(url: URL(string: "https://api.openai.com/v1/models")!)
             request.httpMethod = "GET"
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             request.setValue("application/json", forHTTPHeaderField: "Accept")
             let (data, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
                 let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-                throw NSError(domain: "ProviderAccountService", code: http.statusCode,
-                              userInfo: [NSLocalizedDescriptionKey: "OpenAI models HTTP \(http.statusCode): \(body)"])
+                throw NSError(
+                    domain: "ProviderAccountService",
+                    code: http.statusCode,
+                    userInfo: [NSLocalizedDescriptionKey: "OpenAI models HTTP \(http.statusCode): \(body)"]
+                )
             }
             let decoded = try JSONDecoder().decode(OpenAIListResponse.self, from: data)
             let chatOnly = decoded.data
-                .map { $0.id }
+                .map(\.id)
                 .filter { isChatModel(provider: "openai", id: $0) }
-            let models = chatOnly.isEmpty ? decoded.data.map { $0.id } : chatOnly
+            let models = chatOnly.isEmpty ? decoded.data.map(\.id) : chatOnly
             return models.map { id in
                 ProviderInitializationStatus.ModelMetadata(
                     id: id,
@@ -413,13 +507,16 @@ extension ProviderAccountService {
                 request.httpMethod = "GET"
                 request.setValue("application/json", forHTTPHeaderField: "Accept")
                 let (data, response) = try await URLSession.shared.data(for: request)
-                if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
                     let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-                    throw NSError(domain: "ProviderAccountService", code: http.statusCode,
-                                  userInfo: [NSLocalizedDescriptionKey: "Gemini models HTTP \(http.statusCode): \(body)"])
+                    throw NSError(
+                        domain: "ProviderAccountService",
+                        code: http.statusCode,
+                        userInfo: [NSLocalizedDescriptionKey: "Gemini models HTTP \(http.statusCode): \(body)"]
+                    )
                 }
                 let decoded = try JSONDecoder().decode(GeminiListResponse.self, from: data)
-                allModelNames.append(contentsOf: (decoded.models ?? []).map { $0.name })
+                allModelNames.append(contentsOf: (decoded.models ?? []).map(\.name))
                 pageToken = decoded.nextPageToken
             } while pageToken != nil
 
@@ -442,6 +539,29 @@ extension ProviderAccountService {
                     name: name,
                     provider: "google",
                     contextLength: nil
+                )
+            }
+        case "ollama":
+            // Ollama model discovery via /api/tags
+            let urlStr = account.baseURL ?? "http://localhost:11434"
+            let client = OllamaLLMClient(baseURL: URL(string: urlStr) ?? OllamaLLMClient.defaultBaseURL)
+            let models = try await client.discoverModels()
+            return models.map { model in
+                ProviderInitializationStatus.ModelMetadata(
+                    id: model.name,
+                    name: model.name,
+                    provider: "ollama",
+                    contextLength: 128_000 // Ollama doesn't report context length via tags
+                )
+            }
+        case "mlx":
+            // MLX: return curated catalog models as static metadata.
+            return MLXModelManager.defaultCatalog.map { info in
+                ProviderInitializationStatus.ModelMetadata(
+                    id: info.id,
+                    name: info.displayName,
+                    provider: "mlx",
+                    contextLength: 128_000
                 )
             }
         default:

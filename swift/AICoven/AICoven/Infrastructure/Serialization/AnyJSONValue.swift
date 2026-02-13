@@ -5,7 +5,7 @@ import Foundation
 /// Uses an enum for type-safe storage, making it fully `Sendable` without
 /// `@unchecked`. A computed `value: Any` property is provided for backward
 /// compatibility with existing call sites that use `value as? Type` patterns.
-enum AnyJSONValue: Codable, Hashable, Sendable {
+public enum AnyJSONValue: Codable, Hashable, Sendable {
     case string(String)
     case int(Int)
     case double(Double)
@@ -20,13 +20,13 @@ enum AnyJSONValue: Codable, Hashable, Sendable {
     /// `.value as? String`, `.value as? Int`, etc.
     var value: Any {
         switch self {
-        case .string(let v): return v
-        case .int(let v): return v
-        case .double(let v): return v
-        case .bool(let v): return v
-        case .dictionary(let v): return v
-        case .array(let v): return v
-        case .null: return NSNull()
+        case let .string(v): v
+        case let .int(v): v
+        case let .double(v): v
+        case let .bool(v): v
+        case let .dictionary(v): v
+        case let .array(v): v
+        case .null: NSNull()
         }
     }
 
@@ -62,27 +62,39 @@ enum AnyJSONValue: Codable, Hashable, Sendable {
 
     // MARK: - Codable
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         // Bool must be decoded before Int to avoid false positives.
-        if let v = try? c.decode(Bool.self) { self = .bool(v); return }
-        if let v = try? c.decode(Int.self) { self = .int(v); return }
-        if let v = try? c.decode(Double.self) { self = .double(v); return }
-        if let v = try? c.decode(String.self) { self = .string(v); return }
-        if let v = try? c.decode([String: AnyJSONValue].self) { self = .dictionary(v); return }
-        if let v = try? c.decode([AnyJSONValue].self) { self = .array(v); return }
+        if let v = try? c.decode(Bool.self) { self = .bool(v)
+            return
+        }
+        if let v = try? c.decode(Int.self) { self = .int(v)
+            return
+        }
+        if let v = try? c.decode(Double.self) { self = .double(v)
+            return
+        }
+        if let v = try? c.decode(String.self) { self = .string(v)
+            return
+        }
+        if let v = try? c.decode([String: AnyJSONValue].self) { self = .dictionary(v)
+            return
+        }
+        if let v = try? c.decode([AnyJSONValue].self) { self = .array(v)
+            return
+        }
         self = .null
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var c = encoder.singleValueContainer()
         switch self {
-        case .string(let v): try c.encode(v)
-        case .int(let v): try c.encode(v)
-        case .double(let v): try c.encode(v)
-        case .bool(let v): try c.encode(v)
-        case .dictionary(let v): try c.encode(v)
-        case .array(let v): try c.encode(v)
+        case let .string(v): try c.encode(v)
+        case let .int(v): try c.encode(v)
+        case let .double(v): try c.encode(v)
+        case let .bool(v): try c.encode(v)
+        case let .dictionary(v): try c.encode(v)
+        case let .array(v): try c.encode(v)
         case .null: try c.encodeNil()
         }
     }

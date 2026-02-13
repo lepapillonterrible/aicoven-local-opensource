@@ -16,13 +16,13 @@ struct MarkdownView: View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(parseBlocks(from: text).indices, id: \.self) { i in
                 switch parseBlocks(from: text)[i] {
-                case .paragraph(let md):
+                case let .paragraph(md):
                     VStack(alignment: .leading, spacing: 4) {
                         let lines = md.split(separator: "\n", omittingEmptySubsequences: false)
                         ForEach(Array(lines.enumerated()), id: \.offset) { _, rawLine in
                             let line = String(rawLine)
                             let trimmed = line.trimmingCharacters(in: .whitespaces)
-                            
+
                             if trimmed.isEmpty {
                                 // Preserve blank lines as vertical spacing
                                 Text(" ")
@@ -51,7 +51,7 @@ struct MarkdownView: View {
                     .contextMenu {
                         Button("Copy") { copyToClipboard(md) }
                     }
-                case .code(let code, _):
+                case let .code(code, _):
                     CodeBlockView(code: code)
                 }
             }
@@ -60,6 +60,7 @@ struct MarkdownView: View {
     }
 
     // MARK: - Parsing
+
     private enum Block { case paragraph(String), code(String, lang: String?) }
 
     private func parseBlocks(from md: String) -> [Block] {
@@ -73,7 +74,7 @@ struct MarkdownView: View {
                 let lang = String(line.drop(while: { $0 == "`" })).trimmingCharacters(in: .whitespaces)
                 var code: [String] = []
                 index += 1
-                while index < lines.count && !lines[index].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                while index < lines.count, !lines[index].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
                     code.append(lines[index])
                     index += 1
                 }
@@ -88,7 +89,7 @@ struct MarkdownView: View {
                     let link = lines[index]
                     if link.trimmingCharacters(in: .whitespaces).hasPrefix("```") { break }
                     // Break on empty line (paragraph separator)
-                    if link.trimmingCharacters(in: .whitespaces).isEmpty && !para.isEmpty {
+                    if link.trimmingCharacters(in: .whitespaces).isEmpty, !para.isEmpty {
                         index += 1
                         break
                     }
@@ -105,6 +106,7 @@ struct MarkdownView: View {
     }
 
     // MARK: - Helpers
+
     private func attributedMarkdown(_ md: String) -> AttributedString {
         (try? AttributedString(markdown: md)) ?? AttributedString(md)
     }
@@ -120,6 +122,7 @@ struct MarkdownView: View {
 }
 
 // MARK: - Code Block View
+
 private struct CodeBlockView: View {
     let code: String
 
@@ -169,4 +172,3 @@ struct MarkdownView_Previews: PreviewProvider {
     }
 }
 #endif
-

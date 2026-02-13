@@ -45,10 +45,10 @@ actor ToolService {
         let localISO8601: String
     }
 
-    /// Returns the current time in UTC and the user's local timezone.
-    ///
-    /// Marked `nonisolated` because it does not touch any actor state and can
-    /// be safely called without hopping onto the ToolService actor.
+    // Returns the current time in UTC and the user's local timezone.
+    //
+    // Marked `nonisolated` because it does not touch any actor state and can
+    // be safely called without hopping onto the ToolService actor.
     // Implementation moved up to satisfy ChatToolService; kept here for docs.
 
     // MARK: - Image generation
@@ -65,8 +65,11 @@ actor ToolService {
         guard let caps = environment.capabilities.first(where: { $0.providerID == "openai" }),
               let client = environment.clients["openai"]
         else {
-            throw NSError(domain: "ToolService", code: -1,
-                          userInfo: [NSLocalizedDescriptionKey: "Image generation is not available – no suitable provider configured."])
+            throw NSError(
+                domain: "ToolService",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Image generation is not available – no suitable provider configured."]
+            )
         }
 
         // We do not yet have a dedicated image endpoint on LLMClient, so for
@@ -79,22 +82,30 @@ actor ToolService {
             LLMMessage(role: .user, content: "Generate an image for: \(prompt)")
         ]
         let options = ChatOptions(temperature: 0.8, maxTokens: nil, stream: false)
-        let response = try await client.completeChat(messages: messages,
-                                                     model: caps.chatModel ?? "gpt-4o",
-                                                     options: options)
+        let response = try await client.completeChat(
+            messages: messages,
+            model: caps.chatModel ?? "gpt-4o",
+            options: options
+        )
         let html = response.message.content
 
         // Very small heuristic to pull out a data URL if present.
         guard let range = html.range(of: "data:image"),
               let endQuote = html[range.lowerBound...].firstIndex(of: "\"") ?? html[range.lowerBound...].firstIndex(of: "'")
         else {
-            throw NSError(domain: "ToolService", code: -2,
-                          userInfo: [NSLocalizedDescriptionKey: "Image generation did not return a data URL."])
+            throw NSError(
+                domain: "ToolService",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Image generation did not return a data URL."]
+            )
         }
-        let urlString = String(html[range.lowerBound..<endQuote])
+        let urlString = String(html[range.lowerBound ..< endQuote])
         guard let dataURL = URL(string: urlString) else {
-            throw NSError(domain: "ToolService", code: -3,
-                          userInfo: [NSLocalizedDescriptionKey: "Invalid image data URL returned by model."])
+            throw NSError(
+                domain: "ToolService",
+                code: -3,
+                userInfo: [NSLocalizedDescriptionKey: "Invalid image data URL returned by model."]
+            )
         }
 
         // Persist the image to disk so the UI can display/download it.
@@ -144,10 +155,10 @@ actor ToolService {
 
     // MARK: - Image / file analysis stubs
 
-    /// These analysis helpers are intentionally lightweight – they assume that
-    /// some other part of the app manages attachments and can provide raw
-    /// bytes for a given attachment identifier. Hooking them into the existing
-    /// UploadService/attachments pipeline will be done at a higher layer.
+    // These analysis helpers are intentionally lightweight – they assume that
+    // some other part of the app manages attachments and can provide raw
+    // bytes for a given attachment identifier. Hooking them into the existing
+    // UploadService/attachments pipeline will be done at a higher layer.
 
     struct AnalysisResult {
         let textSummary: String
@@ -158,8 +169,11 @@ actor ToolService {
               let client = environment.clients[caps.providerID],
               let model = caps.visionModel ?? caps.chatModel
         else {
-            throw NSError(domain: "ToolService", code: -10,
-                          userInfo: [NSLocalizedDescriptionKey: "No vision-capable model configured."])
+            throw NSError(
+                domain: "ToolService",
+                code: -10,
+                userInfo: [NSLocalizedDescriptionKey: "No vision-capable model configured."]
+            )
         }
 
         let base64 = data.base64EncodedString()
@@ -199,8 +213,11 @@ actor ToolService {
               let chatModel = caps.chatModel,
               let client = environment.clients[caps.providerID]
         else {
-            throw NSError(domain: "ToolService", code: -11,
-                          userInfo: [NSLocalizedDescriptionKey: "No chat-capable provider configured for file analysis."])
+            throw NSError(
+                domain: "ToolService",
+                code: -11,
+                userInfo: [NSLocalizedDescriptionKey: "No chat-capable provider configured for file analysis."]
+            )
         }
 
         let instruction = hints ?? "Summarize the attached file and highlight the most important details."
@@ -221,7 +238,7 @@ actor ToolService {
         let snippet: String
     }
 
-    // Allow ToolService to be used wherever ChatToolService is expected.
+    /// Allow ToolService to be used wherever ChatToolService is expected.
     nonisolated func currentTime(timezone: TimeZone = .current) -> TimeInfo {
         // implementation unchanged; moved below to satisfy protocol
         let now = Date()
@@ -258,15 +275,21 @@ actor ToolService {
         request.timeoutInterval = 15
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+        if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
             let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-            throw NSError(domain: "ToolService", code: http.statusCode,
-                          userInfo: [NSLocalizedDescriptionKey: "Web search HTTP \(http.statusCode): \(body)"])
+            throw NSError(
+                domain: "ToolService",
+                code: http.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "Web search HTTP \(http.statusCode): \(body)"]
+            )
         }
 
         guard let html = String(data: data, encoding: .utf8) else {
-            throw NSError(domain: "ToolService", code: -21,
-                          userInfo: [NSLocalizedDescriptionKey: "Could not decode search results as UTF-8"])
+            throw NSError(
+                domain: "ToolService",
+                code: -21,
+                userInfo: [NSLocalizedDescriptionKey: "Could not decode search results as UTF-8"]
+            )
         }
 
         let results = Self.parseDDGHTML(html, maxResults: maxResults)
@@ -393,9 +416,9 @@ actor ToolService {
         }
         return results
     }
-    
+
     // MARK: - Web Browse
-    
+
     struct WebBrowseResult {
         let url: URL
         let title: String?
@@ -403,7 +426,7 @@ actor ToolService {
         let contentLength: Int
         let truncated: Bool
     }
-    
+
     /// Fetch a URL and extract its text content.
     /// - Parameters:
     ///   - url: The URL to fetch.
@@ -412,57 +435,69 @@ actor ToolService {
     func webBrowse(url: URL, maxLength: Int = 5000) async throws -> WebBrowseResult {
         // Validate URL scheme
         guard let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme) else {
-            throw NSError(domain: "ToolService", code: -30,
-                          userInfo: [NSLocalizedDescriptionKey: "Only HTTP and HTTPS URLs are supported."])
+            throw NSError(
+                domain: "ToolService",
+                code: -30,
+                userInfo: [NSLocalizedDescriptionKey: "Only HTTP and HTTPS URLs are supported."]
+            )
         }
-        
+
         // Create request with a reasonable user agent
         var request = URLRequest(url: url)
         request.setValue("AICoven/1.0 (Local AI Assistant)", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 30
-        
+
         // Download the full body in one efficient call
         let maxDownloadSize = 10 * 1024 * 1024 // 10 MB
         let (data, response) = try await URLSession.shared.data(for: request)
-        
+
         guard let httpResponse = response as? HTTPURLResponse else {
-            throw NSError(domain: "ToolService", code: -31,
-                          userInfo: [NSLocalizedDescriptionKey: "Invalid response from server."])
+            throw NSError(
+                domain: "ToolService",
+                code: -31,
+                userInfo: [NSLocalizedDescriptionKey: "Invalid response from server."]
+            )
         }
-        
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            throw NSError(domain: "ToolService", code: httpResponse.statusCode,
-                          userInfo: [NSLocalizedDescriptionKey: "HTTP error \(httpResponse.statusCode) fetching URL."])
+
+        guard (200 ..< 300).contains(httpResponse.statusCode) else {
+            throw NSError(
+                domain: "ToolService",
+                code: httpResponse.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "HTTP error \(httpResponse.statusCode) fetching URL."]
+            )
         }
-        
+
         // Truncate if the response exceeds size limit
         let usableData = data.count > maxDownloadSize ? data.prefix(maxDownloadSize) : data
-        
+
         // Decode content as text
         guard let html = String(data: usableData, encoding: .utf8) ?? String(data: usableData, encoding: .isoLatin1) else {
-            throw NSError(domain: "ToolService", code: -32,
-                          userInfo: [NSLocalizedDescriptionKey: "Could not decode page content as text."])
+            throw NSError(
+                domain: "ToolService",
+                code: -32,
+                userInfo: [NSLocalizedDescriptionKey: "Could not decode page content as text."]
+            )
         }
-        
+
         // Extract title
         let title = extractTitle(from: html)
-        
+
         // Extract text content (strip HTML tags)
         var textContent = stripHTML(html)
-        
+
         // Clean up whitespace
         textContent = textContent
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
             .joined(separator: "\n")
-        
+
         // Truncate if necessary
         let truncated = textContent.count > maxLength
         if truncated {
             textContent = String(textContent.prefix(maxLength)) + "\n... [content truncated]"
         }
-        
+
         return WebBrowseResult(
             url: url,
             title: title,
@@ -471,7 +506,7 @@ actor ToolService {
             truncated: truncated
         )
     }
-    
+
     /// Extract the page title from HTML.
     private func extractTitle(from html: String) -> String? {
         // Simple regex to find <title>...</title>
@@ -479,7 +514,7 @@ actor ToolService {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else {
             return nil
         }
-        
+
         let nsHTML = html as NSString
         if let match = regex.firstMatch(in: html, options: [], range: NSRange(location: 0, length: nsHTML.length)),
            match.numberOfRanges >= 2 {
@@ -489,14 +524,14 @@ actor ToolService {
             // Decode HTML entities
             return decodeHTMLEntities(title)
         }
-        
+
         return nil
     }
-    
+
     /// Strip HTML tags from content.
     private func stripHTML(_ html: String) -> String {
         var result = html
-        
+
         // Remove script and style blocks
         let blockPatterns = [
             "<script[^>]*>[\\s\\S]*?</script>",
@@ -506,30 +541,30 @@ actor ToolService {
             "<header[^>]*>[\\s\\S]*?</header>",
             "<footer[^>]*>[\\s\\S]*?</footer>"
         ]
-        
+
         for pattern in blockPatterns {
             if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
                 result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: (result as NSString).length), withTemplate: "")
             }
         }
-        
+
         // Replace block elements with newlines
         let blockElements = ["</p>", "</div>", "</h1>", "</h2>", "</h3>", "</h4>", "</h5>", "</h6>", "<br>", "<br/>", "<br />"]
         for element in blockElements {
             result = result.replacingOccurrences(of: element, with: "\n", options: .caseInsensitive)
         }
-        
+
         // Remove all remaining HTML tags
         if let regex = try? NSRegularExpression(pattern: "<[^>]+>", options: []) {
             result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: (result as NSString).length), withTemplate: "")
         }
-        
+
         // Decode HTML entities
         result = decodeHTMLEntities(result)
-        
+
         return result
     }
-    
+
     /// Decode common HTML entities.
     private func decodeHTMLEntities(_ text: String) -> String {
         var result = text
@@ -548,25 +583,25 @@ actor ToolService {
             ("&reg;", "®"),
             ("&trade;", "™")
         ]
-        
+
         for (entity, replacement) in entities {
             result = result.replacingOccurrences(of: entity, with: replacement, options: .caseInsensitive)
         }
-        
+
         // Handle numeric entities like &#8217;
         // Process matches in reverse order to avoid offset calculation issues
         // when mixing Swift String (grapheme clusters) with NSString (UTF-16 units).
         if let regex = try? NSRegularExpression(pattern: "&#(\\d+);", options: []) {
             var nsResult = result as NSString
             let matches = regex.matches(in: result, options: [], range: NSRange(location: 0, length: nsResult.length))
-            
+
             // Reverse iteration: later matches are replaced first, so their
             // ranges remain valid since we haven't modified earlier parts.
             for match in matches.reversed() {
                 guard match.numberOfRanges >= 2 else { continue }
                 let codeRange = match.range(at: 1)
                 let codeString = nsResult.substring(with: codeRange)
-                
+
                 if let code = Int(codeString),
                    let scalar = Unicode.Scalar(code) {
                     let replacement = String(Character(scalar))
@@ -576,7 +611,7 @@ actor ToolService {
             }
             result = nsResult as String
         }
-        
+
         return result
     }
 }

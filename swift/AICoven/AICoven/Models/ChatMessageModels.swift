@@ -37,7 +37,7 @@ struct ToolCallDetail: Codable, Identifiable, Hashable {
     let id: String
     let name: String
     let args: [String: AnyJSONValue]
-    let result: AnyJSONValue?  // Changed from ToolResult? to handle dict/string/any type
+    let result: AnyJSONValue? // Changed from ToolResult? to handle dict/string/any type
     let error: String?
     let status: Status
 }

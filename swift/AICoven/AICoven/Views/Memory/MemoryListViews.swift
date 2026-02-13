@@ -8,7 +8,7 @@ struct MemoryListView: View {
     let covenId: String?
     @Binding var openTabs: [WorkspaceTab]
     @Binding var activeTabId: String?
-    
+
     @State private var memories: [Memory] = []
     @State private var searchText = ""
     @State private var selectedScope = "all"
@@ -16,19 +16,19 @@ struct MemoryListView: View {
     @State private var errorMessage: String?
     @State private var showDeleteConfirm = false
     @State private var memoryToDelete: Memory?
-    
+
     let scopes = ["all", "user", "coven", "agent"]
-    
+
     var filteredMemories: [Memory] {
         if searchText.isEmpty {
             return memories
         }
         return memories.filter { memory in
             memory.content.localizedCaseInsensitiveContains(searchText) ||
-            (memory.title?.localizedCaseInsensitiveContains(searchText) ?? false)
+                (memory.title?.localizedCaseInsensitiveContains(searchText) ?? false)
         }
     }
-    
+
     var body: some View {
         VStack(spacing: 0) {
             // Header with search and actions
@@ -38,22 +38,22 @@ struct MemoryListView: View {
                     Text(covenId != nil ? "Memory" : "Personal Memory")
                         .font(.aicovenH2)
                         .foregroundColor(.aicovenTextPrimary)
-                    
+
                     Spacer()
-                    
+
                     // Add memory button
                     GradientButton("Add Memory", icon: "plus", style: .primary) {
                         openAddMemoryTab()
                     }
                     .frame(width: 140)
                 }
-                
+
                 // Search bar
                 HStack(spacing: Spacing.xs) {
                     Image(systemName: "magnifyingglass")
                         .font(.aicovenCaption)
                         .foregroundColor(.aicovenTextTertiary)
-                    
+
                     TextField("Search memories...", text: $searchText)
                         .font(.aicovenBodySmall)
                         .textFieldStyle(.plain)
@@ -61,7 +61,7 @@ struct MemoryListView: View {
                 .padding(Spacing.sm)
                 .background(Color.aicovenGlass)
                 .cornerRadius(BorderRadius.sm)
-                
+
                 // Scope filter (only for coven memories)
                 if covenId != nil {
                     HStack(spacing: Spacing.xs) {
@@ -88,9 +88,9 @@ struct MemoryListView: View {
                 }
             }
             .padding(Spacing.lg)
-            
+
             GradientDivider()
-            
+
             // Content area
             if isLoading {
                 LoadingView(message: "Loading memories...")
@@ -111,7 +111,7 @@ struct MemoryListView: View {
                             MemoryCard(
                                 memory: memory,
                                 onEdit: { openEditMemoryTab(memory) },
-                                onDelete: { 
+                                onDelete: {
                                     memoryToDelete = memory
                                     showDeleteConfirm = true
                                 },
@@ -137,18 +137,18 @@ struct MemoryListView: View {
                     await deleteMemory(memory)
                 }
             }
-        } message: { memory in
+        } message: { _ in
             Text("Are you sure you want to delete this memory? This action cannot be undone.")
         }
     }
-    
+
     // MARK: - Actions
-    
+
     /// Load memories from API
     private func loadMemories() async {
         isLoading = true
         errorMessage = nil
-        
+
         do {
             let scope = selectedScope == "all" ? nil : selectedScope
             memories = try await MemoryService.shared.searchMemory(
@@ -160,10 +160,10 @@ struct MemoryListView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
-        
+
         isLoading = false
     }
-    
+
     /// Toggle pin status
     private func togglePin(memory: Memory, isPinned: Bool) async {
         do {
@@ -176,7 +176,7 @@ struct MemoryListView: View {
             errorMessage = "Failed to update pin status: \(error.localizedDescription)"
         }
     }
-    
+
     /// Delete memory
     private func deleteMemory(_ memory: Memory) async {
         do {
@@ -186,7 +186,7 @@ struct MemoryListView: View {
             errorMessage = "Failed to delete memory: \(error.localizedDescription)"
         }
     }
-    
+
     /// Open add memory tab
     private func openAddMemoryTab() {
         let tab = WorkspaceTab.addMemory(covenId: covenId)
@@ -195,7 +195,7 @@ struct MemoryListView: View {
         }
         activeTabId = tab.id
     }
-    
+
     /// Open edit memory tab
     private func openEditMemoryTab(_ memory: Memory) {
         let title = memory.title ?? String(memory.content.prefix(30))
@@ -236,7 +236,7 @@ struct MobileMemoryListView: View {
         }
         return memories.filter { memory in
             memory.content.localizedCaseInsensitiveContains(searchText) ||
-            (memory.title?.localizedCaseInsensitiveContains(searchText) ?? false)
+                (memory.title?.localizedCaseInsensitiveContains(searchText) ?? false)
         }
     }
 
@@ -402,4 +402,3 @@ struct MobileMemoryListView: View {
         }
     }
 }
-

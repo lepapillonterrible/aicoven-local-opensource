@@ -60,6 +60,14 @@
 	<string>$(FIREBASE_STORAGE_BUCKET)</string>
 	<key>FIREBASE_MESSAGING_SENDER_ID</key>
 	<string>$(FIREBASE_MESSAGING_SENDER_ID)</string>
+	<key>GOOGLE_PICKER_API_KEY</key>
+	<string>$(GOOGLE_PICKER_API_KEY)</string>
+	<key>GOOGLE_PICKER_APP_ID</key>
+	<string>$(GOOGLE_PICKER_APP_ID)</string>
+	<key>GITHUB_OAUTH_CLIENT_ID</key>
+	<string>$(GITHUB_OAUTH_CLIENT_ID)</string>
+	<key>GOOGLE_OAUTH_CLIENT_ID</key>
+	<string>$(GOOGLE_OAUTH_CLIENT_ID)</string>
 	<key>ServerRSAPublicKey</key>
 	<string>$(SERVER_RSA_PUBLIC_KEY)</string>
 	<key>CFBundleURLTypes</key>

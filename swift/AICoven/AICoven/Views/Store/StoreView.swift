@@ -91,14 +91,14 @@ struct StoreView: View {
             .background(NebulaBackground())
             .navigationTitle("Store")
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
+                .navigationBarTitleDisplayMode(.inline)
             #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                        .foregroundColor(.aicovenTeal)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { dismiss() }
+                            .foregroundColor(.aicovenTeal)
+                    }
                 }
-            }
         }
     }
 }
@@ -148,7 +148,7 @@ private struct ProductCard: View {
     private var tierInfo: (icon: String, color: Color, features: [String]) {
         switch product.id {
         case StoreService.creatorID:
-            return (
+            (
                 "person.3.fill",
                 .aicovenPurple,
                 [
@@ -158,7 +158,7 @@ private struct ProductCard: View {
                 ]
             )
         case StoreService.toolsPackID:
-            return (
+            (
                 "wrench.and.screwdriver.fill",
                 .aicovenTeal,
                 [
@@ -168,7 +168,7 @@ private struct ProductCard: View {
                 ]
             )
         case StoreService.everythingID:
-            return (
+            (
                 "star.fill",
                 .aicovenPink,
                 [
@@ -178,7 +178,7 @@ private struct ProductCard: View {
                 ]
             )
         default:
-            return ("questionmark", .gray, [])
+            ("questionmark", .gray, [])
         }
     }
 
@@ -292,7 +292,9 @@ struct FeatureUpsellView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showStore = false
 
-    private var tierName: String { storeService.requiredTier(for: feature) }
+    private var tierName: String {
+        storeService.requiredTier(for: feature)
+    }
 
     var body: some View {
         VStack(spacing: Spacing.lg) {

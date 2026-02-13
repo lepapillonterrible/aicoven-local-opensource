@@ -37,20 +37,22 @@ final class ChatServiceSummaryTests: XCTestCase {
         func completeChat(messages: [LLMMessage], model: String, options: ChatOptions) async throws -> LLMChatResponse {
             // Return a deterministic summary so the test can assert on it.
             let msg = LLMMessage(role: .assistant, content: "This is a summary from mock client.")
-            return LLMChatResponse(message: msg,
-                                   providerID: "test-provider",
-                                   modelID: model,
-                                   usage: nil)
+            return LLMChatResponse(
+                message: msg,
+                providerID: "test-provider",
+                modelID: model,
+                usage: nil
+            )
         }
 
         func embed(texts: [String], model: String) async throws -> [[Float]] {
-            return Array(repeating: [0.0, 1.0], count: texts.count)
+            Array(repeating: [0.0, 1.0], count: texts.count)
         }
     }
 
     private actor MockChatToolService: ChatToolService {
         func webSearch(query: String, maxResults: Int) async throws -> [ToolService.WebSearchResult] {
-            return []
+            []
         }
 
         func webBrowse(url: URL, maxLength: Int) async throws -> ToolService.WebBrowseResult {
@@ -58,13 +60,15 @@ final class ChatServiceSummaryTests: XCTestCase {
         }
 
         nonisolated func currentTime(timezone: TimeZone) -> ToolService.TimeInfo {
-            return ToolService.TimeInfo(utcISO8601: "2025-01-01T00:00:00Z",
-                                       timezoneIdentifier: timezone.identifier,
-                                       localISO8601: "2025-01-01T00:00:00Z")
+            ToolService.TimeInfo(
+                utcISO8601: "2025-01-01T00:00:00Z",
+                timezoneIdentifier: timezone.identifier,
+                localISO8601: "2025-01-01T00:00:00Z"
+            )
         }
     }
 
-    func testUpdateThreadSummaryWritesSummaryViaThreadStore() async throws {
+    func testUpdateThreadSummaryWritesSummaryViaThreadStore() async {
         let threadID = "thread-summary-test"
 
         let model = ModelDescriptor(
@@ -106,11 +110,11 @@ final class ChatServiceSummaryTests: XCTestCase {
 
         await chatService.updateThreadSummary(threadId: threadID)
 
-        let summary = mockThreadStore.updatedSummaries[threadID] ?? nil
+        let summary = mockThreadStore.updatedSummaries[threadID]
         XCTAssertEqual(summary, "This is a summary from mock client.")
     }
 
-    func testUpdateThreadSummaryDoesNothingWhenNoModelAvailable() async throws {
+    func testUpdateThreadSummaryDoesNothingWhenNoModelAvailable() async {
         let threadID = "thread-no-model"
 
         let router = HeuristicModelRouter(availableModels: [])
@@ -143,6 +147,6 @@ final class ChatServiceSummaryTests: XCTestCase {
 
         // With no available models or clients, updateThreadSummary should exit
         // early and never call into the thread store.
-        XCTAssertNil(mockThreadStore.updatedSummaries[threadID] ?? nil)
+        XCTAssertNil(mockThreadStore.updatedSummaries[threadID])
     }
 }

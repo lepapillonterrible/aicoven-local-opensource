@@ -185,7 +185,7 @@ final class PricingUpdateService {
         let startOffset = lowerHTML.distance(from: lowerHTML.startIndex, to: anchorRange.lowerBound)
         let startIndex = html.index(html.startIndex, offsetBy: startOffset)
         let endIndex = html.index(startIndex, offsetBy: searchRadius, limitedBy: html.endIndex) ?? html.endIndex
-        let snippet = String(html[startIndex..<endIndex])
+        let snippet = String(html[startIndex ..< endIndex])
 
         guard let regex = try? NSRegularExpression(pattern: "\\$(\\d+(?:\\.\\d+)?)") else { return nil }
         let range = NSRange(location: 0, length: (snippet as NSString).length)

@@ -4,7 +4,7 @@ import SwiftUI
 /// Local-only version: no auth, no connected apps.
 struct ProfileMenuView: View {
     var onOpenTab: ((WorkspaceTabType) -> Void)?
-    
+
     var body: some View {
         Menu {
             // Profile section
@@ -13,42 +13,51 @@ struct ProfileMenuView: View {
             } label: {
                 Label("Profile", systemImage: "person")
             }
-            
+
             Divider()
-            
+
             // Settings
             Button {
                 onOpenTab?(.settings)
             } label: {
                 Label("Settings", systemImage: "gear")
             }
-            
+
             // Provider Keys
             Button {
                 onOpenTab?(.providerKeys)
             } label: {
                 Label("Provider Keys", systemImage: "key")
             }
-            
+
             // Budgets & Usage
             Button {
                 onOpenTab?(.usage)
             } label: {
                 Label("Budgets & Usage", systemImage: "chart.bar")
             }
-            
+
             // Personal memories (local-only, no coven)
             Button {
                 onOpenTab?(.memoryList(covenId: nil))
             } label: {
                 Label("Personal Memory", systemImage: "brain")
             }
-            
+
             // Memory Proposals (personal workspace)
             Button {
                 onOpenTab?(.memoryProposals(covenId: nil))
             } label: {
                 Label("Memory Proposals", systemImage: "doc.text.magnifyingglass")
+            }
+
+            Divider()
+
+            // Terms & Conditions
+            Button {
+                onOpenTab?(.terms)
+            } label: {
+                Label("Terms & Conditions", systemImage: "doc.text")
             }
         } label: {
             // User avatar button
@@ -61,7 +70,7 @@ struct ProfileMenuView: View {
 /// User avatar button for profile menu (local user only).
 struct UserAvatarButton: View {
     private let initials: String = "LC" // Local Client
-    
+
     var body: some View {
         ZStack {
             Circle()
@@ -74,7 +83,7 @@ struct UserAvatarButton: View {
                 )
                 .frame(width: 28, height: 28)
                 .glowEffect(color: .aicovenTeal, radius: 4, intensity: 0.3)
-            
+
             Text(initials)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(.white)
@@ -85,7 +94,7 @@ struct UserAvatarButton: View {
 #Preview {
     ZStack {
         NebulaBackground()
-        
+
         HStack {
             Spacer()
             VStack {

@@ -6,7 +6,7 @@ struct MemoryChunkRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "memory_chunks"
 
     var id: String
-    var userId: String?  // Owner of this memory for data isolation
+    var userId: String? // Owner of this memory for data isolation
     var scope: String
     var piiFlag: Bool
     var tags: String?
@@ -30,16 +30,18 @@ struct MemoryChunkRecord: Codable, FetchableRecord, PersistableRecord {
     }
 
     /// Memberwise initializer used by repositories when inserting new rows.
-    init(id: String,
-         userId: String?,
-         scope: String,
-         piiFlag: Bool,
-         tags: String?,
-         createdAt: Date,
-         createdBy: String?,
-         source: String?,
-         textCiphertext: Data,
-         embedding: Data?) {
+    init(
+        id: String,
+        userId: String?,
+        scope: String,
+        piiFlag: Bool,
+        tags: String?,
+        createdAt: Date,
+        createdBy: String?,
+        source: String?,
+        textCiphertext: Data,
+        embedding: Data?
+    ) {
         self.id = id
         self.userId = userId
         self.scope = scope
@@ -52,7 +54,7 @@ struct MemoryChunkRecord: Codable, FetchableRecord, PersistableRecord {
         self.embedding = embedding
     }
 
-    // Custom Row initializer so GRDB can decode from the snake_case schema.
+    /// Custom Row initializer so GRDB can decode from the snake_case schema.
     init(row: Row) {
         id = row[Columns.id]
         userId = row[Columns.userId]
@@ -106,13 +108,15 @@ actor MemoryRepository {
 
     // MARK: - Public API
 
-    func storeMemory(scope: String,
-                     text: String,
-                     tags: [String],
-                     pii: Bool,
-                     createdBy: String?,
-                     source: String?,
-                     embedding: [Float]?) async throws -> LocalMemoryChunk {
+    func storeMemory(
+        scope: String,
+        text: String,
+        tags: [String],
+        pii: Bool,
+        createdBy: String?,
+        source: String?,
+        embedding: [Float]?
+    ) async throws -> LocalMemoryChunk {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
         // Get current user ID for data isolation
@@ -124,13 +128,12 @@ actor MemoryRepository {
         let ciphertext = try await DataEncryptionService.shared.encrypt(plaintext, purpose: "memory_chunk")
 
         let tagsString = tags.isEmpty ? nil : try String(data: JSONEncoder().encode(tags), encoding: .utf8)
-        let embeddingData: Data?
-        if let embedding {
-            embeddingData = embedding.withUnsafeBufferPointer { ptr in
+        let embeddingData: Data? = if let embedding {
+            embedding.withUnsafeBufferPointer { ptr in
                 Data(buffer: UnsafeBufferPointer(start: ptr.baseAddress, count: ptr.count))
             }
         } else {
-            embeddingData = nil
+            nil
         }
 
         var record = MemoryChunkRecord(
@@ -232,10 +235,12 @@ actor MemoryRepository {
 
     /// Update an existing memory chunk's text, tags, and embedding.
     /// Only updates if it belongs to the current user.
-    func updateMemory(id: String,
-                      newText: String,
-                      newTags: [String],
-                      newEmbedding: [Float]?) async throws -> LocalMemoryChunk? {
+    func updateMemory(
+        id: String,
+        newText: String,
+        newTags: [String],
+        newEmbedding: [Float]?
+    ) async throws -> LocalMemoryChunk? {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
         // Get current user ID for data isolation
@@ -245,13 +250,12 @@ actor MemoryRepository {
         let ciphertext = try await DataEncryptionService.shared.encrypt(plaintext, purpose: "memory_chunk")
 
         let tagsString = newTags.isEmpty ? nil : try String(data: JSONEncoder().encode(newTags), encoding: .utf8)
-        let embeddingData: Data?
-        if let newEmbedding {
-            embeddingData = newEmbedding.withUnsafeBufferPointer { ptr in
+        let embeddingData: Data? = if let newEmbedding {
+            newEmbedding.withUnsafeBufferPointer { ptr in
                 Data(buffer: UnsafeBufferPointer(start: ptr.baseAddress, count: ptr.count))
             }
         } else {
-            embeddingData = nil
+            nil
         }
 
         try await dbQueue.write { db in
@@ -324,7 +328,7 @@ struct MemoryProposalRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "memory_proposals"
 
     var id: String
-    var userId: String?  // Owner of this proposal for data isolation
+    var userId: String? // Owner of this proposal for data isolation
     var eventId: String?
     var covenId: String?
     var proposedContent: String
@@ -360,22 +364,24 @@ struct MemoryProposalRecord: Codable, FetchableRecord, PersistableRecord {
     }
 
     /// Memberwise initializer used by repositories when inserting new rows.
-    init(id: String,
-         userId: String?,
-         eventId: String?,
-         covenId: String?,
-         proposedContent: String,
-         proposedTags: String?,
-         scope: String?,
-         reason: String?,
-         sourceMessageId: String?,
-         status: String,
-         proposedBy: String?,
-         reviewedBy: String?,
-         createdAt: Date,
-         reviewedAt: Date?,
-         title: String?,
-         reviewFeedback: String?) {
+    init(
+        id: String,
+        userId: String?,
+        eventId: String?,
+        covenId: String?,
+        proposedContent: String,
+        proposedTags: String?,
+        scope: String?,
+        reason: String?,
+        sourceMessageId: String?,
+        status: String,
+        proposedBy: String?,
+        reviewedBy: String?,
+        createdAt: Date,
+        reviewedAt: Date?,
+        title: String?,
+        reviewFeedback: String?
+    ) {
         self.id = id
         self.userId = userId
         self.eventId = eventId
@@ -394,7 +400,7 @@ struct MemoryProposalRecord: Codable, FetchableRecord, PersistableRecord {
         self.reviewFeedback = reviewFeedback
     }
 
-    // Custom Row initializer so GRDB can decode from the snake_case schema.
+    /// Custom Row initializer so GRDB can decode from the snake_case schema.
     init(row: Row) {
         id = row[Columns.id]
         userId = row[Columns.userId]
@@ -489,16 +495,18 @@ actor MemoryProposalRepository {
 
     /// Insert a new proposal. This will be used by agent/chat flows when they
     /// generate memory write suggestions.
-    func insertProposal(id: String = UUID().uuidString,
-                        eventId: String?,
-                        covenId: String?,
-                        proposedContent: String,
-                        proposedTags: [String]?,
-                        scope: String?,
-                        reason: String?,
-                        sourceMessageId: String?,
-                        proposedBy: String?,
-                        title: String?) async throws -> MemoryProposalRecord {
+    func insertProposal(
+        id: String = UUID().uuidString,
+        eventId: String?,
+        covenId: String?,
+        proposedContent: String,
+        proposedTags: [String]?,
+        scope: String?,
+        reason: String?,
+        sourceMessageId: String?,
+        proposedBy: String?,
+        title: String?
+    ) async throws -> MemoryProposalRecord {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
         // Get current user ID for data isolation
@@ -541,10 +549,12 @@ actor MemoryProposalRepository {
 
     /// Update the status and review metadata for a proposal, returning the
     /// updated record. Only updates if it belongs to the current user.
-    func updateStatus(id: String,
-                      status: String,
-                      reviewedBy: String?,
-                      reviewFeedback: String?) async throws -> MemoryProposalRecord {
+    func updateStatus(
+        id: String,
+        status: String,
+        reviewedBy: String?,
+        reviewFeedback: String?
+    ) async throws -> MemoryProposalRecord {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
         // Get current user ID for data isolation

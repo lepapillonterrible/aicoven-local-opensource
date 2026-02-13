@@ -15,13 +15,13 @@ enum DeepLinkTarget: Equatable {
 @MainActor
 class AppState: ObservableObject {
     static let shared = AppState()
-    
+
     @Published var selectedThread: Thread?
     @Published var threads: [Thread] = []
     @Published var pendingDeepLink: DeepLinkTarget?
     /// Whether the current user has completed the FTUE onboarding flow.
     @Published var hasCompletedOnboarding: Bool = false
-    
+
     private init() {}
 
     /// Handle incoming deep links.
@@ -69,7 +69,7 @@ class AppState: ObservableObject {
             return nil
         }
     }
-    
+
     /// Create a new thread (personal-only in the open client)
     func createNewThread(covenId: String? = nil) {
         Task {
@@ -84,16 +84,25 @@ class AppState: ObservableObject {
             }
         }
     }
-    
+
     /// Select a thread for chat
     func selectThread(_ thread: Thread) {
         selectedThread = thread
     }
-    
+
+    /// Clear all user-specific state. Call on sign-in/sign-out to prevent
+    /// data leakage between users.
+    func clearUserData() {
+        selectedThread = nil
+        threads = []
+        hasCompletedOnboarding = false
+        pendingDeepLink = nil
+    }
+
     /// Fetch user's threads (personal-only, local store)
     func fetchThreads() async throws {
         let threads = try await ThreadService.shared.loadThreads(covenId: nil)
         self.threads = threads
     }
-    
+
 }

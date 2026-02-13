@@ -2,8 +2,8 @@ import Foundation
 
 /// Service for validating tool arguments.
 /// Ensures required fields are present and of correct types.
-struct ToolValidationService {
-    
+enum ToolValidationService {
+
     /// Validates required string arguments.
     /// - Returns: ToolExecutionResult with error if validation fails, nil otherwise.
     static func validateRequiredString(
@@ -20,7 +20,7 @@ struct ToolValidationService {
                 suggestion: "Please provide the '\(key)' argument."
             )
         }
-        
+
         // Check type and content
         guard let stringValue = valueWrapper.value as? String, !stringValue.isEmpty else {
             return .validationError(
@@ -30,10 +30,10 @@ struct ToolValidationService {
                 suggestion: "Ensure '\(key)' is a string value."
             )
         }
-        
+
         return nil
     }
-    
+
     /// Validates required boolean arguments.
     static func validateRequiredBool(
         args: [String: AnyJSONValue],
@@ -41,7 +41,7 @@ struct ToolValidationService {
         tool: String
     ) -> ToolExecutionResult? {
         guard let valueWrapper = args[key], let _ = valueWrapper.value as? Bool else {
-             return .validationError(
+            return .validationError(
                 tool: tool,
                 message: "Missing or invalid boolean argument: '\(key)'",
                 field: key

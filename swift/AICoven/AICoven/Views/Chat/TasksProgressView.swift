@@ -3,17 +3,17 @@ import SwiftUI
 /// Shows real-time task progress from the agent's scratchpad
 struct TasksProgressView: View {
     let tasks: [AgentTask]
-    
+
     @State private var isExpanded: Bool = true
-    
+
     private var completedCount: Int {
-        tasks.filter { $0.completed }.count
+        tasks.count(where: { $0.completed })
     }
-    
+
     private var totalCount: Int {
         tasks.count
     }
-    
+
     var body: some View {
         if !tasks.isEmpty {
             DisclosureGroup(isExpanded: $isExpanded) {
@@ -31,7 +31,7 @@ struct TasksProgressView: View {
                     Text("(\(completedCount)/\(totalCount))")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
-                    
+
                     // Progress indicator
                     if totalCount > 0 {
                         ProgressView(value: Double(completedCount), total: Double(totalCount))
@@ -48,14 +48,14 @@ struct TasksProgressView: View {
 
 private struct TaskRow: View {
     let task: AgentTask
-    
+
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             // Checkbox icon
             Image(systemName: task.completed ? "checkmark.circle.fill" : "circle")
                 .foregroundColor(task.completed ? .green : .secondary)
                 .font(.system(size: 14))
-            
+
             // Task title
             Text(task.title)
                 .font(.system(size: 13))
@@ -78,7 +78,7 @@ struct TasksProgressView_Previews: PreviewProvider {
                 AgentTask(id: "2", title: "Determine default branch (dev)", completed: true),
                 AgentTask(id: "3", title: "Create LICENSE file in repository", completed: false)
             ])
-            
+
             TasksProgressView(tasks: [
                 AgentTask(id: "1", title: "Search for auth middleware", completed: true),
                 AgentTask(id: "2", title: "Read current implementation", completed: false),

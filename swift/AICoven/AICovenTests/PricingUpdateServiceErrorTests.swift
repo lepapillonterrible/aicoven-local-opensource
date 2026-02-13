@@ -48,15 +48,15 @@ final class PricingUpdateServiceErrorTests: XCTestCase {
         // Verify that provider-specific error contexts are *capable* of being
         // logged. In environments where all provider fetches succeed, we skip
         // the assertion rather than failing the suite.
-        let errorContexts = Set(reporter.errors.map { $0.context })
+        let errorContexts = Set(reporter.errors.map(\.context))
         if errorContexts.isEmpty {
             throw XCTSkip("No provider errors were logged; PricingUpdateService.fetchAllProviders likely succeeded for all providers in this environment.")
         }
 
         XCTAssertTrue(
             errorContexts.contains("PricingUpdateService.fetchAllProviders.openai") ||
-            errorContexts.contains("PricingUpdateService.fetchAllProviders.anthropic") ||
-            errorContexts.contains("PricingUpdateService.fetchAllProviders.google"),
+                errorContexts.contains("PricingUpdateService.fetchAllProviders.anthropic") ||
+                errorContexts.contains("PricingUpdateService.fetchAllProviders.google"),
             "Expected at least one provider-specific PricingUpdateService.fetchAllProviders.* context to be logged when refreshNowAsync encounters errors"
         )
     }

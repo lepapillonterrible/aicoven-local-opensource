@@ -26,7 +26,7 @@ struct CovenTutorialView: View {
         .background(NebulaBackground())
         .navigationTitle("Tutorial")
         #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(.inline)
         #endif
     }
 
@@ -344,16 +344,8 @@ private struct TutorialScreenshot: View {
 
 private struct TutorialTwoColumn<Left: View, Right: View>: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    let left: Left
-    let right: Right
-
-    init(
-        @ViewBuilder left: () -> Left,
-        @ViewBuilder right: () -> Right
-    ) {
-        self.left = left()
-        self.right = right()
-    }
+    @ViewBuilder let left: Left
+    @ViewBuilder let right: Right
 
     var body: some View {
         if horizontalSizeClass == .compact {

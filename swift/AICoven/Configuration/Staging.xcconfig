@@ -1,19 +1,29 @@
 // Staging Configuration
-// NOTE: Secrets.xcconfig is available for optional developer-specific keys
-// (e.g., personal Gemini/OpenAI keys) but is not required for the build.
-// All required configuration is in this file.
+// Secrets.xcconfig overrides the YOUR_* placeholders below with real values.
+// See Secrets.xcconfig.template for setup instructions.
+#include? "Secrets.xcconfig"
 
 // API Environment
 APP_ENV = staging
 
 
 // Firebase Configuration
-FIREBASE_API_KEY = AIzaSyDq6mvLZ-zDZgtoB7u2dxLkkd4odoy2C9g
-FIREBASE_PROJECT_ID = aicoven
-FIREBASE_APP_ID = 1:870439799161:ios:d01e1ad69c55d2a5f007a8
-FIREBASE_AUTH_DOMAIN = aicoven.firebaseapp.com
-FIREBASE_STORAGE_BUCKET = aicoven.firebasestorage.app
-FIREBASE_MESSAGING_SENDER_ID = 870439799161
+// Create a Firebase project at https://console.firebase.google.com
+// and replace the placeholders below with your project's values.
+FIREBASE_API_KEY = YOUR_FIREBASE_API_KEY
+FIREBASE_PROJECT_ID = YOUR_FIREBASE_PROJECT_ID
+FIREBASE_APP_ID = YOUR_FIREBASE_APP_ID
+FIREBASE_AUTH_DOMAIN = YOUR_PROJECT_ID.firebaseapp.com
+FIREBASE_STORAGE_BUCKET = YOUR_PROJECT_ID.firebasestorage.app
+FIREBASE_MESSAGING_SENDER_ID = YOUR_SENDER_ID
+
+// Google Drive Picker (optional – only needed for Google Drive integration)
+GOOGLE_PICKER_API_KEY = YOUR_GOOGLE_PICKER_API_KEY
+GOOGLE_PICKER_APP_ID = YOUR_GOOGLE_PICKER_APP_ID
+
+// Connected Apps – OAuth Client IDs (optional – only needed for GitHub/Google integrations)
+GITHUB_OAUTH_CLIENT_ID = YOUR_GITHUB_OAUTH_CLIENT_ID
+GOOGLE_OAUTH_CLIENT_ID = YOUR_GOOGLE_OAUTH_CLIENT_ID
 
 // App Identifiers
 PRODUCT_BUNDLE_IDENTIFIER_IOS = com.aicoven.com.staging
@@ -25,5 +35,4 @@ PRODUCT_NAME = AICoven Staging
 // Code Signing
 CODE_SIGN_STYLE = Automatic
 DEVELOPMENT_TEAM = // Add your team ID here
-
 

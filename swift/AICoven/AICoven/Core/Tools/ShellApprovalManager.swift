@@ -7,27 +7,27 @@ internal import Combine
 @MainActor
 class ShellApprovalManager: ObservableObject {
     static let shared = ShellApprovalManager()
-    
+
     // MARK: - Published State
-    
+
     /// The current approval request specific to an agent/thread.
     /// In a multi-window app, we might need a more complex mapping (e.g., [ThreadID: Request]),
     /// but for now we assume a single active focus or modal overlay.
     @Published var currentRequest: ShellApprovalRequest?
-    
+
     /// Whether an approval is currently pending.
     var isApprovalPending: Bool {
         currentRequest != nil
     }
-    
+
     // MARK: - Internal State
-    
+
     /// Pending continuations keyed by request ID.
     /// Stored separately from ShellApprovalRequest to prevent UI handlers from
     /// accidentally resuming the continuation directly (which would cause a crash
     /// if handleDecision is also called).
     private var pendingContinuations: [UUID: CheckedContinuation<ShellApprovalDecision, Never>] = [:]
-    
+
     /// Built-in patterns that are always auto-approved (read-only operations).
     /// These are not persisted — they are always present.
     private let builtInAutoApprovePatterns: [String] = [
@@ -54,10 +54,10 @@ class ShellApprovalManager: ObservableObject {
         "^du\\b",
         "^df\\b"
     ]
-    
+
     /// Persistence key for user-added "always allow" patterns.
     private let autoApproveKey = "ShellAutoApprovePatterns"
-    
+
     /// User-added auto-approve patterns (persisted to UserDefaults).
     private var userAutoApprovePatterns: [String] {
         get {
@@ -67,16 +67,16 @@ class ShellApprovalManager: ObservableObject {
             UserDefaults.standard.set(newValue, forKey: autoApproveKey)
         }
     }
-    
+
     /// All active auto-approve patterns (built-in + user-added).
     private var allAutoApprovePatterns: [String] {
         builtInAutoApprovePatterns + userAutoApprovePatterns
     }
-    
+
     private init() {}
-    
+
     // MARK: - Public API
-    
+
     /// Request approval for a shell command.
     /// This method suspends until the user makes a decision via the approval UI.
     /// - Parameters:
@@ -89,15 +89,15 @@ class ShellApprovalManager: ObservableObject {
         directory: String,
         riskLevel: ShellCommandRiskLevel
     ) async -> ShellApprovalDecision {
-        
+
         // 1. Check auto-approve patterns first (only for low-risk commands).
         // Medium/high risk commands always require explicit approval, even if
         // they match a pattern (e.g., "echo test > file" matches ^echo\b but
         // the redirect makes it medium risk).
-        if riskLevel == .low && isAutoApproved(command) {
+        if riskLevel == .low, isAutoApproved(command) {
             return .approve
         }
-        
+
         // 2. Create a continuation to bridge async -> callback
         return await withCheckedContinuation { continuation in
             // Create the request object (continuation stored separately for safety)
@@ -109,35 +109,35 @@ class ShellApprovalManager: ObservableObject {
                 riskLevel: riskLevel,
                 metadata: [:]
             )
-            
+
             // Store continuation separately to prevent accidental double-resume
             self.pendingContinuations[requestId] = continuation
-            
+
             // Update state to trigger UI
             self.currentRequest = request
         }
     }
-    
+
     /// Handle the user's decision from the UI.
     func handleDecision(_ decision: ShellApprovalDecision) {
         guard let request = currentRequest else { return }
-        
+
         // If "always allow" was selected, save the pattern
-        if case .approveAlways(let pattern) = decision {
+        if case let .approveAlways(pattern) = decision {
             addAutoApprovePattern(pattern)
         }
-        
+
         // Clear the request first to prevent duplicate calls
-        self.currentRequest = nil
-        
+        currentRequest = nil
+
         // Resume the continuation (remove from dictionary to ensure single-resume)
         if let continuation = pendingContinuations.removeValue(forKey: request.id) {
             continuation.resume(returning: decision)
         }
     }
-    
+
     // MARK: - Auto-Approve Logic
-    
+
     private func isAutoApproved(_ command: String) -> Bool {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
         for pattern in allAutoApprovePatterns {
@@ -148,21 +148,21 @@ class ShellApprovalManager: ObservableObject {
         }
         return false
     }
-    
+
     private func addAutoApprovePattern(_ pattern: String) {
         var current = userAutoApprovePatterns
         // Don't add if it already exists in built-in or user patterns
-        if !builtInAutoApprovePatterns.contains(pattern) && !current.contains(pattern) {
+        if !builtInAutoApprovePatterns.contains(pattern), !current.contains(pattern) {
             current.append(pattern)
             userAutoApprovePatterns = current
         }
     }
-    
+
     /// Get all auto-approve patterns (built-in + user-added).
     func getAutoApprovePatterns() -> [String] {
-        return allAutoApprovePatterns
+        allAutoApprovePatterns
     }
-    
+
     /// Remove a user-added auto-approve pattern.
     func removeAutoApprovePattern(_ pattern: String) {
         var current = userAutoApprovePatterns

@@ -43,7 +43,8 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
         let container = try await ensureModelLoaded(effectiveModel)
         let session = ChatSession(container)
 
-        // Build system instructions from system messages — this includes tool documentation injected by ContextBuilder.
+        // Build system instructions from system messages — this includes
+        // tool documentation injected by ContextBuilder.
         let systemPrompt = messages
             .filter { $0.role == .system }
             .map(\.content)
@@ -52,7 +53,9 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
             session.instructions = systemPrompt
         }
 
-        // Compose entire conversation history (non-system messages) so the model sees prior user/assistant exchanges including tool results that ChatService appends during the tool loop.
+        // Compose entire conversation history (non-system messages) so the
+        // model sees prior user/assistant exchanges including tool results
+        // that ChatService appends during the tool loop.
         let composedPrompt = Self.composeConversationPrompt(from: messages)
         guard !composedPrompt.isEmpty else {
             throw MLXClientError.noUserMessage

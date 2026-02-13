@@ -6,7 +6,7 @@ struct MemoryExplorerView: View {
     @Binding var openTabs: [WorkspaceTab]
     @Binding var activeTabId: String?
     @Environment(\.dismiss) private var dismiss
-    
+
     var body: some View {
         NavigationStack {
             VStack(spacing: Spacing.lg) {
@@ -15,14 +15,14 @@ struct MemoryExplorerView: View {
                     .font(.aicovenH1)
                     .foregroundColor(.aicovenTextPrimary)
                     .padding(.top, Spacing.lg)
-                
+
                 // Description
                 Text("Search and manage shared knowledge")
                     .font(.aicovenBodySmall)
                     .foregroundColor(.aicovenTextSecondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, Spacing.lg)
-                
+
                 // Action cards
                 VStack(spacing: Spacing.md) {
                     // View memories
@@ -34,7 +34,7 @@ struct MemoryExplorerView: View {
                     ) {
                         openMemoryList()
                     }
-                    
+
                     // View proposals
                     MemoryActionCard(
                         icon: "doc.text.magnifyingglass",
@@ -44,7 +44,7 @@ struct MemoryExplorerView: View {
                     ) {
                         openMemoryProposals()
                     }
-                    
+
                     // Add memory
                     MemoryActionCard(
                         icon: "plus.circle.fill",
@@ -56,25 +56,25 @@ struct MemoryExplorerView: View {
                     }
                 }
                 .padding(.horizontal, Spacing.lg)
-                
+
                 Spacer()
             }
             .navigationTitle("Memory")
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
+                .navigationBarTitleDisplayMode(.inline)
             #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") {
-                        dismiss()
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") {
+                            dismiss()
+                        }
                     }
                 }
-            }
         }
     }
-    
+
     // MARK: - Actions
-    
+
     /// Open memory list tab
     private func openMemoryList() {
         let tab = WorkspaceTab.memoryList(covenId: covenId)
@@ -84,7 +84,7 @@ struct MemoryExplorerView: View {
         activeTabId = tab.id
         dismiss()
     }
-    
+
     /// Open memory proposals tab
     private func openMemoryProposals() {
         let tab = WorkspaceTab.memoryProposals(covenId: covenId)
@@ -94,7 +94,7 @@ struct MemoryExplorerView: View {
         activeTabId = tab.id
         dismiss()
     }
-    
+
     /// Open add memory tab
     private func openAddMemory() {
         let tab = WorkspaceTab.addMemory(covenId: covenId)
@@ -115,26 +115,26 @@ struct MemoryActionCard: View {
     let description: String
     let color: Color
     let action: () -> Void
-    
+
     @State private var isHovering = false
-    
+
     var body: some View {
         Button(action: action) {
             HStack(spacing: Spacing.md) {
                 IconBadge(icon: icon, size: 44, color: color)
-                
+
                 VStack(alignment: .leading, spacing: Spacing.xxs) {
                     Text(title)
                         .font(.aicovenH3)
                         .foregroundColor(.aicovenTextPrimary)
-                    
+
                     Text(description)
                         .font(.aicovenCaption)
                         .foregroundColor(.aicovenTextSecondary)
                 }
-                
+
                 Spacer()
-                
+
                 Image(systemName: "chevron.right")
                     .font(.aicovenCaption)
                     .foregroundColor(.aicovenTextTertiary)
@@ -155,7 +155,7 @@ struct MemoryActionCard: View {
 #Preview {
     @Previewable @State var openTabs: [WorkspaceTab] = []
     @Previewable @State var activeTabId: String?
-    
+
     MemoryExplorerView(
         covenId: nil,
         openTabs: $openTabs,

@@ -18,7 +18,7 @@ enum MessageAdapter {
         ]
         for pattern in patterns {
             guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) else { continue }
-            let range = NSRange(result.startIndex..<result.endIndex, in: result)
+            let range = NSRange(result.startIndex ..< result.endIndex, in: result)
             result = regex.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "")
         }
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -83,7 +83,7 @@ enum MessageAdapter {
         // Tokens: prefer persisted usage on the message, fall back to the
         // immediate ChatResponse (non-streaming path).
         let tokens = chatMessage.tokenUsage?.totalTokens ?? response?.tokenUsage?.totalTokens
-        
+
         // Agent role name: prefer the persisted role_name in metadata (so
         // history loads show the correct agent), falling back to the
         // ChatResponse role for freshly-sent messages.
@@ -108,26 +108,25 @@ enum MessageAdapter {
                 let convertedArgs = call.args.reduce(into: [String: AnyJSONValue]()) { acc, kv in
                     acc[kv.key] = AnyJSONValue(kv.value.value)
                 }
-                
+
                 // Parse status from API
-                let status: ToolCallDetail.Status
-                if let statusStr = call.status?.lowercased() {
-                    status = ToolCallDetail.Status(rawValue: statusStr) ?? .completed
+                let status: ToolCallDetail.Status = if let statusStr = call.status?.lowercased() {
+                    ToolCallDetail.Status(rawValue: statusStr) ?? .completed
                 } else {
-                    status = call.result != nil ? .completed : .pending
+                    call.result != nil ? .completed : .pending
                 }
-                
+
                 return ToolCallDetail(
                     id: "\(id)-tool-\(idx)",
                     name: call.name,
                     args: convertedArgs,
-                    result: call.result,  // Already AnyJSONValue from API
+                    result: call.result, // Already AnyJSONValue from API
                     error: call.error,
                     status: status
                 )
             }
         }()
-        
+
         // Thoughts - try metadata first, then response
         let thoughts: [String]? = {
             if let metaThoughts = meta["thoughts"]?.value as? [String] {
@@ -178,25 +177,24 @@ enum MessageAdapter {
             createdAt: chatMessage.createdAt
         )
     }
-    
-    // Helper to parse tool calls from message metadata
+
+    /// Helper to parse tool calls from message metadata
     private static func parseToolCallsFromMetadata(_ metaToolCalls: [[String: Any]], messageId: String) -> [ToolCallDetail]? {
         let parsed = metaToolCalls.enumerated().compactMap { idx, dict -> ToolCallDetail? in
             guard let name = dict["name"] as? String else { return nil }
-            
+
             // Parse args
-            let args: [String: AnyJSONValue]
-            if let argsDict = dict["args"] as? [String: Any] {
-                args = argsDict.reduce(into: [:]) { acc, kv in
+            let args: [String: AnyJSONValue] = if let argsDict = dict["args"] as? [String: Any] {
+                argsDict.reduce(into: [:]) { acc, kv in
                     acc[kv.key] = AnyJSONValue(kv.value)
                 }
             } else {
-                args = [:]
+                [:]
             }
-            
+
             // Parse result
             let result: AnyJSONValue? = dict["result"].map { AnyJSONValue($0) }
-            
+
             // Parse error and status
             let error = dict["error"] as? String
             let statusStr = dict["status"] as? String
@@ -206,7 +204,7 @@ enum MessageAdapter {
                 }
                 return result != nil ? .completed : .pending
             }()
-            
+
             return ToolCallDetail(
                 id: "\(messageId)-tool-\(idx)",
                 name: name,

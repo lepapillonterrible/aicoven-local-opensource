@@ -5,15 +5,15 @@ struct PersonalContentView: View {
     @Binding var selectedThread: Thread?
     @Binding var openTabs: [WorkspaceTab]
     @Binding var activeTabId: String?
-    
+
     // Callbacks from parent
     var onNewChat: (() -> Void)?
     var onCreateCoven: (() -> Void)?
-    
+
     var activeTab: WorkspaceTab? {
         openTabs.first(where: { $0.id == activeTabId })
     }
-    
+
     var body: some View {
         VStack(spacing: 0) {
             // Tab bar + profile menu (or just profile menu if no tabs)
@@ -34,7 +34,7 @@ struct PersonalContentView: View {
                         activeTabId: $activeTabId
                     )
                     .frame(maxWidth: .infinity)
-                    
+
                     // Profile menu
                     ProfileMenuView(onOpenTab: openTab)
                         .frame(width: 44, height: 44)
@@ -59,14 +59,14 @@ struct PersonalContentView: View {
                     }
                 )
             }
-            
+
             // Content area
             if let tab = activeTab {
                 renderTabContent(tab)
             } else {
                 // Welcome state - no tab open
                 WelcomeToPersonalChat(
-                    onNewChat: { 
+                    onNewChat: {
                         AnalyticsService.shared.trackNewChatTapped(source: "personal_content_view")
                         onNewChat?()
                     },
@@ -77,22 +77,22 @@ struct PersonalContentView: View {
         }
         // Track tab switches using .onChange for reliable analytics
         .onChange(of: activeTabId) { oldTabId, newTabId in
-            guard let newTabId = newTabId,
-                  let oldTabId = oldTabId,
+            guard let newTabId,
+                  let oldTabId,
                   newTabId != oldTabId else { return }
-            
+
             // Look up tab types at the point of change, when both are still valid
             let fromTabType = openTabs.first(where: { $0.id == oldTabId })?.type.analyticsName ?? "unknown"
             let toTabType = openTabs.first(where: { $0.id == newTabId })?.type.analyticsName ?? "unknown"
-            
+
             AnalyticsService.shared.trackTabSwitched(fromTab: fromTabType, toTab: toTabType)
         }
     }
-    
-@ViewBuilder
+
+    @ViewBuilder
     private func renderTabContent(_ tab: WorkspaceTab) -> some View {
         switch tab.type {
-        case .thread(let thread):
+        case let .thread(thread):
             // Tie the chat view's identity to the thread so switching tabs on
             // macOS correctly refreshes the content and state for each thread.
             PersonalChatView(
@@ -131,7 +131,7 @@ struct PersonalContentView: View {
                     }
                 }
             )
-        case .memoryList(let covenId):
+        case let .memoryList(covenId):
             // Personal memory list for the local workspace (no coven).
             MemoryListView(
                 covenId: covenId,
@@ -139,7 +139,7 @@ struct PersonalContentView: View {
                 activeTabId: $activeTabId
             )
             .onAppear { AnalyticsService.shared.trackMemoryListOpened(covenId: covenId) }
-        case .memoryProposals(let covenId):
+        case let .memoryProposals(covenId):
             // For the personal workspace, `covenId` will be nil. The same
             // view can also be reused for coven-scoped proposals in the
             // future by passing a non-nil covenId.
@@ -151,11 +151,13 @@ struct PersonalContentView: View {
             .onAppear { AnalyticsService.shared.trackMemoryProposalViewed() }
         case .store:
             StoreView()
+        case .terms:
+            TermsOfServiceView()
         default:
             EmptyView()
         }
     }
-    
+
     private func openTab(_ type: WorkspaceTabType) {
         // Check if tab already open (this is a tab switch, not a new tab)
         if let existingTab = openTabs.first(where: { $0.type == type }) {
@@ -164,11 +166,11 @@ struct PersonalContentView: View {
             activeTabId = existingTab.id
             return
         }
-        
+
         // Create new tab
         let tab: WorkspaceTab
         switch type {
-        case .thread(let thread):
+        case let .thread(thread):
             tab = .thread(thread)
         case .profile:
             tab = .profile
@@ -182,16 +184,18 @@ struct PersonalContentView: View {
             tab = .budget
         case .personalStrixSettings:
             tab = WorkspaceTab.personalStrix
-        case .memoryList(let covenId):
+        case let .memoryList(covenId):
             tab = WorkspaceTab.memoryList(covenId: covenId)
-        case .memoryProposals(let covenId):
+        case let .memoryProposals(covenId):
             tab = WorkspaceTab.memoryProposals(covenId: covenId)
         case .store:
             tab = .store
+        case .terms:
+            tab = .terms
         default:
             return
         }
-        
+
         openTabs.append(tab)
         activeTabId = tab.id
         AnalyticsService.shared.trackTabOpened(tabType: tab.type.analyticsName)
@@ -203,26 +207,26 @@ struct WelcomeToPersonalChat: View {
     let onNewChat: () -> Void
     let onCreateCoven: () -> Void
     let onOpenProviderKeys: () -> Void
-    
+
     var body: some View {
         VStack(spacing: Spacing.xl) {
             Spacer()
-            
+
             // Static icon instead of animated cauldron
             IconBadge(icon: "sparkles", size: 100, color: .aicovenTeal)
-            
+
             VStack(spacing: Spacing.md) {
                 Text("Welcome to AICoven")
                     .font(.aicovenDisplayMedium)
                     .foregroundColor(.aicovenTextPrimary)
-                
+
                 Text("Start a new conversation or create a coven to collaborate with multiple AI roles")
                     .font(.aicovenBody)
                     .foregroundColor(.aicovenTextSecondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 500)
             }
-            
+
             // Quick actions - now clickable
             HStack(spacing: Spacing.md) {
                 Button(action: onNewChat) {
@@ -239,7 +243,7 @@ struct WelcomeToPersonalChat: View {
                     .glassMorphism()
                 }
                 .buttonStyle(.plain)
-                
+
                 Button(action: onCreateCoven) {
                     VStack(spacing: Spacing.sm) {
                         IconBadge(icon: "person.3", size: 60, color: .aicovenPurple)
@@ -255,31 +259,31 @@ struct WelcomeToPersonalChat: View {
                 }
                 .buttonStyle(.plain)
             }
-            
+
             // Provider keys call-to-action when no keys are configured
             AddProviderKeysCard(onOpenProviderKeys: onOpenProviderKeys)
                 .padding(.top, Spacing.lg)
                 .padding(.horizontal, Spacing.xl)
-            
+
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
-    /// Personal chat view using the same enhanced streaming tooling as coven chats
+/// Personal chat view using the same enhanced streaming tooling as coven chats
 struct PersonalChatView: View {
     let thread: Thread
     let onEditAgent: (() -> Void)?
     /// Optional back handler used on iOS mobile to navigate back to the
     /// threads list without relying on a NavigationStack.
     let onBack: (() -> Void)?
-    
+
     @State private var messages: [ChatMessage] = []
     @State private var messageText = ""
     @State private var isSending = false
     @State private var errorMessage: String?
-    
+
     // Streaming/autonomous state (mirrors EnhancedChatView behavior)
     @State private var lastResponse: ChatResponse?
     @State private var lastResponseId: String?
@@ -292,7 +296,7 @@ struct PersonalChatView: View {
     /// Whether the current streamed turn used any tools (web, GitHub, etc.).
     @State private var streamingUsedTools: Bool = false
     @State private var canEditAgent: Bool = true
-    
+
     // Pagination state for message history
     @State private var isInitialLoading: Bool = false
     @State private var didLoadInitialMessages: Bool = false
@@ -302,7 +306,7 @@ struct PersonalChatView: View {
     @State private var isPrependingMessages: Bool = false
     @State private var pendingScrollAnchorId: String? = nil
     private let pageSize: Int = 20
-    
+
     var body: some View {
         VStack(spacing: 0) {
             // Chat header
@@ -313,9 +317,9 @@ struct PersonalChatView: View {
                 onBack: onBack
             )
             .padding(Spacing.md)
-            
+
             GradientDivider()
-            
+
             // Messages area
             ScrollViewReader { proxy in
                 ScrollView {
@@ -349,7 +353,7 @@ struct PersonalChatView: View {
                             .buttonStyle(.plain)
                             .id("load-more-sentinel-\(oldestMessageId ?? "none")")
                         }
-                        
+
                         // Use the enumerated offset as the ForEach ID to avoid
                         // runtime crashes when the backend sends duplicate
                         // message IDs. We still use `em.id` for scrolling.
@@ -361,7 +365,7 @@ struct PersonalChatView: View {
                             )
                             .id(em.id)
                         }
-                        
+
                         // Show thinking indicator when AI is responding
                         if isSending {
                             HStack(alignment: .top) {
@@ -373,7 +377,7 @@ struct PersonalChatView: View {
                                     }
                                     .font(.caption)
                                     .foregroundStyle(Color.aicovenTeal)
-                                    
+
                                     CauldronLoadingView(message: reasoningLoadingMessage, size: 40)
                                         .padding(16)
                                         .background(
@@ -383,7 +387,7 @@ struct PersonalChatView: View {
                                         )
                                 }
                                 .frame(maxWidth: 800, alignment: .leading)
-                                
+
                                 Spacer(minLength: 0)
                             }
                             .id("thinking-indicator")
@@ -405,7 +409,7 @@ struct PersonalChatView: View {
                         pendingScrollAnchorId = nil
                         return
                     }
-                    
+
                     // Otherwise, scroll to the last message when new messages arrive.
                     if let lastMessage = enhancedMessages.last {
                         withAnimation {
@@ -426,9 +430,9 @@ struct PersonalChatView: View {
                     }
                 }
             }
-            
+
             GradientDivider()
-            
+
             // Message composer
             EnhancedMessageComposer(
                 messageText: $messageText,
@@ -484,7 +488,7 @@ struct PersonalChatView: View {
             await loadProviderKeys()
         }
     }
-    
+
     private var enhancedMessages: [EnhancedChatMessage] {
         messages.map { msg in
             // For the last AI message, use the cached ChatResponse to preserve tool calls and thoughts.
@@ -558,7 +562,7 @@ struct PersonalChatView: View {
             )
         }
     }
-    
+
     /// Load the most recent page of messages for this personal thread.
     private func loadInitialMessages() async {
         guard !isInitialLoading else { return }
@@ -579,7 +583,7 @@ struct PersonalChatView: View {
         }
         didLoadInitialMessages = true
     }
-    
+
     /// Load the next (older) page of messages when the user scrolls to the top
     /// of the currently loaded history.
     private func loadMoreMessagesIfNeeded() async {
@@ -593,10 +597,10 @@ struct PersonalChatView: View {
             AppErrorReporter.log(message: "loadMoreMessagesIfNeeded guard blocked older page load", context: "PersonalContentView.loadMoreMessagesIfNeeded")
             return
         }
-        
+
         isLoadingMore = true
         defer { isLoadingMore = false }
-        
+
         do {
             let older = try await ChatService.shared.loadMessages(
                 threadId: thread.id,
@@ -623,7 +627,7 @@ struct PersonalChatView: View {
             AppErrorReporter.log(error: error, context: "PersonalContentView.loadMoreMessagesIfNeeded")
         }
     }
-    
+
     private func loadProviderKeys() async {
         do {
             let accounts = try await ProviderAccountService.shared.loadProviderAccounts()
@@ -636,24 +640,24 @@ struct PersonalChatView: View {
             }
         }
     }
-    
+
     private func sendMessage(attachmentIds: [String]) async {
         let raw = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return }
-        
+
         // Split the outgoing content into the visible user question and any
         // tool-generated context blocks (web search results, attachment analysis).
         let parts = splitUserAndToolContext(from: raw)
         let userVisibleText = parts.userText
         let fullTextForLLM = parts.fullText
-        
+
         messageText = ""
         isSending = true
         streamingAnswerBuffer = ""
         streamingThoughts = []
         streamingUsedTools = false
         reasoningLoadingMessage = "Thinking through your request…"
-        
+
         // Add user message immediately and persist it in the local history.
         // We store only the human-authored question so the transcript stays
         // clean; tool context is treated as ephemeral system context.
@@ -670,12 +674,12 @@ struct PersonalChatView: View {
         )
         messages.append(userMessage)
         await ChatService.shared.addLocalMessage(userMessage)
-        
+
         do {
             try await ChatService.shared.streamMessage(
                 threadId: thread.id,
                 message: fullTextForLLM,
-                roleId: nil, // Personal threads don't have explicit roles
+                roleId: thread.agentId,
                 attachmentIds: attachmentIds.isEmpty ? nil : attachmentIds,
                 onPlanningDelta: { delta in
                     Task { @MainActor in
@@ -732,6 +736,10 @@ struct PersonalChatView: View {
                         }
                         if let model {
                             meta["model"] = AnyJSONValue(model)
+                        }
+                        // Persist the agent name so history loads show the correct role
+                        if let agentName = thread.agentName {
+                            meta["role_name"] = AnyJSONValue(agentName)
                         }
                         if let usage = tokenUsage {
                             var usageDict: [String: Any] = [:]
@@ -794,7 +802,7 @@ struct PersonalChatView: View {
             }
         }
     }
-    
+
     /// Split the outgoing composer text into a user-visible question and
     /// optional tool-generated context blocks (web search results, attachment
     /// analysis, etc.). The fullText field preserves the original text for
@@ -818,7 +826,7 @@ struct PersonalChatView: View {
         }
         return (userText: userPart, fullText: text)
     }
-    
+
     /// Map tool names to human-readable activity messages for the loader UI.
     private func toolActivityMessage(for toolName: String) -> String {
         if toolName.hasPrefix("web.search") {
@@ -870,7 +878,7 @@ struct PersonalChatHeader: View {
     let canEditAgent: Bool
     let onEditAgent: (() -> Void)?
     let onBack: (() -> Void)?
-    
+
     var body: some View {
         HStack(spacing: Spacing.md) {
             if let onBack {
@@ -881,24 +889,24 @@ struct PersonalChatHeader: View {
                 }
                 .buttonStyle(.plain)
             }
-            
+
             VStack(alignment: .leading, spacing: 4) {
                 Text(thread.title ?? "Chat")
                     .font(.aicovenH2)
                     .foregroundColor(.aicovenTextPrimary)
-                
+
                 HStack(spacing: 6) {
                     Image(systemName: "sparkles")
                         .font(.system(size: 10))
-                    // Show thread's agent name or "Strix" for personal assistant
+                    // Show thread's agent name or generic label
                     Text(thread.agentName ?? "Strix")
                         .font(.aicovenCaption)
                 }
                 .foregroundColor(.aicovenTextSecondary)
             }
-            
+
             Spacer()
-            
+
             if let onEditAgent {
                 Button(action: { if canEditAgent { onEditAgent() } }) {
                     HStack(spacing: 4) {
