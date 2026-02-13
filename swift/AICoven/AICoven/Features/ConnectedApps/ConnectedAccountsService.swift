@@ -7,11 +7,13 @@ actor ConnectedAccountsService {
     /// Shared singleton instance
     static let shared = ConnectedAccountsService()
 
-    /// Keychain key prefix for OAuth tokens
+    /// Keychain key prefix for OAuth tokens (will be user-scoped)
     private let keychainPrefix = "connected_account_token_"
 
-    /// UserDefaults key for accounts list
-    private let accountsKey = "connected_accounts"
+    /// UserDefaults key for accounts list (will be user-scoped)
+    private var accountsKey: String {
+        UserScope.scopedKey("connected_accounts")
+    }
 
     /// In-memory cache of accounts (nil means not yet loaded)
     private var accountsCache: [ConnectedAccount]?
@@ -132,7 +134,8 @@ actor ConnectedAccountsService {
 
     /// Get the OAuth token bundle for an account
     func getTokenBundle(forAccountId id: String) throws -> OAuthTokenBundle {
-        let key = keychainPrefix + id
+        // User-scoped keychain key
+        let key = UserScope.scopedKeychainService(keychainPrefix + id)
 
         // Use KeychainHelper to read the token data
         guard let jsonString = KeychainHelper.load(key: key),
@@ -152,7 +155,8 @@ actor ConnectedAccountsService {
 
     /// Store an OAuth token bundle for an account
     func storeTokenBundle(_ bundle: OAuthTokenBundle, forAccountId id: String) throws {
-        let key = keychainPrefix + id
+        // User-scoped keychain key
+        let key = UserScope.scopedKeychainService(keychainPrefix + id)
 
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -173,7 +177,8 @@ actor ConnectedAccountsService {
 
     /// Delete token bundle from Keychain
     private func deleteTokenBundle(forAccountId id: String) {
-        let key = keychainPrefix + id
+        // User-scoped keychain key
+        let key = UserScope.scopedKeychainService(keychainPrefix + id)
         KeychainHelper.delete(key: key)
     }
 

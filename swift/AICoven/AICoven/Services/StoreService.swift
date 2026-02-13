@@ -102,10 +102,12 @@ class StoreService: ObservableObject {
 
     /// Reload entitlements for the current user. Call after user switch.
     func reloadForCurrentUser() async {
-        // Clear cached purchases (they were for a different user)
-        purchasedProductIDs = []
-        // Load any cached purchases for this user
-        loadPersistedPurchases()
+        await MainActor.run {
+            // Clear cached purchases (they were for a different user)
+            purchasedProductIDs = []
+            // Load any cached purchases for this user
+            loadPersistedPurchases()
+        }
         // Then refresh from StoreKit (which is Apple ID scoped)
         await refreshEntitlements()
     }
@@ -115,11 +117,12 @@ class StoreService: ObservableObject {
     private var transactionListenerTask: Task<Void, Never>?
 
     private init() {
-        loadPersistedPurchases()
+        // Don't load persisted purchases here - they're unscoped if no user is signed in.
+        // Instead, load them in reloadForCurrentUser() which is called after auth.
         transactionListenerTask = listenForTransactions()
         Task {
             await loadProducts()
-            await refreshEntitlements()
+            // Don't refresh entitlements here either - wait for reloadForCurrentUser()
         }
     }
 
