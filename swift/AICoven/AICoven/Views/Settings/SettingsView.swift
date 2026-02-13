@@ -100,28 +100,61 @@ struct SettingsView: View {
     }
 }
 
-/// Placeholder for account settings
+/// Account settings view with profile info and account management
 struct AccountSettingsView: View {
+    @EnvironmentObject var authService: AuthService
+    @State private var showDeleteConfirmation = false
+    @State private var showFinalDeleteConfirmation = false
+    @State private var isDeleting = false
+    @State private var deleteError: String?
+    @State private var showPasswordReset = false
+    @State private var passwordResetSent = false
+
     var body: some View {
         Form {
+            // Profile section showing current user info
             Section("Profile") {
-                TextField("Display Name", text: .constant(""))
-                TextField("Email", text: .constant(""))
-                    .textContentType(.emailAddress)
-                #if os(iOS)
-                    .keyboardType(.emailAddress)
-                #endif
+                HStack {
+                    Text("Display Name")
+                    Spacer()
+                    Text(authService.currentUser?.name ?? "Not set")
+                        .foregroundColor(.secondary)
+                }
+                HStack {
+                    Text("Email")
+                    Spacer()
+                    Text(authService.currentUser?.email ?? "Unknown")
+                        .foregroundColor(.secondary)
+                }
             }
 
+            // Security section with password reset and account deletion
             Section("Security") {
-                Button("Change Password") {
-                    // TODO: Implement
+                Button("Reset Password") {
+                    showPasswordReset = true
                 }
 
-                Button("Delete Account") {
-                    // TODO: Implement
+                Button(role: .destructive) {
+                    showDeleteConfirmation = true
+                } label: {
+                    HStack {
+                        Text("Delete Account")
+                        if isDeleting {
+                            Spacer()
+                            ProgressView()
+                        }
+                    }
                 }
-                .foregroundColor(.red)
+                .disabled(isDeleting)
+            }
+
+            // Show error if deletion failed
+            if let error = deleteError {
+                Section {
+                    Text(error)
+                        .foregroundColor(.red)
+                        .font(.caption)
+                }
             }
         }
         .navigationTitle("Account")
@@ -131,6 +164,66 @@ struct AccountSettingsView: View {
             .onAppear {
                 AnalyticsService.shared.trackSettingsView(section: "account")
             }
+            // Password reset confirmation
+            .alert("Reset Password", isPresented: $showPasswordReset) {
+                Button("Cancel", role: .cancel) {}
+                Button("Send Reset Email") {
+                    Task {
+                        if let email = authService.currentUser?.email {
+                            do {
+                                try await authService.sendPasswordReset(email: email)
+                                passwordResetSent = true
+                            } catch {
+                                print("❌ Failed to send password reset: \(error)")
+                            }
+                        }
+                    }
+                }
+            } message: {
+                Text("We'll send a password reset link to \(authService.currentUser?.email ?? "your email").")
+            }
+            // Password reset sent confirmation
+            .alert("Email Sent", isPresented: $passwordResetSent) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Check your email for the password reset link.")
+            }
+            // First delete confirmation
+            .alert("Delete Account?", isPresented: $showDeleteConfirmation) {
+                Button("Cancel", role: .cancel) {}
+                Button("Continue", role: .destructive) {
+                    showFinalDeleteConfirmation = true
+                }
+            } message: {
+                Text("This will permanently delete your account and all your local data including conversations, memories, and settings. This action cannot be undone.")
+            }
+            // Final delete confirmation
+            .alert("Are you absolutely sure?", isPresented: $showFinalDeleteConfirmation) {
+                Button("Cancel", role: .cancel) {}
+                Button("Delete My Account", role: .destructive) {
+                    Task {
+                        await deleteAccount()
+                    }
+                }
+            } message: {
+                Text("Your account will be permanently deleted. You will be signed out immediately.")
+            }
+    }
+
+    /// Deletes the user's account and local data, then signs out
+    private func deleteAccount() async {
+        isDeleting = true
+        deleteError = nil
+
+        do {
+            try await authService.deleteAccount()
+            // User is now signed out; the auth state listener will handle UI transition
+        } catch {
+            deleteError = "Failed to delete account. Please try again."
+            print("❌ Account deletion failed: \(error)")
+        }
+
+        isDeleting = false
     }
 }
 

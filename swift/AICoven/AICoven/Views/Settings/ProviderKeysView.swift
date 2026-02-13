@@ -21,6 +21,13 @@ struct ProviderKeysView: View {
                     Text("Manage your AI provider API keys")
                         .font(.aicovenBody)
                         .foregroundColor(.aicovenTextSecondary)
+
+                    // Data retention policy disclaimer
+                    Text("By using a provider API key, you agree to that provider's data retention policy as agreed when the key was obtained.")
+                        .font(.aicovenCaption)
+                        .foregroundColor(.aicovenTextTertiary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, Spacing.lg)
                 }
                 .padding(.top, Spacing.xl)
 

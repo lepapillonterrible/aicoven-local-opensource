@@ -181,4 +181,107 @@ class AuthService: ObservableObject {
             buildLocalUserProfile(from: fbUser)
         }
     }
+
+    /// Permanently delete the current user's account and all associated local data.
+    /// This deletes all user data from the local SQLite database and the Firebase Auth user.
+    /// - Throws: An error if the deletion fails
+    func deleteAccount() async throws {
+        print("🗑️ Starting account deletion...")
+
+        guard let firebaseUser = Auth.auth().currentUser else {
+            throw NSError(
+                domain: "AuthService",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "No user is currently signed in."]
+            )
+        }
+
+        let userId = firebaseUser.uid
+
+        // Delete all user data from local SQLite database
+        await deleteLocalUserData(userId: userId)
+
+        // Clear user-specific UserDefaults
+        UserDefaults.standard.removeObject(forKey: AuthService.onboardingKey(for: userId))
+
+        // Delete the Firebase Auth user
+        do {
+            try await firebaseUser.delete()
+            print("✅ Firebase user deleted")
+        } catch {
+            print("❌ Failed to delete Firebase user: \(error)")
+            // Re-throw the error since the user expects account to be fully deleted
+            throw error
+        }
+
+        print("✅ Account deleted successfully")
+
+        // Clear local state
+        await DataEncryptionService.shared.lock()
+        currentUser = nil
+        isAuthenticated = false
+        AppState.shared.hasCompletedOnboarding = false
+    }
+
+    /// Deletes all local data for a specific user from the SQLite database.
+    /// - Parameter userId: The Firebase UID of the user whose data should be deleted
+    private func deleteLocalUserData(userId: String) async {
+        print("🗑️ Deleting local data for user: \(userId)")
+
+        guard let dbQueue = await DatabaseManager.shared.dbQueue else {
+            print("⚠️ Database not available, skipping local data deletion")
+            return
+        }
+
+        do {
+            try await dbQueue.write { db in
+                // Delete user's threads and messages (messages cascade delete with threads)
+                try db.execute(
+                    sql: "DELETE FROM threads WHERE user_id = ?",
+                    arguments: [userId]
+                )
+
+                // Delete user's memory chunks
+                try db.execute(
+                    sql: "DELETE FROM memory_chunks WHERE user_id = ?",
+                    arguments: [userId]
+                )
+
+                // Delete user's memory proposals
+                try db.execute(
+                    sql: "DELETE FROM memory_proposals WHERE user_id = ?",
+                    arguments: [userId]
+                )
+
+                // Delete user's roles (cascade from covens may handle some)
+                try db.execute(
+                    sql: "DELETE FROM roles WHERE user_id = ?",
+                    arguments: [userId]
+                )
+
+                // Delete user's covens (will cascade delete roles)
+                try db.execute(
+                    sql: "DELETE FROM covens WHERE user_id = ?",
+                    arguments: [userId]
+                )
+
+                // Delete user's provider accounts
+                try db.execute(
+                    sql: "DELETE FROM provider_accounts WHERE id IN (SELECT id FROM provider_accounts)",
+                    arguments: []
+                )
+
+                // Delete user settings
+                try db.execute(
+                    sql: "DELETE FROM user_settings WHERE id = ?",
+                    arguments: [userId]
+                )
+
+                print("✅ Local user data deleted from SQLite")
+            }
+        } catch {
+            print("❌ Failed to delete local user data: \(error)")
+            // Don't throw here - we still want to proceed with Firebase deletion
+        }
+    }
 }
