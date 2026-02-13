@@ -9,14 +9,14 @@ For the cloud version of the app go to https://aicoven.ai/
 - **No backend required**: everything happens on device. The only API calls are made to AI model providers.
 - **Local-first data**: chats, documents, and settings live on-device.
 - **User-provided API keys**: you bring your own keys for LLM/embedding providers.
-- **Local LLM support**: run models on your own machine via [Ollama](https://ollama.com) — no API key needed.
+- **Local LLM support**: run models directly on your Mac via [MLX](https://github.com/ml-explore/mlx-swift) (on-device, no server needed) or via [Ollama](https://ollama.com) — no API key needed for either.
 - **Simple default assistant**: a single configurable assistant that "just works" out of the box.
 
 ## Current status
 
 This repo started as an extraction of the original multi-tenant AICoven app and is being reshaped into a **standalone, local-first client**. The current codebase already includes:
 
-- A provider-agnostic `LLMClient` + `ModelRouter` used for all LLM calls, with user-preference-aware routing.
+- A provider-agnostic `LLMClient` + `ModelRouter` used for all LLM calls, supporting OpenAI, Anthropic, Google Gemini, Ollama, and on-device MLX models.
 - Encrypted local context storage (threads, memories, settings) backed by SQLite/GRDB.
 - A "context sandwich" builder that composes system contract, policies, time, memories, history, and the current turn.
 - A tools layer (`ToolEnvironment` + `ToolService`) that exposes web search, file/image analysis, and local file/image generation using only your provider keys.
@@ -84,7 +84,8 @@ The local-first client is functional for core workflows but some features are st
 - Basic chat UI with thread management
 - Shell command tools with approval flow
 - Connected apps: GitHub and Google Drive integrations
-- Local LLM support via Ollama with automatic model discovery
+- Local LLM support via Ollama and on-device MLX with automatic model discovery
+- Native tool calling for API providers (OpenAI, Anthropic, Gemini) with text-based fallback for local models
 - StoreKit 2 in-app purchases with community edition bypass
 - SwiftLint configuration (`.swiftlint.yml`) and CI workflow
 
@@ -106,15 +107,30 @@ For detailed code review findings and recommendations, see [`docs/CODE_REVIEW.md
 
 The tools layer is provider-agnostic and designed to work with whatever keys you configure:
 
-- **Time** – Timezone-aware current time, injected into the context sandwich.
-- **Web search** – A lightweight `web.search` powered by DuckDuckGo's public JSON API (no extra keys).
+- **Time** (`current_time`) – Timezone-aware current time, injected into the context sandwich.
+- **Web search** (`web_search`) – Powered by DuckDuckGo's public JSON API (no extra keys).
+- **Web visit** (`web_visit`) – Fetch and summarize the content of a URL.
+- **File read/write/list** (`file.read`, `file.write`, `file.list`) – Read, write, and list local files and directories.
+- **Shell commands** (`shell.execute`) – Execute local shell commands with a user-approval flow before execution.
 - **Attachment analysis** – Summarization/QA over attached files and images using the best available vision/chat model.
 - **Image generation** – Simple image generation using a chat model and local decoding; images are stored as local files and appear as attachments.
-- **File generation** – Local text file generation (e.g. notes, summaries) written to disk and attached to messages.
-- **Shell commands** – Execute local shell commands with a user-approval flow before execution.
-- **Connected apps** – GitHub repository tools and Google Drive file tools, authenticated via user-provided tokens.
+- **Connected apps** – GitHub repository tools (read/write files, create branches/PRs, search code) and Google Drive file tools (list, read, upload, Sheets read/write), authenticated via user-provided tokens.
 
 These tools are available both to the autonomous `AgentRunner` and to the interactive chat UI via the enhanced message composer.
+
+### Tool calling by provider
+
+| Provider | Tool calling method | Status |
+|----------|-------------------|--------|
+| **OpenAI** | Native function calling API | ✅ Fully supported |
+| **Anthropic** | Native tool use API | ✅ Fully supported |
+| **Google Gemini** | Native function declarations API | ✅ Fully supported |
+| **Ollama** (local) | Text-based (JSON in system prompt) | ⚠️ Needs improvement |
+| **MLX** (on-device) | Text-based (JSON in system prompt) | ⚠️ Needs improvement |
+
+API providers (OpenAI, Anthropic, Gemini) use **native tool calling** — tool schemas are sent as structured function declarations and the model returns structured tool calls. This is reliable and well-supported.
+
+Local models (Ollama, MLX) use **text-based tool calling** — tool definitions are embedded in the system prompt and the model is instructed to output raw JSON. A parser with several fallback strategies (code fence stripping, think-tag removal, brace matching) extracts tool calls from the response. A remapping layer corrects commonly hallucinated tool names (e.g. `python` → `shell.execute`). **This approach works but is less reliable than native tool calling**, especially with smaller models (4B-7B). Contributions to improve local model tool use are very welcome.
 
 ## Privacy and security
 
@@ -161,9 +177,24 @@ For a complete documentation index, see [`docs/README.md`](docs/README.md).
 5. Build & run.
 6. In the app, open Settings → Provider Keys and add your own API keys (e.g. OpenAI, Anthropic, Gemini). The app will then route LLM and embedding calls through those providers.
 
+### Using MLX (On-Device Models)
+
+AICoven can run models **directly on your Mac's GPU** using Apple's [MLX framework](https://github.com/ml-explore/mlx-swift) — no server, no API key, completely offline.
+
+1. In the app, open a chat with a role configured to use an MLX model.
+2. On first use, the model weights are automatically downloaded from HuggingFace.
+3. Subsequent loads are instant from the local cache.
+
+Tested models include:
+- `mlx-community/Mistral-7B-Instruct-v0.3-4bit`
+- `mlx-community/Qwen3-4B-4bit`
+- Any [mlx-community](https://huggingface.co/mlx-community) 4-bit quantized model
+
+> **Note:** MLX models run on Apple Silicon only. Performance depends on your Mac's unified memory — 7B models need ~4 GB, larger models need more. Tool use with MLX models is functional but less reliable than with API providers; see the [tool calling table](#tool-calling-by-provider) above.
+
 ### Using Ollama (Local LLMs)
 
-You can run models entirely on your machine with [Ollama](https://ollama.com) — no API key or cloud account needed.
+You can run models on your machine with [Ollama](https://ollama.com) — no API key or cloud account needed.
 
 1. Install Ollama:
    ```bash
@@ -178,6 +209,8 @@ You can run models entirely on your machine with [Ollama](https://ollama.com) �
 4. Select **Ollama (Local)**, enter the server URL (default `http://localhost:11434`), and tap **Connect**.
 5. The app will discover available models automatically — select one and tap **Add Ollama**.
 6. Start chatting! Requests go directly to Ollama on your machine; nothing leaves your network.
+
+> **Note:** Tool use with Ollama models works but is less reliable than with API providers, especially for smaller models. See the [tool calling table](#tool-calling-by-provider) above.
 
 ## Development Workflow
 
