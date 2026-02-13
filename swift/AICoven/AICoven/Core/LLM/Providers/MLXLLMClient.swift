@@ -30,7 +30,7 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
     #endif
 
     init(modelID: String) {
-        self.defaultModelID = modelID
+        defaultModelID = modelID
     }
 
     // MARK: - LLMClient (full response)
@@ -169,6 +169,7 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
         return container
     }
     #endif
+
     // MARK: - Conversation prompt composition
 
     /// Compose all non-system messages into a single prompt with role labels.
@@ -187,9 +188,9 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
 
         return nonSystem.map { msg in
             switch msg.role {
-            case .user:      return "User: \(msg.content)"
-            case .assistant: return "Assistant: \(msg.content)"
-            default:         return msg.content
+            case .user: "User: \(msg.content)"
+            case .assistant: "Assistant: \(msg.content)"
+            default: msg.content
             }
         }.joined(separator: "\n\n")
     }
@@ -206,13 +207,13 @@ enum MLXClientError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .packageNotAvailable:
-            return "MLX package is not available. Add mlx-swift-lm to the project dependencies."
+            "MLX package is not available. Add mlx-swift-lm to the project dependencies."
         case .noUserMessage:
-            return "No user message found in the conversation."
+            "No user message found in the conversation."
         case .embeddingsNotSupported:
-            return "Local embeddings via MLX are not yet supported."
-        case .modelLoadFailed(let detail):
-            return "Failed to load MLX model: \(detail)"
+            "Local embeddings via MLX are not yet supported."
+        case let .modelLoadFailed(detail):
+            "Failed to load MLX model: \(detail)"
         }
     }
 }

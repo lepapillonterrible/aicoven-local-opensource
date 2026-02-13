@@ -8,10 +8,12 @@ import UIKit
 /// Rich message bubble that renders markdown, attachments, thoughts, and tool calls
 struct RichMessageBubble: View {
     let message: EnhancedChatMessage
-    var onApproveToolCall: ((String) -> Void)? = nil
-    var onRejectToolCall: ((String) -> Void)? = nil
+    var onApproveToolCall: ((String) -> Void)?
+    var onRejectToolCall: ((String) -> Void)?
 
-    private var isUser: Bool { message.role == "user" }
+    private var isUser: Bool {
+        message.role == "user"
+    }
 
     var body: some View {
         HStack(alignment: .top) {
@@ -61,11 +63,11 @@ struct RichMessageBubble: View {
                                 Spacer()
                                 if let url = file.url {
                                     Button("Download") {
-#if os(macOS)
+                                        #if os(macOS)
                                         NSWorkspace.shared.open(url)
-#elseif os(iOS)
+                                        #elseif os(iOS)
                                         UIApplication.shared.open(url)
-#endif
+                                        #endif
                                     }
                                     .buttonStyle(.bordered)
                                 }
@@ -88,7 +90,7 @@ struct RichMessageBubble: View {
         }
     }
 
-    @ViewBuilder private var header: some View {
+    private var header: some View {
         HStack(spacing: 6) {
             Image(systemName: "sparkles")
             // Default to "Strix" for personal threads when no agent role is provided
@@ -99,7 +101,7 @@ struct RichMessageBubble: View {
         .foregroundStyle(Color.aicovenTeal)
     }
 
-    @ViewBuilder private var footer: some View {
+    private var footer: some View {
         HStack(spacing: 8) {
             if let t = message.tokens { Text("\(t) tokens").font(.caption2).foregroundStyle(.secondary) }
             if let d = message.createdAt { Text(d, style: .time).font(.caption2).foregroundStyle(.secondary) }
@@ -111,7 +113,7 @@ struct RichMessageBubble: View {
 struct RichMessageBubble_Previews: PreviewProvider {
     static var previews: some View {
         VStack(alignment: .leading, spacing: 12) {
-                RichMessageBubble(message: .init(
+            RichMessageBubble(message: .init(
                 id: "1",
                 threadId: "t",
                 role: "assistant",
@@ -122,7 +124,7 @@ struct RichMessageBubble_Previews: PreviewProvider {
                 tokens: 123,
                 cost: nil,
                 thoughts: ["Searching memory", "Summarizing"],
-toolCalls: [
+                toolCalls: [
                     ToolCallDetail(id: "c1", name: "web.search", args: [:] as [String: AnyJSONValue], result: AnyJSONValue("Found results"), error: nil, status: .completed)
                 ],
                 attachments: [

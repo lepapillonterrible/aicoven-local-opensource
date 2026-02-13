@@ -63,7 +63,7 @@ final class MLXModelManager: ObservableObject {
     // MARK: - Persistence keys
 
     private static let downloadedModelsKey = "MLXModelManager.downloadedModelIDs"
-    private static let activeModelKey      = "MLXModelManager.activeModelID"
+    private static let activeModelKey = "MLXModelManager.activeModelID"
 
     // MARK: - Init
 
@@ -153,7 +153,7 @@ final class MLXModelManager: ObservableObject {
             // Progress is not directly observable in the current API,
             // so we show indeterminate and then mark complete.
             downloadStates[modelID] = .downloading(progress: 0.5)
-            let _ = try await loadModelContainer(id: modelID)
+            _ = try await loadModelContainer(id: modelID)
             downloadStates[modelID] = .downloaded
             persistDownloadedModel(modelID)
         } catch {
@@ -179,7 +179,7 @@ final class MLXModelManager: ObservableObject {
         //   ~/Library/Caches/huggingface/hub/models--{org}--{model}/
         // where slashes in the model ID are replaced with "--".
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-        if let cacheDir = cacheDir {
+        if let cacheDir {
             let modelDir = cacheDir.appendingPathComponent("huggingface/hub/models--" + modelID.replacingOccurrences(of: "/", with: "--"))
             if FileManager.default.fileExists(atPath: modelDir.path) {
                 do {

@@ -6,7 +6,7 @@ struct ThreadRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "threads"
 
     var id: String
-    var userId: String?  // Owner of this thread for data isolation
+    var userId: String? // Owner of this thread for data isolation
     var title: String?
     var createdAt: Date
     var updatedAt: Date?
@@ -24,13 +24,15 @@ struct ThreadRecord: Codable, FetchableRecord, PersistableRecord {
     }
 
     /// Memberwise initializer used by repositories when inserting new rows.
-    init(id: String,
-         userId: String?,
-         title: String?,
-         createdAt: Date,
-         updatedAt: Date?,
-         summaryCiphertext: Data?,
-         metadata: String?) {
+    init(
+        id: String,
+        userId: String?,
+        title: String?,
+        createdAt: Date,
+        updatedAt: Date?,
+        summaryCiphertext: Data?,
+        metadata: String?
+    ) {
         self.id = id
         self.userId = userId
         self.title = title
@@ -68,7 +70,7 @@ struct MessageRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "messages"
 
     var id: String
-    var userId: String?  // Owner of this message for data isolation
+    var userId: String? // Owner of this message for data isolation
     var threadID: String
     var role: String
     var createdAt: Date
@@ -86,13 +88,15 @@ struct MessageRecord: Codable, FetchableRecord, PersistableRecord {
     }
 
     /// Memberwise initializer used by repositories when inserting new rows.
-    init(id: String,
-         userId: String?,
-         threadID: String,
-         role: String,
-         createdAt: Date,
-         contentCiphertext: Data,
-         metadata: String?) {
+    init(
+        id: String,
+        userId: String?,
+        threadID: String,
+        role: String,
+        createdAt: Date,
+        contentCiphertext: Data,
+        metadata: String?
+    ) {
         self.id = id
         self.userId = userId
         self.threadID = threadID

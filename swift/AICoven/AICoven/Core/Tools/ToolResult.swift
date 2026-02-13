@@ -27,7 +27,7 @@ struct ToolExecutionResult: Codable, Sendable {
     let field: String?
     /// Suggested fix for validation errors
     let suggestion: String?
-    
+
     init(
         tool: String,
         status: String,
@@ -51,9 +51,9 @@ struct ToolExecutionResult: Codable, Sendable {
         self.field = field
         self.suggestion = suggestion
     }
-    
+
     // MARK: - Convenience Initializers
-    
+
     /// Create a successful result with optional context block for the LLM.
     static func success(
         tool: String,
@@ -67,7 +67,7 @@ struct ToolExecutionResult: Codable, Sendable {
             contextBlock: contextBlock
         )
     }
-    
+
     /// Create an error result.
     static func error(
         tool: String,
@@ -85,7 +85,7 @@ struct ToolExecutionResult: Codable, Sendable {
             helpfulInstructions: helpfulInstructions
         )
     }
-    
+
     /// Create a validation error result (agent can fix parameters).
     static func validationError(
         tool: String,
@@ -103,7 +103,7 @@ struct ToolExecutionResult: Codable, Sendable {
             suggestion: suggestion
         )
     }
-    
+
     /// Create a permission denied result.
     static func permissionDenied(
         tool: String,
@@ -119,7 +119,7 @@ struct ToolExecutionResult: Codable, Sendable {
             helpfulInstructions: helpfulInstructions
         )
     }
-    
+
     /// Create a denied result (user declined approval).
     static func denied(tool: String, reason: String = "User denied execution") -> ToolExecutionResult {
         ToolExecutionResult(
@@ -129,7 +129,7 @@ struct ToolExecutionResult: Codable, Sendable {
             errorType: "user_denied"
         )
     }
-    
+
     /// Create a timeout result.
     static func timeout(tool: String, timeoutSeconds: Int) -> ToolExecutionResult {
         ToolExecutionResult(
@@ -156,9 +156,9 @@ enum ToolErrorType: String, Codable, Sendable {
     /// User denied the operation (e.g., shell command approval)
     case userDenied = "user_denied"
     /// Operation timed out
-    case timeout = "timeout"
+    case timeout
     /// Unknown or unexpected error
-    case unknown = "unknown"
+    case unknown
 }
 
 // MARK: - Tool Execution Error
@@ -173,7 +173,7 @@ struct ToolExecutionError: Error, LocalizedError, Sendable {
     let suggestion: String?
     let helpfulInstructions: String?
     let isRetryable: Bool
-    
+
     init(
         type: ToolErrorType,
         message: String,
@@ -192,23 +192,22 @@ struct ToolExecutionError: Error, LocalizedError, Sendable {
         // Default retryability based on error type
         self.isRetryable = isRetryable ?? (type == .invalidParameters || type == .timeout)
     }
-    
+
     var errorDescription: String? {
         message
     }
-    
+
     /// Convert to a ToolExecutionResult for returning to the agent.
     func toResult() -> ToolExecutionResult {
-        let status: String
-        switch type {
+        let status = switch type {
         case .permissionDenied, .userDenied:
-            status = "denied"
+            "denied"
         case .timeout:
-            status = "timeout"
+            "timeout"
         default:
-            status = "error"
+            "error"
         }
-        
+
         return ToolExecutionResult(
             tool: tool ?? "unknown",
             status: status,
@@ -233,11 +232,11 @@ enum ShellCommandRiskLevel: String, Codable, Sendable {
     case medium
     /// Dangerous operations (rm -rf, sudo, system modifications)
     case high
-    
+
     /// Determine risk level from a shell command string.
     static func assess(command: String) -> ShellCommandRiskLevel {
         let lowercased = command.lowercased()
-        
+
         // High-risk patterns
         let highRiskPatterns = [
             "rm -rf /",
@@ -245,19 +244,19 @@ enum ShellCommandRiskLevel: String, Codable, Sendable {
             "sudo ",
             "mkfs",
             "dd if=",
-            ":(){:|:&};:",  // Fork bomb
+            ":(){:|:&};:", // Fork bomb
             "chmod 777 /",
             "> /dev/sda",
             "mv /* ",
             "rm -rf *"
         ]
-        
+
         for pattern in highRiskPatterns {
             if lowercased.contains(pattern) {
                 return .high
             }
         }
-        
+
         // Medium-risk: write operations
         let mediumRiskPatterns = [
             "rm ",
@@ -277,16 +276,16 @@ enum ShellCommandRiskLevel: String, Codable, Sendable {
             "touch ",
             "mkdir ",
             "echo ",
-            "> ",  // Redirect (can overwrite files)
+            "> ", // Redirect (can overwrite files)
             ">> "
         ]
-        
+
         for pattern in mediumRiskPatterns {
             if lowercased.contains(pattern) {
                 return .medium
             }
         }
-        
+
         // Default to low risk for read-only operations
         return .low
     }

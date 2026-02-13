@@ -15,10 +15,10 @@ struct UsageEntryResponse: Codable, Identifiable {
     let completionTokens: Int
     let totalTokens: Int
     let costUsd: Double
-    // metadata is optional dict, tricky to decode if mixed types, keeping as [String: String] for now or omitting if complex
-    // let metadata: [String: String]? 
+    /// metadata is optional dict, tricky to decode if mixed types, keeping as [String: String] for now or omitting if complex
+    /// let metadata: [String: String]?
     let createdAt: String
-    
+
     enum CodingKeys: String, CodingKey {
         case id, model, provider
         case userId = "user_id"
@@ -40,7 +40,7 @@ struct UsageSummaryResponse: Codable {
     let messageCount: Int
     let startDate: String
     let endDate: String
-    
+
     enum CodingKeys: String, CodingKey {
         case totalTokens = "total_tokens"
         case totalCostUsd = "total_cost_usd"
@@ -58,7 +58,7 @@ struct CovenUsageResponse: Codable {
     let totalTokens: Int
     let totalCostUsd: Double
     let messageCount: Int
-    
+
     enum CodingKeys: String, CodingKey {
         case covenId = "coven_id"
         case covenName = "coven_name"
@@ -78,7 +78,7 @@ struct BudgetResponse: Codable, Identifiable {
     let active: Bool
     let createdAt: String
     let updatedAt: String?
-    
+
     enum CodingKeys: String, CodingKey {
         case id, provider, alerts, active
         case ownerId = "owner_id"
@@ -96,7 +96,7 @@ struct RemainingResponse: Codable {
     let remainingUsd: Double?
     let hardCap: Bool
     let thresholdHit: Int?
-    
+
     enum CodingKeys: String, CodingKey {
         case provider
         case budgetUsd = "budget_usd"

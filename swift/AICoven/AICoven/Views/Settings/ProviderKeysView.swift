@@ -6,24 +6,24 @@ struct ProviderKeysView: View {
     @State private var loading = true
     @State private var showAddSheet = false
     @State private var selectedAccount: ProviderAccount?
-    
+
     var body: some View {
         ScrollView {
             VStack(spacing: Spacing.xl) {
                 // Header
                 VStack(spacing: Spacing.sm) {
                     IconBadge(icon: "key.fill", size: 60, color: .aicovenTeal)
-                    
+
                     Text("Provider Keys")
                         .font(.aicovenDisplaySmall)
                         .foregroundColor(.aicovenTextPrimary)
-                    
+
                     Text("Manage your AI provider API keys")
                         .font(.aicovenBody)
                         .foregroundColor(.aicovenTextSecondary)
                 }
                 .padding(.top, Spacing.xl)
-                
+
                 if loading {
                     ProgressView()
                         .scaleEffect(1.5)
@@ -46,7 +46,7 @@ struct ProviderKeysView: View {
                         }
                     }
                     .padding(.horizontal, Spacing.lg)
-                    
+
                     // Add button
                     GradientButton("Add Provider Key", icon: "plus.circle.fill", style: .primary) {
                         showAddSheet = true
@@ -68,35 +68,35 @@ struct ProviderKeysView: View {
             await loadProviderAccounts()
         }
     }
-    
+
     var emptyState: some View {
         VStack(spacing: Spacing.lg) {
             Image(systemName: "key.fill")
                 .font(.system(size: 60))
                 .foregroundColor(.aicovenTeal.opacity(0.6))
-            
+
             Text("No Provider Keys")
                 .font(.aicovenH2)
                 .foregroundColor(.aicovenTextPrimary)
-            
+
             Text("Add your first API key to start using AI providers with AICoven. All keys are encrypted and stored securely.")
                 .font(.aicovenBody)
                 .foregroundColor(.aicovenTextSecondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 400)
-            
+
             GradientButton("Add Provider Key", icon: "plus.circle.fill", style: .primary) {
                 showAddSheet = true
             }
         }
         .padding(Spacing.xxl)
     }
-    
-    // Load provider accounts
+
+    /// Load provider accounts
     private func loadProviderAccounts() async {
         loading = true
         defer { loading = false }
-        
+
         do {
             providerAccounts = try await ProviderAccountService.shared.loadProviderAccounts()
         } catch {
@@ -104,8 +104,8 @@ struct ProviderKeysView: View {
             providerAccounts = []
         }
     }
-    
-    // Delete provider account
+
+    /// Delete provider account
     private func deleteAccount(_ account: ProviderAccount) async {
         do {
             try await ProviderAccountService.shared.deleteProviderAccount(id: account.id)
@@ -122,29 +122,29 @@ struct ProviderAccountCard: View {
     let onEdit: () -> Void
     let onDelete: () -> Void
     @State private var showDeleteConfirmation = false
-    
+
     var providerInfo: (icon: String, name: String, color: Color) {
         switch account.provider.lowercased() {
-        case "openai": return ("🤖", "OpenAI", .aicovenTeal)
-        case "google": return ("🔵", "Google AI", .blue)
-        case "anthropic": return ("🟣", "Anthropic", .aicovenPurple)
-        case "cohere": return ("🧠", "Cohere", .aicovenPink)
-        case "mistral": return ("🌬️", "Mistral AI", .cyan)
-        case "ollama": return ("🦙", "Ollama (Local)", .orange)
-        case "mlx": return ("🧠", "MLX (On-Device)", .purple)
-        default: return ("🔑", account.provider, .aicovenTeal)
+        case "openai": ("🤖", "OpenAI", .aicovenTeal)
+        case "google": ("🔵", "Google AI", .blue)
+        case "anthropic": ("🟣", "Anthropic", .aicovenPurple)
+        case "cohere": ("🧠", "Cohere", .aicovenPink)
+        case "mistral": ("🌬️", "Mistral AI", .cyan)
+        case "ollama": ("🦙", "Ollama (Local)", .orange)
+        case "mlx": ("🧠", "MLX (On-Device)", .purple)
+        default: ("🔑", account.provider, .aicovenTeal)
         }
     }
-    
+
     var statusColor: Color {
         switch account.status {
-        case "healthy": return .green
-        case "unhealthy": return .red
-        case "pending": return .orange
-        default: return .gray
+        case "healthy": .green
+        case "unhealthy": .red
+        case "pending": .orange
+        default: .gray
         }
     }
-    
+
     var body: some View {
         GlassCard {
             VStack(spacing: Spacing.md) {
@@ -153,16 +153,16 @@ struct ProviderAccountCard: View {
                     HStack(spacing: Spacing.sm) {
                         Text(providerInfo.icon)
                             .font(.system(size: 32))
-                        
+
                         VStack(alignment: .leading, spacing: Spacing.xxs) {
                             Text(account.displayName)
                                 .font(.aicovenH3)
                                 .foregroundColor(.aicovenTextPrimary)
-                            
+
                             Text(providerInfo.name)
                                 .font(.aicovenCaption)
                                 .foregroundColor(.aicovenTextSecondary)
-                            
+
                             if let model = account.defaultModel {
                                 Text("Model: \(model)")
                                     .font(.aicovenCaption)
@@ -170,15 +170,15 @@ struct ProviderAccountCard: View {
                             }
                         }
                     }
-                    
+
                     Spacer()
-                    
+
                     // Status badge
                     HStack(spacing: Spacing.xxs) {
                         Circle()
                             .fill(statusColor)
                             .frame(width: 8, height: 8)
-                        
+
                         Text(account.status.capitalized)
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextSecondary)
@@ -188,17 +188,17 @@ struct ProviderAccountCard: View {
                     .background(Color.aicovenGlass)
                     .cornerRadius(BorderRadius.circle)
                 }
-                
+
                 // Scopes
                 if !account.scopes.isEmpty {
                     HStack {
                         Text("Capabilities:")
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextSecondary)
-                        
+
                         Spacer()
                     }
-                    
+
                     FlowLayout(spacing: Spacing.xs) {
                         ForEach(account.scopes, id: \.self) { scope in
                             Text(scope)
@@ -211,7 +211,7 @@ struct ProviderAccountCard: View {
                         }
                     }
                 }
-                
+
                 // Metadata
                 VStack(alignment: .leading, spacing: Spacing.xxs) {
                     if let lastCheck = account.lastHealthCheckAt {
@@ -219,26 +219,26 @@ struct ProviderAccountCard: View {
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextTertiary)
                     }
-                    
+
                     if let quota = account.quotaHint {
                         Text(quota)
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextTertiary)
                     }
                 }
-                
+
                 // Actions
                 HStack(spacing: Spacing.sm) {
                     Button("Test") {
                         // Test connection
                     }
                     .buttonStyle(SecondaryButtonStyle())
-                    
+
                     Button("Edit") {
                         onEdit()
                     }
                     .buttonStyle(SecondaryButtonStyle())
-                    
+
                     Button("Delete") {
                         showDeleteConfirmation = true
                     }
@@ -261,7 +261,7 @@ struct ProviderAccountCard: View {
 struct AddProviderKeySheet: View {
     @Environment(\.dismiss) private var dismiss
     let onComplete: () -> Void
-    
+
     @State private var selectedProvider = "openai"
     @State private var displayName = ""
     @State private var apiKey = ""
@@ -272,10 +272,15 @@ struct AddProviderKeySheet: View {
     @State private var selectedOllamaModel: String = ""
     @State private var connectionTestResult: (success: Bool, message: String)? = nil
     @State private var selectedMLXModelID: String = ""
-    
-    private var isOllama: Bool { selectedProvider == "ollama" }
-    private var isMLX: Bool { selectedProvider == "mlx" }
-    
+
+    private var isOllama: Bool {
+        selectedProvider == "ollama"
+    }
+
+    private var isMLX: Bool {
+        selectedProvider == "mlx"
+    }
+
     let providers = [
         ("openai", "OpenAI", "🤖"),
         ("anthropic", "Anthropic Claude", "🟣"),
@@ -283,7 +288,7 @@ struct AddProviderKeySheet: View {
         ("ollama", "Ollama (Local)", "🦙"),
         ("mlx", "MLX (On-Device)", "🧠")
     ]
-    
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -293,7 +298,7 @@ struct AddProviderKeySheet: View {
                         Text("Provider")
                             .font(.aicovenH3)
                             .foregroundColor(.aicovenTextPrimary)
-                        
+
                         ForEach(providers, id: \.0) { provider in
                             Button {
                                 selectedProvider = provider.0
@@ -309,13 +314,13 @@ struct AddProviderKeySheet: View {
                                 HStack {
                                     Text(provider.2)
                                         .font(.system(size: 24))
-                                    
+
                                     Text(provider.1)
                                         .font(.aicovenBody)
                                         .foregroundColor(.aicovenTextPrimary)
-                                    
+
                                     Spacer()
-                                    
+
                                     if selectedProvider == provider.0 {
                                         Image(systemName: "checkmark.circle.fill")
                                             .foregroundColor(.aicovenTeal)
@@ -330,13 +335,13 @@ struct AddProviderKeySheet: View {
                             .buttonStyle(.plain)
                         }
                     }
-                    
+
                     // Display name
                     VStack(alignment: .leading, spacing: Spacing.sm) {
                         Text("Display Name")
                             .font(.aicovenH3)
                             .foregroundColor(.aicovenTextPrimary)
-                        
+
                         TextField(isOllama ? "My Ollama" : isMLX ? "My Local LLM" : "My API Key", text: $displayName)
                             .font(.aicovenBody)
                             .foregroundColor(.aicovenTextPrimary)
@@ -344,7 +349,7 @@ struct AddProviderKeySheet: View {
                             .background(Color.aicovenGlass)
                             .cornerRadius(BorderRadius.md)
                     }
-                    
+
                     if isOllama {
                         ollamaConfigSection
                     } else if isMLX {
@@ -355,20 +360,20 @@ struct AddProviderKeySheet: View {
                             Text("API Key")
                                 .font(.aicovenH3)
                                 .foregroundColor(.aicovenTextPrimary)
-                            
+
                             SecureField("sk-...", text: $apiKey)
                                 .font(.aicovenBody)
                                 .foregroundColor(.aicovenTextPrimary)
                                 .padding(Spacing.md)
                                 .background(Color.aicovenGlass)
                                 .cornerRadius(BorderRadius.md)
-                            
+
                             Text("🔒 Your API key is encrypted and stored securely")
                                 .font(.aicovenCaption)
                                 .foregroundColor(.aicovenTextSecondary)
                         }
                     }
-                    
+
                     // Save button
                     GradientButton(isOllama ? "Add Ollama" : isMLX ? "Add MLX Model" : "Add Provider Key", icon: "checkmark.circle.fill", style: .primary) {
                         Task {
@@ -390,7 +395,7 @@ struct AddProviderKeySheet: View {
             }
         }
     }
-    
+
     private var saveDisabled: Bool {
         if saving { return true }
         if displayName.isEmpty { return true }
@@ -402,9 +407,9 @@ struct AddProviderKeySheet: View {
             return apiKey.isEmpty
         }
     }
-    
+
     // MARK: - Ollama config section
-    
+
     private var ollamaConfigSection: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
             // Base URL
@@ -412,7 +417,7 @@ struct AddProviderKeySheet: View {
                 Text("Server URL")
                     .font(.aicovenH3)
                     .foregroundColor(.aicovenTextPrimary)
-                
+
                 HStack(spacing: Spacing.sm) {
                     TextField("http://localhost:11434", text: $baseURL)
                         .font(.aicovenBody)
@@ -421,7 +426,7 @@ struct AddProviderKeySheet: View {
                         .background(Color.aicovenGlass)
                         .cornerRadius(BorderRadius.md)
                         .autocorrectionDisabled()
-                    
+
                     Button {
                         Task { await testOllamaConnection() }
                     } label: {
@@ -442,12 +447,12 @@ struct AddProviderKeySheet: View {
                     }
                     .disabled(isLoadingModels || baseURL.isEmpty)
                 }
-                
+
                 Text("🏠 Make sure Ollama is running on your machine")
                     .font(.aicovenCaption)
                     .foregroundColor(.aicovenTextSecondary)
             }
-            
+
             // Connection test result
             if let result = connectionTestResult {
                 HStack {
@@ -459,18 +464,18 @@ struct AddProviderKeySheet: View {
                 }
                 .padding(.vertical, Spacing.xs)
             }
-            
+
             // Model picker (shown after successful connection)
             if !ollamaModels.isEmpty {
                 VStack(alignment: .leading, spacing: Spacing.sm) {
                     Text("Model")
                         .font(.aicovenH3)
                         .foregroundColor(.aicovenTextPrimary)
-                    
+
                     Text("Select a model to use as the default")
                         .font(.aicovenCaption)
                         .foregroundColor(.aicovenTextSecondary)
-                    
+
                     ForEach(ollamaModels) { model in
                         Button {
                             selectedOllamaModel = model.name
@@ -480,16 +485,16 @@ struct AddProviderKeySheet: View {
                                     Text(model.name)
                                         .font(.aicovenBody)
                                         .foregroundColor(.aicovenTextPrimary)
-                                    
+
                                     if let size = model.formattedSize {
                                         Text(size)
                                             .font(.aicovenCaption)
                                             .foregroundColor(.aicovenTextTertiary)
                                     }
                                 }
-                                
+
                                 Spacer()
-                                
+
                                 if selectedOllamaModel == model.name {
                                     Image(systemName: "checkmark.circle.fill")
                                         .foregroundColor(.aicovenTeal)
@@ -507,9 +512,9 @@ struct AddProviderKeySheet: View {
             }
         }
     }
-    
+
     // MARK: - MLX config section
-    
+
     private var mlxConfigSection: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
             if !MLXModelManager.isSupported {
@@ -526,11 +531,11 @@ struct AddProviderKeySheet: View {
                     Text("Select a Model")
                         .font(.aicovenH3)
                         .foregroundColor(.aicovenTextPrimary)
-                    
+
                     Text("Models run entirely on your device. Downloaded from Hugging Face on first use.")
                         .font(.aicovenCaption)
                         .foregroundColor(.aicovenTextSecondary)
-                    
+
                     ForEach(MLXModelManager.defaultCatalog) { model in
                         Button {
                             selectedMLXModelID = model.id
@@ -540,12 +545,12 @@ struct AddProviderKeySheet: View {
                                     Text(model.displayName)
                                         .font(.aicovenBody)
                                         .foregroundColor(.aicovenTextPrimary)
-                                    
+
                                     Text(model.summary)
                                         .font(.aicovenCaption)
                                         .foregroundColor(.aicovenTextSecondary)
                                         .lineLimit(2)
-                                    
+
                                     HStack(spacing: Spacing.sm) {
                                         Label(model.formattedDownloadSize, systemImage: "arrow.down.circle")
                                         Label("\(model.minRAMGB) GB RAM", systemImage: "memorychip")
@@ -554,9 +559,9 @@ struct AddProviderKeySheet: View {
                                     .font(.aicovenCaption)
                                     .foregroundColor(.aicovenTextTertiary)
                                 }
-                                
+
                                 Spacer()
-                                
+
                                 if selectedMLXModelID == model.id {
                                     Image(systemName: "checkmark.circle.fill")
                                         .foregroundColor(.aicovenTeal)
@@ -571,21 +576,21 @@ struct AddProviderKeySheet: View {
                         .buttonStyle(.plain)
                     }
                 }
-                
+
                 Text("🧠 No server or API key needed — runs natively on Apple Silicon")
                     .font(.aicovenCaption)
                     .foregroundColor(.aicovenTextSecondary)
             }
         }
     }
-    
-    private func testOllamaConnection() async {
+
+    func testOllamaConnection() async {
         isLoadingModels = true
         defer { isLoadingModels = false }
-        
+
         let client = OllamaLLMClient(baseURL: URL(string: baseURL) ?? OllamaLLMClient.defaultBaseURL)
         let connected = await client.testConnection()
-        
+
         if connected {
             do {
                 let models = try await client.discoverModels()
@@ -601,12 +606,12 @@ struct AddProviderKeySheet: View {
             connectionTestResult = (false, "Cannot connect to \(baseURL). Is Ollama running?")
         }
     }
-    
-    // Save provider key
+
+    /// Save provider key
     private func saveProviderKey() async {
         saving = true
         defer { saving = false }
-        
+
         do {
             if isOllama {
                 let name = displayName.isEmpty ? "My Ollama" : displayName
@@ -630,10 +635,10 @@ struct AddProviderKeySheet: View {
                     defaultModel: nil
                 )
             }
-            
+
             onComplete()
             dismiss()
-            
+
         } catch {
             AppErrorReporter.log(error: error, context: "ProviderKeysView.saveProviderKey")
         }
@@ -643,17 +648,17 @@ struct AddProviderKeySheet: View {
 /// Simple callout card used on home views when no provider keys are configured
 struct AddProviderKeysCard: View {
     let onOpenProviderKeys: () -> Void
-    
+
     @State private var hasCheckedAccounts = false
     @State private var shouldShow = false
-    
+
     var body: some View {
         Group {
-            if hasCheckedAccounts && shouldShow {
+            if hasCheckedAccounts, shouldShow {
                 GlassCard {
                     HStack(spacing: Spacing.md) {
                         IconBadge(icon: "key.fill", size: 40, color: .aicovenTeal)
-                        
+
                         VStack(alignment: .leading, spacing: Spacing.xs) {
                             Text("Add your provider keys")
                                 .font(.aicovenH2)
@@ -663,9 +668,9 @@ struct AddProviderKeysCard: View {
                                 .foregroundColor(.aicovenTextSecondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                        
+
                         Spacer()
-                        
+
                         Button(action: onOpenProviderKeys) {
                             Text("Add Keys")
                                 .font(.aicovenBodySmall)
@@ -684,11 +689,11 @@ struct AddProviderKeysCard: View {
             await checkProviderAccounts()
         }
     }
-    
+
     private func checkProviderAccounts() async {
         guard !hasCheckedAccounts else { return }
         defer { hasCheckedAccounts = true }
-        
+
         do {
             let accounts = try await ProviderAccountService.shared.loadProviderAccounts()
             shouldShow = accounts.isEmpty
@@ -702,48 +707,48 @@ struct AddProviderKeysCard: View {
 /// Flow layout for wrapping chips
 struct FlowLayout: Layout {
     var spacing: CGFloat = 8
-    
+
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let result = FlowResult(in: proposal.replacingUnspecifiedDimensions().width, subviews: subviews, spacing: spacing)
         return result.size
     }
-    
+
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         let result = FlowResult(in: bounds.width, subviews: subviews, spacing: spacing)
         for (index, subview) in subviews.enumerated() {
             subview.place(at: CGPoint(x: bounds.minX + result.frames[index].minX, y: bounds.minY + result.frames[index].minY), proposal: .unspecified)
         }
     }
-    
+
     struct FlowResult {
         var size: CGSize = .zero
         var frames: [CGRect] = []
-        
+
         init(in maxWidth: CGFloat, subviews: Subviews, spacing: CGFloat) {
             var x: CGFloat = 0
             var y: CGFloat = 0
             var lineHeight: CGFloat = 0
-            
+
             for subview in subviews {
                 let size = subview.sizeThatFits(.unspecified)
-                
-                if x + size.width > maxWidth && x > 0 {
+
+                if x + size.width > maxWidth, x > 0 {
                     x = 0
                     y += lineHeight + spacing
                     lineHeight = 0
                 }
-                
+
                 frames.append(CGRect(x: x, y: y, width: size.width, height: size.height))
                 lineHeight = max(lineHeight, size.height)
                 x += size.width + spacing
             }
-            
-            self.size = CGSize(width: maxWidth, height: y + lineHeight)
+
+            size = CGSize(width: maxWidth, height: y + lineHeight)
         }
     }
 }
 
-// Button styles
+/// Button styles
 struct SecondaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label

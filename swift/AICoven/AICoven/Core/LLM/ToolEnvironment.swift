@@ -5,12 +5,12 @@ import Foundation
 /// provider-specific knowledge (e.g. which models support images).
 /// Conforms to Sendable since all properties are value types.
 struct ProviderCapabilities: Sendable {
-    let providerID: String              // e.g. "openai", "anthropic", "google"
-    let chatModel: String?             // default chat model for this provider
-    let visionModel: String?           // model that can accept images/files as input
-    let imageModel: String?            // model or endpoint for image generation
-    let webModel: String?              // model capable of built-in web browsing, if any
-    let supportsFilesAPI: Bool         // whether the provider has a first-class files API
+    let providerID: String // e.g. "openai", "anthropic", "google"
+    let chatModel: String? // default chat model for this provider
+    let visionModel: String? // model that can accept images/files as input
+    let imageModel: String? // model or endpoint for image generation
+    let webModel: String? // model capable of built-in web browsing, if any
+    let supportsFilesAPI: Bool // whether the provider has a first-class files API
 }
 
 /// Aggregated environment for tools and capabilities. This wraps the lower
@@ -18,7 +18,7 @@ struct ProviderCapabilities: Sendable {
 /// that higher-level services (tools, agents) can consult.
 /// Conforms to Sendable since all properties are Sendable.
 struct ToolEnvironment: Sendable {
-    let clients: [String: LLMClient]           // keyed by providerID
+    let clients: [String: LLMClient] // keyed by providerID
     let models: [ModelDescriptor]
     let capabilities: [ProviderCapabilities]
 
@@ -62,12 +62,11 @@ struct ToolEnvironment: Sendable {
             // added to the catalog.
             let webModel: String? = nil
 
-            let supportsFilesAPI: Bool
-            switch providerID {
+            let supportsFilesAPI = switch providerID {
             case "openai":
-                supportsFilesAPI = true
+                true
             default:
-                supportsFilesAPI = false
+                false
             }
 
             let providerCaps = ProviderCapabilities(
@@ -90,10 +89,10 @@ private extension ModelDescriptor {
     /// components can make similar quality/cost tradeoffs.
     var costClassWeight: Int {
         switch costClass {
-        case .free: return -1
-        case .cheap: return 0
-        case .medium: return 1
-        case .expensive: return 2
+        case .free: -1
+        case .cheap: 0
+        case .medium: 1
+        case .expensive: 2
         }
     }
 }

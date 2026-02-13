@@ -6,16 +6,16 @@ import Foundation
 /// all API calls replaced with local SQLite operations via CovenRepository.
 actor RoleService {
     static let shared = RoleService()
-    
+
     private init() {}
-    
+
     /// Load roles for a coven
     /// - Parameter covenId: The coven ID to load roles for
     /// - Returns: Array of roles for the coven
     func loadRoles(covenId: String) async throws -> [Role] {
-        return try await CovenRepository.shared.loadRoles(covenId: covenId)
+        try await CovenRepository.shared.loadRoles(covenId: covenId)
     }
-    
+
     /// Create a new role in a coven
     /// - Parameters:
     ///   - covenId: The coven to create the role in
@@ -53,7 +53,7 @@ actor RoleService {
         plannerMaxTasks: Int? = nil,
         plannerMaxSeconds: Double? = nil
     ) async throws -> Role {
-        return try await CovenRepository.shared.createRole(
+        try await CovenRepository.shared.createRole(
             covenId: covenId,
             name: name,
             emoji: emoji,
@@ -72,7 +72,7 @@ actor RoleService {
             plannerMaxSeconds: plannerMaxSeconds
         )
     }
-    
+
     /// Update an existing role
     /// - Parameters:
     ///   - roleId: The role ID to update
@@ -110,7 +110,7 @@ actor RoleService {
         plannerMaxTasks: Int? = nil,
         plannerMaxSeconds: Double? = nil
     ) async throws -> Role {
-        return try await CovenRepository.shared.updateRole(
+        try await CovenRepository.shared.updateRole(
             roleId: roleId,
             name: name,
             emoji: emoji,
@@ -129,17 +129,17 @@ actor RoleService {
             plannerMaxSeconds: plannerMaxSeconds
         )
     }
-    
+
     /// Delete a role
     /// - Parameter roleId: The role ID to delete
     func deleteRole(roleId: String) async throws {
         try await CovenRepository.shared.deleteRole(roleId: roleId)
     }
-    
+
     /// Get a specific role by ID
     /// - Parameter roleId: The role ID
     /// - Returns: The role
     func getRole(roleId: String) async throws -> Role {
-        return try await CovenRepository.shared.getRole(roleId: roleId)
+        try await CovenRepository.shared.getRole(roleId: roleId)
     }
 }

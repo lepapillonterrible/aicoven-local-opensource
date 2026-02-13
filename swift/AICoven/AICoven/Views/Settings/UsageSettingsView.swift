@@ -3,28 +3,28 @@ import SwiftUI
 struct UsageSettingsView: View {
     @StateObject private var viewModel = UsageViewModel()
     @State private var selectedTab: UsageTab = .usage
-    
+
     enum UsageTab {
         case usage
         case budgets
     }
-    
+
     var body: some View {
         ScrollView {
             VStack(spacing: Spacing.xl) {
                 // Header
                 VStack(spacing: Spacing.sm) {
                     IconBadge(icon: "chart.bar.fill", size: 60, color: .aicovenTeal)
-                    
+
                     Text("Budgets & Usage")
                         .font(.aicovenDisplaySmall)
                         .foregroundColor(.aicovenTextPrimary)
-                    
+
                     Text("Track your token usage and manage budgets")
                         .font(.aicovenBody)
                         .foregroundColor(.aicovenTextSecondary)
-                    
-                    if let _ = viewModel.lastUpdated {
+
+                    if viewModel.lastUpdated != nil {
                         HStack(spacing: Spacing.md) {
                             HStack(spacing: Spacing.xs) {
                                 Image(systemName: "arrow.clockwise")
@@ -32,11 +32,11 @@ struct UsageSettingsView: View {
                                 Text("Updated \(viewModel.formattedLastUpdated)")
                                     .font(.aicovenCaption)
                             }
-                            
-                            if let _ = viewModel.nextResetDate {
+
+                            if viewModel.nextResetDate != nil {
                                 Text("•")
                                     .font(.aicovenCaption)
-                                
+
                                 HStack(spacing: Spacing.xs) {
                                     Image(systemName: "calendar")
                                         .font(.system(size: 10))
@@ -50,7 +50,7 @@ struct UsageSettingsView: View {
                     }
                 }
                 .padding(.top, Spacing.xl)
-                
+
                 // Tab Picker
                 Picker("View", selection: $selectedTab) {
                     Text("Usage").tag(UsageTab.usage)
@@ -59,7 +59,7 @@ struct UsageSettingsView: View {
                 .pickerStyle(.segmented)
                 .padding(.horizontal, Spacing.lg)
                 .tint(.aicovenTeal)
-                
+
                 if selectedTab == .usage {
                     if viewModel.isLoading {
                         ProgressView()
@@ -80,7 +80,7 @@ struct UsageSettingsView: View {
                                     icon: "dollarsign.circle.fill",
                                     color: .aicovenTeal
                                 )
-                                
+
                                 UsageCard(
                                     title: "Remaining",
                                     value: viewModel.formattedRemainingBudget,
@@ -88,7 +88,7 @@ struct UsageSettingsView: View {
                                     color: .aicovenPurple
                                 )
                             }
-                            
+
                             // Budget Progress
                             if let budget = viewModel.budget, budget.budgetUsd != nil {
                                 GlassCard {
@@ -102,20 +102,20 @@ struct UsageSettingsView: View {
                                                 .font(.aicovenH3)
                                                 .foregroundColor(progressColor)
                                         }
-                                        
+
                                         GeometryReader { geometry in
                                             ZStack(alignment: .leading) {
                                                 Capsule()
                                                     .fill(Color.aicovenBorder)
                                                     .frame(height: 8)
-                                                
+
                                                 Capsule()
                                                     .fill(progressColor)
                                                     .frame(width: geometry.size.width * viewModel.budgetProgress, height: 8)
                                             }
                                         }
                                         .frame(height: 8)
-                                        
+
                                         HStack {
                                             Text("Used: $\(String(format: "%.2f", budget.usageToDateUsd))")
                                                 .font(.aicovenCaption)
@@ -130,14 +130,14 @@ struct UsageSettingsView: View {
                             }
                         }
                         .padding(.horizontal, Spacing.lg)
-                        
+
                         // Recent Activity
                         VStack(alignment: .leading, spacing: Spacing.md) {
                             Text("Recent Activity")
                                 .font(.aicovenH3)
                                 .foregroundColor(.aicovenTextPrimary)
                                 .padding(.horizontal, Spacing.lg)
-                            
+
                             GlassCard {
                                 VStack(spacing: 0) {
                                     ForEach(viewModel.recentEntries) { entry in
@@ -150,9 +150,9 @@ struct UsageSettingsView: View {
                                                     .font(.system(size: 12))
                                                     .foregroundColor(.aicovenTextSecondary)
                                             }
-                                            
+
                                             Spacer()
-                                            
+
                                             VStack(alignment: .trailing, spacing: 4) {
                                                 Text(String(format: "$%.4f", entry.costUsd))
                                                     .font(.system(size: 14, weight: .semibold))
@@ -164,14 +164,14 @@ struct UsageSettingsView: View {
                                         }
                                         .padding(.vertical, Spacing.md)
                                         .padding(.horizontal, Spacing.lg)
-                                        
+
                                         if entry.id != viewModel.recentEntries.last?.id {
                                             Divider()
                                                 .background(Color.aicovenBorder)
                                                 .padding(.leading, Spacing.lg)
                                         }
                                     }
-                                    
+
                                     if viewModel.recentEntries.isEmpty {
                                         Text("No recent activity")
                                             .font(.aicovenBody)
@@ -195,27 +195,27 @@ struct UsageSettingsView: View {
             await viewModel.loadData()
         }
     }
-    
+
     var progressColor: Color {
         if viewModel.budgetProgress >= 0.9 { return .aicovenPink }
         if viewModel.budgetProgress >= 0.75 { return .orange }
         return .aicovenTeal
     }
-    
+
     func formatDate(_ isoString: String) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        
+
         if let date = formatter.date(from: isoString) {
             return date.formatted(date: .abbreviated, time: .shortened)
         }
-        
+
         // Fallback for standard ISO without fractional seconds
         formatter.formatOptions = [.withInternetDateTime]
         if let date = formatter.date(from: isoString) {
             return date.formatted(date: .abbreviated, time: .shortened)
         }
-        
+
         return isoString
     }
 }
@@ -225,7 +225,7 @@ struct UsageCard: View {
     let value: String
     let icon: String
     let color: Color
-    
+
     var body: some View {
         GlassCard {
             VStack(alignment: .leading, spacing: Spacing.sm) {
@@ -236,7 +236,7 @@ struct UsageCard: View {
                         .font(.aicovenCaption)
                         .foregroundColor(.aicovenTextSecondary)
                 }
-                
+
                 Text(value)
                     .font(.aicovenH2)
                     .foregroundColor(.aicovenTextPrimary)

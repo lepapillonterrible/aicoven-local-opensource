@@ -9,26 +9,26 @@ struct ThreadsListView: View {
     var isPersonal: Bool = true
     @Binding var selectedThread: Thread?
     @Binding var refreshTrigger: Bool
-    
+
     @State private var threads: [Thread] = []
     @State private var searchText = ""
     @State private var showNewThreadSheet = false
     @State private var isLoading = false
     @State private var errorMessage: String?
-    
+
     init(isPersonal: Bool = true, selectedThread: Binding<Thread?> = .constant(nil), refreshTrigger: Binding<Bool> = .constant(false)) {
         self.isPersonal = isPersonal
-        self._selectedThread = selectedThread
-        self._refreshTrigger = refreshTrigger
+        _selectedThread = selectedThread
+        _refreshTrigger = refreshTrigger
     }
-    
+
     var filteredThreads: [Thread] {
         if searchText.isEmpty {
             return threads
         }
         return threads.filter { $0.title?.localizedCaseInsensitiveContains(searchText) ?? false }
     }
-    
+
     var body: some View {
         List(selection: $selectedThread) {
             ForEach(filteredThreads) { thread in
@@ -49,9 +49,9 @@ struct ThreadsListView: View {
             }
         }
         .overlay {
-            if isLoading && threads.isEmpty {
+            if isLoading, threads.isEmpty {
                 ProgressView()
-            } else if !isLoading && filteredThreads.isEmpty {
+            } else if !isLoading, filteredThreads.isEmpty {
                 ContentUnavailableView(
                     "No Threads",
                     systemImage: "message",
@@ -84,13 +84,13 @@ struct ThreadsListView: View {
             }
         }
     }
-    
+
     /// Load threads from the local ThreadService (personal workspace only).
     private func loadThreads() async {
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
-        
+
         do {
             AppErrorReporter.log(message: "Loading personal threads", context: "ThreadsListView.loadThreads")
             threads = try await ThreadService.shared.loadThreads(covenId: nil)
@@ -106,7 +106,7 @@ struct ThreadsListView: View {
 struct ThreadRow: View {
     let thread: Thread
     let isPersonal: Bool
-    
+
     var body: some View {
         HStack(spacing: 12) {
             // Role icon
@@ -114,18 +114,18 @@ struct ThreadRow: View {
                 Circle()
                     .fill(Color(hex: "#30FFC4").opacity(0.2))
                     .frame(width: 32, height: 32)
-                
+
                 Image(systemName: "bubble.left")
                     .font(.system(size: 14))
                     .foregroundColor(Color(hex: "#30FFC4"))
             }
-            
+
             VStack(alignment: .leading, spacing: 4) {
                 Text(thread.title ?? "Untitled Thread")
                     .font(.subheadline)
                     .fontWeight(.medium)
                     .lineLimit(1)
-                
+
                 HStack(spacing: 4) {
                     if let agentName = thread.agentName {
                         Text("• \(agentName)")
@@ -134,13 +134,13 @@ struct ThreadRow: View {
                         Text("• Strix")
                             .fontWeight(.medium)
                     }
-                    
+
                     // Only show model if thread has one stored (from previous conversations)
                     if let model = thread.agentModel {
                         Text("•")
                         Text(model)
                     }
-                    
+
                     if let updatedAt = thread.updatedAt {
                         Text(updatedAt, style: .relative)
                     }
@@ -149,7 +149,7 @@ struct ThreadRow: View {
                 .foregroundColor(.secondary)
                 .lineLimit(1)
             }
-            
+
             Spacer()
         }
         .padding(.vertical, 4)
@@ -163,18 +163,18 @@ struct ThreadRow: View {
 struct NewThreadView: View {
     @Environment(\.dismiss) private var dismiss
     /// Optional coven context; `nil` = personal thread.
-    var covenId: String? = nil
+    var covenId: String?
     /// Callback invoked with the newly created thread so callers can
     /// immediately navigate into it.
     let onThreadCreated: (Thread) -> Void
-    
+
     @State private var title = ""
     @State private var selectedRoleId: String?
     @State private var roles: [Role] = []
     @State private var isLoadingRoles = false
     @State private var isCreating = false
     @State private var errorMessage: String?
-    
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -185,7 +185,7 @@ struct NewThreadView: View {
                         TextField("Title", text: $title)
                     }
                     .disabled(isCreating)
-                    
+
                     // Only show role picker when creating a coven thread
                     if covenId != nil {
                         Section("Primary Role") {
@@ -209,45 +209,45 @@ struct NewThreadView: View {
             }
             .navigationTitle("New Thread")
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
+                .navigationBarTitleDisplayMode(.inline)
             #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
-                        Task {
-                            await createThread()
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            dismiss()
                         }
                     }
-                    // For coven threads, require a primary role when roles
-                    // are available so each thread has a clear agent.
-                    .disabled(
-                        isCreating ||
-                        (covenId != nil && !roles.isEmpty && selectedRoleId == nil)
-                    )
+
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Create") {
+                            Task {
+                                await createThread()
+                            }
+                        }
+                        // For coven threads, require a primary role when roles
+                        // are available so each thread has a clear agent.
+                        .disabled(
+                            isCreating ||
+                                (covenId != nil && !roles.isEmpty && selectedRoleId == nil)
+                        )
+                    }
                 }
-            }
-            .alert("Error", isPresented: Binding(
-                get: { errorMessage != nil },
-                set: { if !$0 { errorMessage = nil } }
-            )) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                if let errorMessage {
-                    Text(errorMessage)
+                .alert("Error", isPresented: Binding(
+                    get: { errorMessage != nil },
+                    set: { if !$0 { errorMessage = nil } }
+                )) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    if let errorMessage {
+                        Text(errorMessage)
+                    }
                 }
-            }
         }
         .task {
             await loadRolesIfNeeded()
         }
     }
-    
+
     /// Load coven roles when covenId is set
     private func loadRolesIfNeeded() async {
         guard let covenId, roles.isEmpty else { return }
@@ -263,12 +263,12 @@ struct NewThreadView: View {
             AppErrorReporter.log(error: error, context: "NewThreadView.loadRolesIfNeeded")
         }
     }
-    
+
     private func createThread() async {
         isCreating = true
         errorMessage = nil
         defer { isCreating = false }
-        
+
         do {
             AppErrorReporter.log(message: "Creating thread '\(title)' covenId=\(covenId ?? "nil") roleId=\(selectedRoleId ?? "none")", context: "NewThreadView.createThread")
             let thread = try await ThreadService.shared.createThread(

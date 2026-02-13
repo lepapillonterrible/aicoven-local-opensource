@@ -17,21 +17,25 @@ protocol ThreadStore {
 /// Implemented by `MemoryRepository` in Infrastructure/Persistence.
 protocol MemoryStore {
     @discardableResult
-    func storeMemory(scope: String,
-                     text: String,
-                     tags: [String],
-                     pii: Bool,
-                     createdBy: String?,
-                     source: String?,
-                     embedding: [Float]?) async throws -> LocalMemoryChunk
+    func storeMemory(
+        scope: String,
+        text: String,
+        tags: [String],
+        pii: Bool,
+        createdBy: String?,
+        source: String?,
+        embedding: [Float]?
+    ) async throws -> LocalMemoryChunk
     func loadMemories(scope: String?, limit: Int) async throws -> [LocalMemoryChunk]
     func loadMemory(id: String) async throws -> LocalMemoryChunk?
     func deleteMemory(id: String) async throws
     @discardableResult
-    func updateMemory(id: String,
-                      newText: String,
-                      newTags: [String],
-                      newEmbedding: [Float]?) async throws -> LocalMemoryChunk?
+    func updateMemory(
+        id: String,
+        newText: String,
+        newTags: [String],
+        newEmbedding: [Float]?
+    ) async throws -> LocalMemoryChunk?
 }
 
 /// Protocol abstraction for autonomous agent run persistence.
@@ -40,9 +44,11 @@ protocol MemoryStore {
 protocol AgentRunStore {
     func createRun(threadID: String?, agentType: String, maxSteps: Int) async throws -> LocalAgentRun
     func updateStatus(runID: String, status: String) async throws
-    func appendStep(runID: String,
-                    stepIndex: Int,
-                    input: String,
-                    output: String,
-                    toolCallsJSON: String?) async throws -> LocalAgentStep
+    func appendStep(
+        runID: String,
+        stepIndex: Int,
+        input: String,
+        output: String,
+        toolCallsJSON: String?
+    ) async throws -> LocalAgentStep
 }

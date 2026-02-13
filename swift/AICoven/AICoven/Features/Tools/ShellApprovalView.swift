@@ -3,53 +3,53 @@ import SwiftUI
 /// SwiftUI view for approving/denying shell command execution.
 /// Displays command details, risk level, and approval options.
 struct ShellApprovalView: View {
-    // The approval request to display
+    /// The approval request to display
     let request: ShellApprovalRequest
-    
-    // Callback when user makes a decision
+
+    /// Callback when user makes a decision
     let onDecision: (ShellApprovalDecision) -> Void
-    
+
     // State for "always approve" pattern input
     @State private var showAlwaysApprove = false
     @State private var customPattern = ""
-    
+
     var body: some View {
         VStack(spacing: 20) {
             // Header with risk indicator
             headerSection
-            
+
             // Command display
             commandSection
-            
+
             // Working directory if present
             if let workingDir = request.workingDir {
                 workingDirSection(workingDir)
             }
-            
+
             // Risk explanation
             riskExplanationSection
-            
+
             // Always approve option (expandable)
             if showAlwaysApprove {
                 alwaysApproveSection
             }
-            
+
             Spacer()
-            
+
             // Action buttons
             buttonSection
         }
         .padding(24)
         .frame(minWidth: 400, minHeight: 350)
         #if os(macOS)
-        .background(Color(NSColor.windowBackgroundColor))
+            .background(Color(NSColor.windowBackgroundColor))
         #else
-        .background(Color(UIColor.systemBackground))
+            .background(Color(UIColor.systemBackground))
         #endif
     }
-    
+
     // MARK: - View Components
-    
+
     /// Header section with title and risk badge
     private var headerSection: some View {
         HStack {
@@ -57,18 +57,18 @@ struct ShellApprovalView: View {
             Image(systemName: riskIcon)
                 .font(.system(size: 28))
                 .foregroundColor(riskColor)
-            
+
             VStack(alignment: .leading, spacing: 4) {
                 Text("Shell Command Approval")
                     .font(.headline)
-                
+
                 Text("An agent wants to run a command on your system")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
-            
+
             Spacer()
-            
+
             // Risk level badge
             Text(request.riskLevel.rawValue.uppercased())
                 .font(.caption)
@@ -80,14 +80,14 @@ struct ShellApprovalView: View {
                 .cornerRadius(4)
         }
     }
-    
+
     /// Command display section with monospace formatting
     private var commandSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Command")
                 .font(.caption)
                 .foregroundColor(.secondary)
-            
+
             ScrollView(.horizontal, showsIndicators: true) {
                 Text(request.command)
                     .font(.system(.body, design: .monospaced))
@@ -95,34 +95,34 @@ struct ShellApprovalView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             #if os(macOS)
-            .background(Color(NSColor.textBackgroundColor).opacity(0.5))
+                .background(Color(NSColor.textBackgroundColor).opacity(0.5))
             #else
-            .background(Color(UIColor.secondarySystemBackground))
+                .background(Color(UIColor.secondarySystemBackground))
             #endif
-            .cornerRadius(8)
+                .cornerRadius(8)
         }
     }
-    
+
     /// Working directory section
     private func workingDirSection(_ dir: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Working Directory")
                 .font(.caption)
                 .foregroundColor(.secondary)
-            
+
             Text(dir)
                 .font(.system(.caption, design: .monospaced))
                 .foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
-    
+
     /// Risk explanation based on level
     private var riskExplanationSection: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "info.circle")
                 .foregroundColor(.blue)
-            
+
             Text(riskExplanation)
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -130,37 +130,37 @@ struct ShellApprovalView: View {
         }
         .padding(12)
         #if os(macOS)
-        .background(Color(NSColor.controlBackgroundColor))
+            .background(Color(NSColor.controlBackgroundColor))
         #else
-        .background(Color(UIColor.tertiarySystemBackground))
+            .background(Color(UIColor.tertiarySystemBackground))
         #endif
-        .cornerRadius(8)
+            .cornerRadius(8)
     }
-    
+
     /// "Always approve" pattern input section
     private var alwaysApproveSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Auto-approve pattern (regex)")
                 .font(.caption)
                 .foregroundColor(.secondary)
-            
+
             TextField("e.g. ^ls\\b or ^git status", text: $customPattern)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(.body, design: .monospaced))
-            
+
             Text("Commands matching this pattern will be approved automatically in the future.")
                 .font(.caption2)
                 .foregroundColor(.secondary)
         }
         .padding(12)
         #if os(macOS)
-        .background(Color(NSColor.controlBackgroundColor))
+            .background(Color(NSColor.controlBackgroundColor))
         #else
-        .background(Color(UIColor.tertiarySystemBackground))
+            .background(Color(UIColor.tertiarySystemBackground))
         #endif
-        .cornerRadius(8)
+            .cornerRadius(8)
     }
-    
+
     /// Action buttons section
     private var buttonSection: some View {
         VStack(spacing: 12) {
@@ -176,7 +176,7 @@ struct ShellApprovalView: View {
                 }
                 .buttonStyle(.bordered)
                 .tint(.red)
-                
+
                 // Approve button
                 Button(action: { onDecision(.approve) }) {
                     HStack {
@@ -189,9 +189,9 @@ struct ShellApprovalView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(.green)
             }
-            
+
             // Always approve toggle/button
-            if showAlwaysApprove && !customPattern.isEmpty {
+            if showAlwaysApprove, !customPattern.isEmpty {
                 Button(action: {
                     onDecision(.approveAlways(pattern: customPattern))
                 }) {
@@ -220,42 +220,42 @@ struct ShellApprovalView: View {
             }
         }
     }
-    
+
     // MARK: - Computed Properties
-    
+
     /// Icon for the risk level
     private var riskIcon: String {
         switch request.riskLevel {
         case .low:
-            return "shield.checkmark"
+            "shield.checkmark"
         case .medium:
-            return "shield.lefthalf.filled"
+            "shield.lefthalf.filled"
         case .high:
-            return "exclamationmark.shield"
+            "exclamationmark.shield"
         }
     }
-    
+
     /// Color for the risk level
     private var riskColor: Color {
         switch request.riskLevel {
         case .low:
-            return .green
+            .green
         case .medium:
-            return .yellow
+            .yellow
         case .high:
-            return .red
+            .red
         }
     }
-    
+
     /// Explanation text for each risk level
     private var riskExplanation: String {
         switch request.riskLevel {
         case .low:
-            return "This command appears to be read-only and safe. It should not modify any files or system settings."
+            "This command appears to be read-only and safe. It should not modify any files or system settings."
         case .medium:
-            return "This command may modify files or settings. Review it carefully before approving."
+            "This command may modify files or settings. Review it carefully before approving."
         case .high:
-            return "⚠️ This command is potentially dangerous and could cause system damage or data loss. Proceed with extreme caution."
+            "⚠️ This command is potentially dangerous and could cause system damage or data loss. Proceed with extreme caution."
         }
     }
 }

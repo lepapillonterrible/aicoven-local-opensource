@@ -38,9 +38,9 @@ struct GooglePickerView: View {
             }
             .padding()
             #if os(macOS)
-            .background(Color(NSColor.windowBackgroundColor))
+                .background(Color(NSColor.windowBackgroundColor))
             #else
-            .background(Color(UIColor.systemBackground))
+                .background(Color(UIColor.systemBackground))
             #endif
 
             GooglePickerWebView(
@@ -292,7 +292,7 @@ class PickerCoordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate 
         }
     }
 
-    // Allow navigation to Google domains needed by the Picker
+    /// Allow navigation to Google domains needed by the Picker
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction,

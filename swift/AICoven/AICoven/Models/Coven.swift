@@ -10,14 +10,14 @@ struct Coven: Codable, Identifiable, Hashable {
     let settings: CovenSettings?
     let createdAt: Date
     let updatedAt: Date
-    
+
     enum CodingKeys: String, CodingKey {
         case id, name, description, avatar, settings
         case createdAt = "created_at"
         case updatedAt = "updated_at"
     }
-    
-    // Memberwise initializer for testing/previews
+
+    /// Memberwise initializer for testing/previews
     init(
         id: String,
         name: String,
@@ -35,16 +35,16 @@ struct Coven: Codable, Identifiable, Hashable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
-    
-    // Custom decoder to handle optional fields and defaults
+
+    /// Custom decoder to handle optional fields and defaults
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        
+
         id = try container.decode(String.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         description = try container.decodeIfPresent(String.self, forKey: .description)
         avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
-        
+
         // Decode settings - can be object or JSON string
         if let settingsObj = try? container.decodeIfPresent(CovenSettings.self, forKey: .settings) {
             settings = settingsObj
@@ -55,7 +55,7 @@ struct Coven: Codable, Identifiable, Hashable {
         } else {
             settings = nil
         }
-        
+
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
     }
@@ -66,7 +66,7 @@ struct CovenSettings: Codable, Hashable {
     let defaultMemoryPolicy: [String: String]?
     let budgetCaps: [String: Double]?
     let autoRouteEnabled: Bool?
-    
+
     enum CodingKeys: String, CodingKey {
         case defaultMemoryPolicy = "default_memory_policy"
         case budgetCaps = "budget_caps"
@@ -90,7 +90,7 @@ struct Role: Codable, Identifiable, Hashable {
     let settings: RoleSettings?
     let createdAt: Date
     let updatedAt: Date
-    
+
     enum CodingKeys: String, CodingKey {
         case id
         case covenId = "coven_id"
@@ -119,7 +119,7 @@ struct RoleSettings: Codable, Hashable {
     /// Soft wall-clock budget in seconds for `plan_and_execute` flows
     /// (maps to settings.planner_max_seconds).
     let plannerMaxSeconds: Double?
-    
+
     enum CodingKeys: String, CodingKey {
         case toolConfig = "tool_config"
         case allowedTools = "allowed_tools"
@@ -129,8 +129,8 @@ struct RoleSettings: Codable, Hashable {
         case plannerMaxTasks = "planner_max_tasks"
         case plannerMaxSeconds = "planner_max_seconds"
     }
-    
-    // Custom decoder to handle any additional known fields
+
+    /// Custom decoder to handle any additional known fields
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         toolConfig = try container.decodeIfPresent([String: AnyJSONValue].self, forKey: .toolConfig)
@@ -141,8 +141,8 @@ struct RoleSettings: Codable, Hashable {
         plannerMaxTasks = try container.decodeIfPresent(Int.self, forKey: .plannerMaxTasks)
         plannerMaxSeconds = try container.decodeIfPresent(Double.self, forKey: .plannerMaxSeconds)
     }
-    
-    // Explicit initializer for creating instances
+
+    /// Explicit initializer for creating instances
     init(
         toolConfig: [String: AnyJSONValue]? = nil,
         allowedTools: [String]? = nil,
@@ -162,12 +162,11 @@ struct RoleSettings: Codable, Hashable {
     }
 }
 
-
 /// Provider account (BYOK) model
 struct ProviderAccount: Codable, Identifiable {
     let id: String
     let userId: String?
-    let provider: String  // Can be AIProvider enum or string
+    let provider: String // Can be AIProvider enum or string
     let accountName: String?
     let displayName: String
     let status: String
@@ -179,14 +178,14 @@ struct ProviderAccount: Codable, Identifiable {
     let lastHealthCheckAt: Date?
     let quotaHint: String?
     let createdAt: Date?
-    
+
     /// Whether this account represents a local provider (e.g. Ollama) that
     /// doesn't require an API key and talks to a server on the user's machine.
     var isLocalProvider: Bool {
         let p = provider.lowercased()
         return p == "ollama" || p == "mlx"
     }
-    
+
     enum CodingKeys: String, CodingKey {
         case id
         case userId = "user_id"
@@ -216,7 +215,7 @@ struct ProviderInitializationStatus: Codable {
         let name: String?
         let provider: String?
         let contextLength: Int?
-        
+
         enum CodingKeys: String, CodingKey {
             case id
             case name
@@ -224,11 +223,11 @@ struct ProviderInitializationStatus: Codable {
             case contextLength = "context_length"
         }
     }
-    
+
     let providerAccountId: String
     let status: String
     let modelMetadata: [ModelMetadata]
-    
+
     enum CodingKeys: String, CodingKey {
         case providerAccountId = "provider_account_id"
         case status

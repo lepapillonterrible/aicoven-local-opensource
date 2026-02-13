@@ -5,26 +5,26 @@ import SwiftUI
 /// AICoven brand color palette
 extension Color {
     // Primary brand colors
-    static let aicovenTeal = Color(hex: "#30FFC4")      // Primary accent - cyan/teal
-    static let aicovenPurple = Color(hex: "#9C5FFF")    // Secondary accent - purple
-    static let aicovenPink = Color(hex: "#BE5AF8")      // Tertiary accent - pink
-    static let aicovenDark = Color(hex: "#0D0C0E")      // Dark background
-    
+    static let aicovenTeal = Color(hex: "#30FFC4") // Primary accent - cyan/teal
+    static let aicovenPurple = Color(hex: "#9C5FFF") // Secondary accent - purple
+    static let aicovenPink = Color(hex: "#BE5AF8") // Tertiary accent - pink
+    static let aicovenDark = Color(hex: "#0D0C0E") // Dark background
+
     // UI colors
-    static let aicovenGlass = Color.white.opacity(0.08)  // Glassmorphism
+    static let aicovenGlass = Color.white.opacity(0.08) // Glassmorphism
     static let aicovenBorder = Color.white.opacity(0.12) // Borders
     static let aicovenOverlay = Color.black.opacity(0.4) // Overlays
-    
+
     // Text colors
     static let aicovenTextPrimary = Color.white
     static let aicovenTextSecondary = Color.white.opacity(0.7)
     static let aicovenTextTertiary = Color.white.opacity(0.5)
-    
+
     // Semantic colors
     static let aicovenSuccess = Color(hex: "#30FFC4")
     static let aicovenWarning = Color(hex: "#FFB930")
     static let aicovenError = Color(hex: "#FF3030")
-    
+
     /// Initialize Color from hex string
     init(hex: String) {
         let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
@@ -45,7 +45,7 @@ extension Color {
             .sRGB,
             red: Double(r) / 255,
             green: Double(g) / 255,
-            blue:  Double(b) / 255,
+            blue: Double(b) / 255,
             opacity: Double(a) / 255
         )
     }
@@ -59,17 +59,17 @@ extension Font {
     static let aicovenDisplayLarge = Font.system(size: 34, weight: .bold, design: .rounded)
     static let aicovenDisplayMedium = Font.system(size: 28, weight: .semibold, design: .rounded)
     static let aicovenDisplaySmall = Font.system(size: 24, weight: .medium, design: .rounded)
-    
+
     // Heading styles
     static let aicovenH1 = Font.system(size: 20, weight: .semibold, design: .default)
     static let aicovenH2 = Font.system(size: 17, weight: .semibold, design: .default)
     static let aicovenH3 = Font.system(size: 15, weight: .medium, design: .default)
-    
+
     // Body styles
     static let aicovenBody = Font.system(size: 15, weight: .regular, design: .default)
     static let aicovenBodyMedium = Font.system(size: 15, weight: .medium, design: .default)
     static let aicovenBodySmall = Font.system(size: 13, weight: .regular, design: .default)
-    
+
     // Utility styles
     static let aicovenCaption = Font.system(size: 12, weight: .regular, design: .default)
     static let aicovenMono = Font.system(size: 13, weight: .regular, design: .monospaced)
@@ -110,7 +110,7 @@ struct GlassCard<Content: View>: View {
     let content: Content
     let padding: CGFloat
     let cornerRadius: CGFloat
-    
+
     init(
         padding: CGFloat = Spacing.md,
         cornerRadius: CGFloat = BorderRadius.lg,
@@ -120,7 +120,7 @@ struct GlassCard<Content: View>: View {
         self.padding = padding
         self.cornerRadius = cornerRadius
     }
-    
+
     var body: some View {
         content
             .padding(padding)
@@ -141,11 +141,11 @@ struct GradientButton: View {
     let icon: String?
     let action: () -> Void
     let style: ButtonStyle
-    
+
     enum ButtonStyle {
         case primary, secondary, ghost
     }
-    
+
     init(
         _ title: String,
         icon: String? = nil,
@@ -157,7 +157,7 @@ struct GradientButton: View {
         self.action = action
         self.style = style
     }
-    
+
     var body: some View {
         Button(action: action) {
             HStack(spacing: Spacing.xs) {
@@ -176,7 +176,7 @@ struct GradientButton: View {
         }
         .buttonStyle(.plain)
     }
-    
+
     @ViewBuilder
     private var backgroundView: some View {
         switch style {
@@ -204,7 +204,7 @@ struct IconBadge: View {
     let size: CGFloat
     let color: Color
     let glowIntensity: CGFloat
-    
+
     init(
         icon: String,
         size: CGFloat = 32,
@@ -216,14 +216,14 @@ struct IconBadge: View {
         self.color = color
         self.glowIntensity = glowIntensity
     }
-    
+
     var body: some View {
         ZStack {
             Circle()
                 .fill(color.opacity(0.2))
                 .frame(width: size, height: size)
                 .shadow(color: color.opacity(glowIntensity), radius: 8, x: 0, y: 0)
-            
+
             Image(systemName: icon)
                 .font(.system(size: size * 0.45))
                 .foregroundColor(color)
@@ -238,19 +238,19 @@ struct IconBadge: View {
 struct NebulaBackground: View {
     @AppStorage("aicoven_animated_backgrounds") private var animatedBackgrounds = true
     @State private var animateGradient = false
-    
+
     var body: some View {
         GeometryReader { proxy in
             let maxDimension = max(proxy.size.width, proxy.size.height)
             let primaryRadius = maxDimension * 1.2
             let secondaryRadius = maxDimension * 1.0
             let accentRadius = maxDimension * 0.8
-            
+
             ZStack {
                 // Base dark background
                 Color.aicovenDark
                     .ignoresSafeArea()
-                
+
                 if animatedBackgrounds {
                     animatedLayers(
                         primaryRadius: primaryRadius,
@@ -281,7 +281,7 @@ struct NebulaBackground: View {
         }
         .ignoresSafeArea()
     }
-    
+
     /// Animated gradient layers for the nebula background
     @ViewBuilder
     private func animatedLayers(
@@ -301,7 +301,7 @@ struct NebulaBackground: View {
         )
         .ignoresSafeArea()
         .animation(.easeInOut(duration: 8).repeatForever(autoreverses: true), value: animateGradient)
-        
+
         RadialGradient(
             colors: [
                 Color.aicovenPurple.opacity(0.3),
@@ -313,7 +313,7 @@ struct NebulaBackground: View {
         )
         .ignoresSafeArea()
         .animation(.easeInOut(duration: 10).repeatForever(autoreverses: true), value: animateGradient)
-        
+
         RadialGradient(
             colors: [
                 Color.aicovenPink.opacity(0.2),
@@ -326,7 +326,7 @@ struct NebulaBackground: View {
         .ignoresSafeArea()
         .animation(.easeInOut(duration: 12).repeatForever(autoreverses: true), value: animateGradient)
     }
-    
+
     /// Static (non-animating) gradient layers for the nebula background
     @ViewBuilder
     private func staticLayers(
@@ -344,7 +344,7 @@ struct NebulaBackground: View {
             endRadius: primaryRadius
         )
         .ignoresSafeArea()
-        
+
         RadialGradient(
             colors: [
                 Color.aicovenPurple.opacity(0.3),
@@ -355,7 +355,7 @@ struct NebulaBackground: View {
             endRadius: secondaryRadius
         )
         .ignoresSafeArea()
-        
+
         RadialGradient(
             colors: [
                 Color.aicovenPink.opacity(0.2),
@@ -374,13 +374,13 @@ struct RoleChip: View {
     let name: String
     let icon: String?
     let color: Color
-    
+
     init(name: String, icon: String? = nil, color: Color = .aicovenPurple) {
         self.name = name
         self.icon = icon
         self.color = color
     }
-    
+
     var body: some View {
         HStack(spacing: Spacing.xxs) {
             if let icon {
@@ -440,10 +440,10 @@ extension View {
                     )
             )
     }
-    
+
     /// Apply glow effect
     func glowEffect(color: Color = .aicovenTeal, radius: CGFloat = 8, intensity: CGFloat = 0.5) -> some View {
-        self.shadow(color: color.opacity(intensity), radius: radius, x: 0, y: 0)
+        shadow(color: color.opacity(intensity), radius: radius, x: 0, y: 0)
     }
 }
 
@@ -452,42 +452,42 @@ extension View {
 #Preview("Design System Components") {
     ZStack {
         NebulaBackground()
-        
+
         VStack(spacing: Spacing.lg) {
             // Typography samples
             VStack(alignment: .leading, spacing: Spacing.xs) {
                 Text("Display Large")
                     .font(.aicovenDisplayLarge)
                     .foregroundColor(.aicovenTextPrimary)
-                
+
                 Text("Heading 1")
                     .font(.aicovenH1)
                     .foregroundColor(.aicovenTextPrimary)
-                
+
                 Text("Body text with secondary color")
                     .font(.aicovenBody)
                     .foregroundColor(.aicovenTextSecondary)
-                
+
                 Text("Caption text")
                     .font(.aicovenCaption)
                     .foregroundColor(.aicovenTextTertiary)
             }
             .glassMorphism()
-            
+
             // Buttons
             HStack(spacing: Spacing.md) {
                 GradientButton("Primary", icon: "plus", style: .primary) {}
                 GradientButton("Secondary", style: .secondary) {}
                 GradientButton("Ghost", style: .ghost) {}
             }
-            
+
             // Icon badges
             HStack(spacing: Spacing.md) {
                 IconBadge(icon: "sparkles", color: .aicovenTeal)
                 IconBadge(icon: "message", color: .aicovenPurple)
                 IconBadge(icon: "person", color: .aicovenPink)
             }
-            
+
             // Role chips
             HStack(spacing: Spacing.xs) {
                 RoleChip(name: "Coder", icon: "chevron.left.forwardslash.chevron.right")

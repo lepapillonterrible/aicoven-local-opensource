@@ -6,7 +6,7 @@ import SwiftUI
 struct AddMemoryView: View {
     let covenId: String?
     let onSave: () -> Void
-    
+
     @State private var title = ""
     @State private var content = ""
     @State private var scope = "coven"
@@ -15,17 +15,17 @@ struct AddMemoryView: View {
     @State private var isPinned = false
     @State private var isLoading = false
     @State private var errorMessage: String?
-    
+
     let scopes: [String]
-    
+
     init(covenId: String?, onSave: @escaping () -> Void) {
         self.covenId = covenId
         self.onSave = onSave
         // For personal memory, only "user" scope is available
-        self.scopes = covenId != nil ? ["user", "coven", "agent"] : ["user"]
-        self._scope = State(initialValue: covenId != nil ? "coven" : "user")
+        scopes = covenId != nil ? ["user", "coven", "agent"] : ["user"]
+        _scope = State(initialValue: covenId != nil ? "coven" : "user")
     }
-    
+
     var body: some View {
         VStack(spacing: 0) {
             // Header
@@ -33,18 +33,18 @@ struct AddMemoryView: View {
                 Text("New Memory")
                     .font(.aicovenH2)
                     .foregroundColor(.aicovenTextPrimary)
-                
+
                 Spacer()
-                
+
                 // Save button
                 GradientButton("Save", icon: "checkmark", style: .primary, action: saveMemory)
                     .frame(width: 100)
                     .disabled(content.isEmpty || isLoading)
             }
             .padding(Spacing.lg)
-            
+
             GradientDivider()
-            
+
             // Form
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.lg) {
@@ -53,7 +53,7 @@ struct AddMemoryView: View {
                         Text("Title (optional)")
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextSecondary)
-                        
+
                         TextField("Enter a title...", text: $title)
                             .font(.aicovenBody)
                             .textFieldStyle(.plain)
@@ -61,13 +61,13 @@ struct AddMemoryView: View {
                             .background(Color.aicovenGlass)
                             .cornerRadius(BorderRadius.sm)
                     }
-                    
+
                     // Scope selector
                     VStack(alignment: .leading, spacing: Spacing.xs) {
                         Text("Scope")
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextSecondary)
-                        
+
                         HStack(spacing: Spacing.xs) {
                             ForEach(scopes, id: \.self) { scopeOption in
                                 Button {
@@ -87,13 +87,13 @@ struct AddMemoryView: View {
                             }
                         }
                     }
-                    
+
                     // Content field (required)
                     VStack(alignment: .leading, spacing: Spacing.xs) {
                         Text("Content *")
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextSecondary)
-                        
+
                         TextEditor(text: $content)
                             .font(.aicovenBody)
                             .frame(minHeight: 200)
@@ -101,13 +101,13 @@ struct AddMemoryView: View {
                             .background(Color.aicovenGlass)
                             .cornerRadius(BorderRadius.sm)
                     }
-                    
+
                     // Tags input
                     VStack(alignment: .leading, spacing: Spacing.xs) {
                         Text("Tags")
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextSecondary)
-                        
+
                         // Tag input
                         HStack {
                             TextField("Add tag...", text: $tagInput)
@@ -116,7 +116,7 @@ struct AddMemoryView: View {
                                 .onSubmit {
                                     addTag()
                                 }
-                            
+
                             Button {
                                 addTag()
                             } label: {
@@ -129,7 +129,7 @@ struct AddMemoryView: View {
                         .padding(Spacing.sm)
                         .background(Color.aicovenGlass)
                         .cornerRadius(BorderRadius.sm)
-                        
+
                         // Tag chips
                         if !tags.isEmpty {
                             FlowLayout(spacing: Spacing.xs) {
@@ -138,7 +138,7 @@ struct AddMemoryView: View {
                                         Text("#\(tag)")
                                             .font(.aicovenCaption)
                                             .foregroundColor(.aicovenTeal)
-                                        
+
                                         Button {
                                             removeTag(tag)
                                         } label: {
@@ -156,21 +156,21 @@ struct AddMemoryView: View {
                             }
                         }
                     }
-                    
+
                     // Pin toggle
                     Toggle(isOn: $isPinned) {
                         HStack(spacing: Spacing.xs) {
                             Image(systemName: "pin.fill")
                                 .font(.system(size: 12))
                                 .foregroundColor(.aicovenTeal)
-                            
+
                             Text("Pin this memory")
                                 .font(.aicovenBodySmall)
                                 .foregroundColor(.aicovenTextPrimary)
                         }
                     }
                     .toggleStyle(SwitchToggleStyle(tint: .aicovenTeal))
-                    
+
                     // Error message
                     if let error = errorMessage {
                         ErrorBannerView(message: error)
@@ -180,30 +180,30 @@ struct AddMemoryView: View {
             }
         }
     }
-    
+
     // MARK: - Actions
-    
+
     /// Add a tag
     private func addTag() {
         let trimmed = tagInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty && !tags.contains(trimmed) {
+        if !trimmed.isEmpty, !tags.contains(trimmed) {
             tags.append(trimmed)
             tagInput = ""
         }
     }
-    
+
     /// Remove a tag
     private func removeTag(_ tag: String) {
         tags.removeAll { $0 == tag }
     }
-    
+
     /// Save the memory
     private func saveMemory() {
         guard !content.isEmpty else { return }
-        
+
         isLoading = true
         errorMessage = nil
-        
+
         Task {
             do {
                 _ = try await MemoryService.shared.createMemory(
@@ -225,7 +225,7 @@ struct AddMemoryView: View {
                     createdBy: nil,
                     source: nil
                 )
-                
+
                 // Call completion handler
                 onSave()
             } catch {
@@ -272,7 +272,7 @@ struct EditMemoryView: View {
     let memoryId: String
     let covenId: String?
     let onSave: () -> Void
-    
+
     @State private var memory: Memory?
     @State private var title = ""
     @State private var content = ""
@@ -283,17 +283,17 @@ struct EditMemoryView: View {
     @State private var isLoading = false
     @State private var isSaving = false
     @State private var errorMessage: String?
-    
+
     let scopes: [String]
-    
+
     init(memoryId: String, covenId: String?, onSave: @escaping () -> Void) {
         self.memoryId = memoryId
         self.covenId = covenId
         self.onSave = onSave
         // For personal memory, only "user" scope is available
-        self.scopes = covenId != nil ? ["user", "coven", "agent"] : ["user"]
+        scopes = covenId != nil ? ["user", "coven", "agent"] : ["user"]
     }
-    
+
     var body: some View {
         VStack(spacing: 0) {
             // Header
@@ -301,18 +301,18 @@ struct EditMemoryView: View {
                 Text("Edit Memory")
                     .font(.aicovenH2)
                     .foregroundColor(.aicovenTextPrimary)
-                
+
                 Spacer()
-                
+
                 // Save button
                 GradientButton("Save", icon: "checkmark", style: .primary, action: saveMemory)
                     .frame(width: 100)
                     .disabled(content.isEmpty || isSaving)
             }
             .padding(Spacing.lg)
-            
+
             GradientDivider()
-            
+
             // Content
             if isLoading {
                 LoadingView(message: "Loading memory...")
@@ -331,7 +331,7 @@ struct EditMemoryView: View {
                             Text("Title (optional)")
                                 .font(.aicovenCaption)
                                 .foregroundColor(.aicovenTextSecondary)
-                            
+
                             TextField("Enter a title...", text: $title)
                                 .font(.aicovenBody)
                                 .textFieldStyle(.plain)
@@ -339,13 +339,13 @@ struct EditMemoryView: View {
                                 .background(Color.aicovenGlass)
                                 .cornerRadius(BorderRadius.sm)
                         }
-                        
+
                         // Scope selector
                         VStack(alignment: .leading, spacing: Spacing.xs) {
                             Text("Scope")
                                 .font(.aicovenCaption)
                                 .foregroundColor(.aicovenTextSecondary)
-                            
+
                             HStack(spacing: Spacing.xs) {
                                 ForEach(scopes, id: \.self) { scopeOption in
                                     Button {
@@ -365,13 +365,13 @@ struct EditMemoryView: View {
                                 }
                             }
                         }
-                        
+
                         // Content field (required)
                         VStack(alignment: .leading, spacing: Spacing.xs) {
                             Text("Content *")
                                 .font(.aicovenCaption)
                                 .foregroundColor(.aicovenTextSecondary)
-                            
+
                             TextEditor(text: $content)
                                 .font(.aicovenBody)
                                 .frame(minHeight: 200)
@@ -379,13 +379,13 @@ struct EditMemoryView: View {
                                 .background(Color.aicovenGlass)
                                 .cornerRadius(BorderRadius.sm)
                         }
-                        
+
                         // Tags input
                         VStack(alignment: .leading, spacing: Spacing.xs) {
                             Text("Tags")
                                 .font(.aicovenCaption)
                                 .foregroundColor(.aicovenTextSecondary)
-                            
+
                             // Tag input
                             HStack {
                                 TextField("Add tag...", text: $tagInput)
@@ -394,7 +394,7 @@ struct EditMemoryView: View {
                                     .onSubmit {
                                         addTag()
                                     }
-                                
+
                                 Button {
                                     addTag()
                                 } label: {
@@ -407,7 +407,7 @@ struct EditMemoryView: View {
                             .padding(Spacing.sm)
                             .background(Color.aicovenGlass)
                             .cornerRadius(BorderRadius.sm)
-                            
+
                             // Tag chips
                             if !tags.isEmpty {
                                 FlowLayout(spacing: Spacing.xs) {
@@ -416,7 +416,7 @@ struct EditMemoryView: View {
                                             Text("#\(tag)")
                                                 .font(.aicovenCaption)
                                                 .foregroundColor(.aicovenTeal)
-                                            
+
                                             Button {
                                                 removeTag(tag)
                                             } label: {
@@ -434,21 +434,21 @@ struct EditMemoryView: View {
                                 }
                             }
                         }
-                        
+
                         // Pin toggle
                         Toggle(isOn: $isPinned) {
                             HStack(spacing: Spacing.xs) {
                                 Image(systemName: "pin.fill")
                                     .font(.system(size: 12))
                                     .foregroundColor(.aicovenTeal)
-                                
+
                                 Text("Pin this memory")
                                     .font(.aicovenBodySmall)
                                     .foregroundColor(.aicovenTextPrimary)
                             }
                         }
                         .toggleStyle(SwitchToggleStyle(tint: .aicovenTeal))
-                        
+
                         // Error message
                         if let error = errorMessage {
                             HStack(spacing: Spacing.xs) {
@@ -470,18 +470,18 @@ struct EditMemoryView: View {
             await loadMemory()
         }
     }
-    
+
     // MARK: - Actions
-    
+
     /// Load memory from API
     private func loadMemory() async {
         isLoading = true
         errorMessage = nil
-        
+
         do {
             let loadedMemory = try await MemoryService.shared.getMemory(memoryId: memoryId)
             memory = loadedMemory
-            
+
             // Populate form fields
             title = loadedMemory.title ?? ""
             content = loadedMemory.content
@@ -491,31 +491,31 @@ struct EditMemoryView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
-        
+
         isLoading = false
     }
-    
+
     /// Add a tag
     private func addTag() {
         let trimmed = tagInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty && !tags.contains(trimmed) {
+        if !trimmed.isEmpty, !tags.contains(trimmed) {
             tags.append(trimmed)
             tagInput = ""
         }
     }
-    
+
     /// Remove a tag
     private func removeTag(_ tag: String) {
         tags.removeAll { $0 == tag }
     }
-    
+
     /// Save the memory
     private func saveMemory() {
         guard !content.isEmpty else { return }
-        
+
         isSaving = true
         errorMessage = nil
-        
+
         Task {
             do {
                 _ = try await MemoryService.shared.updateMemory(
@@ -526,7 +526,7 @@ struct EditMemoryView: View {
                     scope: scope,
                     isPinned: isPinned
                 )
-                
+
                 // Call completion handler
                 onSave()
             } catch {
@@ -543,20 +543,20 @@ struct EditMemoryView: View {
 struct MemoryErrorView: View {
     let message: String
     let onRetry: () -> Void
-    
+
     var body: some View {
         VStack(spacing: Spacing.lg) {
             IconBadge(icon: "exclamationmark.triangle", size: 60, color: .red)
-            
+
             Text("Error")
                 .font(.aicovenH2)
                 .foregroundColor(.aicovenTextPrimary)
-            
+
             Text(message)
                 .font(.aicovenBodySmall)
                 .foregroundColor(.aicovenTextSecondary)
                 .multilineTextAlignment(.center)
-            
+
             GradientButton("Retry", icon: "arrow.clockwise", style: .secondary, action: onRetry)
                 .frame(width: 120)
         }

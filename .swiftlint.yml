@@ -1,0 +1,51 @@
+# SwiftLint configuration for AICoven
+# https://realm.github.io/SwiftLint/
+
+# Only lint the Swift app source
+included:
+  - swift/AICoven/AICoven
+  - swift/AICoven/AICovenTests
+
+excluded:
+  - swift/AICoven/DerivedData
+  - Pods
+
+# --- Disabled rules ---
+# These are style-preference rules that produce too much noise for the
+# existing codebase and don't catch real bugs. They can be re-enabled
+# and fixed gradually over time.
+disabled_rules:
+  - line_length               # 338 violations — most lines are UI code / URLs
+  - identifier_name           # 205 violations — short names like `id`, `m` are idiomatic
+  - function_body_length      # SwiftUI body can be long
+  - file_length               # large files are fine for views/services
+  - nesting                   # nested types are common in Swift
+  - cyclomatic_complexity     # complex routing logic is expected
+  - type_body_length          # large types are fine for view models
+  - function_parameter_count  # API helpers need many params
+  - large_tuple               # used in model lists
+  - multiple_closures_with_trailing_closure  # SwiftUI pattern
+  - todo                      # TODOs are fine in-progress
+  - trailing_comma            # handled by SwiftFormat
+  - inclusive_language         # false positives on technical terms
+  - implicit_optional_initialization   # common @State pattern
+  - orphaned_doc_comment      # doc comments near MARK sections
+  - for_where                 # existing loop patterns are clear enough
+  - non_optional_string_data_conversion  # Data("...".utf8) preferred but .data(using:)! is fine
+  - optional_data_string_conversion     # String(data:encoding:) patterns in persistence layer
+  - unused_optional_binding   # `if let _ =` patterns (some remain after partial fix)
+  - static_over_final_class   # minor preference in test helpers
+  - unneeded_synthesized_initializer  # fixed by autocorrect when possible
+
+# --- Opt-in rules ---
+opt_in_rules:
+  - empty_count
+  - closure_spacing
+  - contains_over_first_not_nil
+  - fatal_error_message
+  - first_where
+  - override_in_extension
+
+# --- Rule configuration ---
+reporter: xcode
+

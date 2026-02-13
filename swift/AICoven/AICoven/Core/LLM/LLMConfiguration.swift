@@ -11,9 +11,9 @@ import Foundation
 /// Configuration for building LLM clients from user-provided API keys.
 /// All methods are nonisolated since they only read from thread-safe UserDefaults.
 struct LLMConfiguration: Sendable {
-    // Note: ModelDescriptors are now built dynamically per-account using the
-    // provider's ListModels APIs via ProviderAccountService. This struct only
-    // knows how to build clients; it no longer hardcodes any model IDs.
+    /// Note: ModelDescriptors are now built dynamically per-account using the
+    /// provider's ListModels APIs via ProviderAccountService. This struct only
+    /// knows how to build clients; it no longer hardcodes any model IDs.
     /// Builds LLMClient instances for providers that have API keys configured.
     /// Keys are expected to be cached in UserDefaults by ProviderAccountService.
     /// This method is nonisolated since UserDefaults.standard is thread-safe.

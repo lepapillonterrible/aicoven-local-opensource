@@ -10,9 +10,9 @@ enum LocalChatError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingOpenAIAPIKey:
-            return "No OpenAI API key configured. Set the OPENAI_API_KEY environment variable or store an \"openai_api_key\" string in UserDefaults."
+            "No OpenAI API key configured. Set the OPENAI_API_KEY environment variable or store an \"openai_api_key\" string in UserDefaults."
         case .invalidResponse:
-            return "Received an invalid response from the OpenAI API."
+            "Received an invalid response from the OpenAI API."
         }
     }
 }
@@ -26,6 +26,7 @@ private struct WireLLMMessage: Encodable {
         case assistant
         case system
     }
+
     let role: Role
     let content: String
 }
@@ -64,20 +65,23 @@ private actor OpenAIClient {
                     let role: String
                     let content: String
                 }
+
                 let index: Int?
                 let message: Message
             }
+
             struct Usage: Decodable {
                 let promptTokens: Int?
                 let completionTokens: Int?
                 let totalTokens: Int?
-                
+
                 enum CodingKeys: String, CodingKey {
                     case promptTokens = "prompt_tokens"
                     case completionTokens = "completion_tokens"
                     case totalTokens = "total_tokens"
                 }
             }
+
             let choices: [Choice]
             let usage: Usage?
         }
@@ -94,7 +98,7 @@ private actor OpenAIClient {
         request.httpBody = data
 
         let (responseData, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+        guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
             let bodyText = String(data: responseData, encoding: .utf8) ?? "<non-utf8>"
             AppErrorReporter.log(message: "OpenAI error: status=\((response as? HTTPURLResponse)?.statusCode ?? -1) body=\(bodyText)", context: "LLMClients.OpenAIClient.sendChat")
             throw LocalChatError.invalidResponse
@@ -106,15 +110,14 @@ private actor OpenAIClient {
             throw LocalChatError.invalidResponse
         }
         let content = first.message.content
-        let usage: TokenUsage?
-        if let usageData = res.usage {
-            usage = TokenUsage(
+        let usage: TokenUsage? = if let usageData = res.usage {
+            TokenUsage(
                 promptTokens: usageData.promptTokens,
                 completionTokens: usageData.completionTokens,
                 totalTokens: usageData.totalTokens
             )
         } else {
-            usage = nil
+            nil
         }
         return (content, usage)
     }
@@ -148,7 +151,7 @@ private actor AnthropicClient {
             let model: String
             let maxTokens: Int
             let messages: [AnthropicMessage]
-            
+
             enum CodingKeys: String, CodingKey {
                 case model
                 case maxTokens = "max_tokens"
@@ -164,21 +167,23 @@ private actor AnthropicClient {
                 let type: String?
                 let text: String?
             }
+
             struct Usage: Decodable {
                 let inputTokens: Int?
                 let outputTokens: Int?
-                
+
                 enum CodingKeys: String, CodingKey {
                     case inputTokens = "input_tokens"
                     case outputTokens = "output_tokens"
                 }
             }
+
             let content: [Content]
             let usage: Usage?
         }
 
         // Collapse incoming messages into a single user turn for now.
-        let userText = messages.map { $0.content }.joined(separator: "\n\n")
+        let userText = messages.map(\.content).joined(separator: "\n\n")
         let requestBody = MessageRequest(
             model: model,
             maxTokens: 1024,
@@ -202,7 +207,7 @@ private actor AnthropicClient {
         request.httpBody = data
 
         let (responseData, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+        guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
             let bodyText = String(data: responseData, encoding: .utf8) ?? "<non-utf8>"
             AppErrorReporter.log(message: "Anthropic error: status=\((response as? HTTPURLResponse)?.statusCode ?? -1) body=\(bodyText)", context: "LLMClients.AnthropicClient.sendChat")
             throw LocalChatError.invalidResponse
@@ -210,16 +215,15 @@ private actor AnthropicClient {
 
         let decoder = JSONDecoder()
         let res = try decoder.decode(ResponseBody.self, from: responseData)
-        let contentText = res.content.compactMap { $0.text }.joined(separator: "\n\n")
-        let usage: TokenUsage?
-        if let usageData = res.usage {
-            usage = TokenUsage(
+        let contentText = res.content.compactMap(\.text).joined(separator: "\n\n")
+        let usage: TokenUsage? = if let usageData = res.usage {
+            TokenUsage(
                 promptTokens: usageData.inputTokens,
                 completionTokens: usageData.outputTokens,
                 totalTokens: nil
             )
         } else {
-            usage = nil
+            nil
         }
         return (contentText, usage)
     }
@@ -253,18 +257,21 @@ private actor GeminiClient {
                     struct CandidatePart: Decodable { let text: String? }
                     let parts: [CandidatePart]
                 }
+
                 let content: CandidateContent?
             }
+
             struct Usage: Decodable {
                 let promptTokenCount: Int?
                 let candidatesTokenCount: Int?
                 let totalTokenCount: Int?
             }
+
             let candidates: [Candidate]?
             let usageMetadata: Usage?
         }
 
-        let userText = messages.map { $0.content }.joined(separator: "\n\n")
+        let userText = messages.map(\.content).joined(separator: "\n\n")
         let body = RequestBody(contents: [Content(parts: [Part(text: userText)])])
         let encoder = JSONEncoder()
         let data = try encoder.encode(body)
@@ -284,7 +291,7 @@ private actor GeminiClient {
         request.httpBody = data
 
         let (responseData, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+        guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
             let bodyText = String(data: responseData, encoding: .utf8) ?? "<non-utf8>"
             AppErrorReporter.log(message: "Gemini error: status=\((response as? HTTPURLResponse)?.statusCode ?? -1) body=\(bodyText)", context: "LLMClients.GeminiClient.sendChat")
             throw LocalChatError.invalidResponse
@@ -292,16 +299,15 @@ private actor GeminiClient {
 
         let decoder = JSONDecoder()
         let res = try decoder.decode(ResponseBody.self, from: responseData)
-        let text = res.candidates?.first?.content?.parts.compactMap { $0.text }.joined(separator: "\n\n") ?? ""
-        let usage: TokenUsage?
-        if let usageData = res.usageMetadata {
-            usage = TokenUsage(
+        let text = res.candidates?.first?.content?.parts.compactMap(\.text).joined(separator: "\n\n") ?? ""
+        let usage: TokenUsage? = if let usageData = res.usageMetadata {
+            TokenUsage(
                 promptTokens: usageData.promptTokenCount,
                 completionTokens: usageData.candidatesTokenCount,
                 totalTokens: usageData.totalTokenCount
             )
         } else {
-            usage = nil
+            nil
         }
         return (text, usage)
     }

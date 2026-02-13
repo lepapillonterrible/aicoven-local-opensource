@@ -21,10 +21,10 @@ enum ShellApprovalDecision {
 /// Provides shell command execution for the agent with safety controls.
 /// Commands require user approval unless they match auto-approve patterns.
 actor ShellToolService {
-    
+
     /// Shared singleton instance.
     static let shared = ShellToolService()
-    
+
     /// Commands that are always blocked regardless of approval.
     private let blockedPatterns: [String] = [
         "rm -rf /",
@@ -33,21 +33,21 @@ actor ShellToolService {
         "sudo rm -rf",
         "mkfs",
         "dd if=",
-        ":(){:|:&};:",  // Fork bomb
+        ":(){:|:&};:", // Fork bomb
         "chmod 777 /",
         "> /dev/sda",
         "mv /* ",
         ":(){ :|:& };:"
     ]
-    
+
     /// Maximum command execution timeout in seconds.
     private let defaultTimeoutSeconds: Int = 60
-    
+
     /// Maximum output size in bytes.
-    private let maxOutputSize: Int = 10 * 1024 * 1024  // 10MB
-    
+    private let maxOutputSize: Int = 10 * 1024 * 1024 // 10MB
+
     // MARK: - Execute Command
-    
+
     /// Execute a shell command with safety controls.
     /// - Parameters:
     ///   - command: The command to execute.
@@ -64,7 +64,7 @@ actor ShellToolService {
         metadata: [String: String] = [:]
     ) async -> ToolExecutionResult {
         let timeout = timeoutSeconds ?? defaultTimeoutSeconds
-        
+
         // Check if command is blocked
         if isCommandBlocked(command) {
             return .permissionDenied(
@@ -73,10 +73,10 @@ actor ShellToolService {
                 helpfulInstructions: "Commands that could cause system damage are not allowed. Try a safer alternative."
             )
         }
-        
+
         // Assess risk level
         let riskLevel = ShellCommandRiskLevel.assess(command: command)
-        
+
         // Request approval via ShellApprovalManager (single source of truth).
         // The manager auto-approves low-risk commands matching known patterns,
         // and always prompts for medium/high risk commands.
@@ -86,14 +86,14 @@ actor ShellToolService {
             riskLevel: riskLevel,
             metadata: metadata
         )
-        
+
         switch decision {
         case .approve, .approveAlways:
-            break  // Continue to execution
-        case .deny(let reason):
+            break // Continue to execution
+        case let .deny(reason):
             return .denied(tool: "shell.execute", reason: reason)
         }
-        
+
         // Execute the command
         return await executeCommand(
             command: command,
@@ -102,9 +102,9 @@ actor ShellToolService {
             timeoutSeconds: timeout
         )
     }
-    
+
     // MARK: - Private Methods
-    
+
     /// Check if a command matches a blocked pattern.
     private func isCommandBlocked(_ command: String) -> Bool {
         let lowercased = command.lowercased()
@@ -115,9 +115,7 @@ actor ShellToolService {
         }
         return false
     }
-    
 
-    
     /// Request user approval for a command.
     private func requestApproval(
         command: String,
@@ -126,13 +124,13 @@ actor ShellToolService {
         metadata: [String: String]
     ) async -> ShellApprovalDecision {
         // Use the ShellApprovalManager actor
-        return await ShellApprovalManager.shared.requestApproval(
+        await ShellApprovalManager.shared.requestApproval(
             command: command,
             directory: workingDir ?? "current directory",
             riskLevel: riskLevel
         )
     }
-    
+
     /// Execute the actual command using Process.
     private func executeCommand(
         command: String,
@@ -144,30 +142,30 @@ actor ShellToolService {
         let process = Process()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
-        
+
         // Use zsh as the default shell on macOS
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-c", command]
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
-        
+
         // Set working directory
-        if let workingDir = workingDir {
+        if let workingDir {
             let expandedPath = (workingDir as NSString).expandingTildeInPath
             process.currentDirectoryURL = URL(fileURLWithPath: expandedPath)
         }
-        
+
         // Set environment variables
         var environment = ProcessInfo.processInfo.environment
-        if let env = env {
+        if let env {
             for (key, value) in env {
                 environment[key] = value
             }
         }
         process.environment = environment
-        
+
         let startTime = Date()
-        
+
         // Use async-safe termination handler instead of blocking waitUntilExit()
         // This prevents hanging the actor if the child process ignores SIGTERM.
         // IMPORTANT: The termination handler is set BEFORE process.run() so that
@@ -175,7 +173,7 @@ actor ShellToolService {
         let result: Result<Bool, Error> = await withCheckedContinuation { (continuation: CheckedContinuation<Result<Bool, Error>, Never>) in
             var hasResumed = false
             let lock = NSLock()
-            
+
             // Set up termination handler BEFORE starting the process
             process.terminationHandler = { (_: Process) in
                 lock.lock()
@@ -185,7 +183,7 @@ actor ShellToolService {
                     continuation.resume(returning: .success(false))
                 }
             }
-            
+
             // Start the process
             do {
                 try process.run()
@@ -198,26 +196,26 @@ actor ShellToolService {
                 }
                 return
             }
-            
+
             // Set up timeout task with SIGTERM then SIGKILL fallback
             Task {
                 do {
                     // Wait for the timeout period
                     try await Task.sleep(nanoseconds: UInt64(timeoutSeconds) * 1_000_000_000)
-                    
+
                     // If process is still running, try graceful termination first
                     if process.isRunning {
                         process.terminate() // SIGTERM
-                        
+
                         // Give the process 2 seconds to respond to SIGTERM
                         try await Task.sleep(nanoseconds: 2_000_000_000)
-                        
+
                         // If still running, force kill with SIGKILL
                         if process.isRunning {
                             kill(process.processIdentifier, SIGKILL)
                         }
                     }
-                    
+
                     // Resume with timeout flag if we haven't already
                     lock.lock()
                     defer { lock.unlock() }
@@ -231,52 +229,49 @@ actor ShellToolService {
                 }
             }
         }
-        
+
         // Handle launch failure
         switch result {
-        case .failure(let error):
+        case let .failure(error):
             return .error(
                 tool: "shell.execute",
                 message: "Failed to start command: \(error.localizedDescription)",
                 errorType: "execution_failed"
             )
-        case .success(_):
+        case .success:
             break
         }
-        
-        let didTimeout: Bool
-        if case .success(let timedOut) = result {
-            didTimeout = timedOut
+
+        let didTimeout: Bool = if case let .success(timedOut) = result {
+            timedOut
         } else {
-            didTimeout = false // unreachable due to early return above, but satisfies the compiler
+            false // unreachable due to early return above, but satisfies the compiler
         }
-        
+
         let executionTime = Date().timeIntervalSince(startTime)
         let exitCode = process.terminationStatus
-        
+
         // Check if timed out
         if didTimeout {
             return .timeout(tool: "shell.execute", timeoutSeconds: timeoutSeconds)
         }
-        
+
         // Read output
         let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
         let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-        
-        var stdout: String
-        if stdoutData.count > maxOutputSize {
-            stdout = String(decoding: stdoutData.prefix(maxOutputSize), as: UTF8.self) + "\n... [output truncated]"
+
+        var stdout = if stdoutData.count > maxOutputSize {
+            String(decoding: stdoutData.prefix(maxOutputSize), as: UTF8.self) + "\n... [output truncated]"
         } else {
-            stdout = String(decoding: stdoutData, as: UTF8.self)
+            String(decoding: stdoutData, as: UTF8.self)
         }
 
-        var stderr: String
-        if stderrData.count > maxOutputSize {
-            stderr = String(decoding: stderrData.prefix(maxOutputSize), as: UTF8.self) + "\n... [output truncated]"
+        var stderr = if stderrData.count > maxOutputSize {
+            String(decoding: stderrData.prefix(maxOutputSize), as: UTF8.self) + "\n... [output truncated]"
         } else {
-            stderr = String(decoding: stderrData, as: UTF8.self)
+            String(decoding: stderrData, as: UTF8.self)
         }
-        
+
         // Build context block
         var contextLines: [String] = []
         contextLines.append("[Shell command executed]")
@@ -291,9 +286,9 @@ actor ShellToolService {
         }
         contextLines.append("exit_code: \(exitCode)")
         contextLines.append("execution_time: \(String(format: "%.2f", executionTime))s")
-        
+
         let contextBlock = contextLines.joined(separator: "\n")
-        
+
         if exitCode == 0 {
             return .success(
                 tool: "shell.execute",
@@ -330,6 +325,6 @@ actor ShellToolService {
         )
         #endif
     }
-    
+
     init() {}
 }

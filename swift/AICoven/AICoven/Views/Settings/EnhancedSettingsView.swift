@@ -10,24 +10,24 @@ struct EnhancedSettingsView: View {
     @State private var animatedBackgrounds = true
     @AppStorage("aicoven_animated_backgrounds") private var storedAnimatedBackgrounds = true
     @State private var showConnectedApps = false
-    
+
     var body: some View {
         ScrollView {
             VStack(spacing: Spacing.xl) {
                 // Header
                 VStack(spacing: Spacing.sm) {
                     IconBadge(icon: "gear", size: 60, color: .aicovenPurple)
-                    
+
                     Text("Settings")
                         .font(.aicovenDisplaySmall)
                         .foregroundColor(.aicovenTextPrimary)
-                    
+
                     Text("Manage your preferences")
                         .font(.aicovenBody)
                         .foregroundColor(.aicovenTextSecondary)
                 }
                 .padding(.top, Spacing.xl)
-                
+
                 if loading {
                     ProgressView()
                         .scaleEffect(1.5)
@@ -42,7 +42,7 @@ struct EnhancedSettingsView: View {
                                 .foregroundColor(.aicovenTextPrimary)
                             Spacer()
                         }
-                        
+
                         GlassCard {
                             VStack(spacing: Spacing.md) {
                                 // Push notifications toggle
@@ -53,15 +53,15 @@ struct EnhancedSettingsView: View {
                                     isOn: $notificationsEnabled,
                                     color: .aicovenTeal
                                 )
-                                .onChange(of: notificationsEnabled) { _, newValue in
+                                .onChange(of: notificationsEnabled) { _, _ in
                                     Task {
                                         await saveSettings()
                                     }
                                 }
-                                
+
                                 Divider()
                                     .background(Color.aicovenBorder)
-                                
+
                                 // Email notifications toggle
                                 SettingToggleRow(
                                     icon: "envelope.fill",
@@ -70,7 +70,7 @@ struct EnhancedSettingsView: View {
                                     isOn: $emailNotificationsEnabled,
                                     color: .aicovenPurple
                                 )
-                                .onChange(of: emailNotificationsEnabled) { _, newValue in
+                                .onChange(of: emailNotificationsEnabled) { _, _ in
                                     Task {
                                         await saveSettings()
                                     }
@@ -79,7 +79,7 @@ struct EnhancedSettingsView: View {
                         }
                     }
                     .padding(.horizontal, Spacing.lg)
-                    
+
                     // Appearance section
                     VStack(spacing: Spacing.md) {
                         HStack {
@@ -88,7 +88,7 @@ struct EnhancedSettingsView: View {
                                 .foregroundColor(.aicovenTextPrimary)
                             Spacer()
                         }
-                        
+
                         GlassCard {
                             VStack(spacing: Spacing.md) {
                                 HStack {
@@ -96,7 +96,7 @@ struct EnhancedSettingsView: View {
                                         .font(.aicovenH3)
                                         .foregroundColor(.aicovenPink)
                                         .frame(width: 32)
-                                    
+
                                     VStack(alignment: .leading, spacing: Spacing.xxs) {
                                         Text("Dark Mode")
                                             .font(.aicovenBody)
@@ -105,9 +105,9 @@ struct EnhancedSettingsView: View {
                                             .font(.aicovenCaption)
                                             .foregroundColor(.aicovenTextSecondary)
                                     }
-                                    
+
                                     Spacer()
-                                    
+
                                     Text("ON")
                                         .font(.aicovenCaption)
                                         .foregroundColor(.aicovenTeal)
@@ -116,10 +116,10 @@ struct EnhancedSettingsView: View {
                                         .background(Color.aicovenTeal.opacity(0.2))
                                         .cornerRadius(BorderRadius.circle)
                                 }
-                                
+
                                 Divider()
                                     .background(Color.aicovenBorder)
-                                
+
                                 SettingToggleRow(
                                     icon: "sparkles",
                                     title: "Nebula Animation",
@@ -137,7 +137,7 @@ struct EnhancedSettingsView: View {
                         }
                     }
                     .padding(.horizontal, Spacing.lg)
-                    
+
                     #if os(macOS)
                     // File Access section
                     FileAccessSettingsSection()
@@ -151,7 +151,7 @@ struct EnhancedSettingsView: View {
                                 .foregroundColor(.aicovenTextPrimary)
                             Spacer()
                         }
-                        
+
                         Button {
                             showConnectedApps = true
                         } label: {
@@ -161,7 +161,7 @@ struct EnhancedSettingsView: View {
                                         .font(.aicovenH3)
                                         .foregroundColor(.aicovenPurple)
                                         .frame(width: 32)
-                                    
+
                                     VStack(alignment: .leading, spacing: Spacing.xxs) {
                                         Text("Connected Apps")
                                             .font(.aicovenBody)
@@ -170,9 +170,9 @@ struct EnhancedSettingsView: View {
                                             .font(.aicovenCaption)
                                             .foregroundColor(.aicovenTextSecondary)
                                     }
-                                    
+
                                     Spacer()
-                                    
+
                                     Image(systemName: "chevron.right")
                                         .font(.aicovenCaption)
                                         .foregroundColor(.aicovenTextTertiary)
@@ -182,7 +182,7 @@ struct EnhancedSettingsView: View {
                         .buttonStyle(.plain)
                     }
                     .padding(.horizontal, Spacing.lg)
-                    
+
                     // About section
                     VStack(spacing: Spacing.md) {
                         HStack {
@@ -191,7 +191,7 @@ struct EnhancedSettingsView: View {
                                 .foregroundColor(.aicovenTextPrimary)
                             Spacer()
                         }
-                        
+
                         GlassCard {
                             VStack(spacing: Spacing.md) {
                                 SettingInfoRow(
@@ -200,10 +200,10 @@ struct EnhancedSettingsView: View {
                                     value: "1.0.0",
                                     color: .aicovenTeal
                                 )
-                                
+
                                 Divider()
                                     .background(Color.aicovenBorder)
-                                
+
                                 SettingInfoRow(
                                     icon: "sparkles",
                                     title: "Build",
@@ -212,7 +212,7 @@ struct EnhancedSettingsView: View {
                                 )
                             }
                         }
-                        
+
                         #if DEBUG
                         // Debug / QA utilities
                         GlassCard {
@@ -223,7 +223,7 @@ struct EnhancedSettingsView: View {
                                         .foregroundColor(.aicovenTextPrimary)
                                     Spacer()
                                 }
-                                
+
                                 Button {
                                     Task {
                                         // Best-effort server-side reset; AuthService will
@@ -258,27 +258,27 @@ struct EnhancedSettingsView: View {
             ConnectedAppsView()
         }
     }
-    
-    // Load user settings
+
+    /// Load user settings
     private func loadSettings() async {
         loading = true
         defer { loading = false }
-        
+
         // Start from whatever is persisted locally so we don't
         // accidentally reset the preference if the server doesn't yet
         // send back the new field.
         var effectiveAnimatedBackgrounds = storedAnimatedBackgrounds
-        
+
         guard let user = authService.currentUser else {
             // No user loaded yet – fall back entirely to local storage.
             animatedBackgrounds = effectiveAnimatedBackgrounds
             return
         }
-        
+
         // Load from user settings
         notificationsEnabled = user.settings?.notifications ?? true
         emailNotificationsEnabled = user.settings?.emailNotifications ?? true
-        
+
         // Only override the local value if the backend explicitly
         // returns a setting for animated backgrounds. This prevents the
         // toggle from snapping back to ON when the backend has not yet
@@ -286,23 +286,23 @@ struct EnhancedSettingsView: View {
         if let serverAnimated = user.settings?.animatedBackgrounds {
             effectiveAnimatedBackgrounds = serverAnimated
         }
-        
+
         animatedBackgrounds = effectiveAnimatedBackgrounds
         storedAnimatedBackgrounds = effectiveAnimatedBackgrounds
     }
-    
-    // Save settings (local-only)
+
+    /// Save settings (local-only)
     private func saveSettings() async {
         guard !saving else { return }
         saving = true
         defer { saving = false }
-        
+
         guard let existing = authService.currentUser else {
             // No user object; persist animated backgrounds only via AppStorage.
             storedAnimatedBackgrounds = animatedBackgrounds
             return
         }
-        
+
         // Update the in-memory UserSettings and mirror to AuthService. This
         // keeps the UI consistent without talking to any backend.
         let newSettings = UserSettings(
@@ -334,14 +334,14 @@ struct SettingToggleRow: View {
     let description: String
     @Binding var isOn: Bool
     let color: Color
-    
+
     var body: some View {
         HStack(spacing: Spacing.md) {
             Image(systemName: icon)
                 .font(.aicovenH3)
                 .foregroundColor(color)
                 .frame(width: 32)
-            
+
             VStack(alignment: .leading, spacing: Spacing.xxs) {
                 Text(title)
                     .font(.aicovenBody)
@@ -350,9 +350,9 @@ struct SettingToggleRow: View {
                     .font(.aicovenCaption)
                     .foregroundColor(.aicovenTextSecondary)
             }
-            
+
             Spacer()
-            
+
             Toggle("", isOn: $isOn)
                 .labelsHidden()
                 .tint(.aicovenTeal)
@@ -366,20 +366,20 @@ struct SettingInfoRow: View {
     let title: String
     let value: String
     let color: Color
-    
+
     var body: some View {
         HStack(spacing: Spacing.md) {
             Image(systemName: icon)
                 .font(.aicovenH3)
                 .foregroundColor(color)
                 .frame(width: 32)
-            
+
             Text(title)
                 .font(.aicovenBody)
                 .foregroundColor(.aicovenTextPrimary)
-            
+
             Spacer()
-            
+
             Text(value)
                 .font(.aicovenBody)
                 .foregroundColor(.aicovenTextSecondary)

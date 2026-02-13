@@ -4,9 +4,9 @@ import SwiftUI
 struct ProfileView: View {
     @EnvironmentObject var authService: AuthService
     @State private var user: User?
-    
+
     private let analytics = AnalyticsService.shared
-    
+
     var body: some View {
         NavigationStack {
             List {
@@ -18,16 +18,16 @@ struct ProfileView: View {
                             Circle()
                                 .fill(Color(hex: "#8B5CF6").opacity(0.2))
                                 .frame(width: 60, height: 60)
-                            
+
                             Image(systemName: "person.fill")
                                 .font(.title)
                                 .foregroundColor(Color(hex: "#8B5CF6"))
                         }
-                        
+
                         VStack(alignment: .leading, spacing: 4) {
                             Text(user?.name ?? "User")
                                 .font(.headline)
-                            
+
                             Text(user?.email ?? "")
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
@@ -35,7 +35,7 @@ struct ProfileView: View {
                     }
                     .padding(.vertical, 8)
                 }
-                
+
                 // Stats section
                 Section("Activity") {
                     HStack {
@@ -44,14 +44,14 @@ struct ProfileView: View {
                         Text("0")
                             .foregroundColor(.secondary)
                     }
-                    
+
                     HStack {
                         Label("Threads", systemImage: "message")
                         Spacer()
                         Text("0")
                             .foregroundColor(.secondary)
                     }
-                    
+
                     HStack {
                         Label("Messages", systemImage: "bubble.left")
                         Spacer()
@@ -59,14 +59,14 @@ struct ProfileView: View {
                             .foregroundColor(.secondary)
                     }
                 }
-                
+
                 // Budgets & Usage
                 Section("Settings") {
                     NavigationLink(destination: UsageSettingsView()) {
                         Label("Budgets & Usage", systemImage: "chart.bar")
                     }
                 }
-                
+
                 // Actions section
                 Section {
                     Button(action: signOut) {
@@ -87,12 +87,12 @@ struct ProfileView: View {
             }
         }
     }
-    
+
     /// Load user profile from API
     private func loadUserProfile() async {
         user = authService.currentUser
     }
-    
+
     /// Sign out
     private func signOut() {
         analytics.trackScreenView(screenName: "Logout", screenClass: "ProfileView")

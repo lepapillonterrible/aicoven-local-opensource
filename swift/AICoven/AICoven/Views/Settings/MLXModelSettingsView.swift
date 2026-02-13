@@ -129,7 +129,7 @@ struct MLXModelSettingsView: View {
                                 .cornerRadius(BorderRadius.md)
                         }
 
-                    case .downloading(let progress):
+                    case let .downloading(progress):
                         HStack(spacing: Spacing.sm) {
                             ProgressView(value: progress)
                                 .tint(.aicovenTeal)
@@ -177,7 +177,7 @@ struct MLXModelSettingsView: View {
                             }
                         }
 
-                    case .error(let message):
+                    case let .error(message):
                         HStack {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundColor(.red)

@@ -5,22 +5,22 @@ struct HomeView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var authService: AuthService
     @ObservedObject private var shellApprovalManager = ShellApprovalManager.shared
-    
+
     private let analytics = AnalyticsService.shared
-    
+
     @State private var covens: [Coven] = []
     @State private var personalThreads: [Thread] = []
     @State private var isLoadingCovens = true
     @State private var showCreateCoven = false
-    
+
     // Active state
     @State private var selectedThread: Thread?
     @State private var activeTabId: String?
     @State private var openTabs: [WorkspaceTab] = []
-    
-    // Workspace state - always start in home
+
+    /// Workspace state - always start in home
     @State private var currentWorkspace: WorkspaceType = .home
-    
+
     var body: some View {
         Group {
             if isLoadingCovens {
@@ -81,16 +81,16 @@ struct HomeView: View {
             )
         }
     }
-    
+
     private func loadInitialData() async {
         await loadCovens()
         await loadPersonalThreads()
     }
-    
+
     private func loadCovens() async {
         isLoadingCovens = true
         defer { isLoadingCovens = false }
-        
+
         do {
             covens = try await CovenService.shared.loadCovens()
             AppErrorReporter.log(message: "Loaded \(covens.count) covens", context: "HomeView.loadCovens")
@@ -99,7 +99,7 @@ struct HomeView: View {
             covens = []
         }
     }
-    
+
     private func loadPersonalThreads() async {
         do {
             personalThreads = try await ThreadService.shared.loadThreads(covenId: nil)
@@ -168,17 +168,17 @@ struct PersonalWorkspaceView: View {
     @Binding var openTabs: [WorkspaceTab]
     @Binding var activeTabId: String?
     @Binding var covens: [Coven]
-    
+
     @State private var isSidebarExpanded = false // Collapsed by default
-    
+
     let onCreateCoven: () -> Void
     let onRefreshThreads: () async -> Void
     let onSwitchToCovens: () -> Void
-    
+
     var body: some View {
         ZStack {
             NebulaBackground()
-            
+
             HStack(spacing: 0) {
                 // Personal threads sidebar
                 PersonalThreadsSidebar(
@@ -190,11 +190,11 @@ struct PersonalWorkspaceView: View {
                     onDeleteThread: handleDeleteThread,
                     onSwitchToCovens: onSwitchToCovens
                 )
-                
+
                 Rectangle()
                     .fill(Color.aicovenBorder)
                     .frame(width: 1)
-                
+
                 // Main content area
                 PersonalContentView(
                     selectedThread: $selectedThread,
@@ -214,15 +214,15 @@ struct PersonalWorkspaceView: View {
                 selectedThread = nil
                 return
             }
-            
-            if case .thread(let thread) = tab.type {
+
+            if case let .thread(thread) = tab.type {
                 selectedThread = thread
             } else {
                 selectedThread = nil
             }
         }
     }
-    
+
     private func handleNewThread() {
         Task {
             do {
@@ -239,44 +239,44 @@ struct PersonalWorkspaceView: View {
             }
         }
     }
-    
+
     private func handleOpenThread(_ thread: Thread) {
         // Create tab for thread
         let tab = WorkspaceTab.thread(thread)
-        
+
         // Add to tabs if not already open
         if !openTabs.contains(where: { $0.id == tab.id }) {
             openTabs.append(tab)
         }
-        
+
         // Make it active
         activeTabId = tab.id
         selectedThread = thread
     }
-    
+
     private func handleDeleteThread(_ thread: Thread) {
         Task {
             do {
                 try await ThreadService.shared.deleteThread(threadId: thread.id)
-                
+
                 // Remove from local list
                 if let index = personalThreads.firstIndex(where: { $0.id == thread.id }) {
                     personalThreads.remove(at: index)
                 }
-                
+
                 // Clear selected thread if needed
                 if selectedThread?.id == thread.id {
                     selectedThread = nil
                 }
-                
+
                 // Close any open tab for this thread
                 openTabs.removeAll { tab in
-                    if case .thread(let tabThread) = tab.type {
+                    if case let .thread(tabThread) = tab.type {
                         return tabThread.id == thread.id
                     }
                     return false
                 }
-                
+
                 if activeTabId == thread.id {
                     activeTabId = openTabs.last?.id
                 }

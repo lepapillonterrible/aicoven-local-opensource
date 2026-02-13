@@ -6,9 +6,9 @@ import Foundation
 /// all API calls replaced with local SQLite operations via CovenRepository.
 actor CovenService {
     static let shared = CovenService()
-    
+
     private init() {}
-    
+
     /// Load all covens for the current user
     func loadCovens() async throws -> [Coven] {
         print("🏰 Loading covens...")
@@ -16,7 +16,7 @@ actor CovenService {
         print("✅ Loaded \(covens.count) covens")
         return covens
     }
-    
+
     /// Create a new coven
     /// - Parameters:
     ///   - name: Name of the coven
@@ -33,7 +33,7 @@ actor CovenService {
         print("✅ Created coven: \(coven.id)")
         return coven
     }
-    
+
     /// Update an existing coven
     /// - Parameters:
     ///   - id: Coven ID
@@ -42,15 +42,14 @@ actor CovenService {
     ///   - avatar: New avatar URL (optional)
     /// - Returns: The updated coven
     func updateCoven(id: String, name: String? = nil, description: String? = nil, avatar: String? = nil) async throws -> Coven {
-        let coven = try await CovenRepository.shared.updateCoven(
+        try await CovenRepository.shared.updateCoven(
             id: id,
             name: name,
             description: description,
             avatar: avatar
         )
-        return coven
     }
-    
+
     /// Delete a coven
     /// - Parameter id: Coven ID
     func deleteCoven(id: String) async throws {

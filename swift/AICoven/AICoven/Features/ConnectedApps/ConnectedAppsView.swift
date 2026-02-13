@@ -3,34 +3,35 @@ import SwiftUI
 /// View for managing connected app integrations (GitHub, Google Drive).
 /// All OAuth tokens are stored locally in Keychain.
 struct ConnectedAppsView: View {
-    // Environment to dismiss the view (used on macOS when presented as a sheet)
+    /// Environment to dismiss the view (used on macOS when presented as a sheet)
     @Environment(\.dismiss) private var dismiss
-    
+
     @State private var accounts: [ConnectedAccount] = []
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var isConnecting = false
     @State private var connectingProvider: ConnectedAppProvider?
-    
+
     // GitHub Device Flow state
     @State private var showingDeviceCodeSheet = false
     @State private var deviceUserCode: String = ""
     @State private var deviceVerificationUrl: String = ""
     @State private var deviceFlowTask: Task<Void, Never>?
-    
+
     // Google Picker state
     @State private var showingGooglePicker = false
     @State private var pickedFiles: [GooglePickerFile] = []
-    
-    // OAuth client IDs – pre-configured with AICoven's apps via Info.plist / xcconfig.
-    // Developers who fork the repo can override these in their own xcconfig.
+
+    /// OAuth client IDs – pre-configured with AICoven's apps via Info.plist / xcconfig.
+    /// Developers who fork the repo can override these in their own xcconfig.
     private var githubClientId: String {
         Bundle.main.infoDictionary?["GITHUB_OAUTH_CLIENT_ID"] as? String ?? "Iv23liJu04XRFISDVMBO"
     }
+
     private var googleClientId: String {
         Bundle.main.infoDictionary?["GOOGLE_OAUTH_CLIENT_ID"] as? String ?? "870439799161-1c7u8utd0t0kh3ote5kugh8cj9961ugb.apps.googleusercontent.com"
     }
-    
+
     var body: some View {
         ScrollView {
             VStack(spacing: 24) {
@@ -50,13 +51,13 @@ struct ConnectedAppsView: View {
                     .padding(.top, 12)
                 }
                 #endif
-                
+
                 // Header
                 headerSection
-                
+
                 // Info banner
                 infoBanner
-                
+
                 // Connected apps list
                 VStack(spacing: 16) {
                     ForEach(ConnectedAppProvider.allCases, id: \.rawValue) { provider in
@@ -71,7 +72,7 @@ struct ConnectedAppsView: View {
                     }
                 }
                 .padding(.horizontal)
-                
+
                 // Show recently picked files if any
                 if !pickedFiles.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
@@ -92,16 +93,15 @@ struct ConnectedAppsView: View {
                             }
                             .padding(8)
                             #if os(macOS)
-                            .background(Color(NSColor.controlBackgroundColor))
+                                .background(Color(NSColor.controlBackgroundColor))
                             #else
-                            .background(Color(UIColor.secondarySystemBackground))
+                                .background(Color(UIColor.secondarySystemBackground))
                             #endif
-                            .cornerRadius(8)
+                                .cornerRadius(8)
                         }
                     }
                     .padding(.horizontal)
                 }
-                
 
                 Spacer(minLength: 40)
             }
@@ -153,20 +153,20 @@ struct ConnectedAppsView: View {
             }
         }
     }
-    
+
     // MARK: - View Components
-    
+
     /// Header section
     private var headerSection: some View {
         VStack(spacing: 8) {
             Image(systemName: "app.connected.to.app.below.fill")
                 .font(.system(size: 48))
                 .foregroundColor(.purple)
-            
+
             Text("Connected Apps")
                 .font(.title)
                 .fontWeight(.bold)
-            
+
             Text("Connect external services to enhance agent capabilities")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
@@ -174,95 +174,94 @@ struct ConnectedAppsView: View {
         }
         .padding(.top, 24)
     }
-    
+
     /// Info banner about local-first architecture
     private var infoBanner: some View {
         HStack(spacing: 12) {
             Image(systemName: "lock.shield")
                 .foregroundColor(.green)
-            
+
             VStack(alignment: .leading, spacing: 2) {
                 Text("Local-First Security")
                     .font(.caption)
                     .fontWeight(.semibold)
-                
+
                 Text("OAuth tokens are stored securely in your device's Keychain")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
-            
+
             Spacer()
         }
         .padding()
         #if os(macOS)
-        .background(Color(NSColor.controlBackgroundColor))
+            .background(Color(NSColor.controlBackgroundColor))
         #else
-        .background(Color(UIColor.secondarySystemBackground))
+            .background(Color(UIColor.secondarySystemBackground))
         #endif
-        .cornerRadius(12)
-        .padding(.horizontal)
+            .cornerRadius(12)
+            .padding(.horizontal)
     }
-    
 
     // MARK: - Actions
-    
+
     /// Load accounts from ConnectedAccountsService
     private func loadAccounts() async {
         isLoading = true
         accounts = await ConnectedAccountsService.shared.getAllAccounts()
         isLoading = false
     }
-    
+
     /// Connect to a provider
     private func connect(provider: ConnectedAppProvider) async {
         connectingProvider = provider
-        
+
         do {
             let tokenBundle: OAuthTokenBundle
             let displayName: String
             var metadata: [String: String] = [:]
-            
+
             switch provider {
             case .github:
-                
+
                 // Use Device Flow for GitHub (no client secret needed)
                 let flow = GitHubDeviceFlow(clientId: githubClientId)
-                
+
                 // Set up callback to show user code
                 flow.onUserCodeReceived = { [self] userCode, verificationUrl in
                     // Set values first, then show sheet on next run loop
                     // to ensure SwiftUI state is committed
-                    self.deviceUserCode = userCode
-                    self.deviceVerificationUrl = verificationUrl
+                    deviceUserCode = userCode
+                    deviceVerificationUrl = verificationUrl
                     DispatchQueue.main.async {
-                        self.showingDeviceCodeSheet = true
+                        showingDeviceCodeSheet = true
                     }
                 }
-                
+
                 // Start flow in a task so we can cancel it
                 tokenBundle = try await withTaskCancellationHandler {
                     try await flow.authenticate()
                 } onCancel: {
                     // Task was cancelled (user dismissed sheet)
                 }
-                
+
                 // Hide device code sheet
                 showingDeviceCodeSheet = false
-                
+
                 // Fetch user info
                 displayName = try await fetchGitHubUsername(token: tokenBundle.accessToken)
                 metadata["login"] = displayName
-                
+
             case .googleDrive:
-                
+
                 let flow = await GoogleOAuthFlow(clientId: googleClientId)
                 tokenBundle = try await flow.authenticate()
-                
+
                 // Fetch user info
                 displayName = try await fetchGoogleEmail(token: tokenBundle.accessToken)
                 metadata["email"] = displayName
             }
-            
+
             // Create account
             _ = try await ConnectedAccountsService.shared.createAccount(
                 provider: provider,
@@ -270,11 +269,11 @@ struct ConnectedAppsView: View {
                 tokenBundle: tokenBundle,
                 metadata: metadata
             )
-            
+
             // Reload accounts
             await loadAccounts()
             connectingProvider = nil
-            
+
         } catch is CancellationError {
             // User cancelled - not an error
             connectingProvider = nil
@@ -289,49 +288,49 @@ struct ConnectedAppsView: View {
             errorMessage = error.localizedDescription
         }
     }
-    
+
     /// Disconnect from a provider
     private func disconnect(provider: ConnectedAppProvider) async {
         guard let account = accounts.first(where: { $0.provider == provider && $0.status == .connected }) else {
             return
         }
-        
+
         await ConnectedAccountsService.shared.disconnectAccount(id: account.id)
         await loadAccounts()
     }
-    
+
     // MARK: - Helpers
-    
+
     /// Fetch GitHub username from API
     private func fetchGitHubUsername(token: String) async throws -> String {
         let url = URL(string: "https://api.github.com/user")!
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        
+
         let (data, _) = try await URLSession.shared.data(for: request)
-        
+
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let login = json["login"] as? String else {
             return "GitHub User"
         }
-        
+
         return login
     }
-    
+
     /// Fetch Google email from API
     private func fetchGoogleEmail(token: String) async throws -> String {
         let url = URL(string: "https://www.googleapis.com/oauth2/v2/userinfo")!
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        
+
         let (data, _) = try await URLSession.shared.data(for: request)
-        
+
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let email = json["email"] as? String else {
             return "Google User"
         }
-        
+
         return email
     }
 }
@@ -346,9 +345,11 @@ struct ConnectedAppRow: View {
     let onConnect: () async -> Void
     let onDisconnect: () async -> Void
     let onBrowseDrive: (() -> Void)?
-    
-    var isConnected: Bool { account != nil }
-    
+
+    var isConnected: Bool {
+        account != nil
+    }
+
     var body: some View {
         HStack(spacing: 16) {
             // Icon
@@ -356,18 +357,18 @@ struct ConnectedAppRow: View {
                 Circle()
                     .fill(providerColor.opacity(0.2))
                     .frame(width: 48, height: 48)
-                
+
                 Image(systemName: provider.iconName)
                     .font(.system(size: 24))
                     .foregroundColor(providerColor)
             }
-            
+
             // Info
             VStack(alignment: .leading, spacing: 4) {
                 Text(provider.displayName)
                     .font(.headline)
-                
-                if let account = account {
+
+                if let account {
                     Text(account.displayName)
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -377,16 +378,16 @@ struct ConnectedAppRow: View {
                         .foregroundColor(.secondary)
                 }
             }
-            
+
             Spacer()
-            
+
             // Action buttons
             if isConnecting {
                 ProgressView()
                     .scaleEffect(0.8)
             } else if isConnected {
                 HStack(spacing: 8) {
-                    if let onBrowseDrive = onBrowseDrive {
+                    if let onBrowseDrive {
                         Button("Browse Files") {
                             onBrowseDrive()
                         }
@@ -408,18 +409,18 @@ struct ConnectedAppRow: View {
         }
         .padding()
         #if os(macOS)
-        .background(Color(NSColor.controlBackgroundColor))
+            .background(Color(NSColor.controlBackgroundColor))
         #else
-        .background(Color(UIColor.secondarySystemBackground))
+            .background(Color(UIColor.secondarySystemBackground))
         #endif
-        .cornerRadius(12)
+            .cornerRadius(12)
     }
-    
+
     /// Color for each provider
     private var providerColor: Color {
         switch provider {
-        case .github: return .purple
-        case .googleDrive: return .blue
+        case .github: .purple
+        case .googleDrive: .blue
         }
     }
 }
@@ -449,7 +450,7 @@ struct GooglePickerSheet: View {
                         .foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let error = error {
+            } else if let error {
                 VStack(spacing: 16) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.largeTitle)
@@ -493,9 +494,9 @@ struct GitHubDeviceCodeSheet: View {
     let userCode: String
     let verificationUrl: String
     let onCancel: () -> Void
-    
+
     @State private var codeCopied = false
-    
+
     var body: some View {
         VStack(spacing: 24) {
             // Header
@@ -503,18 +504,18 @@ struct GitHubDeviceCodeSheet: View {
                 Image(systemName: "link.circle.fill")
                     .font(.system(size: 48))
                     .foregroundColor(.purple)
-                
+
                 Text("Connect to GitHub")
                     .font(.title2)
                     .fontWeight(.bold)
             }
-            
+
             // Instructions
             Text("Enter this code on GitHub to authorize AICoven:")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
-            
+
             // User code display
             HStack(spacing: 12) {
                 if userCode.isEmpty {
@@ -527,7 +528,7 @@ struct GitHubDeviceCodeSheet: View {
                     Text(userCode)
                         .font(.system(size: 32, weight: .bold, design: .monospaced))
                         .tracking(4)
-                    
+
                     Button {
                         copyToClipboard(userCode)
                         codeCopied = true
@@ -544,12 +545,12 @@ struct GitHubDeviceCodeSheet: View {
             }
             .padding()
             #if os(macOS)
-            .background(Color(NSColor.controlBackgroundColor))
+                .background(Color(NSColor.controlBackgroundColor))
             #else
-            .background(Color(UIColor.secondarySystemBackground))
+                .background(Color(UIColor.secondarySystemBackground))
             #endif
-            .cornerRadius(12)
-            
+                .cornerRadius(12)
+
             // Open GitHub button
             if let url = URL(string: verificationUrl) {
                 Link(destination: url) {
@@ -564,7 +565,7 @@ struct GitHubDeviceCodeSheet: View {
                     .cornerRadius(12)
                 }
             }
-            
+
             // Waiting indicator
             HStack(spacing: 8) {
                 ProgressView()
@@ -573,9 +574,9 @@ struct GitHubDeviceCodeSheet: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
-            
+
             Spacer()
-            
+
             // Cancel button
             Button("Cancel") {
                 onCancel()
@@ -585,7 +586,7 @@ struct GitHubDeviceCodeSheet: View {
         .padding(24)
         .frame(minWidth: 320, minHeight: 400)
     }
-    
+
     /// Copy text to clipboard
     private func copyToClipboard(_ text: String) {
         #if os(macOS)

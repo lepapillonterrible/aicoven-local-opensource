@@ -12,9 +12,11 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
     ///   - apiKey: Anthropic API key.
     ///   - baseURL: Base URL for the API (overridable for testing).
     ///   - urlSession: Optional custom URLSession used primarily for tests.
-    init(apiKey: String,
-         baseURL: URL = URL(string: "https://api.anthropic.com/v1")!,
-         urlSession: URLSession? = nil) {
+    init(
+        apiKey: String,
+        baseURL: URL = URL(string: "https://api.anthropic.com/v1")!,
+        urlSession: URLSession? = nil
+    ) {
         self.apiKey = apiKey
         self.baseURL = baseURL
         if let urlSession {
@@ -28,8 +30,12 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
     }
 
     func completeChat(messages: [LLMMessage], model: String, options: ChatOptions) async throws -> LLMChatResponse {
-        struct MessageContent: Encodable { let type = "text"; let text: String }
-        struct RequestMessage: Encodable { let role: String; let content: [MessageContent] }
+        struct MessageContent: Encodable { let type = "text"
+            let text: String
+        }
+        struct RequestMessage: Encodable { let role: String
+            let content: [MessageContent]
+        }
         // Native tool calling structures (Anthropic format)
         struct SchemaProperty: Encodable {
             let type: String
@@ -102,33 +108,41 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
             )
         } : nil
 
-        let body = RequestBody(model: model,
-                               max_tokens: options.maxTokens ?? 4096,
-                               messages: reqMessages,
-                               temperature: options.temperature,
-                               tools: toolDefs)
+        let body = RequestBody(
+            model: model,
+            max_tokens: options.maxTokens ?? 4096,
+            messages: reqMessages,
+            temperature: options.temperature,
+            tools: toolDefs
+        )
         request.httpBody = try JSONEncoder().encode(body)
 
         let (data, response) = try await urlSession.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+        if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
             let bodyText = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
             let message = "Anthropic HTTP \(http.statusCode): \(bodyText)"
-            throw NSError(domain: "AnthropicLLMClient", code: http.statusCode,
-                          userInfo: [NSLocalizedDescriptionKey: message])
+            throw NSError(
+                domain: "AnthropicLLMClient",
+                code: http.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: message]
+            )
         }
         guard !data.isEmpty else {
-            throw NSError(domain: "AnthropicLLMClient", code: -2,
-                          userInfo: [NSLocalizedDescriptionKey: "Anthropic returned an empty response body."])
+            throw NSError(
+                domain: "AnthropicLLMClient",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Anthropic returned an empty response body."]
+            )
         }
         let decoded = try JSONDecoder().decode(ResponseBody.self, from: data)
 
         // Extract text content
         let text = decoded.content
             .filter { $0.type == "text" }
-            .compactMap { $0.text }
+            .compactMap(\.text)
             .joined(separator: "\n")
         let msg = LLMMessage(role: .assistant, content: text)
-        
+
         let usage = decoded.usage.map { u in
             LLMTokenUsage(
                 promptTokens: u.input_tokens ?? 0,
@@ -145,9 +159,14 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
                 return LLMToolCall(name: name, arguments: block.input ?? [:])
             }
         }
-        
-        return LLMChatResponse(message: msg, providerID: "anthropic", modelID: decoded.model,
-                               usage: usage, toolCalls: toolCalls)
+
+        return LLMChatResponse(
+            message: msg,
+            providerID: "anthropic",
+            modelID: decoded.model,
+            usage: usage,
+            toolCalls: toolCalls
+        )
     }
 
     func embed(texts: [String], model: String) async throws -> [[Float]] {

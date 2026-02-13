@@ -19,23 +19,23 @@ enum WorkspaceTabType: Equatable {
     case personalStrixSettings
     /// In-app purchase store tab
     case store
-    
+
     static func == (lhs: WorkspaceTabType, rhs: WorkspaceTabType) -> Bool {
         switch (lhs, rhs) {
-        case (.thread(let t1), .thread(let t2)):
-            return t1.id == t2.id
-        case (.addRole(let c1), .addRole(let c2)):
-            return c1 == c2
-        case (.editRole(let r1), .editRole(let r2)):
-            return r1 == r2
-        case (.memoryList(let c1), .memoryList(let c2)):
-            return c1 == c2
-        case (.memoryProposals(let c1), .memoryProposals(let c2)):
-            return c1 == c2
-        case (.addMemory(let c1), .addMemory(let c2)):
-            return c1 == c2
-        case (.editMemory(let m1, let c1), .editMemory(let m2, let c2)):
-            return m1 == m2 && c1 == c2
+        case let (.thread(t1), .thread(t2)):
+            t1.id == t2.id
+        case let (.addRole(c1), .addRole(c2)):
+            c1 == c2
+        case let (.editRole(r1), .editRole(r2)):
+            r1 == r2
+        case let (.memoryList(c1), .memoryList(c2)):
+            c1 == c2
+        case let (.memoryProposals(c1), .memoryProposals(c2)):
+            c1 == c2
+        case let (.addMemory(c1), .addMemory(c2)):
+            c1 == c2
+        case let (.editMemory(m1, c1), .editMemory(m2, c2)):
+            m1 == m2 && c1 == c2
         case (.profile, .profile),
              (.settings, .settings),
              (.providerKeys, .providerKeys),
@@ -44,29 +44,29 @@ enum WorkspaceTabType: Equatable {
              (.connectedApps, .connectedApps),
              (.personalStrixSettings, .personalStrixSettings),
              (.store, .store):
-            return true
+            true
         default:
-            return false
+            false
         }
     }
-    
+
     var analyticsName: String {
         switch self {
-        case .thread: return "thread"
-        case .profile: return "profile"
-        case .settings: return "settings"
-        case .providerKeys: return "provider_keys"
-        case .budget: return "budget"
-        case .connectedApps: return "connected_apps"
-        case .usage: return "usage"
-        case .addRole: return "add_role"
-        case .editRole: return "edit_role"
-        case .memoryList: return "memory_list"
-        case .memoryProposals: return "memory_proposals"
-        case .addMemory: return "add_memory"
-        case .editMemory: return "edit_memory"
-        case .personalStrixSettings: return "personal_strix_settings"
-        case .store: return "store"
+        case .thread: "thread"
+        case .profile: "profile"
+        case .settings: "settings"
+        case .providerKeys: "provider_keys"
+        case .budget: "budget"
+        case .connectedApps: "connected_apps"
+        case .usage: "usage"
+        case .addRole: "add_role"
+        case .editRole: "edit_role"
+        case .memoryList: "memory_list"
+        case .memoryProposals: "memory_proposals"
+        case .addMemory: "add_memory"
+        case .editMemory: "edit_memory"
+        case .personalStrixSettings: "personal_strix_settings"
+        case .store: "store"
         }
     }
 }
@@ -76,11 +76,11 @@ struct WorkspaceTab: Identifiable, Equatable {
     let id: String
     let type: WorkspaceTabType
     var title: String
-    
+
     static func == (lhs: WorkspaceTab, rhs: WorkspaceTab) -> Bool {
         lhs.id == rhs.id
     }
-    
+
     /// Create a tab for a thread
     static func thread(_ thread: Thread) -> WorkspaceTab {
         WorkspaceTab(
@@ -89,7 +89,7 @@ struct WorkspaceTab: Identifiable, Equatable {
             title: thread.title ?? "Untitled"
         )
     }
-    
+
     /// Create a tab for profile
     static var profile: WorkspaceTab {
         WorkspaceTab(
@@ -98,7 +98,7 @@ struct WorkspaceTab: Identifiable, Equatable {
             title: "Profile"
         )
     }
-    
+
     /// Create a tab for settings
     static var settings: WorkspaceTab {
         WorkspaceTab(
@@ -107,7 +107,7 @@ struct WorkspaceTab: Identifiable, Equatable {
             title: "Settings"
         )
     }
-    
+
     /// Create a tab for provider keys
     static var providerKeys: WorkspaceTab {
         WorkspaceTab(
@@ -116,7 +116,7 @@ struct WorkspaceTab: Identifiable, Equatable {
             title: "Provider Keys"
         )
     }
-    
+
     /// Create a tab for budgets
     static var budget: WorkspaceTab {
         WorkspaceTab(
@@ -125,7 +125,7 @@ struct WorkspaceTab: Identifiable, Equatable {
             title: "Budgets"
         )
     }
-    
+
     /// Create a tab for connected apps
     static var connectedApps: WorkspaceTab {
         WorkspaceTab(
@@ -134,7 +134,7 @@ struct WorkspaceTab: Identifiable, Equatable {
             title: "Connected Apps"
         )
     }
-    
+
     /// Create a tab for usage dashboard
     static var usage: WorkspaceTab {
         WorkspaceTab(
@@ -143,7 +143,7 @@ struct WorkspaceTab: Identifiable, Equatable {
             title: "Budgets & Usage"
         )
     }
-    
+
     /// Create a tab for adding a new role
     static func addRole(covenId: String) -> WorkspaceTab {
         WorkspaceTab(
@@ -152,7 +152,7 @@ struct WorkspaceTab: Identifiable, Equatable {
             title: "New Agent Role"
         )
     }
-    
+
     /// Create a tab for editing a role
     static func editRole(roleId: String, roleName: String) -> WorkspaceTab {
         WorkspaceTab(
@@ -161,7 +161,7 @@ struct WorkspaceTab: Identifiable, Equatable {
             title: "Edit \(roleName)"
         )
     }
-    
+
     /// Create a tab for viewing memory list
     static func memoryList(covenId: String?) -> WorkspaceTab {
         WorkspaceTab(
@@ -170,7 +170,7 @@ struct WorkspaceTab: Identifiable, Equatable {
             title: covenId != nil ? "Memory" : "Personal Memory"
         )
     }
-    
+
     /// Create a tab for viewing memory proposals
     static func memoryProposals(covenId: String?) -> WorkspaceTab {
         WorkspaceTab(
@@ -179,7 +179,7 @@ struct WorkspaceTab: Identifiable, Equatable {
             title: "Memory Proposals"
         )
     }
-    
+
     /// Create a tab for adding a new memory
     static func addMemory(covenId: String?) -> WorkspaceTab {
         WorkspaceTab(
@@ -188,7 +188,7 @@ struct WorkspaceTab: Identifiable, Equatable {
             title: "New Memory"
         )
     }
-    
+
     /// Create a tab for editing a memory
     static func editMemory(memoryId: String, memoryTitle: String, covenId: String?) -> WorkspaceTab {
         WorkspaceTab(
@@ -197,7 +197,7 @@ struct WorkspaceTab: Identifiable, Equatable {
             title: "Edit \(memoryTitle)"
         )
     }
-    
+
     /// Tab for personal Strix (default assistant) settings in the personal workspace
     static var personalStrix: WorkspaceTab {
         WorkspaceTab(

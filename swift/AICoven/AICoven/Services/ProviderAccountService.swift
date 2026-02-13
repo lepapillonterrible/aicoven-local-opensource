@@ -378,6 +378,7 @@ actor ProviderAccountService {
 }
 
 // MARK: - ProviderAccountService Private Helpers
+
 extension ProviderAccountService {
     private func loadLocalAccounts() throws -> [LocalProviderAccount] {
         let defaults = UserDefaults.standard
@@ -451,22 +452,27 @@ extension ProviderAccountService {
             guard let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) else {
                 throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing OpenAI API key for account \(account.id)"])
             }
-            struct OpenAIListResponse: Decodable { struct Item: Decodable { let id: String } ; let data: [Item] }
+            struct OpenAIListResponse: Decodable { struct Item: Decodable { let id: String }
+                let data: [Item]
+            }
             var request = URLRequest(url: URL(string: "https://api.openai.com/v1/models")!)
             request.httpMethod = "GET"
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             request.setValue("application/json", forHTTPHeaderField: "Accept")
             let (data, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
                 let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-                throw NSError(domain: "ProviderAccountService", code: http.statusCode,
-                              userInfo: [NSLocalizedDescriptionKey: "OpenAI models HTTP \(http.statusCode): \(body)"])
+                throw NSError(
+                    domain: "ProviderAccountService",
+                    code: http.statusCode,
+                    userInfo: [NSLocalizedDescriptionKey: "OpenAI models HTTP \(http.statusCode): \(body)"]
+                )
             }
             let decoded = try JSONDecoder().decode(OpenAIListResponse.self, from: data)
             let chatOnly = decoded.data
-                .map { $0.id }
+                .map(\.id)
                 .filter { isChatModel(provider: "openai", id: $0) }
-            let models = chatOnly.isEmpty ? decoded.data.map { $0.id } : chatOnly
+            let models = chatOnly.isEmpty ? decoded.data.map(\.id) : chatOnly
             return models.map { id in
                 ProviderInitializationStatus.ModelMetadata(
                     id: id,
@@ -501,13 +507,16 @@ extension ProviderAccountService {
                 request.httpMethod = "GET"
                 request.setValue("application/json", forHTTPHeaderField: "Accept")
                 let (data, response) = try await URLSession.shared.data(for: request)
-                if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
                     let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-                    throw NSError(domain: "ProviderAccountService", code: http.statusCode,
-                                  userInfo: [NSLocalizedDescriptionKey: "Gemini models HTTP \(http.statusCode): \(body)"])
+                    throw NSError(
+                        domain: "ProviderAccountService",
+                        code: http.statusCode,
+                        userInfo: [NSLocalizedDescriptionKey: "Gemini models HTTP \(http.statusCode): \(body)"]
+                    )
                 }
                 let decoded = try JSONDecoder().decode(GeminiListResponse.self, from: data)
-                allModelNames.append(contentsOf: (decoded.models ?? []).map { $0.name })
+                allModelNames.append(contentsOf: (decoded.models ?? []).map(\.name))
                 pageToken = decoded.nextPageToken
             } while pageToken != nil
 
@@ -542,7 +551,7 @@ extension ProviderAccountService {
                     id: model.name,
                     name: model.name,
                     provider: "ollama",
-                    contextLength: 128_000  // Ollama doesn't report context length via tags
+                    contextLength: 128_000 // Ollama doesn't report context length via tags
                 )
             }
         case "mlx":

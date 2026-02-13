@@ -14,16 +14,16 @@ struct WorkspaceView: View {
     @State private var activeTabId: String?
     @State private var roles: [Role] = []
     @State private var threadRefreshTrigger = false
-    
+
     private let analytics = AnalyticsService.shared
-    
+
     let onSwitchToHome: () -> Void
-    
+
     var body: some View {
         ZStack {
             // Nebula background
             NebulaBackground()
-            
+
             // Main workspace layout
             HStack(spacing: 0) {
                 // Enhanced sidebar with coven selector, threads, and roles
@@ -39,12 +39,12 @@ struct WorkspaceView: View {
                     onTapRole: handleTapRole,
                     onSwitchToHome: onSwitchToHome
                 )
-                
+
                 // Vertical divider
                 Rectangle()
                     .fill(Color.aicovenBorder)
                     .frame(width: 1)
-                
+
                 // Main content area with tabs and chat
                 WorkspaceContentView(
                     selectedCoven: $selectedCoven,
@@ -58,7 +58,7 @@ struct WorkspaceView: View {
         .onAppear {
             analytics.trackScreenView(screenName: "WorkspaceView", screenClass: "WorkspaceView")
         }
-        .onChange(of: selectedCoven) { oldValue, newValue in
+        .onChange(of: selectedCoven) { _, newValue in
             if let coven = newValue {
                 analytics.trackCovenView(covenId: coven.id)
                 Task {
@@ -69,7 +69,7 @@ struct WorkspaceView: View {
             }
         }
     }
-    
+
     /// Load roles for the selected coven
     private func loadRoles(covenId: String) async {
         do {
@@ -79,7 +79,7 @@ struct WorkspaceView: View {
             roles = []
         }
     }
-    
+
     /// Handle adding a new role
     private func handleAddRole(covenId: String) {
         let tab = WorkspaceTab.addRole(covenId: covenId)
@@ -89,7 +89,7 @@ struct WorkspaceView: View {
         activeTabId = tab.id
         analytics.trackFeatureUsage(featureName: "add_role")
     }
-    
+
     /// Handle editing a role
     private func handleEditRole(role: Role) {
         let tab = WorkspaceTab.editRole(roleId: role.id, roleName: role.name)
@@ -99,7 +99,7 @@ struct WorkspaceView: View {
         activeTabId = tab.id
         analytics.trackRoleView(roleId: role.id)
     }
-    
+
     /// Handle deleting a role
     private func handleDeleteRole(role: Role) {
         Task {
@@ -112,7 +112,7 @@ struct WorkspaceView: View {
                 }
                 // Close any edit tab for this role
                 openTabs.removeAll { tab in
-                    if case .editRole(let roleId) = tab.type, roleId == role.id {
+                    if case let .editRole(roleId) = tab.type, roleId == role.id {
                         return true
                     }
                     return false
@@ -123,7 +123,7 @@ struct WorkspaceView: View {
             }
         }
     }
-    
+
     /// Handle tapping a role to create a new thread
     private func handleTapRole(role: Role) {
         Task {
@@ -156,11 +156,11 @@ struct WorkspaceContentView: View {
     @Binding var activeTabId: String?
     @EnvironmentObject var authService: AuthService
     @Binding var roles: [Role]
-    
+
     var activeTab: WorkspaceTab? {
         openTabs.first(where: { $0.id == activeTabId })
     }
-    
+
     var body: some View {
         VStack(spacing: 0) {
             // Top bar with profile menu (when no tabs open)
@@ -181,7 +181,7 @@ struct WorkspaceContentView: View {
                         activeTabId: $activeTabId
                     )
                     .frame(maxWidth: .infinity)
-                    
+
                     ProfileMenuView(onOpenTab: openTab)
                         .frame(width: 44, height: 44)
                         .padding(.trailing, Spacing.xs)
@@ -205,7 +205,7 @@ struct WorkspaceContentView: View {
                     }
                 )
             }
-            
+
             // Content area - render based on active tab type
             if let tab = activeTab {
                 renderTabContent(tab)
@@ -234,12 +234,12 @@ struct WorkspaceContentView: View {
             }
         }
     }
-    
-    // Render appropriate view based on tab type
+
+    /// Render appropriate view based on tab type
     @ViewBuilder
     private func renderTabContent(_ tab: WorkspaceTab) -> some View {
         switch tab.type {
-        case .thread(let thread):
+        case let .thread(thread):
             // Reuse PersonalChatView for coven threads (same local chat flow)
             PersonalChatView(
                 thread: thread,
@@ -257,7 +257,7 @@ struct WorkspaceContentView: View {
             BudgetView()
         case .usage:
             UsageSettingsView()
-        case .addRole(let covenId):
+        case let .addRole(covenId):
             AddRoleView(covenId: covenId, roles: roles) {
                 // Refresh roles list and close tab
                 Task {
@@ -277,7 +277,7 @@ struct WorkspaceContentView: View {
                     }
                 }
             }
-        case .editRole(let roleId):
+        case let .editRole(roleId):
             EditRoleView(roleId: roleId, roles: roles) {
                 // Refresh roles list and close tab
                 Task {
@@ -298,13 +298,13 @@ struct WorkspaceContentView: View {
                 }
             }
             .id(roleId)
-        case .memoryList(let covenId):
+        case let .memoryList(covenId):
             MemoryListView(
                 covenId: covenId,
                 openTabs: $openTabs,
                 activeTabId: $activeTabId
             )
-        case .memoryProposals(let covenId):
+        case let .memoryProposals(covenId):
             MemoryProposalsView(
                 covenId: covenId,
                 openTabs: $openTabs,
@@ -314,8 +314,8 @@ struct WorkspaceContentView: View {
             EmptyView()
         }
     }
-    
-    // Open a new tab
+
+    /// Open a new tab
     private func openTab(_ type: WorkspaceTabType) {
         // For settings tabs, only allow one instance
         if case .thread = type {
@@ -326,10 +326,10 @@ struct WorkspaceContentView: View {
                 return
             }
         }
-        
+
         let tab: WorkspaceTab
         switch type {
-        case .thread(let thread):
+        case let .thread(thread):
             tab = .thread(thread)
         case .profile:
             tab = .profile
@@ -343,30 +343,29 @@ struct WorkspaceContentView: View {
             tab = .usage
         case .personalStrixSettings:
             tab = WorkspaceTab.personalStrix
-        case .memoryList(let covenId):
+        case let .memoryList(covenId):
             tab = WorkspaceTab.memoryList(covenId: covenId)
-        case .memoryProposals(let covenId):
+        case let .memoryProposals(covenId):
             tab = WorkspaceTab.memoryProposals(covenId: covenId)
         case .store:
             tab = .store
         default:
             return
         }
-        
+
         openTabs.append(tab)
         activeTabId = tab.id
     }
 }
-
 
 /// Enhanced message composer
 struct EnhancedMessageComposer: View {
     @Binding var messageText: String
     let onSend: ([String]) -> Void // Callback with attachment IDs
     /// Optional callback to surface chat-scoped errors as messages in the thread.
-    var onErrorMessage: ((String) -> Void)? = nil
+    var onErrorMessage: ((String) -> Void)?
     var isDisabled: Bool = false
-    var threadId: String? = nil // For upload when feature flag enabled
+    var threadId: String? // For upload when feature flag enabled
     /// Optional list of roles that can be @mentioned in this thread
     var mentionableRoles: [MentionableRole] = []
     /// When true (iOS), automatically focus the text field when the composer
@@ -377,10 +376,10 @@ struct EnhancedMessageComposer: View {
     // Phase B & D: attachments with optional upload
     @State private var attachments: [FileAttachmentDetail] = []
     @State private var isUploading: Bool = false
-    
-    // Local tool execution state (web search, attachment analysis, generation)
+
+    /// Local tool execution state (web search, attachment analysis, generation)
     @State private var isRunningTool: Bool = false
-    
+
     #if os(iOS)
     @State private var showFileImporter: Bool = false
     @FocusState private var isTextFieldFocused: Bool
@@ -429,7 +428,7 @@ struct EnhancedMessageComposer: View {
                 .buttonStyle(.plain)
                 .disabled(isUploading)
                 #if os(macOS)
-                .help("Attach files (upload via feature flag)")
+                    .help("Attach files (upload via feature flag)")
                 #endif
 
                 // Local tools menu (web search, attachment analysis, generation)
@@ -491,14 +490,14 @@ struct EnhancedMessageComposer: View {
                 .padding(Spacing.sm)
                 .background(Color.aicovenGlass)
                 .cornerRadius(BorderRadius.lg)
-                .lineLimit(1...6)
+                .lineLimit(1 ... 6)
                 .disabled(isDisabled)
                 .onSubmit {
                     send()
                 }
                 #if os(iOS)
                 .task {
-                    if autoFocus && !isDisabled {
+                    if autoFocus, !isDisabled {
                         isTextFieldFocused = true
                     }
                 }
@@ -569,9 +568,9 @@ struct EnhancedMessageComposer: View {
             allowsMultipleSelection: true
         ) { result in
             switch result {
-            case .success(let urls):
+            case let .success(urls):
                 Task { await handleImportedFiles(urls) }
-            case .failure(let error):
+            case let .failure(error):
                 AppErrorReporter.log(error: error, context: "EnhancedMessageComposer.fileImporter")
                 Task { @MainActor in
                     onErrorMessage?("File import failed: \(error.localizedDescription)")
@@ -584,14 +583,15 @@ struct EnhancedMessageComposer: View {
         }
     }
 }
- 
+
 // MARK: - EnhancedMessageComposer Helper Methods
+
 extension EnhancedMessageComposer {
     private func send() {
         let trimmed = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isDisabled, !trimmed.isEmpty else { return }
         // Extract attachment IDs
-        let attachmentIds = attachments.map { $0.id }
+        let attachmentIds = attachments.map(\.id)
         onSend(attachmentIds)
         // Clear attachments after send
         attachments.removeAll()
@@ -691,7 +691,7 @@ extension EnhancedMessageComposer {
             do {
                 let image = try await ToolService.shared.generateImage(prompt: prompt)
                 let name = "generated-image-\(image.id.prefix(8)).png"
-                let size = (try? image.url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? nil
+                let size = (try? image.url.resourceValues(forKeys: [.fileSizeKey]).fileSize)
                 let detail = FileAttachmentDetail(
                     id: image.id,
                     name: name,
@@ -729,7 +729,7 @@ extension EnhancedMessageComposer {
                 let name = "note-\(id.prefix(8)).txt"
                 let data = Data(text.utf8)
                 let file = try ToolService.shared.generateFile(name: name, mimeType: "text/plain", contents: data)
-                let size = (try? file.url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? nil
+                let size = (try? file.url.resourceValues(forKeys: [.fileSizeKey]).fileSize)
                 let detail = FileAttachmentDetail(
                     id: file.id,
                     name: name,
@@ -797,7 +797,7 @@ extension EnhancedMessageComposer {
             let name = role.name.lowercased()
             let emoji = (role.emoji ?? "").lowercased()
             return name.contains(trimmedQuery) || emoji.contains(trimmedQuery)
-        }.prefix(6).map { $0 }
+        }.prefix(6).map(\.self)
     }
 
     /// Insert the selected role mention into the message text, replacing the
@@ -811,7 +811,7 @@ extension EnhancedMessageComposer {
         showMentionSuggestions = false
         mentionQuery = ""
     }
- 
+
     #if os(iOS)
     @MainActor
     private func handleImportedFiles(_ urls: [URL]) async {
@@ -832,7 +832,7 @@ extension EnhancedMessageComposer {
         }
     }
     #endif
- 
+
     #if os(macOS)
     private func attachFiles() {
         let panel = NSOpenPanel()
@@ -856,7 +856,7 @@ extension EnhancedMessageComposer {
                             // Fallback: local-only attachment
                             let name = url.lastPathComponent
                             let mime = mimeType(for: url.pathExtension)
-                            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? nil
+                            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize)
                             detail = FileAttachmentDetail(
                                 id: UUID().uuidString,
                                 name: name,
@@ -901,10 +901,10 @@ struct MentionableRole: Identifiable, Hashable {
 }
 
 #if os(macOS)
-/// macOS-specific multiline text view that supports:
-/// - Shift+Enter for newlines
-/// - Enter to send
-/// - Keeping focus after send
+// macOS-specific multiline text view that supports:
+// - Shift+Enter for newlines
+// - Enter to send
+// - Keeping focus after send
 
 struct MacMultilineTextView: NSViewRepresentable {
     @Binding var text: String
@@ -989,9 +989,9 @@ struct MacMultilineTextView: NSViewRepresentable {
             let isEnter = event.keyCode == 36 || event.keyCode == 76 // Return or keypad Enter
             let isShift = event.modifierFlags.contains(.shift)
 
-            if isEnter && isShift {
+            if isEnter, isShift {
                 // Shift+Enter → insert newline
-                self.insertNewline(nil)
+                insertNewline(nil)
             } else if isEnter {
                 // Enter → send
                 if let onSend {

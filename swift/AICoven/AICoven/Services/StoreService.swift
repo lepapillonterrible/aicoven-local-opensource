@@ -27,8 +27,8 @@ class StoreService: ObservableObject {
     // MARK: - Product identifiers
 
     /// Product IDs matching App Store Connect configuration.
-    static let creatorID    = "com.aicoven.creator"
-    static let toolsPackID  = "com.aicoven.toolspack"
+    static let creatorID = "com.aicoven.creator"
+    static let toolsPackID = "com.aicoven.toolspack"
     static let everythingID = "com.aicoven.everything"
 
     static let allProductIDs: Set<String> = [
@@ -46,12 +46,12 @@ class StoreService: ObservableObject {
 
     var hasCreator: Bool {
         purchasedProductIDs.contains(Self.creatorID) ||
-        purchasedProductIDs.contains(Self.everythingID)
+            purchasedProductIDs.contains(Self.everythingID)
     }
 
     var hasToolsPack: Bool {
         purchasedProductIDs.contains(Self.toolsPackID) ||
-        purchasedProductIDs.contains(Self.everythingID)
+            purchasedProductIDs.contains(Self.everythingID)
     }
 
     var hasEverything: Bool {
@@ -62,9 +62,9 @@ class StoreService: ObservableObject {
     func hasEntitlement(_ feature: PurchasableFeature) -> Bool {
         switch feature {
         case .covens, .multipleAgents, .modelCustomization:
-            return hasCreator
+            hasCreator
         case .shellTool, .githubTool, .googleDriveTool:
-            return hasToolsPack
+            hasToolsPack
         }
     }
 
@@ -72,9 +72,9 @@ class StoreService: ObservableObject {
     func requiredTier(for feature: PurchasableFeature) -> String {
         switch feature {
         case .covens, .multipleAgents, .modelCustomization:
-            return "Creator"
+            "Creator"
         case .shellTool, .githubTool, .googleDriveTool:
-            return "Tools Pack"
+            "Tools Pack"
         }
     }
 
@@ -83,8 +83,10 @@ class StoreService: ObservableObject {
     private static let purchasedIDsKey = "StoreService.purchasedProductIDs"
 
     private func persistPurchases() {
-        UserDefaults.standard.set(Array(purchasedProductIDs),
-                                  forKey: Self.purchasedIDsKey)
+        UserDefaults.standard.set(
+            Array(purchasedProductIDs),
+            forKey: Self.purchasedIDsKey
+        )
     }
 
     private func loadPersistedPurchases() {
@@ -116,7 +118,7 @@ class StoreService: ObservableObject {
         Task.detached { [weak self] in
             for await result in Transaction.updates {
                 guard let self else { return }
-                if case .verified(let transaction) = result {
+                if case let .verified(transaction) = result {
                     await MainActor.run {
                         self.purchasedProductIDs.insert(transaction.productID)
                         self.persistPurchases()
@@ -158,8 +160,8 @@ class StoreService: ObservableObject {
             let result = try await product.purchase()
 
             switch result {
-            case .success(let verification):
-                if case .verified(let transaction) = verification {
+            case let .success(verification):
+                if case let .verified(transaction) = verification {
                     purchasedProductIDs.insert(transaction.productID)
                     persistPurchases()
                     await transaction.finish()
@@ -193,7 +195,7 @@ class StoreService: ObservableObject {
         var entitled: Set<String> = []
 
         for await result in Transaction.currentEntitlements {
-            if case .verified(let transaction) = result {
+            if case let .verified(transaction) = result {
                 if Self.allProductIDs.contains(transaction.productID) {
                     entitled.insert(transaction.productID)
                 }

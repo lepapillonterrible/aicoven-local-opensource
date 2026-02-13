@@ -3,12 +3,12 @@ import SwiftUI
 /// Animated splash screen displayed on app launch
 struct SplashScreenView: View {
     @State private var isAnimating = false
-    
+
     var body: some View {
         ZStack {
             // Brand background
             NebulaBackground()
-            
+
             VStack(spacing: Spacing.lg) {
                 // App Icon
                 Image("icon")
@@ -19,7 +19,7 @@ struct SplashScreenView: View {
                     .shadow(color: .aicovenTeal.opacity(0.3), radius: 20, x: 0, y: 0)
                     .scaleEffect(isAnimating ? 1.0 : 0.8)
                     .opacity(isAnimating ? 1.0 : 0.0)
-                
+
                 // App Title
                 Text("AICoven")
                     .font(.aicovenDisplayLarge)

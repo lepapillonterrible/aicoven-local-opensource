@@ -5,21 +5,21 @@ struct CovensListView: View {
     @Binding var selectedCoven: Coven?
     @Binding var showNewCovenSheet: Bool
     @Binding var refreshTrigger: Bool
-    
+
     private let analytics = AnalyticsService.shared
-    
+
     @State private var covens: [Coven] = []
     @State private var searchText = ""
     @State private var isLoading = false
     @State private var errorMessage: String?
-    
+
     var filteredCovens: [Coven] {
         if searchText.isEmpty {
             return covens
         }
         return covens.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
     }
-    
+
     var body: some View {
         List(selection: $selectedCoven) {
             ForEach(filteredCovens) { coven in
@@ -42,9 +42,9 @@ struct CovensListView: View {
             }
         }
         .overlay {
-            if isLoading && covens.isEmpty {
+            if isLoading, covens.isEmpty {
                 ProgressView()
-            } else if !isLoading && filteredCovens.isEmpty {
+            } else if !isLoading, filteredCovens.isEmpty {
                 ContentUnavailableView(
                     "No Covens",
                     systemImage: "sparkles",
@@ -74,13 +74,13 @@ struct CovensListView: View {
             }
         }
     }
-    
+
     /// Load covens from local database
     private func loadCovens() async {
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
-        
+
         do {
             print("🏰 CovensListView: Loading covens from local database")
             covens = try await CovenService.shared.loadCovens()
@@ -95,7 +95,7 @@ struct CovensListView: View {
 /// Row view for a coven
 struct CovenRow: View {
     let coven: Coven
-    
+
     var body: some View {
         HStack(spacing: 12) {
             // Coven icon/avatar
@@ -103,15 +103,15 @@ struct CovenRow: View {
                 Circle()
                     .fill(Color(hex: "#8B5CF6").opacity(0.2))
                     .frame(width: 40, height: 40)
-                
+
                 Image(systemName: "sparkles")
                     .foregroundColor(Color(hex: "#8B5CF6"))
             }
-            
+
             VStack(alignment: .leading, spacing: 4) {
                 Text(coven.name)
                     .font(.headline)
-                
+
                 if let description = coven.description {
                     Text(description)
                         .font(.caption)
@@ -119,7 +119,7 @@ struct CovenRow: View {
                         .lineLimit(1)
                 }
             }
-            
+
             Spacer()
         }
         .padding(.vertical, 4)
@@ -133,57 +133,57 @@ struct NewCovenView: View {
     @State private var description = ""
     @State private var isCreating = false
     @State private var errorMessage: String?
-    
+
     let onCovenCreated: () -> Void
-    
+
     var body: some View {
         NavigationStack {
             Form {
                 Section {
                     TextField("Coven Name", text: $name)
                     TextField("Description (optional)", text: $description, axis: .vertical)
-                        .lineLimit(3...6)
+                        .lineLimit(3 ... 6)
                 }
             }
             .disabled(isCreating)
             .navigationTitle("New Coven")
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
+                .navigationBarTitleDisplayMode(.inline)
             #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
-                        Task {
-                            await createCoven()
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            dismiss()
                         }
                     }
-                    .disabled(name.isEmpty || isCreating)
+
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Create") {
+                            Task {
+                                await createCoven()
+                            }
+                        }
+                        .disabled(name.isEmpty || isCreating)
+                    }
                 }
-            }
-            .alert("Error", isPresented: Binding(
-                get: { errorMessage != nil },
-                set: { if !$0 { errorMessage = nil } }
-            )) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                if let errorMessage {
-                    Text(errorMessage)
+                .alert("Error", isPresented: Binding(
+                    get: { errorMessage != nil },
+                    set: { if !$0 { errorMessage = nil } }
+                )) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    if let errorMessage {
+                        Text(errorMessage)
+                    }
                 }
-            }
         }
     }
-    
+
     private func createCoven() async {
         isCreating = true
         errorMessage = nil
         defer { isCreating = false }
-        
+
         do {
             print("🏰 NewCovenView: Creating coven '\(name)'")
             _ = try await CovenService.shared.createCoven(

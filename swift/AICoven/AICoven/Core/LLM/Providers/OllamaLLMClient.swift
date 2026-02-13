@@ -17,14 +17,16 @@ final class OllamaLLMClient: LLMClient, @unchecked Sendable {
     /// Default Ollama base URL.
     static let defaultBaseURL = URL(string: "http://localhost:11434")!
 
-    init(baseURL: URL = OllamaLLMClient.defaultBaseURL,
-         urlSession: URLSession? = nil) {
+    init(
+        baseURL: URL = OllamaLLMClient.defaultBaseURL,
+        urlSession: URLSession? = nil
+    ) {
         self.baseURL = baseURL
         if let urlSession {
             self.urlSession = urlSession
         } else {
             let config = URLSessionConfiguration.default
-            config.timeoutIntervalForRequest = 120   // local models can be slow on first load
+            config.timeoutIntervalForRequest = 120 // local models can be slow on first load
             config.timeoutIntervalForResource = 300
             self.urlSession = URLSession(configuration: config)
         }
@@ -49,12 +51,15 @@ final class OllamaLLMClient: LLMClient, @unchecked Sendable {
                     let role: String
                     let content: String
                 }
+
                 let message: Message
             }
+
             struct UsageBody: Decodable {
                 let prompt_tokens: Int?
                 let completion_tokens: Int?
             }
+
             let choices: [Choice]
             let usage: UsageBody?
             let model: String
@@ -68,45 +73,66 @@ final class OllamaLLMClient: LLMClient, @unchecked Sendable {
         let reqMessages = messages.map { msg in
             RequestMessage(role: msg.role.rawValue, content: msg.content)
         }
-        let body = RequestBody(model: model, messages: reqMessages,
-                               temperature: options.temperature, stream: false)
+        let body = RequestBody(
+            model: model,
+            messages: reqMessages,
+            temperature: options.temperature,
+            stream: false
+        )
         request.httpBody = try JSONEncoder().encode(body)
 
         let (data, response) = try await urlSession.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+        if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
             let bodyText = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
             let message = "Ollama HTTP \(http.statusCode): \(bodyText)"
-            throw NSError(domain: "OllamaLLMClient", code: http.statusCode,
-                          userInfo: [NSLocalizedDescriptionKey: message])
+            throw NSError(
+                domain: "OllamaLLMClient",
+                code: http.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: message]
+            )
         }
         guard !data.isEmpty else {
-            throw NSError(domain: "OllamaLLMClient", code: -2,
-                          userInfo: [NSLocalizedDescriptionKey: "Ollama returned an empty response body."])
+            throw NSError(
+                domain: "OllamaLLMClient",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Ollama returned an empty response body."]
+            )
         }
         let decoded = try JSONDecoder().decode(ResponseBody.self, from: data)
         guard let first = decoded.choices.first else {
-            throw NSError(domain: "OllamaLLMClient", code: -1,
-                          userInfo: [NSLocalizedDescriptionKey: "No choices in Ollama response"])
+            throw NSError(
+                domain: "OllamaLLMClient",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "No choices in Ollama response"]
+            )
         }
 
         let msg = LLMMessage(role: .assistant, content: first.message.content)
-        let usage: LLMTokenUsage?
-        if let u = decoded.usage {
-            usage = LLMTokenUsage(promptTokens: u.prompt_tokens ?? 0,
-                                  completionTokens: u.completion_tokens ?? 0)
+        let usage: LLMTokenUsage? = if let u = decoded.usage {
+            LLMTokenUsage(
+                promptTokens: u.prompt_tokens ?? 0,
+                completionTokens: u.completion_tokens ?? 0
+            )
         } else {
-            usage = nil
+            nil
         }
 
-        return LLMChatResponse(message: msg, providerID: "ollama",
-                               modelID: decoded.model, usage: usage)
+        return LLMChatResponse(
+            message: msg,
+            providerID: "ollama",
+            modelID: decoded.model,
+            usage: usage
+        )
     }
 
     func embed(texts: [String], model: String) async throws -> [[Float]] {
         // Ollama supports embeddings via /api/embeddings but the schema is
         // different from OpenAI; for now we throw unsupported.
-        throw NSError(domain: "OllamaLLMClient", code: -1,
-                      userInfo: [NSLocalizedDescriptionKey: "Embeddings not yet supported for Ollama."])
+        throw NSError(
+            domain: "OllamaLLMClient",
+            code: -1,
+            userInfo: [NSLocalizedDescriptionKey: "Embeddings not yet supported for Ollama."]
+        )
     }
 
     // MARK: - Ollama-specific helpers
@@ -117,7 +143,9 @@ final class OllamaLLMClient: LLMClient, @unchecked Sendable {
         let size: Int64?
         let modifiedAt: String?
 
-        var id: String { name }
+        var id: String {
+            name
+        }
 
         /// Human-readable file size (e.g. "3.8 GB").
         var formattedSize: String? {
@@ -148,10 +176,13 @@ final class OllamaLLMClient: LLMClient, @unchecked Sendable {
         request.addValue("application/json", forHTTPHeaderField: "Accept")
 
         let (data, response) = try await urlSession.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+        if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
             let bodyText = String(data: data, encoding: .utf8) ?? ""
-            throw NSError(domain: "OllamaLLMClient", code: http.statusCode,
-                          userInfo: [NSLocalizedDescriptionKey: "Ollama /api/tags HTTP \(http.statusCode): \(bodyText)"])
+            throw NSError(
+                domain: "OllamaLLMClient",
+                code: http.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "Ollama /api/tags HTTP \(http.statusCode): \(bodyText)"]
+            )
         }
         let decoded = try JSONDecoder().decode(TagsResponse.self, from: data)
         return decoded.models ?? []
@@ -166,7 +197,7 @@ final class OllamaLLMClient: LLMClient, @unchecked Sendable {
         do {
             let (_, response) = try await urlSession.data(for: request)
             if let http = response as? HTTPURLResponse {
-                return (200..<300).contains(http.statusCode)
+                return (200 ..< 300).contains(http.statusCode)
             }
             return false
         } catch {

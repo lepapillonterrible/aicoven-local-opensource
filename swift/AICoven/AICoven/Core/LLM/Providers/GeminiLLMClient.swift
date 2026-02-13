@@ -15,9 +15,11 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
     ///   - apiKey: Google Generative Language (Gemini) API key.
     ///   - baseURL: Base URL for the API (overridable for testing).
     ///   - urlSession: Optional custom URLSession used primarily for tests.
-    init(apiKey: String,
-         baseURL: URL = URL(string: "https://generativelanguage.googleapis.com/v1beta")!,
-         urlSession: URLSession? = nil) {
+    init(
+        apiKey: String,
+        baseURL: URL = URL(string: "https://generativelanguage.googleapis.com/v1beta")!,
+        urlSession: URLSession? = nil
+    ) {
         self.apiKey = apiKey
         self.baseURL = baseURL
         if let urlSession {
@@ -33,7 +35,9 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
     func completeChat(messages: [LLMMessage], model: String, options: ChatOptions) async throws -> LLMChatResponse {
         // ── Request types ──────────────────────────────────────────────────
         struct ReqPart: Encodable { let text: String }
-        struct ReqContent: Encodable { let role: String; let parts: [ReqPart] }
+        struct ReqContent: Encodable { let role: String
+            let parts: [ReqPart]
+        }
         struct GenerationConfig: Encodable {
             let temperature: Double
         }
@@ -108,8 +112,10 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
 
         let contents = messages.map { msg in
-            ReqContent(role: msg.role == .user ? "user" : "model",
-                       parts: [ReqPart(text: msg.content)])
+            ReqContent(
+                role: msg.role == .user ? "user" : "model",
+                parts: [ReqPart(text: msg.content)]
+            )
         }
 
         // Convert LLMToolDefinition → Gemini native format (functionDeclarations).
@@ -124,14 +130,13 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
                 for param in tool.parameters {
                     // Map generic types to Gemini schema types:
                     // https://ai.google.dev/api/caching#Type
-                    let geminiType: String
-                    switch param.type.lowercased() {
-                    case "string": geminiType = "STRING"
-                    case "integer", "int", "number", "float", "double": geminiType = "NUMBER"
-                    case "boolean", "bool": geminiType = "BOOLEAN"
-                    case "array": geminiType = "ARRAY"
-                    case "object": geminiType = "OBJECT"
-                    default: geminiType = "STRING" // safe fallback
+                    let geminiType = switch param.type.lowercased() {
+                    case "string": "STRING"
+                    case "integer", "int", "number", "float", "double": "NUMBER"
+                    case "boolean", "bool": "BOOLEAN"
+                    case "array": "ARRAY"
+                    case "object": "OBJECT"
+                    default: "STRING" // safe fallback
                     }
                     // Gemini requires ARRAY types to have an `items` field
                     let items: ItemsSchema? = geminiType == "ARRAY" ? ItemsSchema(type: "STRING") : nil
@@ -156,17 +161,23 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
 
         // ── Execute request ────────────────────────────────────────────────
         let (data, response) = try await urlSession.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+        if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
             let bodyText = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
             let message = "Gemini HTTP \(http.statusCode): \(bodyText)"
-            throw NSError(domain: "GeminiLLMClient", code: http.statusCode,
-                          userInfo: [NSLocalizedDescriptionKey: message])
+            throw NSError(
+                domain: "GeminiLLMClient",
+                code: http.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: message]
+            )
         }
         guard !data.isEmpty else {
-            throw NSError(domain: "GeminiLLMClient", code: -2,
-                          userInfo: [NSLocalizedDescriptionKey: "Gemini returned an empty response body."])
+            throw NSError(
+                domain: "GeminiLLMClient",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Gemini returned an empty response body."]
+            )
         }
-        
+
         let decoded: ResponseBody
         do {
             decoded = try JSONDecoder().decode(ResponseBody.self, from: data)
@@ -177,24 +188,30 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
             #endif
             throw error
         }
-        
+
         // Handle API-level errors returned in the response body.
         if let apiError = decoded.error {
             let message = "Gemini API error \(apiError.code ?? -1): \(apiError.message ?? "unknown")"
-            throw NSError(domain: "GeminiLLMClient", code: apiError.code ?? -1,
-                          userInfo: [NSLocalizedDescriptionKey: message])
+            throw NSError(
+                domain: "GeminiLLMClient",
+                code: apiError.code ?? -1,
+                userInfo: [NSLocalizedDescriptionKey: message]
+            )
         }
-        
+
         guard let first = decoded.candidates?.first else {
-            throw NSError(domain: "GeminiLLMClient", code: -1,
-                          userInfo: [NSLocalizedDescriptionKey: "No candidates in response"])
+            throw NSError(
+                domain: "GeminiLLMClient",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "No candidates in response"]
+            )
         }
-        
+
         // ── Extract text + native tool calls ──────────────────────────────
         let parts = first.content?.parts ?? []
         var textPieces: [String] = []
         var toolCalls: [LLMToolCall] = []
-        
+
         for part in parts {
             if let t = part.text, !t.isEmpty {
                 textPieces.append(t)
@@ -212,10 +229,10 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
                 toolCalls.append(LLMToolCall(name: toolName, arguments: args))
             }
         }
-        
+
         let text = textPieces.joined(separator: "\n")
-        
-        if text.isEmpty && toolCalls.isEmpty {
+
+        if text.isEmpty, toolCalls.isEmpty {
             let reason = first.finishReason ?? "unknown"
             #if DEBUG
             AppErrorReporter.log(
@@ -224,19 +241,24 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
             )
             #endif
         }
-        
+
         let msg = LLMMessage(role: .assistant, content: text)
         let modelVersion = decoded.modelVersion ?? model
-        
+
         let usage = decoded.usageMetadata.map { meta in
             LLMTokenUsage(
                 promptTokens: meta.promptTokenCount ?? 0,
                 completionTokens: meta.candidatesTokenCount ?? 0
             )
         }
-        
-        return LLMChatResponse(message: msg, providerID: "google", modelID: modelVersion,
-                               usage: usage, toolCalls: toolCalls.isEmpty ? nil : toolCalls)
+
+        return LLMChatResponse(
+            message: msg,
+            providerID: "google",
+            modelID: modelVersion,
+            usage: usage,
+            toolCalls: toolCalls.isEmpty ? nil : toolCalls
+        )
     }
 
     func embed(texts: [String], model: String) async throws -> [[Float]] {

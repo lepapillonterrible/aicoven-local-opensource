@@ -6,10 +6,10 @@ import Foundation
 /// and system files while allowing access to typical user workspace folders
 /// like ~/Documents, ~/Desktop, and project directories.
 actor FileToolService {
-    
+
     /// Shared singleton instance.
     static let shared = FileToolService()
-    
+
     /// System directories that are always blocked from access.
     private let blockedSystemPaths: [String] = [
         "/System",
@@ -22,27 +22,27 @@ actor FileToolService {
         "/var",
         "/.Trash"
     ]
-    
+
     /// Sensitive user directories that are blocked from access.
     /// These paths are relative to the user's home directory.
     private let blockedUserPaths: [String] = [
-        ".ssh",              // SSH keys and config
-        ".gnupg",            // GPG keys
-        ".aws",              // AWS credentials
-        ".azure",            // Azure credentials  
-        ".gcloud",           // Google Cloud credentials
-        ".config/gcloud",    // Google Cloud config
-        ".kube",             // Kubernetes config and tokens
-        ".docker",           // Docker config and credentials
-        ".npm",              // NPM tokens
-        ".netrc",            // Network credentials
-        ".git-credentials",  // Git credentials
-        ".gitconfig",        // Git config (may contain tokens)
-        "Library",           // macOS user Library (Keychains, etc.)
-        ".Trash",            // User trash
+        ".ssh", // SSH keys and config
+        ".gnupg", // GPG keys
+        ".aws", // AWS credentials
+        ".azure", // Azure credentials
+        ".gcloud", // Google Cloud credentials
+        ".config/gcloud", // Google Cloud config
+        ".kube", // Kubernetes config and tokens
+        ".docker", // Docker config and credentials
+        ".npm", // NPM tokens
+        ".netrc", // Network credentials
+        ".git-credentials", // Git credentials
+        ".gitconfig", // Git config (may contain tokens)
+        "Library", // macOS user Library (Keychains, etc.)
+        ".Trash", // User trash
         ".local/share/keyrings", // Linux keyrings
-        ".password-store",   // Pass password manager
-        ".gnome-keyring",    // GNOME keyring
+        ".password-store", // Pass password manager
+        ".gnome-keyring", // GNOME keyring
         // Browser profiles (may contain saved passwords, cookies, tokens)
         "Library/Application Support/Google/Chrome",
         "Library/Application Support/Firefox",
@@ -52,19 +52,19 @@ actor FileToolService {
         ".mozilla/firefox",
         ".config/chromium",
         // Other sensitive locations
-        ".env",              // Environment files often contain secrets
-        ".envrc",            // direnv files
+        ".env", // Environment files often contain secrets
+        ".envrc", // direnv files
         ".secrets"
     ]
-    
+
     /// Maximum file size to read (10MB).
     private let maxReadSize: Int = 10 * 1024 * 1024
-    
+
     /// Maximum file size to write (5MB).
     private let maxWriteSize: Int = 5 * 1024 * 1024
-    
+
     // MARK: - Read File
-    
+
     /// Read the contents of a file at the given path.
     /// - Parameters:
     ///   - path: Absolute or relative path to the file.
@@ -72,12 +72,12 @@ actor FileToolService {
     /// - Returns: ToolResult with file content or error.
     func readFile(path: String, workingDir: String? = nil) async -> ToolExecutionResult {
         let resolvedPath = resolvePath(path, workingDir: workingDir)
-        
+
         // Check folder authorization
         if let denied = await checkFolderAuthorization(resolvedPath, tool: "file.read") {
             return denied
         }
-        
+
         // Check if path is blocked
         if isPathBlocked(resolvedPath) {
             return .permissionDenied(
@@ -86,9 +86,9 @@ actor FileToolService {
                 helpfulInstructions: "File operations are restricted to user directories like ~/Documents, ~/Desktop, or project folders."
             )
         }
-        
+
         let fileManager = FileManager.default
-        
+
         // Check if file exists
         guard fileManager.fileExists(atPath: resolvedPath) else {
             return .error(
@@ -98,7 +98,7 @@ actor FileToolService {
                 isRetryable: false
             )
         }
-        
+
         // Check if it's a directory
         var isDirectory: ObjCBool = false
         fileManager.fileExists(atPath: resolvedPath, isDirectory: &isDirectory)
@@ -110,7 +110,7 @@ actor FileToolService {
                 suggestion: "Use file.list to list directory contents, or specify a file path."
             )
         }
-        
+
         // Check file size
         do {
             let attributes = try fileManager.attributesOfItem(atPath: resolvedPath)
@@ -124,11 +124,11 @@ actor FileToolService {
         } catch {
             // Continue anyway, we'll get an error when reading if there's a problem
         }
-        
+
         // Read the file
         do {
             let data = try Data(contentsOf: URL(fileURLWithPath: resolvedPath))
-            
+
             // Try to decode as UTF-8 text
             if let content = String(data: data, encoding: .utf8) {
                 let contextBlock = "[File contents: \(resolvedPath)]\n\(content)"
@@ -163,9 +163,9 @@ actor FileToolService {
             )
         }
     }
-    
+
     // MARK: - Write File
-    
+
     /// Write content to a file at the given path.
     /// - Parameters:
     ///   - path: Absolute or relative path to the file.
@@ -180,12 +180,12 @@ actor FileToolService {
         createDirectories: Bool = true
     ) async -> ToolExecutionResult {
         let resolvedPath = resolvePath(path, workingDir: workingDir)
-        
+
         // Check folder authorization
         if let denied = await checkFolderAuthorization(resolvedPath, tool: "file.write") {
             return denied
         }
-        
+
         // Check if path is blocked
         if isPathBlocked(resolvedPath) {
             return .permissionDenied(
@@ -194,7 +194,7 @@ actor FileToolService {
                 helpfulInstructions: "File operations are restricted to user directories like ~/Documents, ~/Desktop, or project folders."
             )
         }
-        
+
         // Check content size
         let data = content.data(using: .utf8) ?? Data()
         if data.count > maxWriteSize {
@@ -204,10 +204,10 @@ actor FileToolService {
                 errorType: "content_too_large"
             )
         }
-        
+
         let fileManager = FileManager.default
         let url = URL(fileURLWithPath: resolvedPath)
-        
+
         // Create parent directories if needed
         if createDirectories {
             let parentDir = url.deletingLastPathComponent()
@@ -221,7 +221,7 @@ actor FileToolService {
                 )
             }
         }
-        
+
         // Write the file
         do {
             try data.write(to: url)
@@ -242,9 +242,9 @@ actor FileToolService {
             )
         }
     }
-    
+
     // MARK: - List Files
-    
+
     /// List files and directories at the given path.
     /// - Parameters:
     ///   - path: Absolute or relative path to list.
@@ -259,12 +259,12 @@ actor FileToolService {
         maxItems: Int = 100
     ) async -> ToolExecutionResult {
         let resolvedPath = resolvePath(path, workingDir: workingDir)
-        
+
         // Check folder authorization
         if let denied = await checkFolderAuthorization(resolvedPath, tool: "file.list") {
             return denied
         }
-        
+
         // Check if path is blocked
         if isPathBlocked(resolvedPath) {
             return .permissionDenied(
@@ -273,9 +273,9 @@ actor FileToolService {
                 helpfulInstructions: "File operations are restricted to user directories like ~/Documents, ~/Desktop, or project folders."
             )
         }
-        
+
         let fileManager = FileManager.default
-        
+
         // Check if path exists
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: resolvedPath, isDirectory: &isDirectory) else {
@@ -285,7 +285,7 @@ actor FileToolService {
                 errorType: "path_not_found"
             )
         }
-        
+
         guard isDirectory.boolValue else {
             return .validationError(
                 tool: "file.list",
@@ -294,12 +294,12 @@ actor FileToolService {
                 suggestion: "Use file.read to read file contents."
             )
         }
-        
+
         // List directory contents
         do {
             let url = URL(fileURLWithPath: resolvedPath)
             var items: [[String: AnyJSONValue]] = []
-            
+
             if recursive {
                 // Recursive listing with limited depth
                 let enumerator = fileManager.enumerator(
@@ -307,7 +307,7 @@ actor FileToolService {
                     includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey],
                     options: [.skipsHiddenFiles]
                 )
-                
+
                 var count = 0
                 while let itemURL = enumerator?.nextObject() as? URL, count < maxItems {
                     if let item = fileInfoDict(for: itemURL, relativeTo: url) {
@@ -326,14 +326,14 @@ actor FileToolService {
                     includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey],
                     options: [.skipsHiddenFiles]
                 )
-                
+
                 for itemURL in contents.prefix(maxItems) {
                     if let item = fileInfoDict(for: itemURL, relativeTo: url) {
                         items.append(item)
                     }
                 }
             }
-            
+
             // Build context block
             let fileList = items.map { item -> String in
                 let name = (item["name"]?.value as? String) ?? "?"
@@ -341,15 +341,15 @@ actor FileToolService {
                 let size = item["size_bytes"]?.value as? Int
                 if isDir {
                     return "  📁 \(name)/"
-                } else if let size = size {
+                } else if let size {
                     return "  📄 \(name) (\(formatFileSize(size)))"
                 } else {
                     return "  📄 \(name)"
                 }
             }.joined(separator: "\n")
-            
+
             let contextBlock = "[Directory listing: \(resolvedPath)]\n\(fileList)"
-            
+
             return .success(
                 tool: "file.list",
                 result: [
@@ -370,21 +370,21 @@ actor FileToolService {
             )
         }
     }
-    
+
     // MARK: - Helpers
-    
+
     /// Resolve a path, expanding ~ and handling relative paths.
     private func resolvePath(_ path: String, workingDir: String?) -> String {
         var resolved = path
-        
+
         // Expand tilde
         if resolved.hasPrefix("~") {
             resolved = (resolved as NSString).expandingTildeInPath
         }
-        
+
         // Handle relative paths
         if !resolved.hasPrefix("/") {
-            if let workingDir = workingDir {
+            if let workingDir {
                 let base = (workingDir as NSString).expandingTildeInPath
                 resolved = (base as NSString).appendingPathComponent(resolved)
             } else {
@@ -392,15 +392,15 @@ actor FileToolService {
                 resolved = FileManager.default.currentDirectoryPath + "/" + resolved
             }
         }
-        
+
         // Normalize the path
         let standardPath = (resolved as NSString).standardizingPath
-        
+
         // Resolve symlinks to ensure we check the actual destination
         let url = URL(fileURLWithPath: standardPath)
         return url.resolvingSymlinksInPath().path
     }
-    
+
     /// Check if a path is in a blocked directory (system or sensitive user location).
     private func isPathBlocked(_ path: String) -> Bool {
         // Check system paths
@@ -409,7 +409,7 @@ actor FileToolService {
                 return true
             }
         }
-        
+
         // Check sensitive user paths (relative to home directory)
         #if os(macOS)
         let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
@@ -422,7 +422,7 @@ actor FileToolService {
                 return true
             }
         }
-        
+
         // Also block any path component that looks like a secrets file
         let sensitivePatterns = [".env", ".secrets", "credentials", "secret", ".pem", ".key"]
         let pathComponents = path.lowercased().split(separator: "/")
@@ -431,21 +431,21 @@ actor FileToolService {
                 if component.hasPrefix(pattern) || component.hasSuffix(pattern) {
                     // Allow if it's clearly part of a project (e.g., .env.example, secrets.md)
                     let componentStr = String(component)
-                    if componentStr.hasSuffix(".example") || 
-                       componentStr.hasSuffix(".sample") ||
-                       componentStr.hasSuffix(".template") ||
-                       componentStr.hasSuffix(".md") ||
-                       componentStr.hasSuffix(".txt") {
+                    if componentStr.hasSuffix(".example") ||
+                        componentStr.hasSuffix(".sample") ||
+                        componentStr.hasSuffix(".template") ||
+                        componentStr.hasSuffix(".md") ||
+                        componentStr.hasSuffix(".txt") {
                         continue
                     }
                     return true
                 }
             }
         }
-        
+
         return false
     }
-    
+
     /// Check if a path is under a blocked directory, enforcing path component boundaries.
     /// This prevents `/usr-local` from matching `/usr` blocklist entry.
     private func isPathUnderBlockedDir(_ path: String, blockedDir: String) -> Bool {
@@ -459,59 +459,59 @@ actor FileToolService {
         }
         return false
     }
-    
+
     /// Create a dictionary of file info for a URL.
     private func fileInfoDict(for url: URL, relativeTo baseURL: URL) -> [String: AnyJSONValue]? {
         let fileManager = FileManager.default
-        
+
         do {
             let resourceValues = try url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey])
-            
+
             let relativePath = url.path.replacingOccurrences(of: baseURL.path + "/", with: "")
-            
+
             var info: [String: AnyJSONValue] = [
                 "name": AnyJSONValue(url.lastPathComponent),
                 "path": AnyJSONValue(relativePath),
                 "is_directory": AnyJSONValue(resourceValues.isDirectory ?? false)
             ]
-            
+
             if let size = resourceValues.fileSize, !(resourceValues.isDirectory ?? false) {
                 info["size_bytes"] = AnyJSONValue(size)
             }
-            
+
             if let modDate = resourceValues.contentModificationDate {
                 let formatter = ISO8601DateFormatter()
                 info["modified_at"] = AnyJSONValue(formatter.string(from: modDate))
             }
-            
+
             return info
         } catch {
             return nil
         }
     }
-    
+
     /// Format file size for display.
     private func formatFileSize(_ bytes: Int) -> String {
         if bytes < 1024 {
-            return "\(bytes) B"
+            "\(bytes) B"
         } else if bytes < 1024 * 1024 {
-            return String(format: "%.1f KB", Double(bytes) / 1024)
+            String(format: "%.1f KB", Double(bytes) / 1024)
         } else if bytes < 1024 * 1024 * 1024 {
-            return String(format: "%.1f MB", Double(bytes) / (1024 * 1024))
+            String(format: "%.1f MB", Double(bytes) / (1024 * 1024))
         } else {
-            return String(format: "%.1f GB", Double(bytes) / (1024 * 1024 * 1024))
+            String(format: "%.1f GB", Double(bytes) / (1024 * 1024 * 1024))
         }
     }
-    
+
     // MARK: - Folder Authorization
-    
+
     /// Check whether the resolved path is under a user-authorized folder.
     /// Returns a denial result if not authorized, nil if OK.
     private func checkFolderAuthorization(_ resolvedPath: String, tool: String) async -> ToolExecutionResult? {
         let accessible = await MainActor.run {
             FileAccessManager.shared.isPathAccessible(resolvedPath)
         }
-        
+
         if !accessible {
             // Post notification for auto-prompt
             await MainActor.run {
@@ -521,7 +521,7 @@ actor FileToolService {
                     userInfo: ["path": resolvedPath, "tool": tool]
                 )
             }
-            
+
             return .error(
                 tool: tool,
                 message: "Access to '\(resolvedPath)' has not been granted. Please add this folder in Settings > File Access, or grant access when prompted.",
@@ -529,7 +529,7 @@ actor FileToolService {
                 isRetryable: true
             )
         }
-        
+
         return nil
     }
 }

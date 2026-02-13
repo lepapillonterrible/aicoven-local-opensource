@@ -23,12 +23,11 @@ final class DatabaseManager {
     private init() {
         // Resolve Application Support directory.
         let fileManager = FileManager.default
-        let baseURL: URL
-        if let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            baseURL = appSupport
+        let baseURL: URL = if let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            appSupport
         } else {
             // Fallback to documents directory if Application Support is unavailable.
-            baseURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
+            fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
         }
 
         let dirURL = baseURL.appendingPathComponent("AICoven", isDirectory: true)
@@ -38,7 +37,7 @@ final class DatabaseManager {
             AppErrorReporter.log(error: error, context: "DatabaseManager.init.createDirectory")
         }
 
-        self.databaseURL = dirURL.appendingPathComponent("aicoven.sqlite")
+        databaseURL = dirURL.appendingPathComponent("aicoven.sqlite")
     }
 
     /// Call this early in app startup (e.g., in AICovenApp) to open the DB and run migrations.
@@ -209,7 +208,7 @@ final class DatabaseManager {
             }
 
             try migrator.migrate(queue)
-            self.dbQueue = queue
+            dbQueue = queue
         } catch {
             AppErrorReporter.log(error: error, context: "DatabaseManager.configureIfNeeded")
         }

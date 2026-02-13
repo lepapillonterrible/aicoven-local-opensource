@@ -6,9 +6,13 @@ import XCTest
 final class MockURLProtocol: URLProtocol {
     static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
 
-    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
 
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
 
     override func startLoading() {
         guard let handler = MockURLProtocol.handler else {
@@ -86,6 +90,6 @@ final class OpenAILLMClientTests: XCTestCase {
 
         let result = try await client.embed(texts: ["hello"], model: "text-embedding-3-small")
         XCTAssertEqual(result.count, 1)
-        XCTAssertEqual(result.first!, [0.1, 0.2, 0.3])
+        XCTAssertEqual(result.first, [0.1, 0.2, 0.3])
     }
 }

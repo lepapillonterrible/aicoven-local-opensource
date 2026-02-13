@@ -80,8 +80,13 @@ public struct LLMChatResponse: Sendable {
     /// chose not to call any tools.
     public let toolCalls: [LLMToolCall]?
 
-    public init(message: LLMMessage, providerID: String, modelID: String,
-                usage: LLMTokenUsage?, toolCalls: [LLMToolCall]? = nil) {
+    public init(
+        message: LLMMessage,
+        providerID: String,
+        modelID: String,
+        usage: LLMTokenUsage?,
+        toolCalls: [LLMToolCall]? = nil
+    ) {
         self.message = message
         self.providerID = providerID
         self.modelID = modelID
@@ -96,7 +101,9 @@ public struct LLMTokenUsage: Sendable {
     public let promptTokens: Int
     public let completionTokens: Int
 
-    public var totalTokens: Int { promptTokens + completionTokens }
+    public var totalTokens: Int {
+        promptTokens + completionTokens
+    }
 
     public init(promptTokens: Int, completionTokens: Int) {
         self.promptTokens = promptTokens
@@ -116,8 +123,12 @@ public struct ChatOptions: Sendable {
     /// tool instructions in the system prompt.
     public let tools: [LLMToolDefinition]?
 
-    public init(temperature: Double = 0.7, maxTokens: Int? = nil,
-                stream: Bool = false, tools: [LLMToolDefinition]? = nil) {
+    public init(
+        temperature: Double = 0.7,
+        maxTokens: Int? = nil,
+        stream: Bool = false,
+        tools: [LLMToolDefinition]? = nil
+    ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
         self.stream = stream
@@ -164,15 +175,17 @@ public protocol StreamingLLMClient: LLMClient {
 /// Default streaming implementation: wraps `completeChat()` and emits the
 /// full response as a single delta. Clients that natively stream should
 /// override this with a real implementation.
-extension StreamingLLMClient {
-    public func streamChat(messages: [LLMMessage], model: String, options: ChatOptions) -> AsyncThrowingStream<LLMStreamDelta, Error> {
+public extension StreamingLLMClient {
+    func streamChat(messages: [LLMMessage], model: String, options: ChatOptions) -> AsyncThrowingStream<LLMStreamDelta, Error> {
         AsyncThrowingStream { continuation in
             Task {
                 do {
                     let response = try await completeChat(messages: messages, model: model, options: options)
-                    continuation.yield(LLMStreamDelta(text: response.message.content,
-                                                       isFinished: true,
-                                                       usage: response.usage))
+                    continuation.yield(LLMStreamDelta(
+                        text: response.message.content,
+                        isFinished: true,
+                        usage: response.usage
+                    ))
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -181,4 +194,3 @@ extension StreamingLLMClient {
         }
     }
 }
-

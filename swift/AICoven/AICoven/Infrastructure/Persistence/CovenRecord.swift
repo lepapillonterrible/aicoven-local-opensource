@@ -27,8 +27,16 @@ struct CovenRecord: Codable, FetchableRecord, PersistableRecord {
         case updatedAt = "updated_at"
     }
 
-    init(id: String, name: String, description: String?, avatar: String?,
-         settings: String?, userId: String?, createdAt: Date, updatedAt: Date) {
+    init(
+        id: String,
+        name: String,
+        description: String?,
+        avatar: String?,
+        settings: String?,
+        userId: String?,
+        createdAt: Date,
+        updatedAt: Date
+    ) {
         self.id = id
         self.name = name
         self.description = description
@@ -102,10 +110,23 @@ struct RoleRecord: Codable, FetchableRecord, PersistableRecord {
         case updatedAt = "updated_at"
     }
 
-    init(id: String, covenId: String, name: String, emoji: String?,
-         description: String?, systemPrompt: String?, model: String?,
-         provider: String?, providerAccountId: String?, temperature: Double?,
-         maxTokens: Int?, settings: String?, userId: String?, createdAt: Date, updatedAt: Date) {
+    init(
+        id: String,
+        covenId: String,
+        name: String,
+        emoji: String?,
+        description: String?,
+        systemPrompt: String?,
+        model: String?,
+        provider: String?,
+        providerAccountId: String?,
+        temperature: Double?,
+        maxTokens: Int?,
+        settings: String?,
+        userId: String?,
+        createdAt: Date,
+        updatedAt: Date
+    ) {
         self.id = id
         self.covenId = covenId
         self.name = name
@@ -196,8 +217,15 @@ actor CovenRepository {
             try record.insert(db)
         }
 
-        return Coven(id: id, name: name, description: description, avatar: avatar,
-                      settings: nil, createdAt: now, updatedAt: now)
+        return Coven(
+            id: id,
+            name: name,
+            description: description,
+            avatar: avatar,
+            settings: nil,
+            createdAt: now,
+            updatedAt: now
+        )
     }
 
     func loadCovens() async throws -> [Coven] {
@@ -212,12 +240,11 @@ actor CovenRepository {
         }
 
         return records.map { rec in
-            let settings: CovenSettings?
-            if let settingsJSON = rec.settings,
-               let data = settingsJSON.data(using: .utf8) {
-                settings = try? JSONDecoder().decode(CovenSettings.self, from: data)
+            let settings: CovenSettings? = if let settingsJSON = rec.settings,
+                                              let data = settingsJSON.data(using: .utf8) {
+                try? JSONDecoder().decode(CovenSettings.self, from: data)
             } else {
-                settings = nil
+                nil
             }
             return Coven(
                 id: rec.id,
@@ -317,7 +344,7 @@ actor CovenRepository {
         // Build settings JSON if needed
         var settingsJSON: String? = nil
         if allowedTools != nil || collaboratorRoleIds != nil || autonomousMode != nil ||
-           autonomousMaxSteps != nil || plannerMaxTasks != nil || plannerMaxSeconds != nil {
+            autonomousMaxSteps != nil || plannerMaxTasks != nil || plannerMaxSeconds != nil {
             let roleSettings = RoleSettings(
                 toolConfig: nil,
                 allowedTools: allowedTools,
@@ -393,7 +420,7 @@ actor CovenRepository {
 
             // Update settings if any settings-related param is provided
             if allowedTools != nil || collaboratorRoleIds != nil || autonomousMode != nil ||
-               autonomousMaxSteps != nil || plannerMaxTasks != nil || plannerMaxSeconds != nil {
+                autonomousMaxSteps != nil || plannerMaxTasks != nil || plannerMaxSeconds != nil {
                 let roleSettings = RoleSettings(
                     toolConfig: nil,
                     allowedTools: allowedTools,
@@ -426,12 +453,11 @@ actor CovenRepository {
     // MARK: - Helpers
 
     private func mapRecordToRole(_ rec: RoleRecord) -> Role {
-        let settings: RoleSettings?
-        if let settingsJSON = rec.settings,
-           let data = settingsJSON.data(using: .utf8) {
-            settings = try? JSONDecoder().decode(RoleSettings.self, from: data)
+        let settings: RoleSettings? = if let settingsJSON = rec.settings,
+                                         let data = settingsJSON.data(using: .utf8) {
+            try? JSONDecoder().decode(RoleSettings.self, from: data)
         } else {
-            settings = nil
+            nil
         }
 
         return Role(
@@ -461,8 +487,8 @@ enum CovenRepositoryError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .covenNotFound: return "Coven not found"
-        case .roleNotFound: return "Role not found"
+        case .covenNotFound: "Coven not found"
+        case .roleNotFound: "Role not found"
         }
     }
 }

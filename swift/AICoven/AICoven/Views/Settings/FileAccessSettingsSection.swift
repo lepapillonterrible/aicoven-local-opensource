@@ -8,7 +8,7 @@ struct FileAccessSettingsSection: View {
     @ObservedObject private var fileAccessManager = FileAccessManager.shared
     @State private var showAutoPromptAlert = false
     @State private var deniedPath: String = ""
-    
+
     var body: some View {
         VStack(spacing: Spacing.md) {
             HStack {
@@ -17,7 +17,7 @@ struct FileAccessSettingsSection: View {
                     .foregroundColor(.aicovenTextPrimary)
                 Spacer()
             }
-            
+
             GlassCard {
                 VStack(spacing: Spacing.md) {
                     // Info text
@@ -26,7 +26,7 @@ struct FileAccessSettingsSection: View {
                             .font(.aicovenH3)
                             .foregroundColor(.aicovenTeal)
                             .frame(width: 32)
-                        
+
                         VStack(alignment: .leading, spacing: Spacing.xxs) {
                             Text("Allowed Folders")
                                 .font(.aicovenBody)
@@ -37,7 +37,7 @@ struct FileAccessSettingsSection: View {
                         }
                         Spacer()
                     }
-                    
+
                     // Show info banner when the app is not sandboxed
                     if fileAccessManager.isUnrestricted {
                         HStack(spacing: Spacing.sm) {
@@ -52,26 +52,26 @@ struct FileAccessSettingsSection: View {
                         .background(Color.aicovenTeal.opacity(0.1))
                         .cornerRadius(8)
                     }
-                    
+
                     if !fileAccessManager.allowedFolders.isEmpty {
                         Divider()
                             .background(Color.aicovenBorder)
-                        
+
                         // List of allowed folders
                         ForEach(fileAccessManager.allowedFolders) { folder in
                             HStack(spacing: Spacing.sm) {
                                 Image(systemName: "folder.fill")
                                     .font(.aicovenCaption)
                                     .foregroundColor(.aicovenPurple)
-                                
+
                                 Text(folder.displayPath)
                                     .font(.aicovenBodySmall)
                                     .foregroundColor(.aicovenTextPrimary)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
-                                
+
                                 Spacer()
-                                
+
                                 Button {
                                     fileAccessManager.removeFolder(folder)
                                 } label: {
@@ -85,10 +85,10 @@ struct FileAccessSettingsSection: View {
                             .padding(.vertical, Spacing.xxs)
                         }
                     }
-                    
+
                     Divider()
                         .background(Color.aicovenBorder)
-                    
+
                     // Add folder button
                     Button {
                         fileAccessManager.promptForFolderAccess()
@@ -118,7 +118,7 @@ struct FileAccessSettingsSection: View {
             Button("Grant Access") {
                 fileAccessManager.promptForFolderAccess()
             }
-            Button("Cancel", role: .cancel) { }
+            Button("Cancel", role: .cancel) {}
         } message: {
             Text("The agent tried to access '\(deniedPath)' but this folder hasn't been authorized. Would you like to grant access now?")
         }
