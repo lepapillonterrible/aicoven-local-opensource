@@ -80,19 +80,34 @@ class StoreService: ObservableObject {
 
     // MARK: - Persistence (backup)
 
-    private static let purchasedIDsKey = "StoreService.purchasedProductIDs"
+    /// User-scoped storage key so each Firebase user gets their own purchase cache.
+    private var purchasedIDsKey: String {
+        UserScope.scopedKey("StoreService.purchasedProductIDs")
+    }
 
     private func persistPurchases() {
         UserDefaults.standard.set(
             Array(purchasedProductIDs),
-            forKey: Self.purchasedIDsKey
+            forKey: purchasedIDsKey
         )
     }
 
     private func loadPersistedPurchases() {
-        if let saved = UserDefaults.standard.stringArray(forKey: Self.purchasedIDsKey) {
+        if let saved = UserDefaults.standard.stringArray(forKey: purchasedIDsKey) {
             purchasedProductIDs = Set(saved)
+        } else {
+            purchasedProductIDs = []
         }
+    }
+
+    /// Reload entitlements for the current user. Call after user switch.
+    func reloadForCurrentUser() async {
+        // Clear cached purchases (they were for a different user)
+        purchasedProductIDs = []
+        // Load any cached purchases for this user
+        loadPersistedPurchases()
+        // Then refresh from StoreKit (which is Apple ID scoped)
+        await refreshEntitlements()
     }
 
     // MARK: - Transaction listener

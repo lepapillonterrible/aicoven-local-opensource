@@ -166,18 +166,29 @@ actor ChatService {
     private var messageStore: [String: [ChatMessage]] = [:]
     /// Maximum number of prior turns to include when building LLM context.
     private let maxContextMessages = 20
-    /// On-disk cache location for message history so threads survive restarts.
-    private let messageStoreURL: URL = {
+
+    /// Whether we've attempted to hydrate the in-memory store from disk.
+    private var hasLoadedFromDisk = false
+
+    /// User-scoped on-disk cache location for message history.
+    private var messageStoreURL: URL {
         let fm = FileManager.default
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fm.urls(for: .documentDirectory, in: .userDomainMask).first!
         let dir = base.appendingPathComponent("AICovenOpen", isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("messages.json", isDirectory: false)
-    }()
+        // Use user-scoped filename so each user gets their own message history
+        let filename = UserScope.scopedFilename("messages", extension: "json")
+        return dir.appendingPathComponent(filename, isDirectory: false)
+    }
 
-    /// Whether we've attempted to hydrate the in-memory store from disk.
-    private var hasLoadedFromDisk = false
+    /// Reload message store for the current user. Call after user switch.
+    func reloadForCurrentUser() {
+        // Clear in-memory cache
+        messageStore = [:]
+        hasLoadedFromDisk = false
+        // Next call to loadMessages will reload from user-scoped file
+    }
 
     init(
         contextBuilder: ContextBuilder,

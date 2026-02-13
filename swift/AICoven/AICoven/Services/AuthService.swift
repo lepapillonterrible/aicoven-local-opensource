@@ -28,8 +28,25 @@ class AuthService: ObservableObject {
         return "\(id).\(base)"
     }
 
+    /// UserDefaults key to detect fresh install. This is NOT user-scoped because
+    /// we need to detect reinstall before knowing who the user is.
+    private static let hasLaunchedBeforeKey = "AuthService.hasLaunchedBefore"
+
     private init() {
         print("🔧 AuthService initializing...")
+
+        // Detect fresh install: Firebase persists auth in Keychain (survives app deletion),
+        // but UserDefaults is cleared on uninstall. If we have a Firebase user but no
+        // UserDefaults marker, this is a reinstall - sign out for a clean slate.
+        let hasLaunchedBefore = UserDefaults.standard.bool(forKey: Self.hasLaunchedBeforeKey)
+        if !hasLaunchedBefore {
+            UserDefaults.standard.set(true, forKey: Self.hasLaunchedBeforeKey)
+            if Auth.auth().currentUser != nil {
+                print("🔄 Fresh install detected with stale Firebase auth - signing out")
+                try? Auth.auth().signOut()
+            }
+        }
+
         // Listen for auth state changes
         authStateHandle = Auth.auth().addStateDidChangeListener { [weak self] _, firebaseUser in
             Task { @MainActor in
@@ -39,9 +56,12 @@ class AuthService: ObservableObject {
                     // Build user profile from Firebase user data (no backend needed)
                     self?.buildLocalUserProfile(from: firebaseUser)
                     self?.isAuthenticated = true
-                    // Reload thread service for the newly signed-in user to ensure
-                    // user-scoped data isolation (prevents seeing other users' threads)
+                    // Reload all services for the newly signed-in user to ensure
+                    // user-scoped data isolation (prevents seeing other users' data)
+                    AppState.shared.clearUserData()
                     await ThreadService.shared.reloadForCurrentUser()
+                    await StoreService.shared.reloadForCurrentUser()
+                    await ChatService.shared.reloadForCurrentUser()
                 } else {
                     print("❌ No Firebase user - signed out")
                     self?.currentUser = nil

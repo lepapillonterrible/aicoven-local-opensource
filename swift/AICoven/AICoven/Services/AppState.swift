@@ -90,6 +90,15 @@ class AppState: ObservableObject {
         selectedThread = thread
     }
 
+    /// Clear all user-specific state. Call on sign-in/sign-out to prevent
+    /// data leakage between users.
+    func clearUserData() {
+        selectedThread = nil
+        threads = []
+        hasCompletedOnboarding = false
+        pendingDeepLink = nil
+    }
+
     /// Fetch user's threads (personal-only, local store)
     func fetchThreads() async throws {
         let threads = try await ThreadService.shared.loadThreads(covenId: nil)
