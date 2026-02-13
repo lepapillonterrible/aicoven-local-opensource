@@ -210,6 +210,35 @@ You can run models on your machine with [Ollama](https://ollama.com) — no API 
 5. The app will discover available models automatically — select one and tap **Add Ollama**.
 6. Start chatting! Requests go directly to Ollama on your machine; nothing leaves your network.
 
+### Using MLX (On-Device, Apple Silicon)
+
+AICoven Local also supports running models directly on-device using [MLX](https://github.com/ml-explore/mlx) on Apple Silicon.
+
+**Hardware requirements**
+
+- macOS on Apple Silicon (M1 or newer) is required.
+- For a smooth experience, at least **16 GB RAM** is recommended for medium/large models.
+
+**Expected model sizes & memory usage**
+
+- Small models (e.g. 3–4B parameters): typically **2–4 GB** downloads; expect **4–8 GB** of free RAM.
+- Medium models (e.g. 7–8B parameters): typically **4–8 GB** downloads; expect **8–16 GB** of free RAM.
+- Larger models may require more disk space and RAM; choose a size appropriate for your machine.
+
+**Adding an MLX provider in the app**
+
+1. Ensure you have an Apple Silicon Mac (M1 or newer) and that MLX models/tools are installed according to the MLX project’s instructions.
+2. Open the app and go to **Settings → Provider Keys → Add Provider Key**.
+3. Select **MLX (On-Device)** from the provider list.
+4. Configure the model or path options as prompted, then tap **Connect**.
+5. Once connected, select your preferred MLX model in the app and start chatting.
+
+**MLX vs. Ollama**
+
+- **MLX**: runs inference directly on your Apple Silicon GPU/CPU with no local HTTP server. Everything stays entirely on-device inside the app.
+- **Ollama**: runs a local HTTP server that manages models and serves requests at `http://localhost:11434`. AICoven Local connects to that server over localhost.
+
+Use MLX if you want a fully in-process, Apple Silicon–optimized workflow, and Ollama if you prefer a local model server that can be shared across multiple tools.
 > **Note:** Tool use with Ollama models works but is less reliable than with API providers, especially for smaller models. See the [tool calling table](#tool-calling-by-provider) above.
 
 ## Development Workflow
