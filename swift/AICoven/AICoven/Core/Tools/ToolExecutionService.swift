@@ -131,7 +131,9 @@ actor ToolExecutionService {
             }
 
             do {
-                let results = try await toolService.webSearch(query: query, maxResults: 5)
+                // Use ToolService.shared directly to ensure we get a fresh reference,
+                // avoiding potential iOS initialization issues with stored property.
+                let results = try await ToolService.shared.webSearch(query: query, maxResults: 5)
                 if results.isEmpty {
                     return .success(tool: toolCall.name, result: ["status": AnyJSONValue("no_results")], contextBlock: "[Web Search] No results found for '\(query)'")
                 }
@@ -140,8 +142,12 @@ actor ToolExecutionService {
                 let block = "[Web Search Results for '\(query)']\n" + lines.joined(separator: "\n\n")
 
                 return .success(tool: toolCall.name, result: ["count": AnyJSONValue(results.count)], contextBlock: block)
+            } catch let error as NSError {
+                // Provide more detailed error info for debugging iOS issues
+                let message = "Web search failed: \(error.localizedDescription) (domain: \(error.domain), code: \(error.code))"
+                return .error(tool: toolCall.name, message: message)
             } catch {
-                return .error(tool: toolCall.name, message: error.localizedDescription)
+                return .error(tool: toolCall.name, message: "Web search failed: \(error.localizedDescription)")
             }
 
         case "web_browse":
@@ -152,14 +158,19 @@ actor ToolExecutionService {
             return await executeWebBrowse(url: url, toolName: toolCall.name)
 
         case "current_time":
+            // Inline implementation to avoid toolService dependency and potential
+            // iOS initialization issues. This is pure computation with no side effects.
             var tz = TimeZone.current
             if let tzString = extractString(from: toolCall.args, key: "timezone"),
                let parsed = TimeZone(identifier: tzString) {
                 tz = parsed
             }
-            let info = toolService.currentTime(timezone: tz)
-            let block = "[Current Time]\n\(info.localISO8601) (Zone: \(info.timezoneIdentifier))"
-            return .success(tool: toolCall.name, result: ["iso8601": AnyJSONValue(info.localISO8601)], contextBlock: block)
+            let now = Date()
+            let localFormatter = ISO8601DateFormatter()
+            localFormatter.timeZone = tz
+            let localISO8601 = localFormatter.string(from: now)
+            let block = "[Current Time]\n\(localISO8601) (Zone: \(tz.identifier))"
+            return .success(tool: toolCall.name, result: ["iso8601": AnyJSONValue(localISO8601)], contextBlock: block)
 
         // --- GitHub Tools ---
         case "github.listRepos", "github.list_repos":
@@ -694,7 +705,8 @@ actor ToolExecutionService {
 
     private func executeWebBrowse(url: URL, toolName: String) async -> ToolExecutionResult {
         do {
-            let result = try await toolService.webBrowse(url: url)
+            // Use ToolService.shared directly to avoid iOS initialization issues
+            let result = try await ToolService.shared.webBrowse(url: url)
             let block = "[Web Browse: \(result.title ?? "No Title")]\nURL: \(result.url.absoluteString)\n\n\(result.content)"
             return .success(
                 tool: toolName,
@@ -705,8 +717,12 @@ actor ToolExecutionService {
                 ],
                 contextBlock: block
             )
+        } catch let error as NSError {
+            // Provide more detailed error info for debugging iOS issues
+            let message = "Web browse failed: \(error.localizedDescription) (domain: \(error.domain), code: \(error.code))"
+            return .error(tool: toolName, message: message)
         } catch {
-            return .error(tool: toolName, message: error.localizedDescription)
+            return .error(tool: toolName, message: "Web browse failed: \(error.localizedDescription)")
         }
     }
 
