@@ -33,7 +33,7 @@ final class FileAccessManager: ObservableObject {
         let bookmarkData: Data
 
         var displayPath: String {
-            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            let home = NSHomeDirectory()
             let path = url.path
             if path.hasPrefix(home) {
                 return "~" + path.dropFirst(home.count)
@@ -107,8 +107,13 @@ final class FileAccessManager: ObservableObject {
         }
 
         do {
+            #if os(macOS)
+            let bookmarkOptions: URL.BookmarkCreationOptions = .withSecurityScope
+            #else
+            let bookmarkOptions: URL.BookmarkCreationOptions = []
+            #endif
             let bookmarkData = try url.bookmarkData(
-                options: .withSecurityScope,
+                options: bookmarkOptions,
                 includingResourceValuesForKeys: nil,
                 relativeTo: nil
             )
@@ -177,9 +182,14 @@ final class FileAccessManager: ObservableObject {
         for bookmarkData in savedBookmarks {
             var isStale = false
             do {
+                #if os(macOS)
+                let resolveOptions: URL.BookmarkResolutionOptions = .withSecurityScope
+                #else
+                let resolveOptions: URL.BookmarkResolutionOptions = []
+                #endif
                 let url = try URL(
                     resolvingBookmarkData: bookmarkData,
-                    options: .withSecurityScope,
+                    options: resolveOptions,
                     relativeTo: nil,
                     bookmarkDataIsStale: &isStale
                 )
@@ -193,8 +203,13 @@ final class FileAccessManager: ObservableObject {
 
                 if isStale {
                     // Re-create the bookmark
+                    #if os(macOS)
+                    let creationOptions: URL.BookmarkCreationOptions = .withSecurityScope
+                    #else
+                    let creationOptions: URL.BookmarkCreationOptions = []
+                    #endif
                     if let newData = try? url.bookmarkData(
-                        options: .withSecurityScope,
+                        options: creationOptions,
                         includingResourceValuesForKeys: nil,
                         relativeTo: nil
                     ) {
@@ -237,7 +252,11 @@ final class FileAccessManager: ObservableObject {
 
     /// Check if the app is actually sandboxed at runtime.
     private func isAppSandboxed() -> Bool {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        #if os(iOS)
+        return true // iOS apps are always sandboxed
+        #else
+        let home = NSHomeDirectory()
         return home.contains("/Library/Containers/")
+        #endif
     }
 }
