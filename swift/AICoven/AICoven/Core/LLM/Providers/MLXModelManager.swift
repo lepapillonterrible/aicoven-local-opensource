@@ -1,6 +1,10 @@
 import Foundation
 internal import Combine
 
+#if canImport(UIKit)
+import UIKit
+#endif
+
 #if canImport(MLXLLM)
 import MLXLLM
 import MLXLMCommon
@@ -123,11 +127,26 @@ final class MLXModelManager: ObservableObject {
 
     // MARK: - Platform check
 
+    /// Minimum RAM required for MLX inference (8 GB).
+    private static let minimumRAMBytes: UInt64 = 8_000_000_000
+
     /// Whether the current device supports MLX inference.
-    /// Nonisolated because this is a compile-time constant.
+    /// Supported on: macOS with Apple Silicon, iPadOS on M-series iPads with 8GB+ RAM.
+    /// Not supported on: iPhones (insufficient memory headroom).
     nonisolated static var isSupported: Bool {
         #if arch(arm64)
+        #if os(macOS)
+        // All Apple Silicon Macs are supported
         return true
+        #elseif os(iOS)
+        // Only support iPads with M-series chips (8GB+ RAM)
+        // iPhones are excluded even if they have enough RAM due to aggressive memory limits
+        let isIPad = UIDevice.current.userInterfaceIdiom == .pad
+        let hasEnoughRAM = ProcessInfo.processInfo.physicalMemory >= minimumRAMBytes
+        return isIPad && hasEnoughRAM
+        #else
+        return false
+        #endif
         #else
         return false
         #endif

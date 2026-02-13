@@ -19,7 +19,7 @@ struct MLXModelSettingsView: View {
                         .font(.system(size: 28, weight: .bold))
                         .foregroundColor(.primary)
 
-                    Text("Models run entirely on your Mac using Apple Silicon. No server or API key required.")
+                    Text("Models run entirely on your device using Apple Silicon. No server or API key required.")
                         .font(.aicovenBody)
                         .foregroundColor(.aicovenTextSecondary)
                         .multilineTextAlignment(.center)
@@ -51,7 +51,7 @@ struct MLXModelSettingsView: View {
                     .font(.aicovenH3)
                     .foregroundColor(.aicovenTextPrimary)
 
-                Text("MLX on-device models require a Mac with Apple Silicon (M1 or newer).")
+                Text("MLX on-device models require a Mac or iPad with Apple Silicon (M1 or newer) and at least 8 GB of RAM.")
                     .font(.aicovenBody)
                     .foregroundColor(.aicovenTextSecondary)
                     .multilineTextAlignment(.center)
