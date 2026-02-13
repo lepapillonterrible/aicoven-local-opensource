@@ -17,6 +17,10 @@ final class FileAccessManager: ObservableObject {
     /// Folders the user has explicitly granted access to.
     @Published private(set) var allowedFolders: [AllowedFolder] = []
     
+    /// Whether file access is unrestricted (non-sandboxed community builds).
+    /// When `true`, all paths are accessible regardless of allowed folders.
+    @Published private(set) var isUnrestricted: Bool = false
+    
     // MARK: - Storage Keys
     
     private static let bookmarksKey = "aicoven_allowed_folder_bookmarks"
@@ -47,6 +51,7 @@ final class FileAccessManager: ObservableObject {
     // MARK: - Initialization
     
     private init() {
+        isUnrestricted = !isAppSandboxed()
         resolveBookmarks()
     }
     

@@ -8,6 +8,8 @@ import Foundation
 ///
 /// Additionally provides helpers for model discovery (`/api/tags`) and
 /// connection testing used by the provider-keys UI.
+// Safety: @unchecked Sendable is safe because both `baseURL` and `urlSession`
+// are immutable after init, and URLSession is documented as thread-safe.
 final class OllamaLLMClient: LLMClient, @unchecked Sendable {
     let baseURL: URL
     private let urlSession: URLSession

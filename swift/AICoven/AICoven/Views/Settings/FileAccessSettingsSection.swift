@@ -38,6 +38,21 @@ struct FileAccessSettingsSection: View {
                         Spacer()
                     }
                     
+                    // Show info banner when the app is not sandboxed
+                    if fileAccessManager.isUnrestricted {
+                        HStack(spacing: Spacing.sm) {
+                            Image(systemName: "info.circle.fill")
+                                .font(.aicovenBody)
+                                .foregroundColor(.aicovenTeal)
+                            Text("This build is not sandboxed — agents can access all files without folder grants. You can still add folders below to pre-authorize paths for sandboxed builds.")
+                                .font(.aicovenCaption)
+                                .foregroundColor(.aicovenTextSecondary)
+                        }
+                        .padding(Spacing.sm)
+                        .background(Color.aicovenTeal.opacity(0.1))
+                        .cornerRadius(8)
+                    }
+                    
                     if !fileAccessManager.allowedFolders.isEmpty {
                         Divider()
                             .background(Color.aicovenBorder)

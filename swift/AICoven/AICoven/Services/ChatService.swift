@@ -473,10 +473,6 @@ actor ChatService {
                 // When we have accumulated tool results, include a brief
                 // instruction so the model knows to incorporate them.
                 composedUserMessage += "\n\nYou have tool results below. Use them to answer the user's question. If you need more information, call another tool. Otherwise, provide your final answer in natural language.\n\n" + toolContextLog
-            } else if isLocalModel {
-                // For local models on the first step (no tool results yet),
-                // inject a brief reminder to use tools.
-                composedUserMessage += "\n\nRemember: if you need current time, file contents, or web data, respond with ONLY a JSON tool call like {\"tool\": \"tool_name\", \"input\": {...}, \"reason\": \"...\"}. Do NOT explain what you would do — just call the tool."
             }
             
             // Build LLM context using the shared ContextBuilder, which will pull
@@ -979,14 +975,13 @@ struct ChatToolInvocation: Codable {
         
         // Strip <think>...</think> blocks emitted by reasoning models (e.g. Qwen3).
         // These appear before the tool-call JSON and prevent parsing.
-        while let thinkStart = trimmed.range(of: "<think>"),
-              let thinkEnd = trimmed.range(of: "</think>") {
-            trimmed = String(trimmed[..<thinkStart.lowerBound] + trimmed[thinkEnd.upperBound...])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        }
+        trimmed = trimmed.replacingOccurrences(
+            of: "<think>[\\s\\S]*?</think>",
+            with: "",
+            options: .regularExpression
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
         // Also handle unclosed <think> tags (model started thinking but response was cut off).
-        if let thinkStart = trimmed.range(of: "<think>"),
-           trimmed.range(of: "</think>") == nil {
+        if let thinkStart = trimmed.range(of: "<think>") {
             trimmed = String(trimmed[..<thinkStart.lowerBound])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         }

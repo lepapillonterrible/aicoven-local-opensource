@@ -1,1 +1,4 @@
 .DS_Store
+
+# Local secrets (real API keys) – never commit
+swift/AICoven/Configuration/Secrets.xcconfig
