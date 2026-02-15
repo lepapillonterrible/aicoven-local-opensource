@@ -1,5 +1,6 @@
 import Foundation
 import FirebaseAuth
+import FirebaseCore
 internal import Combine
 import GRDB
 
@@ -20,6 +21,10 @@ class AuthService: ObservableObject {
 
     private var authStateHandle: AuthStateDidChangeListenerHandle?
 
+    /// Whether Firebase Auth is available (i.e., FirebaseApp was configured).
+    /// When false, all auth operations are no-ops.
+    private let isFirebaseAvailable: Bool
+
     /// UserDefaults key for persisting onboarding completion, scoped by user.
     private static func onboardingKey(for uid: String? = nil) -> String {
         let id = uid ?? UserScope.currentUserID
@@ -34,6 +39,17 @@ class AuthService: ObservableObject {
 
     private init() {
         print("🔧 AuthService initializing...")
+
+        // Check if Firebase is configured before accessing Auth.auth().
+        // In CI builds or when GoogleService-Info.plist is missing/invalid,
+        // FirebaseApp won't be configured and Auth.auth() would crash.
+        guard FirebaseApp.app() != nil else {
+            print("⚠️ Firebase not configured - AuthService running in offline mode")
+            isFirebaseAvailable = false
+            isLoading = false
+            return
+        }
+        isFirebaseAvailable = true
 
         // Detect fresh install: Firebase persists auth in Keychain (survives app deletion),
         // but UserDefaults is cleared on uninstall. If we have a Firebase user but no
@@ -74,13 +90,15 @@ class AuthService: ObservableObject {
     }
 
     deinit {
-        if let handle = authStateHandle {
+        // Only remove listener if Firebase was available
+        if isFirebaseAvailable, let handle = authStateHandle {
             Auth.auth().removeStateDidChangeListener(handle)
         }
     }
 
     /// Get current Firebase ID token (available for future API use if needed)
     func getIdToken() async -> String? {
+        guard isFirebaseAvailable else { return nil }
         do {
             return try await Auth.auth().currentUser?.getIDToken()
         } catch {
@@ -91,6 +109,13 @@ class AuthService: ObservableObject {
 
     /// Sign in with email and password
     func signIn(email: String, password: String) async throws {
+        guard isFirebaseAvailable else {
+            throw NSError(
+                domain: "AuthService",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Firebase not configured"]
+            )
+        }
         print("🔐 Attempting sign in for: \(email)")
         isLoading = true
         defer { isLoading = false }
@@ -108,6 +133,13 @@ class AuthService: ObservableObject {
 
     /// Sign up with email and password
     func signUp(email: String, password: String, name: String?) async throws {
+        guard isFirebaseAvailable else {
+            throw NSError(
+                domain: "AuthService",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Firebase not configured"]
+            )
+        }
         isLoading = true
         defer { isLoading = false }
 
@@ -141,13 +173,23 @@ class AuthService: ObservableObject {
             // Reload threads for the (now nil) user context.
             await ThreadService.shared.reloadForCurrentUser()
         }
-        try Auth.auth().signOut()
+        // Only call Firebase signOut if available
+        if isFirebaseAvailable {
+            try Auth.auth().signOut()
+        }
         currentUser = nil
         isAuthenticated = false
     }
 
     /// Send password reset email
     func sendPasswordReset(email: String) async throws {
+        guard isFirebaseAvailable else {
+            throw NSError(
+                domain: "AuthService",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Firebase not configured"]
+            )
+        }
         try await Auth.auth().sendPasswordReset(withEmail: email)
     }
 
@@ -176,6 +218,7 @@ class AuthService: ObservableObject {
 
     /// Update user profile (local-only: updates Firebase display name and in-memory user)
     func updateProfile(name: String?, profile: UserProfile?) async throws {
+        guard isFirebaseAvailable else { return }
         if let name, let fbUser = Auth.auth().currentUser {
             let changeRequest = fbUser.createProfileChangeRequest()
             changeRequest.displayName = name
@@ -192,8 +235,8 @@ class AuthService: ObservableObject {
     func markOnboardingCompleted() async {
         UserDefaults.standard.set(true, forKey: AuthService.onboardingKey())
         AppState.shared.hasCompletedOnboarding = true
-        // Rebuild user so settings reflect the change
-        if let fbUser = Auth.auth().currentUser {
+        // Rebuild user so settings reflect the change (only if Firebase is available)
+        if isFirebaseAvailable, let fbUser = Auth.auth().currentUser {
             buildLocalUserProfile(from: fbUser)
         }
     }
@@ -202,7 +245,8 @@ class AuthService: ObservableObject {
     func markOnboardingCompletedReset() async {
         UserDefaults.standard.set(false, forKey: AuthService.onboardingKey())
         AppState.shared.hasCompletedOnboarding = false
-        if let fbUser = Auth.auth().currentUser {
+        // Rebuild user so settings reflect the change (only if Firebase is available)
+        if isFirebaseAvailable, let fbUser = Auth.auth().currentUser {
             buildLocalUserProfile(from: fbUser)
         }
     }
@@ -212,6 +256,14 @@ class AuthService: ObservableObject {
     /// - Throws: An error if the deletion fails
     func deleteAccount() async throws {
         print("🗑️ Starting account deletion...")
+
+        guard isFirebaseAvailable else {
+            throw NSError(
+                domain: "AuthService",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Firebase not configured"]
+            )
+        }
 
         guard let firebaseUser = Auth.auth().currentUser else {
             throw NSError(
