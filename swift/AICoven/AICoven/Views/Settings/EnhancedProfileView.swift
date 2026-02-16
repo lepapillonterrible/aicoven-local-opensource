@@ -14,7 +14,8 @@ struct EnhancedProfileView: View {
     @State private var editedRole = ""
     @State private var saving = false
     @State private var showDeleteConfirmation = false
-    @State private var showFinalDeleteConfirmation = false
+    @State private var showPasswordPrompt = false
+    @State private var deletePassword = ""
     @State private var isDeleting = false
     @State private var deleteError: String?
 
@@ -272,21 +273,27 @@ struct EnhancedProfileView: View {
         .alert("Delete Account?", isPresented: $showDeleteConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Continue", role: .destructive) {
-                showFinalDeleteConfirmation = true
+                // Clear any previous password and show password prompt
+                deletePassword = ""
+                showPasswordPrompt = true
             }
         } message: {
             Text("This will permanently delete your account and all your local data including conversations, memories, and settings. This action cannot be undone.")
         }
-        // Final delete confirmation
-        .alert("Are you absolutely sure?", isPresented: $showFinalDeleteConfirmation) {
-            Button("Cancel", role: .cancel) {}
+        // Password prompt for re-authentication
+        .alert("Enter your password to confirm", isPresented: $showPasswordPrompt) {
+            SecureField("Password", text: $deletePassword)
+            Button("Cancel", role: .cancel) {
+                deletePassword = ""
+            }
             Button("Delete My Account", role: .destructive) {
                 Task {
                     await deleteAccount()
                 }
             }
+            .disabled(deletePassword.isEmpty)
         } message: {
-            Text("Your account will be permanently deleted. You will be signed out immediately.")
+            Text("For security, please enter your password to permanently delete your account.")
         }
         .onReceive(authService.$currentUser) { newValue in
             userInfo = newValue
@@ -345,13 +352,27 @@ struct EnhancedProfileView: View {
         deleteError = nil
 
         do {
-            try await authService.deleteAccount()
+            try await authService.deleteAccount(password: deletePassword)
             // User is now signed out; the auth state listener will handle UI transition
-        } catch {
-            deleteError = "Failed to delete account. Please try again."
+        } catch let error as NSError {
+            // Provide user-friendly error messages
+            if error.domain == "FIRAuthErrorDomain" {
+                switch error.code {
+                case 17009: // ERROR_WRONG_PASSWORD
+                    deleteError = "Incorrect password. Please try again."
+                case 17014: // ERROR_REQUIRES_RECENT_LOGIN (shouldn't happen now but kept for safety)
+                    deleteError = "Please sign out and sign back in, then try again."
+                default:
+                    deleteError = error.localizedDescription
+                }
+            } else {
+                deleteError = "Failed to delete account. Please try again."
+            }
             AppErrorReporter.log(error: error, context: "EnhancedProfileView.deleteAccount")
         }
 
+        // Clear password from memory
+        deletePassword = ""
         isDeleting = false
     }
 }

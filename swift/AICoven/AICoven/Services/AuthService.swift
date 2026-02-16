@@ -251,10 +251,39 @@ class AuthService: ObservableObject {
         }
     }
 
+    /// Re-authenticate the user with their password.
+    /// Required before sensitive operations like account deletion.
+    /// - Parameter password: The user's current password
+    /// - Throws: An error if re-authentication fails
+    func reauthenticate(password: String) async throws {
+        guard isFirebaseAvailable else {
+            throw NSError(
+                domain: "AuthService",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Firebase not configured"]
+            )
+        }
+
+        guard let firebaseUser = Auth.auth().currentUser,
+              let email = firebaseUser.email else {
+            throw NSError(
+                domain: "AuthService",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "No user is currently signed in."]
+            )
+        }
+
+        // Create credential and re-authenticate
+        let credential = EmailAuthProvider.credential(withEmail: email, password: password)
+        try await firebaseUser.reauthenticate(with: credential)
+        print("✅ Re-authentication successful")
+    }
+
     /// Permanently delete the current user's account and all associated local data.
     /// This deletes all user data from the local SQLite database and the Firebase Auth user.
+    /// - Parameter password: The user's current password for re-authentication
     /// - Throws: An error if the deletion fails
-    func deleteAccount() async throws {
+    func deleteAccount(password: String) async throws {
         print("🗑️ Starting account deletion...")
 
         guard isFirebaseAvailable else {
@@ -272,6 +301,9 @@ class AuthService: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "No user is currently signed in."]
             )
         }
+
+        // Re-authenticate before deletion (Firebase requires recent auth for sensitive ops)
+        try await reauthenticate(password: password)
 
         let userId = firebaseUser.uid
 
