@@ -30,10 +30,11 @@ final class AnthropicLLMClientTests: XCTestCase {
     }
 
     func testCompleteChat_decodesSuccessfulResponse() async throws {
+        // Note: Anthropic API returns content blocks with a "type" field
         let json = """
         {
           "content": [
-            { "text": "Hello from Claude" }
+            { "type": "text", "text": "Hello from Claude" }
           ],
           "model": "claude-3-haiku-20240307"
         }

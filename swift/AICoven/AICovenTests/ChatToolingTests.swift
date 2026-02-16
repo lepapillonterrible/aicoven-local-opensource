@@ -16,7 +16,8 @@ final class ChatToolingTests: XCTestCase {
     }
 
     func testCurrentMaxToolSteps_defaultsAndCap() {
-        let key = "chat_max_tool_steps"
+        // Use the scoped key that ChatService uses internally
+        let key = UserScope.scopedKey("chat_max_tool_steps")
         let defaults = UserDefaults.standard
         defaults.removeObject(forKey: key)
 
@@ -30,6 +31,9 @@ final class ChatToolingTests: XCTestCase {
         // Values above hard cap are clamped to 15
         defaults.set(50, forKey: key)
         XCTAssertEqual(ChatService.currentMaxToolSteps(), 15)
+
+        // Cleanup
+        defaults.removeObject(forKey: key)
     }
 
     func testMaybeForceSearchQuery_forWeatherRefusal() async {

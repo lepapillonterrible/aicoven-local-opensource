@@ -131,9 +131,8 @@ actor ToolExecutionService {
             }
 
             do {
-                // Use ToolService.shared directly to ensure we get a fresh reference,
-                // avoiding potential iOS initialization issues with stored property.
-                let results = try await ToolService.shared.webSearch(query: query, maxResults: 5)
+                // Use the injected toolService to enable mocking in tests.
+                let results = try await toolService.webSearch(query: query, maxResults: 5)
                 if results.isEmpty {
                     return .success(tool: toolCall.name, result: ["status": AnyJSONValue("no_results")], contextBlock: "[Web Search] No results found for '\(query)'")
                 }

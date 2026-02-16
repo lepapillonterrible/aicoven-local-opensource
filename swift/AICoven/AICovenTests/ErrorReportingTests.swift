@@ -35,9 +35,10 @@ final class ErrorReportingTests: XCTestCase {
         let reporter = CapturingErrorReporter()
         AppErrorReporter.use(reporter)
 
-        // Write invalid JSON under the usage entries key so decoding fails.
+        // Write invalid JSON under the scoped usage entries key so decoding fails.
         let defaults = UserDefaults.standard
-        defaults.set("not-json".data(using: .utf8), forKey: "local_usage.entries.v1")
+        let scopedKey = UserScope.scopedKey("local_usage.entries.v1")
+        defaults.set("not-json".data(using: .utf8), forKey: scopedKey)
 
         // Calling any public API that reads entries should trigger a decode
         // failure but still succeed overall.
