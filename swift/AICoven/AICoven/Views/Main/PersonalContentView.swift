@@ -436,9 +436,9 @@ struct PersonalChatView: View {
             // Message composer
             EnhancedMessageComposer(
                 messageText: $messageText,
-                onSend: { attachmentIds in
+                onSend: { attachments in
                     Task {
-                        await sendMessage(attachmentIds: attachmentIds)
+                        await sendMessage(attachments: attachments)
                     }
                 },
                 onErrorMessage: { errorText in
@@ -641,7 +641,9 @@ struct PersonalChatView: View {
         }
     }
 
-    private func sendMessage(attachmentIds: [String]) async {
+    /// Send a message with optional file attachments to the LLM.
+    /// Attachments are read from disk and their contents are injected into the context.
+    private func sendMessage(attachments: [FileAttachmentDetail]) async {
         let raw = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return }
 
@@ -680,7 +682,7 @@ struct PersonalChatView: View {
                 threadId: thread.id,
                 message: fullTextForLLM,
                 roleId: thread.agentId,
-                attachmentIds: attachmentIds.isEmpty ? nil : attachmentIds,
+                attachments: attachments.isEmpty ? nil : attachments,
                 onPlanningDelta: { delta in
                     Task { @MainActor in
                         let trimmed = delta.trimmingCharacters(in: .whitespacesAndNewlines)

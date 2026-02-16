@@ -330,12 +330,19 @@ actor ChatService {
     /// small tool-calling loop (web_search, current_time) before returning the
     /// final natural-language answer. The loop follows the same JSON protocol
     /// as AgentRunner so models can decide when to call tools.
+    ///
+    /// - Parameters:
+    ///   - threadId: The thread ID
+    ///   - message: User message content
+    ///   - roleId: AI role/agent ID (optional)
+    ///   - providerAccountId: Provider account to use (optional)
+    ///   - attachments: File attachments with local URLs (optional). File contents will be read and injected into the context.
     func streamMessage(
         threadId: String,
         message: String,
         roleId: String? = nil,
         providerAccountId: String? = nil,
-        attachmentIds: [String]? = nil,
+        attachments: [FileAttachmentDetail]? = nil,
         onPlanningDelta: @escaping (String) -> Void,
         onToolEvent: @escaping (String) -> Void,
         onAnswerDelta: @escaping (String) -> Void,
@@ -458,7 +465,62 @@ actor ChatService {
         let toolContextCompressThreshold = 3000
 
         // Track initial message sent
-        AnalyticsService.shared.trackMessageSent(threadId: threadId, hasAttachments: !(attachmentIds?.isEmpty ?? true), attachmentCount: attachmentIds?.count ?? 0)
+        AnalyticsService.shared.trackMessageSent(threadId: threadId, hasAttachments: !(attachments?.isEmpty ?? true), attachmentCount: attachments?.count ?? 0)
+
+        // ── Build attachment context block ────────────────────────────────
+        // Read file contents from local attachments and build a context block
+        // so the agent can see the attached files.
+        var attachmentContextBlock = ""
+        if let attachments, !attachments.isEmpty {
+            var attachmentLines: [String] = []
+            for attachment in attachments {
+                let name = attachment.name
+                let mime = attachment.mimeType ?? "unknown"
+
+                // Try to read file contents from the local URL
+                if let url = attachment.url {
+                    do {
+                        if mime.hasPrefix("image/") {
+                            // For images, describe them (actual image content would need vision API)
+                            let sizeDesc = attachment.sizeBytes.map { "\(ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file))" } ?? "unknown size"
+                            let dims = (attachment.width != nil && attachment.height != nil) ? "\(attachment.width!)×\(attachment.height!)" : ""
+                            attachmentLines.append("[Image: \(name)] (\(mime), \(sizeDesc)\(dims.isEmpty ? "" : ", \(dims)"))")
+                            attachmentLines.append("Note: This is an image attachment. Describe what you see or ask the user about it if needed.")
+                        } else {
+                            // For text-based files, read the content
+                            let data = try Data(contentsOf: url)
+                            if let text = String(data: data, encoding: .utf8) {
+                                // Truncate very large files to avoid context overflow
+                                let maxChars = 8000
+                                let truncated = text.count > maxChars
+                                let content = truncated ? String(text.prefix(maxChars)) + "\n... [truncated, \(text.count - maxChars) more characters]" : text
+                                attachmentLines.append("[File: \(name)] (\(mime))")
+                                attachmentLines.append("```")
+                                attachmentLines.append(content)
+                                attachmentLines.append("```")
+                            } else {
+                                // Binary file that's not an image - just note its presence
+                                let sizeDesc = attachment.sizeBytes.map { "\(ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file))" } ?? "unknown size"
+                                attachmentLines.append("[Binary file: \(name)] (\(mime), \(sizeDesc)) - Contents cannot be displayed as text.")
+                            }
+                        }
+                    } catch {
+                        AppErrorReporter.log(error: error, context: "ChatService.streamMessage.readAttachment")
+                        attachmentLines.append("[File: \(name)] (\(mime)) - Unable to read file contents: \(error.localizedDescription)")
+                    }
+                } else {
+                    // No URL available, just describe the attachment
+                    let sizeDesc = attachment.sizeBytes.map { "\(ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file))" } ?? "unknown size"
+                    attachmentLines.append("[File: \(name)] (\(mime), \(sizeDesc)) - No local file URL available.")
+                }
+            }
+            if !attachmentLines.isEmpty {
+                attachmentContextBlock = "\n\n[User attached files]\n" + attachmentLines.joined(separator: "\n")
+            }
+        }
+
+        // Append attachment context to the message so the LLM can see the files
+        let messageWithAttachments = attachmentContextBlock.isEmpty ? message : message + attachmentContextBlock
 
         // First phase: while we still have tool budget, let the model decide
         // whether to call a tool. Each successful tool invocation consumes one
@@ -470,7 +532,8 @@ actor ChatService {
             // ContextBuilder already includes full tool documentation, so
             // appending here too caused double-injection and prompt
             // regurgitation.
-            var composedUserMessage = message
+            // Include attachment context so the model can see any attached files.
+            var composedUserMessage = messageWithAttachments
             if !toolContextLog.isEmpty {
                 // When we have accumulated tool results, include a brief
                 // instruction so the model knows to incorporate them.
@@ -704,7 +767,8 @@ actor ChatService {
         if finalText == nil {
             // Final phase: no tool instructions — just ask the model to
             // answer in natural language using whatever it already knows.
-            var composedUserMessage = message + "\n\nIMPORTANT: You must now answer the user directly in natural language. Do NOT call tools or return JSON. Provide the most helpful answer you can using your own reasoning and the information already available (including any tool results and your built-in knowledge). Do NOT say that you cannot answer because you cannot use tools or the web; instead, make your best effort to answer, even if it is an approximation, and clearly explain any uncertainty."
+            // Include attachment context so the model can see any attached files.
+            var composedUserMessage = messageWithAttachments + "\n\nIMPORTANT: You must now answer the user directly in natural language. Do NOT call tools or return JSON. Provide the most helpful answer you can using your own reasoning and the information already available (including any tool results and your built-in knowledge). Do NOT say that you cannot answer because you cannot use tools or the web; instead, make your best effort to answer, even if it is an approximation, and clearly explain any uncertainty."
             if !toolContextLog.isEmpty {
                 composedUserMessage += "\n\n" + toolContextLog
             }

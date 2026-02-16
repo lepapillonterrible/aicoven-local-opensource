@@ -385,7 +385,8 @@ struct WorkspaceContentView: View {
 /// Enhanced message composer
 struct EnhancedMessageComposer: View {
     @Binding var messageText: String
-    let onSend: ([String]) -> Void // Callback with attachment IDs
+    /// Callback when user sends a message, provides the full attachment details (with URLs for local file access)
+    let onSend: ([FileAttachmentDetail]) -> Void
     /// Optional callback to surface chat-scoped errors as messages in the thread.
     var onErrorMessage: ((String) -> Void)?
     var isDisabled: Bool = false
@@ -400,9 +401,6 @@ struct EnhancedMessageComposer: View {
     // Phase B & D: attachments with optional upload
     @State private var attachments: [FileAttachmentDetail] = []
     @State private var isUploading: Bool = false
-
-    /// Local tool execution state (web search, attachment analysis, generation)
-    @State private var isRunningTool: Bool = false
 
     #if os(iOS)
     @State private var showFileImporter: Bool = false
@@ -452,41 +450,8 @@ struct EnhancedMessageComposer: View {
                 .buttonStyle(.plain)
                 .disabled(isUploading)
                 #if os(macOS)
-                    .help("Attach files (upload via feature flag)")
+                    .help("Attach files")
                 #endif
-
-                // Local tools menu (web search, attachment analysis, generation)
-                Menu {
-                    Button("Search web for this") {
-                        runWebSearchTool()
-                    }
-                    Button("Summarize attachments") {
-                        runAnalyzeAttachmentsTool()
-                    }
-                    .disabled(attachments.isEmpty)
-                    Divider()
-                    Button("Generate image from message") {
-                        runGenerateImageTool()
-                    }
-                    Button("Generate file from message") {
-                        runGenerateFileTool()
-                    }
-                } label: {
-                    if isRunningTool {
-                        ProgressView()
-                            .controlSize(.small)
-                            .padding(Spacing.xs)
-                    } else {
-                        Image(systemName: "wand.and.stars")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.aicovenTextSecondary)
-                            .padding(Spacing.xs)
-                    }
-                }
-                .background(Color.aicovenGlass)
-                .cornerRadius(BorderRadius.sm)
-                .buttonStyle(.plain)
-                .disabled(isDisabled)
 
                 // Text input
                 #if os(macOS)
@@ -611,172 +576,17 @@ struct EnhancedMessageComposer: View {
 // MARK: - EnhancedMessageComposer Helper Methods
 
 extension EnhancedMessageComposer {
+    /// Send the message with all attached files to the onSend callback
     private func send() {
         let trimmed = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isDisabled, !trimmed.isEmpty else { return }
-        // Extract attachment IDs
-        let attachmentIds = attachments.map(\.id)
-        onSend(attachmentIds)
+        // Pass the full attachment details (including URLs) so the chat service can read file contents
+        onSend(attachments)
         // Clear attachments after send
         attachments.removeAll()
         // Reset mention state
         showMentionSuggestions = false
         mentionQuery = ""
-    }
-
-    // MARK: - Local tool wiring
-
-    /// Use DuckDuckGo-backed web search to enrich the current message text.
-    private func runWebSearchTool() {
-        let query = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return }
-
-        Task {
-            isRunningTool = true
-            do {
-                let results = try await ToolService.shared.webSearch(query: query, maxResults: 3)
-                guard !results.isEmpty else {
-                    isRunningTool = false
-                    return
-                }
-                let summaryLines = results.enumerated().map { idx, result in
-                    "\(idx + 1). \(result.title) — \(result.url.absoluteString)\n\(result.snippet)"
-                }
-                let block = "\n\n[Web search results]\n" + summaryLines.joined(separator: "\n\n")
-                await MainActor.run {
-                    messageText += block
-                    isRunningTool = false
-                }
-            } catch {
-                AppErrorReporter.log(error: error, context: "WorkspaceView.runWebSearchTool")
-                await MainActor.run {
-                    isRunningTool = false
-                }
-                Task { @MainActor in
-                    onErrorMessage?("Web search tool failed: \(error.localizedDescription)")
-                }
-            }
-        }
-    }
-
-    /// Run local analysis on currently attached files and append summaries
-    /// into the pending message text.
-    private func runAnalyzeAttachmentsTool() {
-        guard !attachments.isEmpty else { return }
-
-        let currentQuestion = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        Task {
-            isRunningTool = true
-            do {
-                var lines: [String] = []
-                for attachment in attachments {
-                    do {
-                        let hints = currentQuestion.isEmpty ? nil : "User question: \(currentQuestion)"
-                        let result = try await ToolService.shared.analyzeAttachment(attachment, hints: hints)
-                        let name = attachment.name
-                        lines.append("- \(name): \(result.textSummary)")
-                    } catch {
-                        AppErrorReporter.log(error: error, context: "WorkspaceView.runAnalyzeAttachmentsTool.attachment_\(attachment.id)")
-                        Task { @MainActor in
-                            onErrorMessage?("Attachment analysis failed for \(attachment.name): \(error.localizedDescription)")
-                        }
-                    }
-                }
-                guard !lines.isEmpty else {
-                    isRunningTool = false
-                    return
-                }
-                let block = "\n\n[Attachment analysis]\n" + lines.joined(separator: "\n")
-                await MainActor.run {
-                    messageText += block
-                    isRunningTool = false
-                }
-            } catch {
-                AppErrorReporter.log(error: error, context: "WorkspaceView.runAnalyzeAttachmentsTool")
-                await MainActor.run {
-                    isRunningTool = false
-                }
-                Task { @MainActor in
-                    onErrorMessage?("Attachment analysis tool failed: \(error.localizedDescription)")
-                }
-            }
-        }
-    }
-
-    /// Generate an image using the current message text as the prompt and
-    /// attach it locally so it can be sent with the next message.
-    private func runGenerateImageTool() {
-        let prompt = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty else { return }
-
-        Task {
-            isRunningTool = true
-            do {
-                let image = try await ToolService.shared.generateImage(prompt: prompt)
-                let name = "generated-image-\(image.id.prefix(8)).png"
-                let size = (try? image.url.resourceValues(forKeys: [.fileSizeKey]).fileSize)
-                let detail = FileAttachmentDetail(
-                    id: image.id,
-                    name: name,
-                    mimeType: "image/png",
-                    sizeBytes: size,
-                    width: nil,
-                    height: nil,
-                    url: image.url
-                )
-                await MainActor.run {
-                    attachments.append(detail)
-                    isRunningTool = false
-                }
-            } catch {
-                AppErrorReporter.log(error: error, context: "WorkspaceView.runGenerateImageTool")
-                await MainActor.run {
-                    isRunningTool = false
-                }
-                Task { @MainActor in
-                    onErrorMessage?("Image generation failed: \(error.localizedDescription)")
-                }
-            }
-        }
-    }
-
-    /// Generate a local text file from the current message text and attach it.
-    private func runGenerateFileTool() {
-        let text = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-
-        Task {
-            isRunningTool = true
-            do {
-                let id = UUID().uuidString
-                let name = "note-\(id.prefix(8)).txt"
-                let data = Data(text.utf8)
-                let file = try ToolService.shared.generateFile(name: name, mimeType: "text/plain", contents: data)
-                let size = (try? file.url.resourceValues(forKeys: [.fileSizeKey]).fileSize)
-                let detail = FileAttachmentDetail(
-                    id: file.id,
-                    name: name,
-                    mimeType: file.mimeType,
-                    sizeBytes: size,
-                    width: nil,
-                    height: nil,
-                    url: file.url
-                )
-                await MainActor.run {
-                    attachments.append(detail)
-                    isRunningTool = false
-                }
-            } catch {
-                AppErrorReporter.log(error: error, context: "WorkspaceView.runGenerateFileTool")
-                await MainActor.run {
-                    isRunningTool = false
-                }
-                Task { @MainActor in
-                    onErrorMessage?("File generation failed: \(error.localizedDescription)")
-                }
-            }
-        }
     }
 
     /// Update @mention suggestions based on the current message text.
