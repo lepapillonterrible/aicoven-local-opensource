@@ -36,9 +36,19 @@ final class ErrorReportingTests: XCTestCase {
         AppErrorReporter.use(reporter)
 
         // Write invalid JSON under the scoped usage entries key so decoding fails.
+        // UsageService uses UserScope.scopedKey() internally, so we must use the same.
         let defaults = UserDefaults.standard
-        let scopedKey = UserScope.scopedKey("local_usage.entries.v1")
+        let baseKey = "local_usage.entries.v1"
+        let scopedKey = UserScope.scopedKey(baseKey)
+
+        // Clean both keys first to ensure a clean state
+        defaults.removeObject(forKey: baseKey)
+        defaults.removeObject(forKey: scopedKey)
+        defaults.synchronize()
+
+        // Set corrupt data on the scoped key
         defaults.set("not-json".data(using: .utf8), forKey: scopedKey)
+        defaults.synchronize()
 
         // Calling any public API that reads entries should trigger a decode
         // failure but still succeed overall.
@@ -48,6 +58,11 @@ final class ErrorReportingTests: XCTestCase {
             reporter.errors.contains { $0.context == "UsageService.loadEntries.decodeEntries" },
             "Expected UsageService.loadEntries.decodeEntries to be logged when entries JSON is corrupt"
         )
+
+        // Cleanup
+        defaults.removeObject(forKey: baseKey)
+        defaults.removeObject(forKey: scopedKey)
+        defaults.synchronize()
     }
 
     func testPricingUpdateService_logsDecodeErrorAndReturnsEmpty() throws {

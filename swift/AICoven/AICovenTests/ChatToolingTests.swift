@@ -16,24 +16,35 @@ final class ChatToolingTests: XCTestCase {
     }
 
     func testCurrentMaxToolSteps_defaultsAndCap() {
-        // Use the scoped key that ChatService uses internally
-        let key = UserScope.scopedKey("chat_max_tool_steps")
+        // The key used by ChatService.currentMaxToolSteps() depends on UserScope.scopedKey(),
+        // which may return different values based on Firebase auth state.
+        // We get the scoped key at test time and use it consistently.
         let defaults = UserDefaults.standard
-        defaults.removeObject(forKey: key)
+        let baseKey = "chat_max_tool_steps"
+        let scopedKey = UserScope.scopedKey(baseKey)
+
+        // Clean up both possible keys at start to ensure clean state
+        defaults.removeObject(forKey: baseKey)
+        defaults.removeObject(forKey: scopedKey)
+        defaults.synchronize()
 
         // Default when unset is 5 (conservative to prevent tool thrash)
-        XCTAssertEqual(ChatService.currentMaxToolSteps(), 5)
+        XCTAssertEqual(ChatService.currentMaxToolSteps(), 5, "Default should be 5")
 
-        // Custom value within cap
-        defaults.set(3, forKey: key)
-        XCTAssertEqual(ChatService.currentMaxToolSteps(), 3)
+        // Custom value within cap - set using the same scoped key ChatService uses
+        defaults.set(3, forKey: scopedKey)
+        defaults.synchronize()
+        XCTAssertEqual(ChatService.currentMaxToolSteps(), 3, "Should respect custom value of 3")
 
         // Values above hard cap are clamped to 15
-        defaults.set(50, forKey: key)
-        XCTAssertEqual(ChatService.currentMaxToolSteps(), 15)
+        defaults.set(50, forKey: scopedKey)
+        defaults.synchronize()
+        XCTAssertEqual(ChatService.currentMaxToolSteps(), 15, "Should clamp values > 15 to 15")
 
-        // Cleanup
-        defaults.removeObject(forKey: key)
+        // Cleanup both possible keys
+        defaults.removeObject(forKey: baseKey)
+        defaults.removeObject(forKey: scopedKey)
+        defaults.synchronize()
     }
 
     func testMaybeForceSearchQuery_forWeatherRefusal() async {
