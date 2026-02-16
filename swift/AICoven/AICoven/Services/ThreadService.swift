@@ -18,14 +18,56 @@ actor ThreadService {
     private var persistenceURL: URL
 
     private init() {
+        // IMPORTANT: Do NOT load threads here. At init time, the Firebase user
+        // may not be authenticated yet, so UserScope.currentUserID returns nil
+        // and we'd load from the unscoped file, causing data leakage between users.
+        // Threads are loaded in reloadForCurrentUser() after authentication.
         persistenceURL = ThreadService.makePersistenceURL()
-        personalThreads = ThreadService.loadThreadsFromDisk(persistenceURL: persistenceURL)
+        // Start with empty array - will be populated after auth via reloadForCurrentUser()
+        personalThreads = []
     }
 
     /// Reload threads for the current user. Call after user switch.
     func reloadForCurrentUser() {
         persistenceURL = ThreadService.makePersistenceURL()
         personalThreads = ThreadService.loadThreadsFromDisk(persistenceURL: persistenceURL)
+
+        // Clean up any orphaned threads without a valid user ID.
+        // These may exist from before authentication was required.
+        cleanupOrphanedThreads()
+    }
+
+    /// Remove threads that don't belong to the current user.
+    /// This handles legacy threads created before auth was required.
+    private func cleanupOrphanedThreads() {
+        let currentUserID = UserScope.currentUserID
+        guard let currentUserID else {
+            // No user signed in - clear all threads to prevent data leakage
+            if !personalThreads.isEmpty {
+                AppErrorReporter.log(message: "Clearing \(personalThreads.count) threads - no authenticated user", context: "ThreadService.cleanupOrphanedThreads")
+                personalThreads = []
+                persistPersonalThreads()
+            }
+            return
+        }
+
+        // Remove threads with missing, invalid, or mismatched user IDs
+        let validUserIDs = [currentUserID] // Only current user's threads are valid
+        let orphanedCount = personalThreads.count(where: { thread in
+            thread.userId.isEmpty ||
+                thread.userId == "local-user" ||
+                !validUserIDs.contains(thread.userId)
+        })
+
+        if orphanedCount > 0 {
+            AppErrorReporter.log(message: "Removing \(orphanedCount) orphaned threads (invalid user ID)", context: "ThreadService.cleanupOrphanedThreads")
+            personalThreads.removeAll { thread in
+                thread.userId.isEmpty ||
+                    thread.userId == "local-user" ||
+                    !validUserIDs.contains(thread.userId)
+            }
+            persistPersonalThreads()
+        }
     }
 
     // MARK: - Persistence helpers
@@ -119,9 +161,16 @@ actor ThreadService {
             // Coven threads are persisted locally just like personal threads.
             AppErrorReporter.log(message: "Creating coven thread (covenId: \(covenId)) in local store", context: "ThreadService.createThread")
             let now = Date()
+            guard let currentUserID = await AuthService.shared.currentUser?.id else {
+                throw NSError(
+                    domain: "ThreadService",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Cannot create thread: no authenticated user"]
+                )
+            }
             let thread = await Thread(
                 id: UUID().uuidString,
-                userId: AuthService.shared.currentUser?.id ?? "local-user",
+                userId: currentUserID,
                 covenId: covenId,
                 title: title ?? "Coven Chat",
                 agentId: agentId,
@@ -141,9 +190,16 @@ actor ThreadService {
         } else {
             AppErrorReporter.log(message: "Creating personal thread in local store", context: "ThreadService.createThread")
             let now = Date()
+            guard let currentUserID = await AuthService.shared.currentUser?.id else {
+                throw NSError(
+                    domain: "ThreadService",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Cannot create thread: no authenticated user"]
+                )
+            }
             let thread = await Thread(
                 id: UUID().uuidString,
-                userId: AuthService.shared.currentUser?.id ?? "local-user",
+                userId: currentUserID,
                 covenId: nil,
                 title: title ?? "New Chat",
                 agentId: agentId,
@@ -169,29 +225,16 @@ actor ThreadService {
     /// Get a specific thread
     /// - Parameter threadId: The thread ID
     /// - Returns: The thread
+    /// - Throws: Error if thread not found or no authenticated user
     func getThread(threadId: String) async throws -> Thread {
         if let local = personalThreads.first(where: { $0.id == threadId }) {
             return local
         }
-        // For coven threads in the legacy app, just synthesize a placeholder
-        // so callers don't crash. In the local-first client these should not
-        // be used.
-        AppErrorReporter.log(message: "getThread(\(threadId)) called in local-only build – returning placeholder thread.", context: "ThreadService.getThread")
-        let now = Date()
-        return await Thread(
-            id: threadId,
-            userId: AuthService.shared.currentUser?.id ?? "local-user",
-            covenId: nil,
-            title: "Chat",
-            agentId: nil,
-            agentName: nil,
-            agentModel: nil,
-            isPinned: false,
-            isArchived: false,
-            messageCount: 0,
-            createdAt: now,
-            updatedAt: now,
-            lastMessageAt: nil
+        // Thread not found - throw error instead of returning placeholder
+        throw NSError(
+            domain: "ThreadService",
+            code: -1,
+            userInfo: [NSLocalizedDescriptionKey: "Thread not found: \(threadId)"]
         )
     }
 

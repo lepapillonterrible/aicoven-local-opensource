@@ -44,27 +44,40 @@ class StoreService: ObservableObject {
 
     // MARK: - Entitlement helpers
 
+    /// Whether user is authenticated. Entitlements require authentication.
+    private var isAuthenticated: Bool {
+        UserScope.currentUserID != nil
+    }
+
     var hasCreator: Bool {
-        purchasedProductIDs.contains(Self.creatorID) ||
+        // Require authentication - no entitlements for unauthenticated users
+        guard isAuthenticated else { return false }
+        return purchasedProductIDs.contains(Self.creatorID) ||
             purchasedProductIDs.contains(Self.everythingID)
     }
 
     var hasToolsPack: Bool {
-        purchasedProductIDs.contains(Self.toolsPackID) ||
+        // Require authentication - no entitlements for unauthenticated users
+        guard isAuthenticated else { return false }
+        return purchasedProductIDs.contains(Self.toolsPackID) ||
             purchasedProductIDs.contains(Self.everythingID)
     }
 
     var hasEverything: Bool {
-        purchasedProductIDs.contains(Self.everythingID)
+        // Require authentication - no entitlements for unauthenticated users
+        guard isAuthenticated else { return false }
+        return purchasedProductIDs.contains(Self.everythingID)
     }
 
     /// Check whether a specific feature is unlocked.
+    /// Returns false if user is not authenticated.
     func hasEntitlement(_ feature: PurchasableFeature) -> Bool {
+        guard isAuthenticated else { return false }
         switch feature {
         case .covens, .multipleAgents, .modelCustomization:
-            hasCreator
+            return hasCreator
         case .shellTool, .githubTool, .googleDriveTool:
-            hasToolsPack
+            return hasToolsPack
         }
     }
 
@@ -101,14 +114,24 @@ class StoreService: ObservableObject {
     }
 
     /// Reload entitlements for the current user. Call after user switch.
+    /// Requires authentication - clears entitlements if no user is signed in.
     func reloadForCurrentUser() async {
         await MainActor.run {
             // Clear cached purchases (they were for a different user)
             purchasedProductIDs = []
+
+            // Only load purchases if user is authenticated
+            guard UserScope.currentUserID != nil else {
+                AppErrorReporter.log(message: "Clearing purchases - no authenticated user", context: "StoreService.reloadForCurrentUser")
+                return
+            }
+
             // Load any cached purchases for this user
             loadPersistedPurchases()
         }
-        // Then refresh from StoreKit (which is Apple ID scoped)
+
+        // Only refresh from StoreKit if authenticated
+        guard UserScope.currentUserID != nil else { return }
         await refreshEntitlements()
     }
 
@@ -171,8 +194,15 @@ class StoreService: ObservableObject {
 
     // MARK: - Purchase
 
+    /// Purchase a product. Requires authentication.
     func purchase(_ product: Product) async {
         purchaseError = nil
+
+        // Require authentication before allowing purchase
+        guard UserScope.currentUserID != nil else {
+            purchaseError = "Please sign in to make a purchase."
+            return
+        }
 
         do {
             let result = try await product.purchase()

@@ -1,5 +1,6 @@
 import Foundation
 import FirebaseAuth
+import FirebaseCore
 
 /// Centralized helper for scoping local data stores (UserDefaults keys,
 /// Keychain service names, file paths) to the current Firebase user.
@@ -12,9 +13,12 @@ enum UserScope {
     // MARK: - Current User
 
     /// The Firebase UID of the currently signed-in user, or `nil` if
-    /// nobody is signed in.
+    /// nobody is signed in or Firebase is not configured.
     static var currentUserID: String? {
-        Auth.auth().currentUser?.uid
+        // Guard against accessing Auth before Firebase is configured
+        // (crashes in CI/test environments without valid GoogleService-Info.plist)
+        guard FirebaseApp.app() != nil else { return nil }
+        return Auth.auth().currentUser?.uid
     }
 
     // MARK: - Key Scoping
