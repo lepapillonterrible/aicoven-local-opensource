@@ -171,7 +171,7 @@ final class ChatAndAgentIntegrationTests: XCTestCase {
             message: "What time is it and check the web?",
             roleId: nil,
             providerAccountId: nil,
-            attachmentIds: nil,
+            attachments: nil,
             onPlanningDelta: onPlanningDelta,
             onToolEvent: onToolEvent,
             onAnswerDelta: onAnswerDelta,
