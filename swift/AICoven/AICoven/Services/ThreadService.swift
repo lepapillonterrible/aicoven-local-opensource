@@ -156,18 +156,19 @@ actor ThreadService {
     ///   - covenId: The coven ID (nil for personal thread)
     ///   - agentId: AI agent/role ID (optional)
     /// - Returns: The created thread
+    /// Fallback user ID for local-first mode when no Firebase user is authenticated.
+    /// This allows the app to work fully offline without requiring sign-in.
+    private static let localFallbackUserID = "local-user"
+
     func createThread(title: String? = nil, covenId: String? = nil, agentId: String? = nil, agentName: String? = nil) async throws -> Thread {
+        // Use authenticated user ID if available, otherwise fall back to local user ID.
+        // This allows the app to work in offline/local-first mode without Firebase.
+        let currentUserID = await AuthService.shared.currentUser?.id ?? Self.localFallbackUserID
+
         if let covenId {
             // Coven threads are persisted locally just like personal threads.
             AppErrorReporter.log(message: "Creating coven thread (covenId: \(covenId)) in local store", context: "ThreadService.createThread")
             let now = Date()
-            guard let currentUserID = await AuthService.shared.currentUser?.id else {
-                throw NSError(
-                    domain: "ThreadService",
-                    code: -1,
-                    userInfo: [NSLocalizedDescriptionKey: "Cannot create thread: no authenticated user"]
-                )
-            }
             let thread = await Thread(
                 id: UUID().uuidString,
                 userId: currentUserID,
@@ -190,13 +191,6 @@ actor ThreadService {
         } else {
             AppErrorReporter.log(message: "Creating personal thread in local store", context: "ThreadService.createThread")
             let now = Date()
-            guard let currentUserID = await AuthService.shared.currentUser?.id else {
-                throw NSError(
-                    domain: "ThreadService",
-                    code: -1,
-                    userInfo: [NSLocalizedDescriptionKey: "Cannot create thread: no authenticated user"]
-                )
-            }
             let thread = await Thread(
                 id: UUID().uuidString,
                 userId: currentUserID,
