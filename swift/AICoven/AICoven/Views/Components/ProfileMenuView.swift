@@ -59,6 +59,13 @@ struct ProfileMenuView: View {
             } label: {
                 Label("Terms & Conditions", systemImage: "doc.text")
             }
+
+            // Privacy Policy
+            Button {
+                onOpenTab?(.privacy)
+            } label: {
+                Label("Privacy Policy", systemImage: "hand.raised")
+            }
         } label: {
             // User avatar button
             UserAvatarButton()

@@ -8,7 +8,8 @@ enum EmbeddingServiceError: Error {
 
 /// Service responsible for computing embeddings via the configured LLM
 /// providers and wiring them into the local memory store.
-actor EmbeddingService {
+@MainActor
+final class EmbeddingService {
     static let shared = EmbeddingService()
 
     private let memoryRepository: MemoryRepository

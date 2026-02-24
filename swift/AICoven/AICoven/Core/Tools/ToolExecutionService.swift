@@ -55,7 +55,7 @@ actor ToolExecutionService {
     func execute(toolCall: ParsedToolCall, agentType: String, threadID: String? = nil) async -> ToolExecutionResult {
         // 1. Rate Limiting
         if isRateLimited() {
-            return .error(
+            return await .error(
                 tool: toolCall.name,
                 message: "Global tool rate limit exceeded. Please wait a moment.",
                 errorType: "rate_limit",
@@ -65,7 +65,7 @@ actor ToolExecutionService {
 
         // 2. Permission Check
         if !isToolAllowed(toolCall.name, for: agentType) {
-            return .permissionDenied(
+            return await .permissionDenied(
                 tool: toolCall.name,
                 message: "Tool '\(toolCall.name)' is not allowed for this agent type.",
                 helpfulInstructions: "This agent is not configured to use this tool."
@@ -76,7 +76,7 @@ actor ToolExecutionService {
         if requiresToolsPack(toolCall.name) {
             let entitled = await hasToolsPackEntitlement()
             if !entitled {
-                return .error(
+                return await .error(
                     tool: toolCall.name,
                     message: "The '\(toolCall.name)' tool requires the Tools Pack upgrade. Go to Profile → Upgrade to unlock shell, GitHub, and Google Drive tools.",
                     errorType: "entitlement_required",
@@ -91,14 +91,14 @@ actor ToolExecutionService {
         // --- File Tools ---
         case "file.read":
             guard let path = extractString(from: toolCall.args, key: "path") else {
-                return .validationError(tool: toolCall.name, message: "Missing required argument: 'path'")
+                return await .validationError(tool: toolCall.name, message: "Missing required argument: 'path'")
             }
             return await fileService.readFile(path: path)
 
         case "file.write":
             guard let path = extractString(from: toolCall.args, key: "path"),
                   let content = extractString(from: toolCall.args, key: "content") else {
-                return .validationError(tool: toolCall.name, message: "Missing required arguments: 'path' and 'content'")
+                return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'path' and 'content'")
             }
             return await fileService.writeFile(path: path, content: content)
 
@@ -112,7 +112,7 @@ actor ToolExecutionService {
         // --- Shell Tools ---
         case "shell.execute":
             guard let command = extractString(from: toolCall.args, key: "command") else {
-                return .validationError(tool: toolCall.name, message: "Missing required argument: 'command'")
+                return await .validationError(tool: toolCall.name, message: "Missing required argument: 'command'")
             }
             return await shellService.execute(command: command)
 
@@ -120,7 +120,7 @@ actor ToolExecutionService {
         case "web_search":
             // Route to existing ToolService but wrap in standard result
             guard let query = extractString(from: toolCall.args, key: "query") ?? extractString(from: toolCall.args, key: "input") else {
-                return .validationError(tool: toolCall.name, message: "Missing 'query' argument")
+                return await .validationError(tool: toolCall.name, message: "Missing 'query' argument")
             }
 
             // Heuristic: if query looks like a URL, use web_browse instead
@@ -132,25 +132,25 @@ actor ToolExecutionService {
                 // Use the injected toolService to enable mocking in tests.
                 let results = try await toolService.webSearch(query: query, maxResults: 5)
                 if results.isEmpty {
-                    return .success(tool: toolCall.name, result: ["status": AnyJSONValue("no_results")], contextBlock: "[Web Search] No results found for '\(query)'")
+                    return await .success(tool: toolCall.name, result: ["status": AnyJSONValue("no_results")], contextBlock: "[Web Search] No results found for '\(query)'")
                 }
 
                 let lines = results.enumerated().map { "\($0.offset + 1). \($0.element.title) - \($0.element.url)\n\($0.element.snippet)" }
                 let block = "[Web Search Results for '\(query)']\n" + lines.joined(separator: "\n\n")
 
-                return .success(tool: toolCall.name, result: ["count": AnyJSONValue(results.count)], contextBlock: block)
+                return await .success(tool: toolCall.name, result: ["count": AnyJSONValue(results.count)], contextBlock: block)
             } catch let error as NSError {
                 // Provide more detailed error info for debugging iOS issues
                 let message = "Web search failed: \(error.localizedDescription) (domain: \(error.domain), code: \(error.code))"
-                return .error(tool: toolCall.name, message: message)
+                return await .error(tool: toolCall.name, message: message)
             } catch {
-                return .error(tool: toolCall.name, message: "Web search failed: \(error.localizedDescription)")
+                return await .error(tool: toolCall.name, message: "Web search failed: \(error.localizedDescription)")
             }
 
         case "web_browse":
             guard let urlString = extractString(from: toolCall.args, key: "url"),
                   let url = URL(string: urlString) else {
-                return .validationError(tool: toolCall.name, message: "Missing or invalid 'url' argument")
+                return await .validationError(tool: toolCall.name, message: "Missing or invalid 'url' argument")
             }
             return await executeWebBrowse(url: url, toolName: toolCall.name)
 
@@ -167,7 +167,7 @@ actor ToolExecutionService {
             localFormatter.timeZone = tz
             let localISO8601 = localFormatter.string(from: now)
             let block = "[Current Time]\n\(localISO8601) (Zone: \(tz.identifier))"
-            return .success(tool: toolCall.name, result: ["iso8601": AnyJSONValue(localISO8601)], contextBlock: block)
+            return await .success(tool: toolCall.name, result: ["iso8601": AnyJSONValue(localISO8601)], contextBlock: block)
 
         // --- GitHub Tools ---
         case "github.listRepos", "github.list_repos":
@@ -214,7 +214,7 @@ actor ToolExecutionService {
             return await executeGoogleSheetsWriteValues(toolCall: toolCall)
 
         default:
-            return .error(
+            return await .error(
                 tool: toolCall.name,
                 message: "Unknown tool: \(toolCall.name)",
                 errorType: "unknown_tool",
@@ -228,29 +228,29 @@ actor ToolExecutionService {
     /// Execute github.listRepos
     private func executeGitHubListRepos(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .github) else {
-            return .error(tool: toolCall.name, message: "GitHub not connected. Please connect GitHub in Settings > Connected Apps.")
+            return await .error(tool: toolCall.name, message: "GitHub not connected. Please connect GitHub in Settings > Connected Apps.")
         }
 
         do {
             let repos = try await githubService.listRepos(accountId: account.id)
             let repoNames = repos.compactMap { $0["full_name"] as? String }
             let block = "[GitHub Repos]\n" + repoNames.joined(separator: "\n")
-            return .success(tool: toolCall.name, result: ["count": AnyJSONValue(repos.count)], contextBlock: block)
+            return await .success(tool: toolCall.name, result: ["count": AnyJSONValue(repos.count)], contextBlock: block)
         } catch {
-            return .error(tool: toolCall.name, message: error.localizedDescription)
+            return await .error(tool: toolCall.name, message: error.localizedDescription)
         }
     }
 
     /// Execute github.readFile
     private func executeGitHubReadFile(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .github) else {
-            return .error(tool: toolCall.name, message: "GitHub not connected.")
+            return await .error(tool: toolCall.name, message: "GitHub not connected.")
         }
 
         guard let owner = extractString(from: toolCall.args, key: "owner"),
               let repo = extractString(from: toolCall.args, key: "repo"),
               let path = extractString(from: toolCall.args, key: "path") else {
-            return .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo', 'path'")
+            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo', 'path'")
         }
 
         let ref = extractString(from: toolCall.args, key: "ref")
@@ -264,16 +264,16 @@ actor ToolExecutionService {
                 ref: ref
             )
             let block = "[GitHub File: \(owner)/\(repo)/\(path)]\n\(content)"
-            return .success(tool: toolCall.name, result: ["path": AnyJSONValue(path)], contextBlock: block)
+            return await .success(tool: toolCall.name, result: ["path": AnyJSONValue(path)], contextBlock: block)
         } catch {
-            return .error(tool: toolCall.name, message: error.localizedDescription)
+            return await .error(tool: toolCall.name, message: error.localizedDescription)
         }
     }
 
     /// Execute github.writeFile
     private func executeGitHubWriteFile(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .github) else {
-            return .error(tool: toolCall.name, message: "GitHub not connected.")
+            return await .error(tool: toolCall.name, message: "GitHub not connected.")
         }
 
         guard let owner = extractString(from: toolCall.args, key: "owner"),
@@ -281,7 +281,7 @@ actor ToolExecutionService {
               let path = extractString(from: toolCall.args, key: "path"),
               let content = extractString(from: toolCall.args, key: "content"),
               let message = extractString(from: toolCall.args, key: "message") else {
-            return .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo', 'path', 'content', 'message'")
+            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo', 'path', 'content', 'message'")
         }
 
         let branch = extractString(from: toolCall.args, key: "branch")
@@ -299,21 +299,21 @@ actor ToolExecutionService {
                 sha: sha
             )
             let block = "[GitHub File Written: \(owner)/\(repo)/\(path)]\nCommit message: \(message)"
-            return .success(tool: toolCall.name, result: ["path": AnyJSONValue(path)], contextBlock: block)
+            return await .success(tool: toolCall.name, result: ["path": AnyJSONValue(path)], contextBlock: block)
         } catch {
-            return .error(tool: toolCall.name, message: error.localizedDescription)
+            return await .error(tool: toolCall.name, message: error.localizedDescription)
         }
     }
 
     /// Execute github.listFiles
     private func executeGitHubListFiles(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .github) else {
-            return .error(tool: toolCall.name, message: "GitHub not connected.")
+            return await .error(tool: toolCall.name, message: "GitHub not connected.")
         }
 
         guard let owner = extractString(from: toolCall.args, key: "owner"),
               let repo = extractString(from: toolCall.args, key: "repo") else {
-            return .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo'")
+            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo'")
         }
 
         let path = extractString(from: toolCall.args, key: "path") ?? ""
@@ -329,23 +329,23 @@ actor ToolExecutionService {
             )
             let fileNames = files.compactMap { $0["name"] as? String }
             let block = "[GitHub Files: \(owner)/\(repo)/\(path)]\n" + fileNames.joined(separator: "\n")
-            return .success(tool: toolCall.name, result: ["count": AnyJSONValue(files.count)], contextBlock: block)
+            return await .success(tool: toolCall.name, result: ["count": AnyJSONValue(files.count)], contextBlock: block)
         } catch {
-            return .error(tool: toolCall.name, message: error.localizedDescription)
+            return await .error(tool: toolCall.name, message: error.localizedDescription)
         }
     }
 
     /// Execute github.createBranch
     private func executeGitHubCreateBranch(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .github) else {
-            return .error(tool: toolCall.name, message: "GitHub not connected.")
+            return await .error(tool: toolCall.name, message: "GitHub not connected.")
         }
 
         guard let owner = extractString(from: toolCall.args, key: "owner"),
               let repo = extractString(from: toolCall.args, key: "repo"),
               let baseBranch = extractString(from: toolCall.args, key: "base_branch") ?? extractString(from: toolCall.args, key: "baseBranch"),
               let newBranch = extractString(from: toolCall.args, key: "new_branch") ?? extractString(from: toolCall.args, key: "newBranch") else {
-            return .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo', 'base_branch', 'new_branch'")
+            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo', 'base_branch', 'new_branch'")
         }
 
         do {
@@ -360,16 +360,16 @@ actor ToolExecutionService {
             let block = alreadyExisted
                 ? "[GitHub Branch] Branch '\(newBranch)' already exists in \(owner)/\(repo)"
                 : "[GitHub Branch Created] '\(newBranch)' from '\(baseBranch)' in \(owner)/\(repo)"
-            return .success(tool: toolCall.name, result: ["branch": AnyJSONValue(newBranch)], contextBlock: block)
+            return await .success(tool: toolCall.name, result: ["branch": AnyJSONValue(newBranch)], contextBlock: block)
         } catch {
-            return .error(tool: toolCall.name, message: error.localizedDescription)
+            return await .error(tool: toolCall.name, message: error.localizedDescription)
         }
     }
 
     /// Execute github.createPR
     private func executeGitHubCreatePR(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .github) else {
-            return .error(tool: toolCall.name, message: "GitHub not connected.")
+            return await .error(tool: toolCall.name, message: "GitHub not connected.")
         }
 
         guard let owner = extractString(from: toolCall.args, key: "owner"),
@@ -377,7 +377,7 @@ actor ToolExecutionService {
               let title = extractString(from: toolCall.args, key: "title"),
               let head = extractString(from: toolCall.args, key: "head"),
               let base = extractString(from: toolCall.args, key: "base") else {
-            return .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo', 'title', 'head', 'base'")
+            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo', 'title', 'head', 'base'")
         }
 
         let body = extractString(from: toolCall.args, key: "body")
@@ -395,20 +395,20 @@ actor ToolExecutionService {
             let prNumber = result["number"] as? Int ?? 0
             let htmlUrl = result["html_url"] as? String ?? ""
             let block = "[GitHub PR Created] #\(prNumber): \(title)\n\(htmlUrl)"
-            return .success(tool: toolCall.name, result: ["pr_number": AnyJSONValue(prNumber), "url": AnyJSONValue(htmlUrl)], contextBlock: block)
+            return await .success(tool: toolCall.name, result: ["pr_number": AnyJSONValue(prNumber), "url": AnyJSONValue(htmlUrl)], contextBlock: block)
         } catch {
-            return .error(tool: toolCall.name, message: error.localizedDescription)
+            return await .error(tool: toolCall.name, message: error.localizedDescription)
         }
     }
 
     /// Execute github.searchCode
     private func executeGitHubSearchCode(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .github) else {
-            return .error(tool: toolCall.name, message: "GitHub not connected.")
+            return await .error(tool: toolCall.name, message: "GitHub not connected.")
         }
 
         guard let query = extractString(from: toolCall.args, key: "query") else {
-            return .validationError(tool: toolCall.name, message: "Missing required argument: 'query'")
+            return await .validationError(tool: toolCall.name, message: "Missing required argument: 'query'")
         }
 
         do {
@@ -416,21 +416,21 @@ actor ToolExecutionService {
             let items = result["items"] as? [[String: Any]] ?? []
             let paths = items.compactMap { $0["path"] as? String }
             let block = "[GitHub Code Search: \(query)]\n" + paths.prefix(20).joined(separator: "\n")
-            return .success(tool: toolCall.name, result: ["total_count": AnyJSONValue(result["total_count"] as? Int ?? 0)], contextBlock: block)
+            return await .success(tool: toolCall.name, result: ["total_count": AnyJSONValue(result["total_count"] as? Int ?? 0)], contextBlock: block)
         } catch {
-            return .error(tool: toolCall.name, message: error.localizedDescription)
+            return await .error(tool: toolCall.name, message: error.localizedDescription)
         }
     }
 
     /// Execute github.getPR - fetch pull request details including title, body, state, and diff info
     private func executeGitHubGetPR(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .github) else {
-            return .error(tool: toolCall.name, message: "GitHub not connected. Please connect GitHub in Settings > Connected Apps.")
+            return await .error(tool: toolCall.name, message: "GitHub not connected. Please connect GitHub in Settings > Connected Apps.")
         }
 
         guard let owner = extractString(from: toolCall.args, key: "owner"),
               let repo = extractString(from: toolCall.args, key: "repo") else {
-            return .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo'")
+            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo'")
         }
 
         // Accept pull_number as int or string
@@ -446,7 +446,7 @@ actor ToolExecutionService {
                   let num = Int(numStr) {
             pullNumber = num
         } else {
-            return .validationError(tool: toolCall.name, message: "Missing required argument: 'pull_number'")
+            return await .validationError(tool: toolCall.name, message: "Missing required argument: 'pull_number'")
         }
 
         do {
@@ -479,7 +479,7 @@ actor ToolExecutionService {
             \(body.isEmpty ? "(No description)" : body)
             """
 
-            return .success(
+            return await .success(
                 tool: toolCall.name,
                 result: [
                     "number": AnyJSONValue(pullNumber),
@@ -497,7 +497,7 @@ actor ToolExecutionService {
     /// Execute github.listPRFiles - list files changed in a pull request with patches
     private func executeGitHubListPRFiles(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .github) else {
-            return .error(tool: toolCall.name, message: "GitHub not connected. Please connect GitHub in Settings > Connected Apps.")
+            return await .error(tool: toolCall.name, message: "GitHub not connected. Please connect GitHub in Settings > Connected Apps.")
         }
 
         guard let owner = extractString(from: toolCall.args, key: "owner"),
@@ -518,7 +518,7 @@ actor ToolExecutionService {
                   let num = Int(numStr) {
             pullNumber = num
         } else {
-            return .validationError(tool: toolCall.name, message: "Missing required argument: 'pull_number'")
+            return await .validationError(tool: toolCall.name, message: "Missing required argument: 'pull_number'")
         }
 
         do {
@@ -552,13 +552,13 @@ actor ToolExecutionService {
 
             let block = "[GitHub PR #\(pullNumber) Files (\(files.count) changed)]\n\n" + fileDetails.joined(separator: "\n\n")
 
-            return .success(
+            return await .success(
                 tool: toolCall.name,
                 result: ["count": AnyJSONValue(files.count)],
                 contextBlock: block
             )
         } catch {
-            return .error(tool: toolCall.name, message: error.localizedDescription)
+            return await .error(tool: toolCall.name, message: error.localizedDescription)
         }
     }
 
@@ -576,20 +576,20 @@ actor ToolExecutionService {
             let response = try await googleDriveService.listFiles(accountId: account.id, query: query)
             let fileNames = response.files.map { "\($0.name) (\($0.mimeType ?? "unknown"))" }
             let block = "[Google Drive Files]\n" + fileNames.joined(separator: "\n")
-            return .success(tool: toolCall.name, result: ["count": AnyJSONValue(response.files.count)], contextBlock: block)
+            return await .success(tool: toolCall.name, result: ["count": AnyJSONValue(response.files.count)], contextBlock: block)
         } catch {
-            return .error(tool: toolCall.name, message: error.localizedDescription)
+            return await .error(tool: toolCall.name, message: error.localizedDescription)
         }
     }
 
     /// Execute google_drive.readFile
     private func executeGoogleDriveReadFile(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .googleDrive) else {
-            return .error(tool: toolCall.name, message: "Google Drive not connected.")
+            return await .error(tool: toolCall.name, message: "Google Drive not connected.")
         }
 
         guard let fileId = extractString(from: toolCall.args, key: "file_id") ?? extractString(from: toolCall.args, key: "fileId") else {
-            return .validationError(tool: toolCall.name, message: "Missing required argument: 'file_id'")
+            return await .validationError(tool: toolCall.name, message: "Missing required argument: 'file_id'")
         }
 
         let exportMimeType = extractString(from: toolCall.args, key: "export_mime_type") ?? "text/plain"
@@ -602,21 +602,21 @@ actor ToolExecutionService {
             )
             let content = String(data: data, encoding: .utf8) ?? "<binary content>"
             let block = "[Google Drive File: \(fileId)]\n\(content.prefix(5000))"
-            return .success(tool: toolCall.name, result: ["file_id": AnyJSONValue(fileId)], contextBlock: block)
+            return await .success(tool: toolCall.name, result: ["file_id": AnyJSONValue(fileId)], contextBlock: block)
         } catch {
-            return .error(tool: toolCall.name, message: error.localizedDescription)
+            return await .error(tool: toolCall.name, message: error.localizedDescription)
         }
     }
 
     /// Execute google_drive.uploadFile
     private func executeGoogleDriveUploadFile(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .googleDrive) else {
-            return .error(tool: toolCall.name, message: "Google Drive not connected.")
+            return await .error(tool: toolCall.name, message: "Google Drive not connected.")
         }
 
         guard let name = extractString(from: toolCall.args, key: "name"),
               let content = extractString(from: toolCall.args, key: "content") else {
-            return .validationError(tool: toolCall.name, message: "Missing required arguments: 'name', 'content'")
+            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'name', 'content'")
         }
 
         let mimeType = extractString(from: toolCall.args, key: "mime_type") ?? "text/plain"
@@ -629,21 +629,21 @@ actor ToolExecutionService {
                 content: content.data(using: .utf8) ?? Data()
             )
             let block = "[Google Drive File Uploaded]\nName: \(file.name)\nID: \(file.id)"
-            return .success(tool: toolCall.name, result: ["file_id": AnyJSONValue(file.id)], contextBlock: block)
+            return await .success(tool: toolCall.name, result: ["file_id": AnyJSONValue(file.id)], contextBlock: block)
         } catch {
-            return .error(tool: toolCall.name, message: error.localizedDescription)
+            return await .error(tool: toolCall.name, message: error.localizedDescription)
         }
     }
 
     /// Execute google_sheets.readValues
     private func executeGoogleSheetsReadValues(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .googleDrive) else {
-            return .error(tool: toolCall.name, message: "Google Drive not connected.")
+            return await .error(tool: toolCall.name, message: "Google Drive not connected.")
         }
 
         guard let spreadsheetId = extractString(from: toolCall.args, key: "spreadsheet_id") ?? extractString(from: toolCall.args, key: "spreadsheetId"),
               let range = extractString(from: toolCall.args, key: "range") else {
-            return .validationError(tool: toolCall.name, message: "Missing required arguments: 'spreadsheet_id', 'range'")
+            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'spreadsheet_id', 'range'")
         }
 
         do {
@@ -654,26 +654,26 @@ actor ToolExecutionService {
             )
             let formatted = values.map { $0.joined(separator: "\t") }.joined(separator: "\n")
             let block = "[Google Sheets: \(range)]\n\(formatted)"
-            return .success(tool: toolCall.name, result: ["row_count": AnyJSONValue(values.count)], contextBlock: block)
+            return await .success(tool: toolCall.name, result: ["row_count": AnyJSONValue(values.count)], contextBlock: block)
         } catch {
-            return .error(tool: toolCall.name, message: error.localizedDescription)
+            return await .error(tool: toolCall.name, message: error.localizedDescription)
         }
     }
 
     /// Execute google_sheets.writeValues
     private func executeGoogleSheetsWriteValues(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .googleDrive) else {
-            return .error(tool: toolCall.name, message: "Google Drive not connected.")
+            return await .error(tool: toolCall.name, message: "Google Drive not connected.")
         }
 
         guard let spreadsheetId = extractString(from: toolCall.args, key: "spreadsheet_id") ?? extractString(from: toolCall.args, key: "spreadsheetId"),
               let range = extractString(from: toolCall.args, key: "range") else {
-            return .validationError(tool: toolCall.name, message: "Missing required arguments: 'spreadsheet_id', 'range'")
+            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'spreadsheet_id', 'range'")
         }
 
         // Parse values from args - expecting array of arrays
         guard let valuesArg = toolCall.args["values"]?.value as? [[Any]] else {
-            return .validationError(tool: toolCall.name, message: "Missing or invalid 'values' argument (expected array of arrays)")
+            return await .validationError(tool: toolCall.name, message: "Missing or invalid 'values' argument (expected array of arrays)")
         }
 
         let values = valuesArg.map { row in row.map { String(describing: $0) } }
@@ -686,9 +686,9 @@ actor ToolExecutionService {
                 values: values
             )
             let block = "[Google Sheets Updated: \(range)]\nWrote \(values.count) rows"
-            return .success(tool: toolCall.name, result: ["updated_rows": AnyJSONValue(values.count)], contextBlock: block)
+            return await .success(tool: toolCall.name, result: ["updated_rows": AnyJSONValue(values.count)], contextBlock: block)
         } catch {
-            return .error(tool: toolCall.name, message: error.localizedDescription)
+            return await .error(tool: toolCall.name, message: error.localizedDescription)
         }
     }
 
@@ -705,7 +705,7 @@ actor ToolExecutionService {
             // Use ToolService.shared directly to avoid iOS initialization issues
             let result = try await ToolService.shared.webBrowse(url: url)
             let block = "[Web Browse: \(result.title ?? "No Title")]\nURL: \(result.url.absoluteString)\n\n\(result.content)"
-            return .success(
+            return await .success(
                 tool: toolName,
                 result: [
                     "url": AnyJSONValue(result.url.absoluteString),
@@ -719,7 +719,7 @@ actor ToolExecutionService {
             let message = "Web browse failed: \(error.localizedDescription) (domain: \(error.domain), code: \(error.code))"
             return .error(tool: toolName, message: message)
         } catch {
-            return .error(tool: toolName, message: "Web browse failed: \(error.localizedDescription)")
+            return await .error(tool: toolName, message: "Web browse failed: \(error.localizedDescription)")
         }
     }
 

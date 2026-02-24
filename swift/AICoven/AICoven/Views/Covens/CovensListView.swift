@@ -138,14 +138,124 @@ struct NewCovenView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    TextField("Coven Name", text: $name)
-                    TextField("Description (optional)", text: $description, axis: .vertical)
-                        .lineLimit(3 ... 6)
+            ZStack {
+                NebulaBackground()
+
+                ScrollView {
+                    VStack(spacing: Spacing.lg) {
+                        // Header
+                        VStack(spacing: Spacing.sm) {
+                            IconBadge(icon: "sparkles", size: 80, color: .aicovenPurple)
+
+                            Text("Create a Coven")
+                                .font(.aicovenDisplaySmall)
+                                .foregroundColor(.aicovenTextPrimary)
+
+                            Text("Collaborate with multiple AI roles in a shared workspace")
+                                .font(.aicovenBody)
+                                .foregroundColor(.aicovenTextSecondary)
+                                .multilineTextAlignment(.center)
+                                .frame(maxWidth: 400)
+                        }
+                        .padding(.top, Spacing.xl)
+
+                        // Form
+                        VStack(spacing: Spacing.md) {
+                            // Name field
+                            VStack(alignment: .leading, spacing: Spacing.xs) {
+                                Text("Coven Name")
+                                    .font(.aicovenBodyMedium)
+                                    .foregroundColor(.aicovenTextPrimary)
+
+                                TextField("", text: $name, prompt: Text("My Project").foregroundColor(.aicovenTextTertiary))
+                                    .font(.aicovenBody)
+                                    .foregroundColor(.aicovenTextPrimary)
+                                    .padding(Spacing.sm)
+                                    .background(Color.aicovenGlass)
+                                    .cornerRadius(BorderRadius.md)
+                            }
+
+                            // Description field
+                            VStack(alignment: .leading, spacing: Spacing.xs) {
+                                Text("Description (Optional)")
+                                    .font(.aicovenBodyMedium)
+                                    .foregroundColor(.aicovenTextPrimary)
+
+                                TextField("", text: $description, prompt: Text("What's this coven for?").foregroundColor(.aicovenTextTertiary), axis: .vertical)
+                                    .font(.aicovenBody)
+                                    .foregroundColor(.aicovenTextPrimary)
+                                    .padding(Spacing.sm)
+                                    .background(Color.aicovenGlass)
+                                    .cornerRadius(BorderRadius.md)
+                                    .lineLimit(3 ... 6)
+                            }
+                        }
+                        .padding(.horizontal, Spacing.xl)
+                        .glassMorphism()
+                        .padding(.horizontal, Spacing.lg)
+
+                        // Error message
+                        if let errorMessage {
+                            Text(errorMessage)
+                                .font(.aicovenBodySmall)
+                                .foregroundColor(.aicovenError)
+                                .padding(.horizontal, Spacing.lg)
+                        }
+
+                        // Actions
+                        HStack(spacing: Spacing.md) {
+                            // Cancel button
+                            Button("Cancel") {
+                                dismiss()
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.horizontal, Spacing.lg)
+                            .padding(.vertical, Spacing.sm)
+                            .background(Color.aicovenGlass)
+                            .foregroundColor(.aicovenTeal)
+                            .cornerRadius(BorderRadius.md)
+
+                            Button(action: {
+                                Task {
+                                    await createCoven()
+                                }
+                            }) {
+                                HStack(spacing: Spacing.xs) {
+                                    if isCreating {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                            .tint(.white)
+                                    }
+                                    Text(isCreating ? "Creating..." : "Create Coven")
+                                        .font(.aicovenBodyMedium)
+                                }
+                                .padding(.horizontal, Spacing.lg)
+                                .padding(.vertical, Spacing.sm)
+                                .frame(minWidth: 150)
+                                .background(
+                                    Group {
+                                        if name.isEmpty {
+                                            Color.aicovenGlass
+                                        } else {
+                                            LinearGradient(
+                                                colors: [Color.aicovenTeal, Color.aicovenPurple],
+                                                startPoint: .leading,
+                                                endPoint: .trailing
+                                            )
+                                        }
+                                    }
+                                )
+                                .foregroundColor(.white)
+                                .cornerRadius(BorderRadius.md)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(name.isEmpty || isCreating)
+                        }
+                        .padding(.horizontal, Spacing.lg)
+                    }
+                    .padding(.bottom, Spacing.xl)
                 }
             }
-            .disabled(isCreating)
             .navigationTitle("New Coven")
             #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
@@ -155,25 +265,6 @@ struct NewCovenView: View {
                         Button("Cancel") {
                             dismiss()
                         }
-                    }
-
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Create") {
-                            Task {
-                                await createCoven()
-                            }
-                        }
-                        .disabled(name.isEmpty || isCreating)
-                    }
-                }
-                .alert("Error", isPresented: Binding(
-                    get: { errorMessage != nil },
-                    set: { if !$0 { errorMessage = nil } }
-                )) {
-                    Button("OK", role: .cancel) {}
-                } message: {
-                    if let errorMessage {
-                        Text(errorMessage)
                     }
                 }
         }

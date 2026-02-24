@@ -16,8 +16,8 @@ struct LLMConfiguration: Sendable {
     /// knows how to build clients; it no longer hardcodes any model IDs.
     /// Builds LLMClient instances for providers that have API keys configured.
     /// Keys are expected to be cached in UserDefaults by ProviderAccountService.
-    /// This method is nonisolated since UserDefaults.standard is thread-safe.
-    nonisolated static func makeDefaultClients() -> [String: LLMClient] {
+    /// This method is implicitly MainActor since it accesses UserScope.
+    static func makeDefaultClients() -> [String: LLMClient] {
         var result: [String: LLMClient] = [:]
         let defaults = UserDefaults.standard
 
@@ -49,8 +49,7 @@ struct LLMConfiguration: Sendable {
 
     /// Returns only the configured clients. ModelDescriptors are now provided
     /// by ProviderAccountService based on live ListModels responses.
-    /// This method is nonisolated since it only calls nonisolated methods.
-    nonisolated static func makeEnvironment() -> (models: [ModelDescriptor], clients: [String: LLMClient]) {
+    static func makeEnvironment() -> (models: [ModelDescriptor], clients: [String: LLMClient]) {
         let clients = makeDefaultClients()
         return ([], clients)
     }

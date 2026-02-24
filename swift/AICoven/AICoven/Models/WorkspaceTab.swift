@@ -21,6 +21,8 @@ enum WorkspaceTabType: Equatable {
     case store
     /// Terms of Service tab
     case terms
+    /// Privacy Policy tab
+    case privacy
 
     static func == (lhs: WorkspaceTabType, rhs: WorkspaceTabType) -> Bool {
         switch (lhs, rhs) {
@@ -46,7 +48,8 @@ enum WorkspaceTabType: Equatable {
              (.connectedApps, .connectedApps),
              (.personalStrixSettings, .personalStrixSettings),
              (.store, .store),
-             (.terms, .terms):
+             (.terms, .terms),
+             (.privacy, .privacy):
             true
         default:
             false
@@ -71,6 +74,7 @@ enum WorkspaceTabType: Equatable {
         case .personalStrixSettings: "personal_strix_settings"
         case .store: "store"
         case .terms: "terms"
+        case .privacy: "privacy"
         }
     }
 }
@@ -226,6 +230,15 @@ struct WorkspaceTab: Identifiable, Equatable {
             id: "terms",
             type: .terms,
             title: "Terms & Conditions"
+        )
+    }
+
+    /// Tab for Privacy Policy
+    static var privacy: WorkspaceTab {
+        WorkspaceTab(
+            id: "privacy",
+            type: .privacy,
+            title: "Privacy Policy"
         )
     }
 }

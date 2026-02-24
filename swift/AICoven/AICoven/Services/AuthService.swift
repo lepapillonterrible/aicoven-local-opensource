@@ -77,6 +77,17 @@ class AuthService: ObservableObject {
                     // Reload all services for the newly signed-in user to ensure
                     // user-scoped data isolation (prevents seeing other users' data)
                     await ThreadService.shared.reloadForCurrentUser()
+
+                    // One-time cleanup: clear stale test purchases that were cached
+                    // during automated testing. This runs once per user.
+                    let cleanupKey = "StoreService.didCleanupStalePurchases.\(firebaseUser.uid)"
+                    if !UserDefaults.standard.bool(forKey: cleanupKey) {
+                        await MainActor.run {
+                            StoreService.shared.clearStalePurchasesForCurrentUser()
+                            UserDefaults.standard.set(true, forKey: cleanupKey)
+                        }
+                    }
+
                     await StoreService.shared.reloadForCurrentUser()
                     await ChatService.shared.reloadForCurrentUser()
                 } else {

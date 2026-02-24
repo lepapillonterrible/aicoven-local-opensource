@@ -256,6 +256,7 @@ struct EnhancedSettingsView: View {
         }
         .sheet(isPresented: $showConnectedApps) {
             ConnectedAppsView()
+                .environmentObject(StoreService.shared)
         }
     }
 

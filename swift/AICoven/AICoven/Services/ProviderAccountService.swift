@@ -1,6 +1,10 @@
 import Foundation
 import Security
 
+extension Notification.Name {
+    static let providerKeysUpdated = Notification.Name("ProviderKeysUpdated")
+}
+
 /// Lightweight local representation of a provider account (BYOK).
 ///
 /// This is the persisted form stored on disk/UserDefaults. It deliberately
@@ -147,6 +151,8 @@ actor ProviderAccountService {
         try KeychainHelper.save(key: keychainKey(for: id), value: apiKey)
         updateGlobalAPIKeyCache(provider: provider, apiKey: apiKey)
 
+        await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
+
         return ProviderAccount(from: local)
     }
 
@@ -176,6 +182,8 @@ actor ProviderAccountService {
 
         // Cache base URL so LLMConfiguration can build the OllamaLLMClient.
         updateGlobalAPIKeyCache(provider: "ollama", apiKey: baseURL)
+
+        await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
 
         return ProviderAccount(from: local)
     }
@@ -208,6 +216,8 @@ actor ProviderAccountService {
         // on first chat via MLXLLMClient.ensureModelLoaded().
         await MLXModelManager.shared.setActiveModel(modelID)
 
+        await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
+
         return ProviderAccount(from: local)
     }
 
@@ -229,6 +239,8 @@ actor ProviderAccountService {
         if !remainingForProvider {
             clearGlobalAPIKeyCache(provider: removed.provider)
         }
+
+        await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
     }
 
     /// Get initialization status for a provider account, including a list of
@@ -333,8 +345,11 @@ actor ProviderAccountService {
 
         // ── MLX local models ─────────────────────────────────────────────
         // MLX models don't come from a remote API, so inject descriptors
-        // for any active/downloaded model directly.
-        if let activeMLX = UserDefaults.standard.string(forKey: "MLXModelManager.activeModelID"), !activeMLX.isEmpty {
+        // for any active/downloaded model directly—but ONLY if the user
+        // actually has an MLX provider account configured.
+        let hasMLXAccount = locals.contains { $0.provider.lowercased() == "mlx" }
+        if hasMLXAccount,
+           let activeMLX = UserDefaults.standard.string(forKey: "MLXModelManager.activeModelID"), !activeMLX.isEmpty {
             descriptors.append(
                 ModelDescriptor(
                     providerID: "mlx",
@@ -483,7 +498,7 @@ extension ProviderAccountService {
             }
         case "google", "gemini":
             // Gemini / Google AI
-            guard let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) ?? UserDefaults.standard.string(forKey: UserScope.scopedKey("gemini_api_key")) else {
+            guard let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) else {
                 throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing Gemini API key for account \(account.id)"])
             }
             struct GeminiListResponse: Decodable {
@@ -562,6 +577,45 @@ extension ProviderAccountService {
                     name: info.displayName,
                     provider: "mlx",
                     contextLength: 128_000
+                )
+            }
+        case "anthropic":
+            guard let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) else {
+                throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing Anthropic API key for account \(account.id)"])
+            }
+            struct AnthropicListResponse: Decodable {
+                struct Item: Decodable { let id: String
+                    let display_name: String?
+                }
+
+                let data: [Item]?
+            }
+            var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/models")!)
+            request.httpMethod = "GET"
+            request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
+                let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
+                throw NSError(
+                    domain: "ProviderAccountService",
+                    code: http.statusCode,
+                    userInfo: [NSLocalizedDescriptionKey: "Anthropic models HTTP \(http.statusCode): \(body)"]
+                )
+            }
+            let decoded = try JSONDecoder().decode(AnthropicListResponse.self, from: data)
+            let modelsData = decoded.data ?? []
+            let chatOnly = modelsData
+                .map(\.id)
+                .filter { isChatModel(provider: "anthropic", id: $0) }
+            let models = chatOnly.isEmpty ? modelsData.map(\.id) : chatOnly
+            return models.map { id in
+                ProviderInitializationStatus.ModelMetadata(
+                    id: id,
+                    name: modelsData.first(where: { $0.id == id })?.display_name ?? id,
+                    provider: "anthropic",
+                    contextLength: nil
                 )
             }
         default:

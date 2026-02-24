@@ -80,7 +80,7 @@ actor FileToolService {
 
         // Check if path is blocked
         if isPathBlocked(resolvedPath) {
-            return .permissionDenied(
+            return await .permissionDenied(
                 tool: "file.read",
                 message: "Access to system directories is not allowed: \(resolvedPath)",
                 helpfulInstructions: "File operations are restricted to user directories like ~/Documents, ~/Desktop, or project folders."
@@ -91,7 +91,7 @@ actor FileToolService {
 
         // Check if file exists
         guard fileManager.fileExists(atPath: resolvedPath) else {
-            return .error(
+            return await .error(
                 tool: "file.read",
                 message: "File not found: \(resolvedPath)",
                 errorType: "file_not_found",
@@ -103,7 +103,7 @@ actor FileToolService {
         var isDirectory: ObjCBool = false
         fileManager.fileExists(atPath: resolvedPath, isDirectory: &isDirectory)
         if isDirectory.boolValue {
-            return .validationError(
+            return await .validationError(
                 tool: "file.read",
                 message: "Path is a directory, not a file: \(resolvedPath)",
                 field: "path",
@@ -115,7 +115,7 @@ actor FileToolService {
         do {
             let attributes = try fileManager.attributesOfItem(atPath: resolvedPath)
             if let fileSize = attributes[.size] as? Int, fileSize > maxReadSize {
-                return .error(
+                return await .error(
                     tool: "file.read",
                     message: "File too large (\(fileSize) bytes). Maximum size is \(maxReadSize) bytes.",
                     errorType: "file_too_large"
@@ -132,7 +132,7 @@ actor FileToolService {
             // Try to decode as UTF-8 text
             if let content = String(data: data, encoding: .utf8) {
                 let contextBlock = "[File contents: \(resolvedPath)]\n\(content)"
-                return .success(
+                return await .success(
                     tool: "file.read",
                     result: [
                         "path": AnyJSONValue(resolvedPath),
@@ -144,7 +144,7 @@ actor FileToolService {
                 )
             } else {
                 // Binary file
-                return .success(
+                return await .success(
                     tool: "file.read",
                     result: [
                         "path": AnyJSONValue(resolvedPath),
@@ -156,7 +156,7 @@ actor FileToolService {
                 )
             }
         } catch {
-            return .error(
+            return await .error(
                 tool: "file.read",
                 message: "Failed to read file: \(error.localizedDescription)",
                 errorType: "read_error"
@@ -188,7 +188,7 @@ actor FileToolService {
 
         // Check if path is blocked
         if isPathBlocked(resolvedPath) {
-            return .permissionDenied(
+            return await .permissionDenied(
                 tool: "file.write",
                 message: "Writing to system directories is not allowed: \(resolvedPath)",
                 helpfulInstructions: "File operations are restricted to user directories like ~/Documents, ~/Desktop, or project folders."
@@ -198,7 +198,7 @@ actor FileToolService {
         // Check content size
         let data = content.data(using: .utf8) ?? Data()
         if data.count > maxWriteSize {
-            return .error(
+            return await .error(
                 tool: "file.write",
                 message: "Content too large (\(data.count) bytes). Maximum size is \(maxWriteSize) bytes.",
                 errorType: "content_too_large"
@@ -214,7 +214,7 @@ actor FileToolService {
             do {
                 try fileManager.createDirectory(at: parentDir, withIntermediateDirectories: true)
             } catch {
-                return .error(
+                return await .error(
                     tool: "file.write",
                     message: "Failed to create parent directories: \(error.localizedDescription)",
                     errorType: "directory_error"
@@ -225,7 +225,7 @@ actor FileToolService {
         // Write the file
         do {
             try data.write(to: url)
-            return .success(
+            return await .success(
                 tool: "file.write",
                 result: [
                     "path": AnyJSONValue(resolvedPath),
@@ -235,7 +235,7 @@ actor FileToolService {
                 contextBlock: "[File written: \(resolvedPath)] - \(data.count) bytes"
             )
         } catch {
-            return .error(
+            return await .error(
                 tool: "file.write",
                 message: "Failed to write file: \(error.localizedDescription)",
                 errorType: "write_error"
@@ -267,7 +267,7 @@ actor FileToolService {
 
         // Check if path is blocked
         if isPathBlocked(resolvedPath) {
-            return .permissionDenied(
+            return await .permissionDenied(
                 tool: "file.list",
                 message: "Access to system directories is not allowed: \(resolvedPath)",
                 helpfulInstructions: "File operations are restricted to user directories like ~/Documents, ~/Desktop, or project folders."
@@ -279,7 +279,7 @@ actor FileToolService {
         // Check if path exists
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: resolvedPath, isDirectory: &isDirectory) else {
-            return .error(
+            return await .error(
                 tool: "file.list",
                 message: "Path not found: \(resolvedPath)",
                 errorType: "path_not_found"
@@ -287,7 +287,7 @@ actor FileToolService {
         }
 
         guard isDirectory.boolValue else {
-            return .validationError(
+            return await .validationError(
                 tool: "file.list",
                 message: "Path is a file, not a directory: \(resolvedPath)",
                 field: "path",
@@ -350,7 +350,7 @@ actor FileToolService {
 
             let contextBlock = "[Directory listing: \(resolvedPath)]\n\(fileList)"
 
-            return .success(
+            return await .success(
                 tool: "file.list",
                 result: [
                     "path": AnyJSONValue(resolvedPath),
@@ -363,7 +363,7 @@ actor FileToolService {
                 contextBlock: contextBlock
             )
         } catch {
-            return .error(
+            return await .error(
                 tool: "file.list",
                 message: "Failed to list directory: \(error.localizedDescription)",
                 errorType: "list_error"
@@ -522,7 +522,7 @@ actor FileToolService {
                 )
             }
 
-            return .error(
+            return await .error(
                 tool: tool,
                 message: "Access to '\(resolvedPath)' has not been granted. Please add this folder in Settings > File Access, or grant access when prompted.",
                 errorType: "folder_not_authorized",

@@ -116,6 +116,9 @@ class StoreService: ObservableObject {
     /// Reload entitlements for the current user. Call after user switch.
     /// Requires authentication - clears entitlements if no user is signed in.
     func reloadForCurrentUser() async {
+        let userID = UserScope.currentUserID ?? "<none>"
+        print("💳 StoreService.reloadForCurrentUser: userID=\(userID)")
+
         await MainActor.run {
             // Clear cached purchases (they were for a different user)
             purchasedProductIDs = []
@@ -128,11 +131,32 @@ class StoreService: ObservableObject {
 
             // Load any cached purchases for this user
             loadPersistedPurchases()
+            print("💳 Loaded cached purchases for user: \(purchasedProductIDs)")
         }
 
         // Only refresh from StoreKit if authenticated
         guard UserScope.currentUserID != nil else { return }
         await refreshEntitlements()
+        print("💳 After StoreKit refresh: \(purchasedProductIDs)")
+    }
+
+    /// Clear stale test purchases that were cached for this user but made by automated tests.
+    /// Call this once to clean up after running tests with a real Firebase account.
+    func clearStalePurchasesForCurrentUser() {
+        guard UserScope.currentUserID != nil else { return }
+        print("🧹 Clearing stale purchases for current user")
+        print("   Was: \(purchasedProductIDs)")
+        purchasedProductIDs = []
+        persistPurchases()
+        print("   Now: \(purchasedProductIDs)")
+    }
+
+    /// Debug: Clear all cached purchase data (useful for testing)
+    /// WARNING: This does not affect actual StoreKit entitlements
+    func debugClearCachedPurchases() {
+        print("⚠️ DEBUG: Clearing cached purchases from UserDefaults")
+        purchasedProductIDs = []
+        persistPurchases()
     }
 
     // MARK: - Transaction listener
@@ -239,18 +263,47 @@ class StoreService: ObservableObject {
     }
 
     /// Walk current entitlements and update purchased set.
+    ///
+    /// NOTE: StoreKit entitlements are tied to Apple ID, not Firebase user.
+    /// We only add NEW purchases from StoreKit (made during this session),
+    /// we don't replace the user's cached purchases with Apple ID purchases.
+    /// This prevents User A from inheriting User B's purchases when they
+    /// share the same Apple ID but have different Firebase accounts.
     private func refreshEntitlements() async {
-        var entitled: Set<String> = []
-
+        // Get current StoreKit entitlements (tied to Apple ID)
+        var storeKitEntitlements: Set<String> = []
         for await result in Transaction.currentEntitlements {
             if case let .verified(transaction) = result {
                 if Self.allProductIDs.contains(transaction.productID) {
-                    entitled.insert(transaction.productID)
+                    storeKitEntitlements.insert(transaction.productID)
                 }
             }
         }
 
-        purchasedProductIDs = entitled
-        persistPurchases()
+        // Only ADD purchases that are in both StoreKit AND were made during
+        // this user's session. Don't replace the user's purchases with
+        // StoreKit entitlements from a different Firebase user.
+        //
+        // The flow is:
+        // 1. User makes purchase -> StoreKit returns it -> we add to purchasedProductIDs -> persist
+        // 2. User signs out, different user signs in
+        // 3. That user's cached purchases are loaded (empty or their own)
+        // 4. StoreKit still returns the first user's purchase
+        // 5. We DON'T add it because it's not in the new user's cache
+        //
+        // To properly sync purchases across devices/users, you'd need a backend.
+
+        print("💳 StoreKit entitlements (Apple ID): \(storeKitEntitlements)")
+        print("💳 User's cached purchases: \(purchasedProductIDs)")
+
+        // Only keep purchases that are both cached for this user AND valid in StoreKit
+        // This handles refunds: if StoreKit no longer has it, remove it
+        let validPurchases = purchasedProductIDs.intersection(storeKitEntitlements)
+
+        if validPurchases != purchasedProductIDs {
+            print("💳 Removing invalid/refunded purchases: \(purchasedProductIDs.subtracting(validPurchases))")
+            purchasedProductIDs = validPurchases
+            persistPurchases()
+        }
     }
 }

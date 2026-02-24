@@ -312,6 +312,8 @@ struct OnboardingFlowView: View {
 /// Step 1: Privacy by Default / encryption overview
 private struct PrivacyStepView: View {
     @Binding var accepted: Bool
+    @State private var showTermsOfService = false
+    @State private var showPrivacyPolicy = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.lg) {
@@ -359,9 +361,31 @@ private struct PrivacyStepView: View {
             }
 
             Toggle(isOn: $accepted) {
-                Text("I understand that if I lose my encryption keys, AICoven cannot recover my data.")
-                    .font(.aicovenBodySmall)
-                    .foregroundColor(.aicovenTextSecondary)
+                VStack(alignment: .leading, spacing: Spacing.xs) {
+                    Text("I understand that if I lose my encryption keys, AICoven cannot recover my data.")
+                        .font(.aicovenBodySmall)
+                        .foregroundColor(.aicovenTextSecondary)
+
+                    Button {
+                        showPrivacyPolicy = true
+                    } label: {
+                        Text("Read our Privacy Policy")
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTeal)
+                            .underline()
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        showTermsOfService = true
+                    } label: {
+                        Text("Read our Terms of Service")
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTeal)
+                            .underline()
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .onChange(of: accepted) { _, newValue in
                 if newValue {
@@ -370,6 +394,30 @@ private struct PrivacyStepView: View {
                         properties: [:]
                     )
                 }
+            }
+        }
+        .sheet(isPresented: $showTermsOfService) {
+            NavigationStack {
+                TermsOfServiceView()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") {
+                                showTermsOfService = false
+                            }
+                        }
+                    }
+            }
+        }
+        .sheet(isPresented: $showPrivacyPolicy) {
+            NavigationStack {
+                PrivacyPolicyView()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") {
+                                showPrivacyPolicy = false
+                            }
+                        }
+                    }
             }
         }
     }
@@ -395,7 +443,7 @@ private struct KeysStepView: View {
             InfoCard(
                 icon: "wand.and.stars",
                 title: "Add Your Provider Keys",
-                text: "AICoven doesn't resell AI models. You'll connect your own API keys so you stay in control of cost, data, and model choice."
+                text: "AICoven doesn't resell AI models. You'll connect your own API keys. Data is sent to providers only when you interact with them."
             )
 
             InfoCard(
@@ -447,7 +495,7 @@ private struct KeysStepView: View {
                 .foregroundColor(.aicovenTextSecondary)
 
             Toggle(isOn: $accepted) {
-                Text("I understand that I am responsible for my own API billing and usage across connected providers.")
+                Text("I consent to sharing my prompts, message content, and conversation context with the specific third-party AI providers I configure (e.g. OpenAI, Anthropic, Google) for AI processing.")
                     .font(.aicovenBodySmall)
                     .foregroundColor(.aicovenTextSecondary)
             }

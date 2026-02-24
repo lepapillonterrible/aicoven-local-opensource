@@ -117,6 +117,13 @@ struct WorkspaceSidebarView: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .didCreateThread)) { _ in
+            Task {
+                if let covenId = selectedCoven?.id {
+                    await loadThreads(covenId: covenId)
+                }
+            }
+        }
         .sheet(isPresented: $showNewCovenSheet) {
             // Use CreateCovenSheet which checks Creator entitlement
             CreateCovenSheet(onCreated: { _ in

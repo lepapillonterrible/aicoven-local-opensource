@@ -223,6 +223,11 @@ struct PersonalWorkspaceView: View {
                 selectedThread = nil
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .didCreateThread)) { _ in
+            Task {
+                await onRefreshThreads()
+            }
+        }
     }
 
     private func handleNewThread() {

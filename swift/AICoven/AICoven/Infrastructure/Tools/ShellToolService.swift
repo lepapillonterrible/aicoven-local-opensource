@@ -67,7 +67,7 @@ actor ShellToolService {
 
         // Check if command is blocked
         if isCommandBlocked(command) {
-            return .permissionDenied(
+            return await .permissionDenied(
                 tool: "shell.execute",
                 message: "This command is blocked for safety reasons: \(command)",
                 helpfulInstructions: "Commands that could cause system damage are not allowed. Try a safer alternative."
@@ -91,7 +91,7 @@ actor ShellToolService {
         case .approve, .approveAlways:
             break // Continue to execution
         case let .deny(reason):
-            return .denied(tool: "shell.execute", reason: reason)
+            return await .denied(tool: "shell.execute", reason: reason)
         }
 
         // Execute the command
@@ -233,7 +233,7 @@ actor ShellToolService {
         // Handle launch failure
         switch result {
         case let .failure(error):
-            return .error(
+            return await .error(
                 tool: "shell.execute",
                 message: "Failed to start command: \(error.localizedDescription)",
                 errorType: "execution_failed"
@@ -253,7 +253,7 @@ actor ShellToolService {
 
         // Check if timed out
         if didTimeout {
-            return .timeout(tool: "shell.execute", timeoutSeconds: timeoutSeconds)
+            return await .timeout(tool: "shell.execute", timeoutSeconds: timeoutSeconds)
         }
 
         // Read output
@@ -290,7 +290,7 @@ actor ShellToolService {
         let contextBlock = contextLines.joined(separator: "\n")
 
         if exitCode == 0 {
-            return .success(
+            return await .success(
                 tool: "shell.execute",
                 result: [
                     "exit_code": AnyJSONValue(Int(exitCode)),
@@ -318,7 +318,7 @@ actor ShellToolService {
         }
         #else
         // Shell execution is not available on iOS
-        return .error(
+        return await .error(
             tool: "shell.execute",
             message: "Shell command execution is only available on macOS.",
             errorType: "platform_unsupported"

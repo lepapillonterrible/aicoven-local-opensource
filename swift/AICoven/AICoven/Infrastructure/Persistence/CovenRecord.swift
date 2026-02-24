@@ -201,7 +201,7 @@ actor CovenRepository {
 
         let now = Date()
         let id = UUID().uuidString
-        let uid = UserScope.currentUserID
+        let uid = await UserScope.currentUserID
         let record = CovenRecord(
             id: id,
             name: name,
@@ -231,9 +231,12 @@ actor CovenRepository {
     func loadCovens() async throws -> [Coven] {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
+        // Fetch user ID outside the synchronous database closure
+        let uid = await UserScope.currentUserID
+
         let records: [CovenRecord] = try await dbQueue.read { db in
             var request = CovenRecord.order(CovenRecord.Columns.createdAt.desc)
-            if let uid = UserScope.currentUserID {
+            if let uid {
                 request = request.filter(CovenRecord.Columns.userId == uid)
             }
             return try request.fetchAll(db)
@@ -294,11 +297,14 @@ actor CovenRepository {
     func loadRoles(covenId: String) async throws -> [Role] {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
+        // Fetch user ID outside the synchronous database closure
+        let uid = await UserScope.currentUserID
+
         let records: [RoleRecord] = try await dbQueue.read { db in
             var request = RoleRecord
                 .filter(RoleRecord.Columns.covenId == covenId)
                 .order(RoleRecord.Columns.createdAt.asc)
-            if let uid = UserScope.currentUserID {
+            if let uid {
                 request = request.filter(RoleRecord.Columns.userId == uid)
             }
             return try request.fetchAll(db)
@@ -359,7 +365,7 @@ actor CovenRepository {
             }
         }
 
-        let record = RoleRecord(
+        let record = await RoleRecord(
             id: id,
             covenId: covenId,
             name: name,

@@ -940,6 +940,11 @@ actor ChatService {
                 messages.append(LLMMessage(role: role, content: msg.content))
             }
 
+            messages.append(LLMMessage(
+                role: .user,
+                content: "Please provide the concise 3-6 bullet point summary of our conversation now."
+            ))
+
             let routingContext = RoutingContext(
                 task: .chat,
                 requireLocalOnly: false,
@@ -985,19 +990,23 @@ actor ChatService {
         let provider = UserDefaults.standard.string(forKey: UserScope.scopedKey("llm_provider"))?.lowercased() ?? "openai"
         switch provider {
         case "anthropic":
-            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("anthropic_model")) ?? "claude-3-5-sonnet-20241022"
+            let fallback = modelRouter.fallbackModel(for: "anthropic") ?? "claude-3-5-sonnet-latest"
+            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("anthropic_model")) ?? fallback
             return ("anthropic", model)
         case "google", "gemini":
-            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("gemini_model")) ?? "gemini-1.5-pro"
+            let fallback = modelRouter.fallbackModel(for: "google") ?? "gemini-1.5-pro"
+            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("gemini_model")) ?? fallback
             return ("google", model)
         case "mlx":
             let model = UserDefaults.standard.string(forKey: "MLXModelManager.activeModelID") ?? "mlx-community/Qwen3-4B-4bit"
             return ("mlx", model)
         case "ollama":
-            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model")) ?? "llama3.2"
+            let fallback = modelRouter.fallbackModel(for: "ollama") ?? "llama3.2"
+            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model")) ?? fallback
             return ("ollama", model)
         default:
-            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("openai_model")) ?? "gpt-4o"
+            let fallback = modelRouter.fallbackModel(for: "openai") ?? "gpt-4o"
+            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("openai_model")) ?? fallback
             return ("openai", model)
         }
     }

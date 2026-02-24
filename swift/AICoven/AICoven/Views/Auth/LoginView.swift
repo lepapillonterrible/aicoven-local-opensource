@@ -19,6 +19,8 @@ struct LoginView: View {
     @State private var confirmPasswordFieldFocused = false
     @State private var isPasswordVisible = false
     @State private var isConfirmPasswordVisible = false
+    @State private var showTermsOfService = false
+    @State private var showPrivacyPolicy = false
 
     enum AuthMode {
         case signin, signup
@@ -26,8 +28,7 @@ struct LoginView: View {
 
     var body: some View {
         ZStack {
-            Color.aicovenDark
-                .ignoresSafeArea()
+            NebulaBackground()
 
             if mode == .signup {
                 signupContent
@@ -42,6 +43,30 @@ struct LoginView: View {
         }
         .sheet(isPresented: $showForgotPassword) {
             ForgotPasswordView()
+        }
+        .sheet(isPresented: $showTermsOfService) {
+            NavigationStack {
+                TermsOfServiceView()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") {
+                                showTermsOfService = false
+                            }
+                        }
+                    }
+            }
+        }
+        .sheet(isPresented: $showPrivacyPolicy) {
+            NavigationStack {
+                PrivacyPolicyView()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") {
+                                showPrivacyPolicy = false
+                            }
+                        }
+                    }
+            }
         }
     }
 
@@ -362,6 +387,35 @@ private extension LoginView {
                     .padding(.bottom, 40)
                 }
                 .frame(maxWidth: .infinity)
+
+                // Footer with Terms & Privacy
+                VStack(spacing: Spacing.xs) {
+                    Text("By continuing, you agree to our")
+                        .font(.aicovenCaption)
+                        .foregroundColor(.aicovenTextSecondary)
+
+                    HStack(spacing: Spacing.xs) {
+                        Button { self.showTermsOfService = true } label: {
+                            Text("Terms of Service")
+                                .font(.aicovenCaption)
+                                .foregroundColor(.aicovenTeal)
+                                .underline()
+                        }
+
+                        Text("and")
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextSecondary)
+
+                        Button { self.showPrivacyPolicy = true } label: {
+                            Text("Privacy Policy")
+                                .font(.aicovenCaption)
+                                .foregroundColor(.aicovenTeal)
+                                .underline()
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.bottom, Spacing.lg)
             }
         }
     }
@@ -530,6 +584,35 @@ private extension LoginView {
                     .padding(.bottom, 40)
                 }
                 .frame(maxWidth: .infinity)
+
+                // Footer with Terms & Privacy
+                VStack(spacing: Spacing.xs) {
+                    Text("By continuing, you agree to our")
+                        .font(.aicovenCaption)
+                        .foregroundColor(.aicovenTextSecondary)
+
+                    HStack(spacing: Spacing.xs) {
+                        Button { self.showTermsOfService = true } label: {
+                            Text("Terms of Service")
+                                .font(.aicovenCaption)
+                                .foregroundColor(.aicovenTeal)
+                                .underline()
+                        }
+
+                        Text("and")
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextSecondary)
+
+                        Button { self.showPrivacyPolicy = true } label: {
+                            Text("Privacy Policy")
+                                .font(.aicovenCaption)
+                                .foregroundColor(.aicovenTeal)
+                                .underline()
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.bottom, Spacing.lg)
             }
         }
     }

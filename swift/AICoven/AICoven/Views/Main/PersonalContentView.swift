@@ -131,6 +131,7 @@ struct PersonalContentView: View {
                     }
                 }
             )
+            .environmentObject(StoreService.shared)
         case let .memoryList(covenId):
             // Personal memory list for the local workspace (no coven).
             MemoryListView(
@@ -151,8 +152,11 @@ struct PersonalContentView: View {
             .onAppear { AnalyticsService.shared.trackMemoryProposalViewed() }
         case .store:
             StoreView()
+                .environmentObject(StoreService.shared)
         case .terms:
             TermsOfServiceView()
+        case .privacy:
+            PrivacyPolicyView()
         default:
             EmptyView()
         }
@@ -192,6 +196,8 @@ struct PersonalContentView: View {
             tab = .store
         case .terms:
             tab = .terms
+        case .privacy:
+            tab = .privacy
         default:
             return
         }
@@ -486,6 +492,11 @@ struct PersonalChatView: View {
 
             await loadInitialMessages()
             await loadProviderKeys()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .providerKeysUpdated)) { _ in
+            Task {
+                await loadProviderKeys()
+            }
         }
     }
 

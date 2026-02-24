@@ -45,11 +45,13 @@ struct AICovenApp: App {
                 } else if !isEncryptionUnlocked {
                     // First check auth, then unlock encryption with user-scoped keys.
                     if !authService.isAuthenticated, !authService.isLoading {
-                        LoginView()
-                            .environmentObject(authService)
-                            .environmentObject(AppState.shared)
-                            .environmentObject(StoreService.shared)
-                            .transition(.opacity)
+                        NavigationStack {
+                            LoginView()
+                                .environmentObject(authService)
+                                .environmentObject(AppState.shared)
+                                .environmentObject(StoreService.shared)
+                        }
+                        .transition(.opacity)
                     } else if authService.isLoading {
                         LoadingView(message: "Loading...")
                     } else {

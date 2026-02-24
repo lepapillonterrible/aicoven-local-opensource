@@ -24,8 +24,7 @@ struct ToolEnvironment: Sendable {
 
     /// Build a ToolEnvironment from the current LLMConfiguration. This only
     /// inspects providers for which we actually have API keys configured.
-    /// This method is nonisolated since LLMConfiguration.makeEnvironment() is nonisolated.
-    nonisolated static func make() -> ToolEnvironment {
+    static func make() -> ToolEnvironment {
         let env = LLMConfiguration.makeEnvironment()
         let clients = env.clients
         let models = env.models

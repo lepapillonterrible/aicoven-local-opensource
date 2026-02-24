@@ -68,11 +68,17 @@ public protocol ModelRouter: Sendable {
     func route(for context: RoutingContext) -> ModelDescriptor?
     /// Look up a specific model by provider and model ID.
     func findExact(providerID: String, modelID: String) -> ModelDescriptor?
+    /// Return an available fallback model ID for the given provider.
+    func fallbackModel(for providerID: String) -> String?
 }
 
 public extension ModelRouter {
     /// Default implementation returns nil (no match).
     func findExact(providerID: String, modelID: String) -> ModelDescriptor? {
+        nil
+    }
+
+    func fallbackModel(for providerID: String) -> String? {
         nil
     }
 }
@@ -85,6 +91,10 @@ public final class HeuristicModelRouter: ModelRouter, @unchecked Sendable {
 
     public init(availableModels: [ModelDescriptor]) {
         self.availableModels = availableModels
+    }
+
+    public func fallbackModel(for providerID: String) -> String? {
+        availableModels.first(where: { $0.providerID == providerID })?.modelID
     }
 
     public func findExact(providerID: String, modelID: String) -> ModelDescriptor? {

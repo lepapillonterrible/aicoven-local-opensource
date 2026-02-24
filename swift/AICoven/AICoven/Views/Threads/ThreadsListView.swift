@@ -83,6 +83,11 @@ struct ThreadsListView: View {
                 await loadThreads()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .didCreateThread)) { _ in
+            Task {
+                await loadThreads()
+            }
+        }
     }
 
     /// Load threads from the local ThreadService (personal workspace only).

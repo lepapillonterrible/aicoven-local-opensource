@@ -85,6 +85,28 @@ struct StoreView: View {
                             .foregroundColor(.aicovenTeal)
                     }
                     .buttonStyle(.plain)
+                    .padding(.bottom, Spacing.lg)
+
+                    // Legal Links
+                    HStack(spacing: Spacing.md) {
+                        NavigationLink(destination: TermsOfServiceView()) {
+                            Text("Terms of Service")
+                                .font(.aicovenCaption)
+                                .foregroundColor(.aicovenTextTertiary)
+                                .underline()
+                        }
+
+                        Text("•")
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextTertiary)
+
+                        NavigationLink(destination: PrivacyPolicyView()) {
+                            Text("Privacy Policy")
+                                .font(.aicovenCaption)
+                                .foregroundColor(.aicovenTextTertiary)
+                                .underline()
+                        }
+                    }
                     .padding(.bottom, Spacing.xl)
                 }
             }

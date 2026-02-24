@@ -30,7 +30,7 @@ struct PrivacyPolicyView: View {
             .padding(.horizontal, Spacing.lg)
             .padding(.vertical, Spacing.xl)
         }
-        .background(Color.aicovenDark)
+        .background(NebulaBackground())
         .navigationTitle("Privacy Policy")
         #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

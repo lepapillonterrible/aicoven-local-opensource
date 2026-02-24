@@ -28,7 +28,7 @@ struct TermsOfServiceView: View {
             .padding(.horizontal, Spacing.lg)
             .padding(.vertical, Spacing.xl)
         }
-        .background(Color.aicovenDark)
+        .background(NebulaBackground())
         .navigationTitle("Terms of Service")
         #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

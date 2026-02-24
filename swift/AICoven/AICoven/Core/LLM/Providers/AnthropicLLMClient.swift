@@ -54,6 +54,7 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
         struct RequestBody: Encodable {
             let model: String
             let max_tokens: Int
+            let system: String?
             let messages: [RequestMessage]
             let temperature: Double
             let tools: [ToolDef]?
@@ -86,7 +87,10 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
         request.addValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.addValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
-        let reqMessages = messages.map { msg in
+        let systemContent = messages.filter { $0.role == .system }.map(\.content).joined(separator: "\n\n")
+        let finalSystem = systemContent.isEmpty ? nil : systemContent
+
+        let reqMessages = messages.filter { $0.role != .system }.map { msg in
             RequestMessage(
                 role: msg.role == .user ? "user" : "assistant",
                 content: [MessageContent(text: msg.content)]
@@ -94,6 +98,7 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
         }
 
         // Convert LLMToolDefinition → Anthropic native format
+        var anthropicToOriginalName: [String: String] = [:]
         let toolDefs: [ToolDef]? = options.tools?.isEmpty == false ? options.tools!.map { tool in
             var props: [String: SchemaProperty] = [:]
             var requiredParams: [String] = []
@@ -101,8 +106,13 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
                 props[param.name] = SchemaProperty(type: param.type, description: param.description)
                 if param.required { requiredParams.append(param.name) }
             }
+
+            // Anthropic strictly requires tool names to match ^[a-zA-Z0-9_-]{1,128}$
+            let sanitizedName = tool.name.replacingOccurrences(of: ".", with: "_")
+            anthropicToOriginalName[sanitizedName] = tool.name
+
             return ToolDef(
-                name: tool.name,
+                name: sanitizedName,
                 description: tool.description,
                 input_schema: InputSchema(type: "object", properties: props, required: requiredParams)
             )
@@ -111,6 +121,7 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
         let body = RequestBody(
             model: model,
             max_tokens: options.maxTokens ?? 4096,
+            system: finalSystem,
             messages: reqMessages,
             temperature: options.temperature,
             tools: toolDefs
@@ -156,7 +167,8 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
         if !toolUseBlocks.isEmpty {
             toolCalls = toolUseBlocks.compactMap { block in
                 guard let name = block.name else { return nil }
-                return LLMToolCall(name: name, arguments: block.input ?? [:])
+                let originalName = anthropicToOriginalName[name] ?? name
+                return LLMToolCall(name: originalName, arguments: block.input ?? [:])
             }
         }
 

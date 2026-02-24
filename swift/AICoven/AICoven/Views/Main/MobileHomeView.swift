@@ -93,7 +93,7 @@ struct MobileHomeView: View {
             if isLoadingThreads {
                 CauldronLoadingView(message: "Loading workspace...", size: 80)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.aicovenDark)
+                    .background(NebulaBackground())
             } else {
                 MobilePersonalWorkspace(
                     personalThreads: $personalThreads,
@@ -489,12 +489,10 @@ struct MobileCovensRootView: View {
                             .foregroundColor(.aicovenTextSecondary)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, Spacing.lg)
-                        Button {
+                        // Use GradientButton directly with action (not wrapped in Button)
+                        GradientButton("Create Coven", icon: "plus", style: .primary) {
                             showCreateCoven = true
-                        } label: {
-                            GradientButton("Create Coven", icon: "plus", style: .primary) {}
                         }
-                        .buttonStyle(.plain)
                     }
                     .padding(Spacing.xl)
                     // First-time coven onboarding: when the user opens the
@@ -940,6 +938,15 @@ struct MobileProfileRootView: View {
                         NavigationLink(destination: StoreView()) {
                             Label("Upgrade", systemImage: "sparkles")
                                 .foregroundColor(.aicovenTeal)
+                        }
+                    }
+
+                    Section("Legal") {
+                        NavigationLink(destination: TermsOfServiceView()) {
+                            Label("Terms & Conditions", systemImage: "doc.text")
+                        }
+                        NavigationLink(destination: PrivacyPolicyView()) {
+                            Label("Privacy Policy", systemImage: "hand.raised")
                         }
                     }
                 }

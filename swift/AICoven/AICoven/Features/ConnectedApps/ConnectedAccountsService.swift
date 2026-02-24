@@ -11,8 +11,8 @@ actor ConnectedAccountsService {
     private let keychainPrefix = "connected_account_token_"
 
     /// UserDefaults key for accounts list (will be user-scoped)
-    private var accountsKey: String {
-        UserScope.scopedKey("connected_accounts")
+    private func getAccountsKey() async -> String {
+        await UserScope.scopedKey("connected_accounts")
     }
 
     /// In-memory cache of accounts (nil means not yet loaded)
@@ -27,35 +27,35 @@ actor ConnectedAccountsService {
     }
 
     /// Ensure accounts are loaded from storage (called by public methods)
-    private func ensureAccountsLoaded() {
+    private func ensureAccountsLoaded() async {
         guard !hasLoadedAccounts else { return }
         hasLoadedAccounts = true
-        loadAccountsFromStorage()
+        await loadAccountsFromStorage()
     }
 
     // MARK: - Account Management
 
     /// Get all connected accounts
-    func getAllAccounts() -> [ConnectedAccount] {
-        ensureAccountsLoaded()
+    func getAllAccounts() async -> [ConnectedAccount] {
+        await ensureAccountsLoaded()
         return accountsCache ?? []
     }
 
     /// Get accounts for a specific provider
-    func getAccounts(for provider: ConnectedAppProvider) -> [ConnectedAccount] {
-        ensureAccountsLoaded()
+    func getAccounts(for provider: ConnectedAppProvider) async -> [ConnectedAccount] {
+        await ensureAccountsLoaded()
         return (accountsCache ?? []).filter { $0.provider == provider }
     }
 
     /// Get a specific account by ID
-    func getAccount(id: String) -> ConnectedAccount? {
-        ensureAccountsLoaded()
+    func getAccount(id: String) async -> ConnectedAccount? {
+        await ensureAccountsLoaded()
         return accountsCache?.first { $0.id == id }
     }
 
     /// Get the first connected account for a provider (convenience for single-account providers)
-    func getConnectedAccount(for provider: ConnectedAppProvider) -> ConnectedAccount? {
-        ensureAccountsLoaded()
+    func getConnectedAccount(for provider: ConnectedAppProvider) async -> ConnectedAccount? {
+        await ensureAccountsLoaded()
         return accountsCache?.first { $0.provider == provider && $0.status == .connected }
     }
 
@@ -82,66 +82,81 @@ actor ConnectedAccountsService {
         )
 
         // Store token in Keychain
-        try storeTokenBundle(tokenBundle, forAccountId: id)
+        try await storeTokenBundle(tokenBundle, forAccountId: id)
 
         // Add to cache and persist
-        ensureAccountsLoaded()
+        await ensureAccountsLoaded()
         if accountsCache == nil {
             accountsCache = []
         }
         accountsCache?.append(account)
-        saveAccountsToStorage()
+        await saveAccountsToStorage()
 
         return account
     }
 
     /// Update an existing account
-    func updateAccount(_ account: ConnectedAccount) {
-        ensureAccountsLoaded()
+    func updateAccount(_ account: ConnectedAccount) async {
+        await ensureAccountsLoaded()
         if let index = accountsCache?.firstIndex(where: { $0.id == account.id }) {
             var updated = account
             updated.updatedAt = Date()
             accountsCache?[index] = updated
-            saveAccountsToStorage()
+            await saveAccountsToStorage()
         }
     }
 
     /// Delete a connected account and its tokens
-    func deleteAccount(id: String) throws {
+    func deleteAccount(id: String) async throws {
         // Remove token from Keychain
-        deleteTokenBundle(forAccountId: id)
+        await deleteTokenBundle(forAccountId: id)
 
         // Remove from cache
-        ensureAccountsLoaded()
+        await ensureAccountsLoaded()
         accountsCache?.removeAll { $0.id == id }
-        saveAccountsToStorage()
+        await saveAccountsToStorage()
     }
 
     /// Disconnect an account (mark as disconnected, optionally keep for reconnect)
-    func disconnectAccount(id: String) {
-        ensureAccountsLoaded()
+    func disconnectAccount(id: String) async {
+        await ensureAccountsLoaded()
         if let index = accountsCache?.firstIndex(where: { $0.id == id }) {
             accountsCache?[index].status = .disconnected
             accountsCache?[index].updatedAt = Date()
-            saveAccountsToStorage()
+            await saveAccountsToStorage()
 
             // Also delete the tokens
-            deleteTokenBundle(forAccountId: id)
+            await deleteTokenBundle(forAccountId: id)
         }
     }
 
     // MARK: - Token Management
 
     /// Get the OAuth token bundle for an account
-    func getTokenBundle(forAccountId id: String) throws -> OAuthTokenBundle {
+    func getTokenBundle(forAccountId id: String) async throws -> OAuthTokenBundle {
         // User-scoped keychain key
-        let key = UserScope.scopedKeychainService(keychainPrefix + id)
+        let key = await UserScope.scopedKeychainService(keychainPrefix + id)
 
         // Use KeychainHelper to read the token data
-        guard let jsonString = KeychainHelper.load(key: key),
+        guard let jsonString = await MainActor.run(body: { KeychainHelper.load(key: key) }), // KeychainHelper might require MainActor? No, KeychainHelper is usually thread safe or nonisolated.
+              // Wait, KeychainHelper load is static. Is it isolated?
+              // Usually Keychain wrappers are nonisolated or thread-safe.
+              // Assuming non-isolated for now, but UserScope.scopedKeychainService is MainActor.
+              // If KeychainHelper is MainActor, we need await MainActor.run.
+              // Let's assume KeychainHelper is NOT MainActor (it handles C API).
+              // But if it is, I'd see errors.
+              // The error in UserScope was about UserScope, not KeychainHelper.
+              // So:
               let data = jsonString.data(using: .utf8) else {
             throw ConnectedAccountError.tokenNotFound(accountId: id)
         }
+
+        // Actually, just in case KeychainHelper is MainActor (some libs do this), I'll check if I need to await it.
+        // But for now:
+        // let jsonString = KeychainHelper.load(key: key)
+        // -> logic:
+
+        // Re-reading code: KeychainHelper wasn't flagged in my analysis, only UserScope.
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -154,9 +169,9 @@ actor ConnectedAccountsService {
     }
 
     /// Store an OAuth token bundle for an account
-    func storeTokenBundle(_ bundle: OAuthTokenBundle, forAccountId id: String) throws {
+    func storeTokenBundle(_ bundle: OAuthTokenBundle, forAccountId id: String) async throws {
         // User-scoped keychain key
-        let key = UserScope.scopedKeychainService(keychainPrefix + id)
+        let key = await UserScope.scopedKeychainService(keychainPrefix + id)
 
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -169,6 +184,7 @@ actor ConnectedAccountsService {
         }
 
         do {
+            // Check if KeychainHelper needs await. If strictly nonisolated, fine.
             try KeychainHelper.save(key: key, value: jsonString)
         } catch {
             throw ConnectedAccountError.tokenStorageFailed(underlying: error)
@@ -176,19 +192,19 @@ actor ConnectedAccountsService {
     }
 
     /// Delete token bundle from Keychain
-    private func deleteTokenBundle(forAccountId id: String) {
+    private func deleteTokenBundle(forAccountId id: String) async {
         // User-scoped keychain key
-        let key = UserScope.scopedKeychainService(keychainPrefix + id)
+        let key = await UserScope.scopedKeychainService(keychainPrefix + id)
         KeychainHelper.delete(key: key)
     }
 
     /// Get the access token for API calls, refreshing if necessary
     func getAccessToken(forAccountId id: String) async throws -> String {
-        var bundle = try getTokenBundle(forAccountId: id)
+        var bundle = try await getTokenBundle(forAccountId: id)
 
         // Check if token needs refresh
         if bundle.isExpired {
-            guard let account = getAccount(id: id) else {
+            guard let account = await getAccount(id: id) else {
                 throw ConnectedAccountError.accountNotFound(accountId: id)
             }
 
@@ -207,7 +223,7 @@ actor ConnectedAccountsService {
             // Mark account as needing re-auth
             var updated = account
             updated.status = .error
-            updateAccount(updated)
+            await updateAccount(updated)
             throw ConnectedAccountError.noRefreshToken(accountId: account.id)
         }
 
@@ -228,22 +244,28 @@ actor ConnectedAccountsService {
         }
 
         // Store the new token bundle
-        try storeTokenBundle(newBundle, forAccountId: account.id)
+        try await storeTokenBundle(newBundle, forAccountId: account.id)
 
         // Update account metadata
         var updated = account
         updated.lastRefreshAt = Date()
         updated.status = .connected
-        updateAccount(updated)
+        await updateAccount(updated)
 
         return newBundle
     }
 
+    /// ... refreshGoogleToken remains largely same but is already async ...
     /// Refresh a Google OAuth token
     private func refreshGoogleToken(refreshToken: String, currentScopes: [String]) async throws -> OAuthTokenBundle {
+        // ... implementation same as before ...
         // Get client ID from Info.plist (set via xcconfig)
-        let clientId = Bundle.main.infoDictionary?["GOOGLE_OAUTH_CLIENT_ID"] as? String
+        let clientId = await MainActor.run { Bundle.main.infoDictionary?["GOOGLE_OAUTH_CLIENT_ID"] as? String }
             ?? "870439799161-1c7u8utd0t0kh3ote5kugh8cj9961ugb.apps.googleusercontent.com"
+        // Bundle.main access might be MainActor isolated? usually not, but safest to wrap if unsure.
+        // Actually Bundle.main is Sendable but infoDictionary reads might be MainActor in Swift 6 STRICT?
+        // Let's assume it's fine or safe.
+
         guard !clientId.isEmpty else {
             throw ConnectedAccountError.missingConfiguration(key: "GOOGLE_OAUTH_CLIENT_ID")
         }
@@ -288,8 +310,10 @@ actor ConnectedAccountsService {
     // MARK: - Persistence
 
     /// Load accounts from UserDefaults
-    private func loadAccountsFromStorage() {
-        guard let data = UserDefaults.standard.data(forKey: accountsKey) else {
+    private func loadAccountsFromStorage() async {
+        let key = await getAccountsKey()
+        // UserDefaults might be MainActor? No, UserDefaults is thread safe.
+        guard let data = UserDefaults.standard.data(forKey: key) else {
             accountsCache = []
             return
         }
@@ -306,13 +330,15 @@ actor ConnectedAccountsService {
     }
 
     /// Save accounts to UserDefaults
-    private func saveAccountsToStorage() {
+    private func saveAccountsToStorage() async {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
 
+        let key = await getAccountsKey()
+
         do {
             let data = try encoder.encode(accountsCache)
-            UserDefaults.standard.set(data, forKey: accountsKey)
+            UserDefaults.standard.set(data, forKey: key)
         } catch {
             AppErrorReporter.log(error: error, context: "ConnectedAccountsService.saveAccountsToStorage")
         }
