@@ -5,6 +5,7 @@ import SwiftUI
 struct ConnectedAppsView: View {
     /// Environment to dismiss the view (used on macOS when presented as a sheet)
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var storeService: StoreService
 
     @State private var accounts: [ConnectedAccount] = []
     @State private var isLoading = true
@@ -21,6 +22,10 @@ struct ConnectedAppsView: View {
     // Google Picker state
     @State private var showingGooglePicker = false
     @State private var pickedFiles: [GooglePickerFile] = []
+
+    // Upsell state
+    @State private var showUpsell = false
+    @State private var upsellFeature: PurchasableFeature = .githubTool
 
     /// OAuth client IDs – pre-configured with AICoven's apps via Info.plist / xcconfig.
     /// Developers who fork the repo can override these in their own xcconfig.
@@ -152,6 +157,13 @@ struct ConnectedAppsView: View {
                 )
             }
         }
+        .sheet(isPresented: $showUpsell) {
+            FeatureUpsellView(
+                feature: upsellFeature,
+                featureDescription: "Connecting external apps requires the Tools Pack upgrade."
+            )
+            .environmentObject(storeService)
+        }
     }
 
     // MARK: - View Components
@@ -214,6 +226,13 @@ struct ConnectedAppsView: View {
 
     /// Connect to a provider
     private func connect(provider: ConnectedAppProvider) async {
+        let feature: PurchasableFeature = (provider == .github) ? .githubTool : .googleDriveTool
+        guard storeService.hasToolsPack else {
+            upsellFeature = feature
+            showUpsell = true
+            return
+        }
+
         connectingProvider = provider
 
         do {

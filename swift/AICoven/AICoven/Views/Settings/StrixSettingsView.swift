@@ -83,7 +83,7 @@ struct StrixSettingsView: View {
                             GradientButton("Save Changes", icon: "checkmark.circle.fill", style: .primary) {
                                 Task { await save() }
                             }
-                            .disabled(isSaving)
+                            .disabled(isSaving || providerAccounts.isEmpty)
                         }
                         .padding(.horizontal, Spacing.lg)
                         .padding(.bottom, Spacing.xl)
@@ -181,46 +181,22 @@ struct StrixSettingsView: View {
                             ProgressView()
                                 .padding(Spacing.md)
                         } else if providerAccounts.isEmpty {
-                            // Fallback UI when no provider accounts exist yet – use
-                            // static provider + free-form model entry.
-                            VStack(alignment: .leading, spacing: Spacing.xs) {
-                                Text("Provider")
-                                    .font(.aicovenCaption)
+                            VStack(spacing: Spacing.sm) {
+                                Image(systemName: "key.fill")
+                                    .font(.system(size: 32))
                                     .foregroundColor(.aicovenTextSecondary)
-
-                                Menu {
-                                    ForEach(providerOptions, id: \.0) { option in
-                                        Button(option.1) { provider = option.0 }
-                                    }
-                                } label: {
-                                    HStack {
-                                        let label = providerOptions.first(where: { $0.0 == provider })?.1 ?? provider
-                                        Text(label)
-                                            .font(.aicovenBody)
-                                            .foregroundColor(.aicovenTextPrimary)
-                                        Spacer()
-                                        Image(systemName: "chevron.down")
-                                            .foregroundColor(.aicovenTextSecondary)
-                                    }
-                                    .padding(Spacing.sm)
-                                    .background(Color.aicovenGlass)
-                                    .cornerRadius(BorderRadius.sm)
-                                }
-                            }
-
-                            VStack(alignment: .leading, spacing: Spacing.xs) {
-                                Text("Model ID")
-                                    .font(.aicovenCaption)
-                                    .foregroundColor(.aicovenTextSecondary)
-
-                                TextField("gpt-4o", text: $model)
-                                    .font(.aicovenBody)
+                                Text("No Provider Keys Added")
+                                    .font(.aicovenH3)
                                     .foregroundColor(.aicovenTextPrimary)
-                                    .padding(Spacing.sm)
-                                    .background(Color.aicovenGlass)
-                                    .cornerRadius(BorderRadius.sm)
-                                    .disableAutocorrection(true)
+                                Text("You must add at least one Provider Key before you can configure Strix.")
+                                    .font(.aicovenBodySmall)
+                                    .foregroundColor(.aicovenTextSecondary)
+                                    .multilineTextAlignment(.center)
                             }
+                            .padding(.vertical, Spacing.lg)
+                            .frame(maxWidth: .infinity)
+                            .background(Color.aicovenGlass)
+                            .cornerRadius(BorderRadius.md)
                         } else {
                             // Provider account selection backed by the user's BYOK
                             // accounts. This keeps Strix aligned with a real API
