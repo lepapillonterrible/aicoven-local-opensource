@@ -94,6 +94,7 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
         }
 
         // Convert LLMToolDefinition → Anthropic native format
+        var anthropicToOriginalName: [String: String] = [:]
         let toolDefs: [ToolDef]? = options.tools?.isEmpty == false ? options.tools!.map { tool in
             var props: [String: SchemaProperty] = [:]
             var requiredParams: [String] = []
@@ -101,8 +102,13 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
                 props[param.name] = SchemaProperty(type: param.type, description: param.description)
                 if param.required { requiredParams.append(param.name) }
             }
+
+            // Anthropic strictly requires tool names to match ^[a-zA-Z0-9_-]{1,128}$
+            let sanitizedName = tool.name.replacingOccurrences(of: ".", with: "_")
+            anthropicToOriginalName[sanitizedName] = tool.name
+
             return ToolDef(
-                name: tool.name,
+                name: sanitizedName,
                 description: tool.description,
                 input_schema: InputSchema(type: "object", properties: props, required: requiredParams)
             )
@@ -156,7 +162,8 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
         if !toolUseBlocks.isEmpty {
             toolCalls = toolUseBlocks.compactMap { block in
                 guard let name = block.name else { return nil }
-                return LLMToolCall(name: name, arguments: block.input ?? [:])
+                let originalName = anthropicToOriginalName[name] ?? name
+                return LLMToolCall(name: originalName, arguments: block.input ?? [:])
             }
         }
 
