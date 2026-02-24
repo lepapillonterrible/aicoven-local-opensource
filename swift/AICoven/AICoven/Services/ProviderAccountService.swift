@@ -579,6 +579,45 @@ extension ProviderAccountService {
                     contextLength: 128_000
                 )
             }
+        case "anthropic":
+            guard let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) ?? UserDefaults.standard.string(forKey: UserScope.scopedKey("anthropic_api_key")) else {
+                throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing Anthropic API key for account \(account.id)"])
+            }
+            struct AnthropicListResponse: Decodable {
+                struct Item: Decodable { let id: String
+                    let display_name: String?
+                }
+
+                let data: [Item]?
+            }
+            var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/models")!)
+            request.httpMethod = "GET"
+            request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
+                let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
+                throw NSError(
+                    domain: "ProviderAccountService",
+                    code: http.statusCode,
+                    userInfo: [NSLocalizedDescriptionKey: "Anthropic models HTTP \(http.statusCode): \(body)"]
+                )
+            }
+            let decoded = try JSONDecoder().decode(AnthropicListResponse.self, from: data)
+            let modelsData = decoded.data ?? []
+            let chatOnly = modelsData
+                .map(\.id)
+                .filter { isChatModel(provider: "anthropic", id: $0) }
+            let models = chatOnly.isEmpty ? modelsData.map(\.id) : chatOnly
+            return models.map { id in
+                ProviderInitializationStatus.ModelMetadata(
+                    id: id,
+                    name: modelsData.first(where: { $0.id == id })?.display_name ?? id,
+                    provider: "anthropic",
+                    contextLength: nil
+                )
+            }
         default:
             // Other providers: fall back to static metadata for now.
             throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "No remote model fetch implemented for provider \(provider)"])
