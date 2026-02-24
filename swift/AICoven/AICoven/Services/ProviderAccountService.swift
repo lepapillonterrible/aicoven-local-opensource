@@ -476,7 +476,7 @@ extension ProviderAccountService {
         let provider = account.provider.lowercased()
         switch provider {
         case "openai":
-            guard let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) ?? UserDefaults.standard.string(forKey: UserScope.scopedKey("openai_api_key")) else {
+            guard let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) else {
                 throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing OpenAI API key for account \(account.id)"])
             }
             struct OpenAIListResponse: Decodable { struct Item: Decodable { let id: String }
@@ -510,7 +510,7 @@ extension ProviderAccountService {
             }
         case "google", "gemini":
             // Gemini / Google AI
-            guard let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) ?? UserDefaults.standard.string(forKey: UserScope.scopedKey("gemini_api_key")) else {
+            guard let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) else {
                 throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing Gemini API key for account \(account.id)"])
             }
             struct GeminiListResponse: Decodable {
@@ -592,7 +592,7 @@ extension ProviderAccountService {
                 )
             }
         case "anthropic":
-            guard let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) ?? UserDefaults.standard.string(forKey: UserScope.scopedKey("anthropic_api_key")) else {
+            guard let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) else {
                 throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing Anthropic API key for account \(account.id)"])
             }
             struct AnthropicListResponse: Decodable {
