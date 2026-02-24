@@ -151,7 +151,7 @@ actor ProviderAccountService {
         try KeychainHelper.save(key: keychainKey(for: id), value: apiKey)
         updateGlobalAPIKeyCache(provider: provider, apiKey: apiKey)
 
-        NotificationCenter.default.post(name: .providerKeysUpdated, object: nil)
+        await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
 
         return ProviderAccount(from: local)
     }
@@ -183,7 +183,7 @@ actor ProviderAccountService {
         // Cache base URL so LLMConfiguration can build the OllamaLLMClient.
         updateGlobalAPIKeyCache(provider: "ollama", apiKey: baseURL)
 
-        NotificationCenter.default.post(name: .providerKeysUpdated, object: nil)
+        await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
 
         return ProviderAccount(from: local)
     }
@@ -216,7 +216,7 @@ actor ProviderAccountService {
         // on first chat via MLXLLMClient.ensureModelLoaded().
         await MLXModelManager.shared.setActiveModel(modelID)
 
-        NotificationCenter.default.post(name: .providerKeysUpdated, object: nil)
+        await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
 
         return ProviderAccount(from: local)
     }
@@ -240,7 +240,7 @@ actor ProviderAccountService {
             clearGlobalAPIKeyCache(provider: removed.provider)
         }
 
-        NotificationCenter.default.post(name: .providerKeysUpdated, object: nil)
+        await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
     }
 
     /// Get initialization status for a provider account, including a list of
