@@ -15,9 +15,6 @@ struct CreateCovenSheet: View {
     let onCreated: (Coven) -> Void
 
     var body: some View {
-        // Debug: Log entitlement state to diagnose platform differences
-        _ = print("🏪 CreateCovenSheet: hasCreator=\(storeService.hasCreator), purchasedIDs=\(storeService.purchasedProductIDs)")
-
         if !storeService.hasCreator {
             FeatureUpsellView(
                 feature: .covens,
