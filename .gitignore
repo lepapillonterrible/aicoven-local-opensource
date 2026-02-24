@@ -2,3 +2,4 @@
 
 # Local secrets (real API keys) – never commit
 swift/AICoven/Configuration/Secrets.xcconfig
+swift/AICoven/build_error.log
