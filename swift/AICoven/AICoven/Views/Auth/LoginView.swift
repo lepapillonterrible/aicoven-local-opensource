@@ -395,7 +395,7 @@ private extension LoginView {
                         .foregroundColor(.aicovenTextSecondary)
 
                     HStack(spacing: Spacing.xs) {
-                        NavigationLink(destination: TermsOfServiceView()) {
+                        Button { self.showTermsOfService = true } label: {
                             Text("Terms of Service")
                                 .font(.aicovenCaption)
                                 .foregroundColor(.aicovenTeal)
@@ -406,13 +406,14 @@ private extension LoginView {
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextSecondary)
 
-                        NavigationLink(destination: PrivacyPolicyView()) {
+                        Button { self.showPrivacyPolicy = true } label: {
                             Text("Privacy Policy")
                                 .font(.aicovenCaption)
                                 .foregroundColor(.aicovenTeal)
                                 .underline()
                         }
                     }
+                    .buttonStyle(.plain)
                 }
                 .padding(.bottom, Spacing.lg)
             }
@@ -591,7 +592,7 @@ private extension LoginView {
                         .foregroundColor(.aicovenTextSecondary)
 
                     HStack(spacing: Spacing.xs) {
-                        NavigationLink(destination: TermsOfServiceView()) {
+                        Button { self.showTermsOfService = true } label: {
                             Text("Terms of Service")
                                 .font(.aicovenCaption)
                                 .foregroundColor(.aicovenTeal)
@@ -602,13 +603,14 @@ private extension LoginView {
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextSecondary)
 
-                        NavigationLink(destination: PrivacyPolicyView()) {
+                        Button { self.showPrivacyPolicy = true } label: {
                             Text("Privacy Policy")
                                 .font(.aicovenCaption)
                                 .foregroundColor(.aicovenTeal)
                                 .underline()
                         }
                     }
+                    .buttonStyle(.plain)
                 }
                 .padding(.bottom, Spacing.lg)
             }
