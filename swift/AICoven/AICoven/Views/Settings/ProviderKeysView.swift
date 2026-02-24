@@ -66,6 +66,7 @@ struct ProviderKeysView: View {
         .background(NebulaBackground())
         .sheet(isPresented: $showAddSheet) {
             AddProviderKeySheet {
+                showAddSheet = false
                 Task {
                     await loadProviderAccounts()
                 }
