@@ -312,6 +312,8 @@ struct OnboardingFlowView: View {
 /// Step 1: Privacy by Default / encryption overview
 private struct PrivacyStepView: View {
     @Binding var accepted: Bool
+    @State private var showTermsOfService = false
+    @State private var showPrivacyPolicy = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.lg) {
@@ -364,19 +366,25 @@ private struct PrivacyStepView: View {
                         .font(.aicovenBodySmall)
                         .foregroundColor(.aicovenTextSecondary)
 
-                    Link(destination: URL(string: "https://aicoven.ai/privacy")!) {
+                    Button {
+                        showPrivacyPolicy = true
+                    } label: {
                         Text("Read our Privacy Policy")
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTeal)
                             .underline()
                     }
+                    .buttonStyle(.plain)
 
-                    NavigationLink(destination: TermsOfServiceView()) {
+                    Button {
+                        showTermsOfService = true
+                    } label: {
                         Text("Read our Terms of Service")
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTeal)
                             .underline()
                     }
+                    .buttonStyle(.plain)
                 }
             }
             .onChange(of: accepted) { _, newValue in
@@ -386,6 +394,30 @@ private struct PrivacyStepView: View {
                         properties: [:]
                     )
                 }
+            }
+        }
+        .sheet(isPresented: $showTermsOfService) {
+            NavigationStack {
+                TermsOfServiceView()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") {
+                                showTermsOfService = false
+                            }
+                        }
+                    }
+            }
+        }
+        .sheet(isPresented: $showPrivacyPolicy) {
+            NavigationStack {
+                PrivacyPolicyView()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") {
+                                showPrivacyPolicy = false
+                            }
+                        }
+                    }
             }
         }
     }
@@ -463,7 +495,7 @@ private struct KeysStepView: View {
                 .foregroundColor(.aicovenTextSecondary)
 
             Toggle(isOn: $accepted) {
-                Text("I understand that I am responsible for my own API billing and consent to my data being sent to connected providers.")
+                Text("I consent to sharing my prompts, message content, and conversation context with the specific third-party AI providers I configure (e.g. OpenAI, Anthropic, Google) for AI processing.")
                     .font(.aicovenBodySmall)
                     .foregroundColor(.aicovenTextSecondary)
             }

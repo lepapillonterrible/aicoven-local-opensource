@@ -19,6 +19,8 @@ struct LoginView: View {
     @State private var confirmPasswordFieldFocused = false
     @State private var isPasswordVisible = false
     @State private var isConfirmPasswordVisible = false
+    @State private var showTermsOfService = false
+    @State private var showPrivacyPolicy = false
 
     enum AuthMode {
         case signin, signup
@@ -41,6 +43,30 @@ struct LoginView: View {
         }
         .sheet(isPresented: $showForgotPassword) {
             ForgotPasswordView()
+        }
+        .sheet(isPresented: $showTermsOfService) {
+            NavigationStack {
+                TermsOfServiceView()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") {
+                                showTermsOfService = false
+                            }
+                        }
+                    }
+            }
+        }
+        .sheet(isPresented: $showPrivacyPolicy) {
+            NavigationStack {
+                PrivacyPolicyView()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") {
+                                showPrivacyPolicy = false
+                            }
+                        }
+                    }
+            }
         }
     }
 

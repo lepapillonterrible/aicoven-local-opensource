@@ -1,6 +1,10 @@
 import Foundation
 import Security
 
+extension Notification.Name {
+    static let providerKeysUpdated = Notification.Name("ProviderKeysUpdated")
+}
+
 /// Lightweight local representation of a provider account (BYOK).
 ///
 /// This is the persisted form stored on disk/UserDefaults. It deliberately
@@ -147,6 +151,8 @@ actor ProviderAccountService {
         try KeychainHelper.save(key: keychainKey(for: id), value: apiKey)
         updateGlobalAPIKeyCache(provider: provider, apiKey: apiKey)
 
+        NotificationCenter.default.post(name: .providerKeysUpdated, object: nil)
+
         return ProviderAccount(from: local)
     }
 
@@ -176,6 +182,8 @@ actor ProviderAccountService {
 
         // Cache base URL so LLMConfiguration can build the OllamaLLMClient.
         updateGlobalAPIKeyCache(provider: "ollama", apiKey: baseURL)
+
+        NotificationCenter.default.post(name: .providerKeysUpdated, object: nil)
 
         return ProviderAccount(from: local)
     }
@@ -208,6 +216,8 @@ actor ProviderAccountService {
         // on first chat via MLXLLMClient.ensureModelLoaded().
         await MLXModelManager.shared.setActiveModel(modelID)
 
+        NotificationCenter.default.post(name: .providerKeysUpdated, object: nil)
+
         return ProviderAccount(from: local)
     }
 
@@ -229,6 +239,8 @@ actor ProviderAccountService {
         if !remainingForProvider {
             clearGlobalAPIKeyCache(provider: removed.provider)
         }
+
+        NotificationCenter.default.post(name: .providerKeysUpdated, object: nil)
     }
 
     /// Get initialization status for a provider account, including a list of
@@ -449,7 +461,7 @@ extension ProviderAccountService {
         let provider = account.provider.lowercased()
         switch provider {
         case "openai":
-            guard let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) else {
+            guard let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) ?? UserDefaults.standard.string(forKey: UserScope.scopedKey("openai_api_key")) else {
                 throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing OpenAI API key for account \(account.id)"])
             }
             struct OpenAIListResponse: Decodable { struct Item: Decodable { let id: String }

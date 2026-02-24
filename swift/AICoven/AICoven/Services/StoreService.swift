@@ -50,43 +50,28 @@ class StoreService: ObservableObject {
     }
 
     var hasCreator: Bool {
-        #if COMMUNITY_EDITION
-        return true
-        #else
         // Require authentication - no entitlements for unauthenticated users
         guard isAuthenticated else { return false }
         return purchasedProductIDs.contains(Self.creatorID) ||
             purchasedProductIDs.contains(Self.everythingID)
-        #endif
     }
 
     var hasToolsPack: Bool {
-        #if COMMUNITY_EDITION
-        return true
-        #else
         // Require authentication - no entitlements for unauthenticated users
         guard isAuthenticated else { return false }
         return purchasedProductIDs.contains(Self.toolsPackID) ||
             purchasedProductIDs.contains(Self.everythingID)
-        #endif
     }
 
     var hasEverything: Bool {
-        #if COMMUNITY_EDITION
-        return true
-        #else
         // Require authentication - no entitlements for unauthenticated users
         guard isAuthenticated else { return false }
         return purchasedProductIDs.contains(Self.everythingID)
-        #endif
     }
 
     /// Check whether a specific feature is unlocked.
     /// Returns false if user is not authenticated.
     func hasEntitlement(_ feature: PurchasableFeature) -> Bool {
-        #if COMMUNITY_EDITION
-        return true
-        #else
         guard isAuthenticated else { return false }
         switch feature {
         case .covens, .multipleAgents, .modelCustomization:
@@ -94,7 +79,6 @@ class StoreService: ObservableObject {
         case .shellTool, .githubTool, .googleDriveTool:
             return hasToolsPack
         }
-        #endif
     }
 
     /// Human-readable tier name required to unlock a feature.
@@ -132,7 +116,6 @@ class StoreService: ObservableObject {
     /// Reload entitlements for the current user. Call after user switch.
     /// Requires authentication - clears entitlements if no user is signed in.
     func reloadForCurrentUser() async {
-        #if !COMMUNITY_EDITION
         let userID = UserScope.currentUserID ?? "<none>"
         print("💳 StoreService.reloadForCurrentUser: userID=\(userID)")
 
@@ -155,7 +138,6 @@ class StoreService: ObservableObject {
         guard UserScope.currentUserID != nil else { return }
         await refreshEntitlements()
         print("💳 After StoreKit refresh: \(purchasedProductIDs)")
-        #endif
     }
 
     /// Clear stale test purchases that were cached for this user but made by automated tests.
@@ -184,13 +166,11 @@ class StoreService: ObservableObject {
     private init() {
         // Don't load persisted purchases here - they're unscoped if no user is signed in.
         // Instead, load them in reloadForCurrentUser() which is called after auth.
-        #if !COMMUNITY_EDITION
         transactionListenerTask = listenForTransactions()
         Task {
             await loadProducts()
             // Don't refresh entitlements here either - wait for reloadForCurrentUser()
         }
-        #endif
     }
 
     deinit {

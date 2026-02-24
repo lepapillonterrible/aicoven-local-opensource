@@ -493,6 +493,11 @@ struct PersonalChatView: View {
             await loadInitialMessages()
             await loadProviderKeys()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .providerKeysUpdated)) { _ in
+            Task {
+                await loadProviderKeys()
+            }
+        }
     }
 
     private var enhancedMessages: [EnhancedChatMessage] {
