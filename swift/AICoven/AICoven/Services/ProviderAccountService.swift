@@ -365,6 +365,18 @@ actor ProviderAccountService {
         return descriptors
     }
 
+    /// Helper to find a safe fallback model ID for a given provider based on
+    /// the models we have already fetched and cached from the API.
+    /// This prevents hardcoding model IDs (like claude-3-5-sonnet-20241022)
+    /// which may 404 if the API deprecates them.
+    func fallbackModelID(for provider: String) async throws -> String? {
+        let descriptors = try await loadAllModelDescriptors()
+        let providerModels = descriptors.filter { $0.providerID.lowercased() == provider.lowercased() }
+
+        // Return the first available model for this provider
+        return providerModels.first?.modelID
+    }
+
     /// Helper to refresh all provider accounts for the current user in parallel.
     /// Failures for individual accounts are logged but don't throw.
     func refreshAllProviderModels() async {

@@ -368,7 +368,7 @@ actor ChatService {
             AppErrorReporter.log(message: "Role '\(role.name)' resolved provider=\(prefProvider) model=\(prefModel)", context: "ChatService.streamMessage.roleResolution")
             #endif
         } else {
-            let (globalProvider, globalModel) = resolveProviderAndModel()
+            let (globalProvider, globalModel) = await resolveProviderAndModel()
             prefProvider = globalProvider
             prefModel = globalModel
             #if DEBUG
@@ -981,23 +981,27 @@ actor ChatService {
     /// localized. It prefers explicit overrides in UserDefaults:
     ///  - llm_provider: "openai" | "anthropic" | "google"
     ///  - openai_model / anthropic_model / gemini_model
-    private func resolveProviderAndModel() -> (String, String) {
+    private func resolveProviderAndModel() async -> (String, String) {
         let provider = UserDefaults.standard.string(forKey: UserScope.scopedKey("llm_provider"))?.lowercased() ?? "openai"
         switch provider {
         case "anthropic":
-            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("anthropic_model")) ?? "claude-3-5-sonnet-20241022"
+            let fallback = await (try? ProviderAccountService.shared.fallbackModelID(for: "anthropic")) ?? "claude-3-5-sonnet-latest"
+            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("anthropic_model")) ?? fallback
             return ("anthropic", model)
         case "google", "gemini":
-            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("gemini_model")) ?? "gemini-1.5-pro"
+            let fallback = await (try? ProviderAccountService.shared.fallbackModelID(for: "google")) ?? "gemini-1.5-pro"
+            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("gemini_model")) ?? fallback
             return ("google", model)
         case "mlx":
             let model = UserDefaults.standard.string(forKey: "MLXModelManager.activeModelID") ?? "mlx-community/Qwen3-4B-4bit"
             return ("mlx", model)
         case "ollama":
-            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model")) ?? "llama3.2"
+            let fallback = await (try? ProviderAccountService.shared.fallbackModelID(for: "ollama")) ?? "llama3.2"
+            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model")) ?? fallback
             return ("ollama", model)
         default:
-            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("openai_model")) ?? "gpt-4o"
+            let fallback = await (try? ProviderAccountService.shared.fallbackModelID(for: "openai")) ?? "gpt-4o"
+            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("openai_model")) ?? fallback
             return ("openai", model)
         }
     }
