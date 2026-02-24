@@ -10,7 +10,7 @@ struct AgentProfile {
 
 /// Executes autonomous agent runs with a user-defined maximum number of steps.
 @MainActor
-final class AgentRunner: Sendable {
+final class AgentRunner {
     /// Shared singleton configured with built-in providers (OpenAI, Anthropic, Gemini),
     /// filtered to those that actually have API keys configured.
     static let shared: AgentRunner = {
