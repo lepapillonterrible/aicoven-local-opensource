@@ -54,6 +54,7 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
         struct RequestBody: Encodable {
             let model: String
             let max_tokens: Int
+            let system: String?
             let messages: [RequestMessage]
             let temperature: Double
             let tools: [ToolDef]?
@@ -86,7 +87,10 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
         request.addValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.addValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
-        let reqMessages = messages.map { msg in
+        let systemContent = messages.filter { $0.role == .system }.map(\.content).joined(separator: "\n\n")
+        let finalSystem = systemContent.isEmpty ? nil : systemContent
+
+        let reqMessages = messages.filter { $0.role != .system }.map { msg in
             RequestMessage(
                 role: msg.role == .user ? "user" : "assistant",
                 content: [MessageContent(text: msg.content)]
@@ -117,6 +121,7 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
         let body = RequestBody(
             model: model,
             max_tokens: options.maxTokens ?? 4096,
+            system: finalSystem,
             messages: reqMessages,
             temperature: options.temperature,
             tools: toolDefs

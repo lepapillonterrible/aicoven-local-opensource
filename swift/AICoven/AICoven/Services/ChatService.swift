@@ -940,6 +940,11 @@ actor ChatService {
                 messages.append(LLMMessage(role: role, content: msg.content))
             }
 
+            messages.append(LLMMessage(
+                role: .user,
+                content: "Please provide the concise 3-6 bullet point summary of our conversation now."
+            ))
+
             let routingContext = RoutingContext(
                 task: .chat,
                 requireLocalOnly: false,
