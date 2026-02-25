@@ -134,6 +134,8 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .scrollContentBackground(.hidden)
+            .background(NebulaBackground())
             .onAppear {
                 analytics.trackScreenView(screenName: "SettingsView", screenClass: "SettingsView")
             }

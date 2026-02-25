@@ -23,10 +23,6 @@ struct ConnectedAppsView: View {
     @State private var showingGooglePicker = false
     @State private var pickedFiles: [GooglePickerFile] = []
 
-    // Upsell state
-    @State private var showUpsell = false
-    @State private var upsellFeature: PurchasableFeature = .githubTool
-
     /// OAuth client IDs – pre-configured with AICoven's apps via Info.plist / xcconfig.
     /// Developers who fork the repo can override these in their own xcconfig.
     private var githubClientId: String {
@@ -82,27 +78,25 @@ struct ConnectedAppsView: View {
                 if !pickedFiles.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Recently Picked Files")
-                            .font(.headline)
+                            .font(.aicovenH3)
+                            .foregroundColor(.aicovenTextSecondary)
                         ForEach(pickedFiles) { file in
                             HStack {
                                 Image(systemName: "doc.fill")
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(.aicovenTeal)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(file.name)
-                                        .font(.subheadline)
+                                        .font(.aicovenBodySmall)
+                                        .foregroundColor(.aicovenTextPrimary)
                                     Text(file.id)
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
+                                        .font(.aicovenCaption)
+                                        .foregroundColor(.aicovenTextTertiary)
                                 }
                                 Spacer()
                             }
                             .padding(8)
-                            #if os(macOS)
-                                .background(Color(NSColor.controlBackgroundColor))
-                            #else
-                                .background(Color(UIColor.secondarySystemBackground))
-                            #endif
-                                .cornerRadius(8)
+                            .background(Color.aicovenGlass)
+                            .cornerRadius(8)
                         }
                     }
                     .padding(.horizontal)
@@ -111,11 +105,7 @@ struct ConnectedAppsView: View {
                 Spacer(minLength: 40)
             }
         }
-        #if os(macOS)
-        .background(Color(NSColor.windowBackgroundColor))
-        #else
-        .background(Color(UIColor.systemBackground))
-        #endif
+        .background(NebulaBackground())
         .task { await loadAccounts() }
         .alert("Error", isPresented: Binding(
             get: { errorMessage != nil },
@@ -157,62 +147,51 @@ struct ConnectedAppsView: View {
                 )
             }
         }
-        .sheet(isPresented: $showUpsell) {
-            FeatureUpsellView(
-                feature: upsellFeature,
-                featureDescription: "Connecting external apps requires the Tools Pack upgrade."
-            )
-            .environmentObject(storeService)
-        }
+
     }
 
     // MARK: - View Components
 
     /// Header section
     private var headerSection: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "app.connected.to.app.below.fill")
-                .font(.system(size: 48))
-                .foregroundColor(.purple)
+        VStack(spacing: Spacing.sm) {
+            IconBadge(icon: "app.connected.to.app.below.fill", size: 60, color: .aicovenPurple)
 
             Text("Connected Apps")
-                .font(.title)
-                .fontWeight(.bold)
+                .font(.aicovenDisplaySmall)
+                .foregroundColor(.aicovenTextPrimary)
 
             Text("Connect external services to enhance agent capabilities")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
+                .font(.aicovenBody)
+                .foregroundColor(.aicovenTextSecondary)
                 .multilineTextAlignment(.center)
         }
-        .padding(.top, 24)
+        .padding(.top, Spacing.xl)
     }
 
     /// Info banner about local-first architecture
     private var infoBanner: some View {
         HStack(spacing: 12) {
             Image(systemName: "lock.shield")
-                .foregroundColor(.green)
+                .foregroundColor(.aicovenTeal)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Local-First Security")
-                    .font(.caption)
+                    .font(.aicovenBodySmall)
                     .fontWeight(.semibold)
+                    .foregroundColor(.aicovenTextPrimary)
 
                 Text("OAuth tokens are stored securely in your device's Keychain")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .font(.aicovenCaption)
+                    .foregroundColor(.aicovenTextSecondary)
             }
 
             Spacer()
         }
         .padding()
-        #if os(macOS)
-            .background(Color(NSColor.controlBackgroundColor))
-        #else
-            .background(Color(UIColor.secondarySystemBackground))
-        #endif
-            .cornerRadius(12)
-            .padding(.horizontal)
+        .background(Color.aicovenGlass)
+        .cornerRadius(12)
+        .padding(.horizontal)
     }
 
     // MARK: - Actions
@@ -226,13 +205,6 @@ struct ConnectedAppsView: View {
 
     /// Connect to a provider
     private func connect(provider: ConnectedAppProvider) async {
-        let feature: PurchasableFeature = (provider == .github) ? .githubTool : .googleDriveTool
-        guard storeService.hasToolsPack else {
-            upsellFeature = feature
-            showUpsell = true
-            return
-        }
-
         connectingProvider = provider
 
         do {
@@ -374,7 +346,7 @@ struct ConnectedAppRow: View {
             // Icon
             ZStack {
                 Circle()
-                    .fill(providerColor.opacity(0.2))
+                    .fill(providerColor.opacity(0.15))
                     .frame(width: 48, height: 48)
 
                 Image(systemName: provider.iconName)
@@ -385,16 +357,17 @@ struct ConnectedAppRow: View {
             // Info
             VStack(alignment: .leading, spacing: 4) {
                 Text(provider.displayName)
-                    .font(.headline)
+                    .font(.aicovenH3)
+                    .foregroundColor(.aicovenTextPrimary)
 
                 if let account {
                     Text(account.displayName)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .font(.aicovenCaption)
+                        .foregroundColor(.aicovenTextSecondary)
                 } else {
                     Text("Not connected")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .font(.aicovenCaption)
+                        .foregroundColor(.aicovenTextTertiary)
                 }
             }
 
@@ -427,12 +400,12 @@ struct ConnectedAppRow: View {
             }
         }
         .padding()
-        #if os(macOS)
-            .background(Color(NSColor.controlBackgroundColor))
-        #else
-            .background(Color(UIColor.secondarySystemBackground))
-        #endif
-            .cornerRadius(12)
+        .background(Color.aicovenGlass)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.aicovenBorder, lineWidth: 1)
+        )
+        .cornerRadius(12)
     }
 
     /// Color for each provider
@@ -464,25 +437,28 @@ struct GooglePickerSheet: View {
             if isLoading {
                 VStack(spacing: 16) {
                     ProgressView()
+                        .tint(.aicovenTeal)
                     Text("Preparing Drive access…")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                        .font(.aicovenBody)
+                        .foregroundColor(.aicovenTextSecondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(NebulaBackground())
             } else if let error {
                 VStack(spacing: 16) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.largeTitle)
                         .foregroundColor(.orange)
                     Text(error)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                        .font(.aicovenBody)
+                        .foregroundColor(.aicovenTextSecondary)
                         .multilineTextAlignment(.center)
                     Button("Cancel") { onCancel() }
                         .buttonStyle(.bordered)
                 }
                 .padding()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(NebulaBackground())
             } else if let token = accessToken {
                 GooglePickerView(
                     accessToken: token,
@@ -519,20 +495,18 @@ struct GitHubDeviceCodeSheet: View {
     var body: some View {
         VStack(spacing: 24) {
             // Header
-            VStack(spacing: 8) {
-                Image(systemName: "link.circle.fill")
-                    .font(.system(size: 48))
-                    .foregroundColor(.purple)
+            VStack(spacing: Spacing.sm) {
+                IconBadge(icon: "link.circle.fill", size: 60, color: .aicovenPurple)
 
                 Text("Connect to GitHub")
-                    .font(.title2)
-                    .fontWeight(.bold)
+                    .font(.aicovenH1)
+                    .foregroundColor(.aicovenTextPrimary)
             }
 
             // Instructions
             Text("Enter this code on GitHub to authorize AICoven:")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
+                .font(.aicovenBody)
+                .foregroundColor(.aicovenTextSecondary)
                 .multilineTextAlignment(.center)
 
             // User code display
@@ -541,8 +515,8 @@ struct GitHubDeviceCodeSheet: View {
                     ProgressView()
                         .scaleEffect(1.2)
                     Text("Loading code...")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .font(.aicovenCaption)
+                        .foregroundColor(.aicovenTextSecondary)
                 } else {
                     Text(userCode)
                         .font(.system(size: 32, weight: .bold, design: .monospaced))
@@ -563,12 +537,8 @@ struct GitHubDeviceCodeSheet: View {
                 }
             }
             .padding()
-            #if os(macOS)
-                .background(Color(NSColor.controlBackgroundColor))
-            #else
-                .background(Color(UIColor.secondarySystemBackground))
-            #endif
-                .cornerRadius(12)
+            .background(Color.aicovenGlass)
+            .cornerRadius(12)
 
             // Open GitHub button
             if let url = URL(string: verificationUrl) {
@@ -579,7 +549,13 @@ struct GitHubDeviceCodeSheet: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding()
-                    .background(Color.purple)
+                    .background(
+                        LinearGradient(
+                            colors: [Color.aicovenTeal, Color.aicovenPurple],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
                     .foregroundColor(.white)
                     .cornerRadius(12)
                 }
@@ -589,9 +565,10 @@ struct GitHubDeviceCodeSheet: View {
             HStack(spacing: 8) {
                 ProgressView()
                     .scaleEffect(0.8)
+                    .tint(.aicovenTeal)
                 Text("Waiting for authorization...")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .font(.aicovenCaption)
+                    .foregroundColor(.aicovenTextTertiary)
             }
 
             Spacer()
@@ -604,6 +581,7 @@ struct GitHubDeviceCodeSheet: View {
         }
         .padding(24)
         .frame(minWidth: 320, minHeight: 400)
+        .background(NebulaBackground())
     }
 
     /// Copy text to clipboard

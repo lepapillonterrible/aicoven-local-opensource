@@ -34,7 +34,7 @@ struct MLXModelSettingsView: View {
             }
             .padding(Spacing.lg)
         }
-        .background(Color.aicovenDark)
+        .background(NebulaBackground())
         .navigationTitle("MLX Models")
     }
 
