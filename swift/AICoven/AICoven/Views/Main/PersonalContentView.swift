@@ -503,6 +503,7 @@ struct PersonalChatView: View {
         return messages.map { msg in
             let count = idCounts[msg.id, default: 0]
             idCounts[msg.id] = count + 1
+            // Generate unique ID for all messages to handle backend duplicates
             let uniqueId = count == 0 ? msg.id : "\(msg.id)-dup\(count)"
 
             // For the last AI message, use the cached ChatResponse to preserve tool calls and thoughts.
@@ -535,8 +536,9 @@ struct PersonalChatView: View {
                     )
                 }
 
+                // Non-streaming path: use uniqueId for consistency
                 return EnhancedChatMessage(
-                    id: base.id,
+                    id: uniqueId,
                     threadId: base.threadId,
                     role: base.role,
                     content: base.content,
@@ -557,8 +559,9 @@ struct PersonalChatView: View {
             let base = MessageAdapter.toEnhanced(from: msg, response: nil)
             let resolvedAgentRole = base.agentRole ?? thread.agentName
 
+            // All messages use uniqueId for consistent deduplication
             return EnhancedChatMessage(
-                id: base.id,
+                id: uniqueId,
                 threadId: base.threadId,
                 role: base.role,
                 content: base.content,

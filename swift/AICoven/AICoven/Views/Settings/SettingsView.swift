@@ -110,11 +110,13 @@ struct SettingsView: View {
 
                 // About section
                 Section("About") {
+                    // Extract version info from bundle
+                    let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+                    let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+
                     HStack {
                         Text("Version")
                         Spacer()
-                        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-                        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
                         Text("\(version) (\(build))")
                             .foregroundColor(.secondary)
                     }

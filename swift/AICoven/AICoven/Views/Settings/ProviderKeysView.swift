@@ -313,13 +313,31 @@ struct ProviderAccountCard: View {
                 testResult = (true, "Connected but no models found.")
             }
         } catch {
-            let msg = error.localizedDescription
-            // Extract a user-friendly message from HTTP errors
-            if msg.contains("HTTP") {
-                testResult = (false, msg)
+            // Format error message consistently for all error types
+            let errorMessage: String
+
+            // Check if it's an NSError with HTTP status code context
+            if let nsError = error as NSError?, nsError.domain == "ProviderAccountService" {
+                // HTTP errors from the provider API (e.g., 401, 403, 500)
+                let statusCode = nsError.code
+                if statusCode > 0 {
+                    let description = nsError.localizedDescription
+                    // Extract just the HTTP status and brief description
+                    if description.contains("HTTP") {
+                        errorMessage = description
+                    } else {
+                        errorMessage = "HTTP \(statusCode): \(description)"
+                    }
+                } else {
+                    // Non-HTTP error (e.g., missing API key)
+                    errorMessage = nsError.localizedDescription
+                }
             } else {
-                testResult = (false, "Connection failed: \(msg)")
+                // URLError (network issues) or other error types
+                errorMessage = error.localizedDescription
             }
+
+            testResult = (false, errorMessage)
         }
     }
 }
@@ -953,9 +971,10 @@ struct EditProviderKeySheet: View {
         defer { saving = false }
 
         do {
+            // displayName is guaranteed to be non-empty due to button validation
             try await ProviderAccountService.shared.updateProviderAccount(
                 id: account.id,
-                displayName: displayName.isEmpty ? nil : displayName,
+                displayName: displayName,
                 apiKey: apiKey.isEmpty ? nil : apiKey,
                 baseURL: isOllama ? baseURL : nil
             )
