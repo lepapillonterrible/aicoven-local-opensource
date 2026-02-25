@@ -63,10 +63,18 @@ struct ProviderKeysView: View {
                 }
             }
         }
-        .background(NebulaBackground())
+        .background(NebulaBackground().ignoresSafeArea())
         .sheet(isPresented: $showAddSheet) {
             AddProviderKeySheet {
                 showAddSheet = false
+                Task {
+                    await loadProviderAccounts()
+                }
+            }
+        }
+        .sheet(item: $selectedAccount) { account in
+            EditProviderKeySheet(account: account) {
+                selectedAccount = nil
                 Task {
                     await loadProviderAccounts()
                 }
@@ -130,6 +138,8 @@ struct ProviderAccountCard: View {
     let onEdit: () -> Void
     let onDelete: () -> Void
     @State private var showDeleteConfirmation = false
+    @State private var isTesting = false
+    @State private var testResult: (success: Bool, message: String)? = nil
 
     var providerInfo: (icon: String, name: String, color: Color) {
         switch account.provider.lowercased() {
@@ -235,12 +245,37 @@ struct ProviderAccountCard: View {
                     }
                 }
 
+                // Test result
+                if let result = testResult {
+                    HStack(spacing: Spacing.xs) {
+                        Image(systemName: result.success ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundColor(result.success ? .green : .red)
+                        Text(result.message)
+                            .font(.aicovenCaption)
+                            .foregroundColor(result.success ? .green : .red)
+                            .lineLimit(2)
+                    }
+                    .padding(Spacing.sm)
+                    .background(Color.aicovenGlass)
+                    .cornerRadius(BorderRadius.sm)
+                }
+
                 // Actions
                 HStack(spacing: Spacing.sm) {
-                    Button("Test") {
-                        // Test connection
+                    Button {
+                        Task { await testConnection() }
+                    } label: {
+                        HStack(spacing: Spacing.xxs) {
+                            if isTesting {
+                                ProgressView()
+                                    .scaleEffect(0.6)
+                                    .tint(.aicovenTextPrimary)
+                            }
+                            Text(isTesting ? "Testing..." : "Test")
+                        }
                     }
                     .buttonStyle(SecondaryButtonStyle())
+                    .disabled(isTesting)
 
                     Button("Edit") {
                         onEdit()
@@ -261,6 +296,48 @@ struct ProviderAccountCard: View {
             }
         } message: {
             Text("Are you sure you want to delete this provider key? This action cannot be undone.")
+        }
+    }
+
+    private func testConnection() async {
+        isTesting = true
+        testResult = nil
+        defer { isTesting = false }
+
+        do {
+            let status = try await ProviderAccountService.shared.getInitializationStatus(accountId: account.id)
+            let modelCount = status.modelMetadata.count
+            if modelCount > 0 {
+                testResult = (true, "Connected! Found \(modelCount) model(s).")
+            } else {
+                testResult = (true, "Connected but no models found.")
+            }
+        } catch {
+            // Format error message consistently for all error types
+            let errorMessage: String
+
+            // Check if it's an NSError with HTTP status code context
+            if let nsError = error as NSError?, nsError.domain == "ProviderAccountService" {
+                // HTTP errors from the provider API (e.g., 401, 403, 500)
+                let statusCode = nsError.code
+                if statusCode > 0 {
+                    let description = nsError.localizedDescription
+                    // Extract just the HTTP status and brief description
+                    if description.contains("HTTP") {
+                        errorMessage = description
+                    } else {
+                        errorMessage = "HTTP \(statusCode): \(description)"
+                    }
+                } else {
+                    // Non-HTTP error (e.g., missing API key)
+                    errorMessage = nsError.localizedDescription
+                }
+            } else {
+                // URLError (network issues) or other error types
+                errorMessage = error.localizedDescription
+            }
+
+            testResult = (false, errorMessage)
         }
     }
 }
@@ -329,7 +406,7 @@ struct AddProviderKeySheet: View {
                 }
                 .padding(Spacing.lg)
             }
-            .background(NebulaBackground())
+            .background(NebulaBackground().ignoresSafeArea())
             .navigationTitle("Add Provider Key")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -404,7 +481,7 @@ private struct AddProviderKeyStep2View: View {
             }
             .padding(Spacing.lg)
         }
-        .background(NebulaBackground())
+        .background(NebulaBackground().ignoresSafeArea())
         .navigationTitle(providerDisplayName)
         #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -776,6 +853,135 @@ private struct AddProviderKeyStep2View: View {
 
         } catch {
             AppErrorReporter.log(error: error, context: "ProviderKeysView.saveProviderKey")
+        }
+    }
+}
+
+/// Edit an existing provider key
+struct EditProviderKeySheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let account: ProviderAccount
+    let onComplete: () -> Void
+
+    @State private var displayName: String = ""
+    @State private var apiKey: String = ""
+    @State private var baseURL: String = ""
+    @State private var saving = false
+    @State private var errorMessage: String?
+
+    private var isOllama: Bool {
+        account.provider.lowercased() == "ollama"
+    }
+
+    private var isMLX: Bool {
+        account.provider.lowercased() == "mlx"
+    }
+
+    private var isLocal: Bool {
+        isOllama || isMLX
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: Spacing.lg) {
+                    // Display name
+                    VStack(alignment: .leading, spacing: Spacing.sm) {
+                        Text("Display Name")
+                            .font(.aicovenH3)
+                            .foregroundColor(.aicovenTextPrimary)
+
+                        TextField("My API Key", text: $displayName)
+                            .font(.aicovenBody)
+                            .foregroundColor(.aicovenTextPrimary)
+                            .padding(Spacing.md)
+                            .background(Color.aicovenGlass)
+                            .cornerRadius(BorderRadius.md)
+                    }
+
+                    // API key or Base URL
+                    if isOllama {
+                        VStack(alignment: .leading, spacing: Spacing.sm) {
+                            Text("Server URL")
+                                .font(.aicovenH3)
+                                .foregroundColor(.aicovenTextPrimary)
+
+                            TextField("http://localhost:11434", text: $baseURL)
+                                .font(.aicovenBody)
+                                .foregroundColor(.aicovenTextPrimary)
+                                .padding(Spacing.md)
+                                .background(Color.aicovenGlass)
+                                .cornerRadius(BorderRadius.md)
+                                .autocorrectionDisabled()
+                        }
+                    } else if !isMLX {
+                        VStack(alignment: .leading, spacing: Spacing.sm) {
+                            Text("API Key")
+                                .font(.aicovenH3)
+                                .foregroundColor(.aicovenTextPrimary)
+
+                            SecureField("Leave blank to keep current key", text: $apiKey)
+                                .font(.aicovenBody)
+                                .foregroundColor(.aicovenTextPrimary)
+                                .padding(Spacing.md)
+                                .background(Color.aicovenGlass)
+                                .cornerRadius(BorderRadius.md)
+
+                            Text("🔒 Leave blank to keep your existing key")
+                                .font(.aicovenCaption)
+                                .foregroundColor(.aicovenTextSecondary)
+                        }
+                    }
+
+                    if let error = errorMessage {
+                        HStack(spacing: Spacing.xs) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.red)
+                            Text(error)
+                                .font(.aicovenCaption)
+                                .foregroundColor(.red)
+                        }
+                    }
+
+                    // Save button
+                    GradientButton(saving ? "Saving..." : "Save Changes", icon: "checkmark.circle.fill", style: .primary) {
+                        Task { await saveChanges() }
+                    }
+                    .disabled(saving || displayName.isEmpty)
+                }
+                .padding(Spacing.lg)
+            }
+            .background(NebulaBackground().ignoresSafeArea())
+            .navigationTitle("Edit Provider Key")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+        .onAppear {
+            displayName = account.displayName
+            baseURL = account.baseURL ?? "http://localhost:11434"
+        }
+    }
+
+    private func saveChanges() async {
+        saving = true
+        errorMessage = nil
+        defer { saving = false }
+
+        do {
+            // displayName is guaranteed to be non-empty due to button validation
+            try await ProviderAccountService.shared.updateProviderAccount(
+                id: account.id,
+                displayName: displayName,
+                apiKey: apiKey.isEmpty ? nil : apiKey,
+                baseURL: isOllama ? baseURL : nil
+            )
+            onComplete()
+            dismiss()
+        } catch {
+            errorMessage = "Failed to save: \(error.localizedDescription)"
         }
     }
 }

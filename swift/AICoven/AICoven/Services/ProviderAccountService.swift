@@ -221,6 +221,46 @@ actor ProviderAccountService {
         return ProviderAccount(from: local)
     }
 
+    /// Update an existing provider account's display name and/or API key.
+    func updateProviderAccount(
+        id: String,
+        displayName: String? = nil,
+        apiKey: String? = nil,
+        baseURL: String? = nil,
+        defaultModel: String? = nil
+    ) async throws {
+        var locals = try loadLocalAccounts()
+        guard let index = locals.firstIndex(where: { $0.id == id }) else {
+            throw LocalProviderAccountError.accountNotFound
+        }
+        let old = locals[index]
+        let updated = LocalProviderAccount(
+            id: old.id,
+            provider: old.provider,
+            displayName: displayName ?? old.displayName,
+            scopes: old.scopes,
+            defaultModel: defaultModel ?? old.defaultModel,
+            baseURL: baseURL ?? old.baseURL,
+            status: old.status,
+            createdAt: old.createdAt
+        )
+        locals[index] = updated
+        try saveLocalAccounts(locals)
+
+        // Update Keychain if API key changed
+        if let apiKey, !apiKey.isEmpty {
+            try KeychainHelper.save(key: keychainKey(for: id), value: apiKey)
+            updateGlobalAPIKeyCache(provider: old.provider, apiKey: apiKey)
+        }
+
+        // Update Ollama base URL cache if changed
+        if let baseURL, old.provider.lowercased() == "ollama" {
+            updateGlobalAPIKeyCache(provider: "ollama", apiKey: baseURL)
+        }
+
+        await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
+    }
+
     /// Delete a local provider account and its associated API key.
     func deleteProviderAccount(id: String) async throws {
         var locals = try loadLocalAccounts()

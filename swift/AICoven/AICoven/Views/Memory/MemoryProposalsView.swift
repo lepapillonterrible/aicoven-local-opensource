@@ -16,91 +16,94 @@ struct MemoryProposalsView: View {
     let statuses = ["pending", "approved", "rejected", "all"]
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            VStack(spacing: Spacing.md) {
-                HStack {
-                    Text("Memory Proposals")
-                        .font(.aicovenH2)
-                        .foregroundColor(.aicovenTextPrimary)
+        ZStack {
+            NebulaBackground()
+            VStack(spacing: 0) {
+                // Header
+                VStack(spacing: Spacing.md) {
+                    HStack {
+                        Text("Memory Proposals")
+                            .font(.aicovenH2)
+                            .foregroundColor(.aicovenTextPrimary)
 
-                    Spacer()
-                }
-
-                // Status filter
-                HStack(spacing: Spacing.xs) {
-                    ForEach(statuses, id: \.self) { status in
-                        Button {
-                            selectedStatus = status
-                            Task {
-                                await loadProposals()
-                            }
-                        } label: {
-                            Text(status.capitalized)
-                                .font(.aicovenCaption)
-                                .foregroundColor(selectedStatus == status ? .aicovenTeal : .aicovenTextSecondary)
-                                .padding(.horizontal, Spacing.sm)
-                                .padding(.vertical, Spacing.xs)
-                                .background(
-                                    RoundedRectangle(cornerRadius: BorderRadius.sm)
-                                        .fill(selectedStatus == status ? Color.aicovenGlass : Color.clear)
-                                )
-                        }
-                        .buttonStyle(.plain)
+                        Spacer()
                     }
-                }
-            }
-            .padding(Spacing.lg)
 
-            GradientDivider()
-
-            // Content area
-            if isLoading {
-                LoadingView(message: "Loading proposals...")
-            } else if let error = errorMessage {
-                MemoryErrorView(message: error) {
-                    Task {
-                        await loadProposals()
-                    }
-                }
-            } else if proposals.isEmpty {
-                EmptyProposalsState()
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: Spacing.sm) {
-                        ForEach(proposals) { proposal in
-                            ProposalCard(
-                                proposal: proposal,
-                                onApprove: {
-                                    Task {
-                                        await reviewProposal(proposal, action: "approve")
-                                    }
-                                },
-                                onReject: {
-                                    Task {
-                                        await reviewProposal(proposal, action: "reject")
-                                    }
-                                },
-                                onSaveAsMemory: { editedContent in
-                                    Task {
-                                        await saveProposalAsMemory(proposal, editedContent: editedContent)
-                                    }
-                                },
-                                onDelete: {
-                                    Task {
-                                        await deleteProposal(proposal)
-                                    }
+                    // Status filter
+                    HStack(spacing: Spacing.xs) {
+                        ForEach(statuses, id: \.self) { status in
+                            Button {
+                                selectedStatus = status
+                                Task {
+                                    await loadProposals()
                                 }
-                            )
+                            } label: {
+                                Text(status.capitalized)
+                                    .font(.aicovenCaption)
+                                    .foregroundColor(selectedStatus == status ? .aicovenTeal : .aicovenTextSecondary)
+                                    .padding(.horizontal, Spacing.sm)
+                                    .padding(.vertical, Spacing.xs)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: BorderRadius.sm)
+                                            .fill(selectedStatus == status ? Color.aicovenGlass : Color.clear)
+                                    )
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
-                    .padding(Spacing.lg)
+                }
+                .padding(Spacing.lg)
+
+                GradientDivider()
+
+                // Content area
+                if isLoading {
+                    LoadingView(message: "Loading proposals...")
+                } else if let error = errorMessage {
+                    MemoryErrorView(message: error) {
+                        Task {
+                            await loadProposals()
+                        }
+                    }
+                } else if proposals.isEmpty {
+                    EmptyProposalsState()
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: Spacing.sm) {
+                            ForEach(proposals) { proposal in
+                                ProposalCard(
+                                    proposal: proposal,
+                                    onApprove: {
+                                        Task {
+                                            await reviewProposal(proposal, action: "approve")
+                                        }
+                                    },
+                                    onReject: {
+                                        Task {
+                                            await reviewProposal(proposal, action: "reject")
+                                        }
+                                    },
+                                    onSaveAsMemory: { editedContent in
+                                        Task {
+                                            await saveProposalAsMemory(proposal, editedContent: editedContent)
+                                        }
+                                    },
+                                    onDelete: {
+                                        Task {
+                                            await deleteProposal(proposal)
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                        .padding(Spacing.lg)
+                    }
                 }
             }
-        }
-        .task {
-            await loadProposals()
-        }
+            .task {
+                await loadProposals()
+            }
+        } // ZStack
     }
 
     // MARK: - Actions

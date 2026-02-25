@@ -7,8 +7,8 @@ struct EnhancedSettingsView: View {
     @State private var emailNotificationsEnabled = true
     @State private var loading = true
     @State private var saving = false
-    @State private var animatedBackgrounds = true
-    @AppStorage("aicoven_animated_backgrounds") private var storedAnimatedBackgrounds = true
+    @State private var animatedBackgrounds = false
+    @AppStorage("aicoven_animated_backgrounds") private var storedAnimatedBackgrounds = false
     @State private var showConnectedApps = false
 
     var body: some View {

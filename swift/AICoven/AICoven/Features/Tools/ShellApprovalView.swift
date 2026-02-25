@@ -41,11 +41,7 @@ struct ShellApprovalView: View {
         }
         .padding(24)
         .frame(minWidth: 400, minHeight: 350)
-        #if os(macOS)
-            .background(Color(NSColor.windowBackgroundColor))
-        #else
-            .background(Color(UIColor.systemBackground))
-        #endif
+        .background(NebulaBackground())
     }
 
     // MARK: - View Components
@@ -94,12 +90,8 @@ struct ShellApprovalView: View {
                     .padding(12)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            #if os(macOS)
-                .background(Color(NSColor.textBackgroundColor).opacity(0.5))
-            #else
-                .background(Color(UIColor.secondarySystemBackground))
-            #endif
-                .cornerRadius(8)
+            .background(Color.aicovenGlass)
+            .cornerRadius(8)
         }
     }
 
@@ -129,12 +121,8 @@ struct ShellApprovalView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)
-        #if os(macOS)
-            .background(Color(NSColor.controlBackgroundColor))
-        #else
-            .background(Color(UIColor.tertiarySystemBackground))
-        #endif
-            .cornerRadius(8)
+        .background(Color.aicovenGlass)
+        .cornerRadius(8)
     }
 
     /// "Always approve" pattern input section
@@ -153,12 +141,8 @@ struct ShellApprovalView: View {
                 .foregroundColor(.secondary)
         }
         .padding(12)
-        #if os(macOS)
-            .background(Color(NSColor.controlBackgroundColor))
-        #else
-            .background(Color(UIColor.tertiarySystemBackground))
-        #endif
-            .cornerRadius(8)
+        .background(Color.aicovenGlass)
+        .cornerRadius(8)
     }
 
     /// Action buttons section

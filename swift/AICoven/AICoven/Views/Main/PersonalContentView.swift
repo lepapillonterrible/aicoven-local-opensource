@@ -360,10 +360,8 @@ struct PersonalChatView: View {
                             .id("load-more-sentinel-\(oldestMessageId ?? "none")")
                         }
 
-                        // Use the enumerated offset as the ForEach ID to avoid
-                        // runtime crashes when the backend sends duplicate
-                        // message IDs. We still use `em.id` for scrolling.
-                        ForEach(Array(enhancedMessages.enumerated()), id: \.offset) { _, em in
+                        // stable element UUID to allow SwiftUI caching of older history.
+                        ForEach(Array(enhancedMessages.enumerated()), id: \.element.id) { _, em in
                             RichMessageBubble(
                                 message: em,
                                 onApproveToolCall: { _ in },
@@ -501,7 +499,13 @@ struct PersonalChatView: View {
     }
 
     private var enhancedMessages: [EnhancedChatMessage] {
-        messages.map { msg in
+        var idCounts = [String: Int]()
+        return messages.map { msg in
+            let count = idCounts[msg.id, default: 0]
+            idCounts[msg.id] = count + 1
+            // Generate unique ID for all messages to handle backend duplicates
+            let uniqueId = count == 0 ? msg.id : "\(msg.id)-dup\(count)"
+
             // For the last AI message, use the cached ChatResponse to preserve tool calls and thoughts.
             if msg.id == lastResponseId, let response = lastResponse {
                 let base = MessageAdapter.toEnhanced(from: msg, response: response)
@@ -514,7 +518,7 @@ struct PersonalChatView: View {
                 // While streaming, override content with live buffer
                 if isSending, !streamingAnswerBuffer.isEmpty, msg.role == "assistant" {
                     return EnhancedChatMessage(
-                        id: base.id,
+                        id: uniqueId,
                         threadId: base.threadId,
                         role: base.role,
                         content: MessageAdapter.sanitizeContentForDisplay(streamingAnswerBuffer),
@@ -532,8 +536,9 @@ struct PersonalChatView: View {
                     )
                 }
 
+                // Non-streaming path: use uniqueId for consistency
                 return EnhancedChatMessage(
-                    id: base.id,
+                    id: uniqueId,
                     threadId: base.threadId,
                     role: base.role,
                     content: base.content,
@@ -554,8 +559,9 @@ struct PersonalChatView: View {
             let base = MessageAdapter.toEnhanced(from: msg, response: nil)
             let resolvedAgentRole = base.agentRole ?? thread.agentName
 
+            // All messages use uniqueId for consistent deduplication
             return EnhancedChatMessage(
-                id: base.id,
+                id: uniqueId,
                 threadId: base.threadId,
                 role: base.role,
                 content: base.content,
