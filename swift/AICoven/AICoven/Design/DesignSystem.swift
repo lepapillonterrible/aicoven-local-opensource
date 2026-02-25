@@ -236,7 +236,7 @@ struct IconBadge: View {
 /// Uses the view's geometry to scale radial gradients so they fully cover
 /// any screen size (iPhone, iPad, macOS window) without hard‑coded radii.
 struct NebulaBackground: View {
-    @AppStorage("aicoven_animated_backgrounds") private var animatedBackgrounds = true
+    @AppStorage("aicoven_animated_backgrounds") private var animatedBackgrounds = false
     @State private var animateGradient = false
 
     var body: some View {

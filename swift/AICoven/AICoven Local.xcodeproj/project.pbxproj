@@ -615,7 +615,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				"INFOPLIST_FILE[sdk=iphoneos*]" = "Resources/Info-iOS.plist";
 				"INFOPLIST_FILE[sdk=macosx*]" = "Resources/Info-macOS.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "AICoven Local";
+				INFOPLIST_KEY_CFBundleDisplayName = "AI Coven Local";
 				INFOPLIST_KEY_CFBundleIconName = AppIcon;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -672,7 +672,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				"INFOPLIST_FILE[sdk=iphoneos*]" = "Resources/Info-iOS.plist";
 				"INFOPLIST_FILE[sdk=macosx*]" = "Resources/Info-macOS.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "AICoven Local";
+				INFOPLIST_KEY_CFBundleDisplayName = "AI Coven Local";
 				INFOPLIST_KEY_CFBundleIconName = AppIcon;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -721,7 +721,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				"INFOPLIST_FILE[sdk=iphoneos*]" = "Resources/Info-iOS.plist";
 				"INFOPLIST_FILE[sdk=macosx*]" = "Resources/Info-macOS.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "AICoven Local";
+				INFOPLIST_KEY_CFBundleDisplayName = "AI Coven Local";
 				INFOPLIST_KEY_CFBundleIconName = AppIcon;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";

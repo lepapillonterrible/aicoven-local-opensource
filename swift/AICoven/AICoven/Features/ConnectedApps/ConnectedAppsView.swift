@@ -12,6 +12,8 @@ struct ConnectedAppsView: View {
     @State private var errorMessage: String?
     @State private var isConnecting = false
     @State private var connectingProvider: ConnectedAppProvider?
+    @State private var showUpsell = false
+    @State private var upsellFeature: PurchasableFeature = .githubTool
 
     // GitHub Device Flow state
     @State private var showingDeviceCodeSheet = false
@@ -147,6 +149,13 @@ struct ConnectedAppsView: View {
                 )
             }
         }
+        .sheet(isPresented: $showUpsell) {
+            FeatureUpsellView(
+                feature: upsellFeature,
+                featureDescription: "Connected Apps require the Tools Pack upgrade. Integrate GitHub and Google Drive to give your AI agent access to your files and repositories."
+            )
+            .environmentObject(storeService)
+        }
 
     }
 
@@ -205,6 +214,13 @@ struct ConnectedAppsView: View {
 
     /// Connect to a provider
     private func connect(provider: ConnectedAppProvider) async {
+        // Gate connected apps behind the Tools Pack entitlement
+        if !storeService.hasToolsPack {
+            upsellFeature = provider == .github ? .githubTool : .googleDriveTool
+            showUpsell = true
+            return
+        }
+
         connectingProvider = provider
 
         do {
