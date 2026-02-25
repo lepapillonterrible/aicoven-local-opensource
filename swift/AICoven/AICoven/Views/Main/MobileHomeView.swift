@@ -472,8 +472,7 @@ struct MobileCovensRootView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                NebulaBackground()
-
+                NebulaBackground().ignoresSafeArea()
                 if isLoading {
                     ProgressView()
                         .scaleEffect(1.5)
@@ -910,8 +909,7 @@ struct MobileProfileRootView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                NebulaBackground()
-
+                NebulaBackground().ignoresSafeArea()
                 List {
                     Section("Account") {
                         NavigationLink(destination: EnhancedProfileView()) {
