@@ -500,6 +500,29 @@ enum PromptTemplates {
         .union(shellTools)
         .union(githubTools)
         .union(googleDriveTools)
+
+    /// Dynamically resolve the Set of actual enabled native tools according to Connected Accounts + Entitlements.
+    static func connectedToolSet() async -> Set<String> {
+        var tools = basicChatTools.union(fileTools)
+
+        // The shell tool currently requires the Tools Pack IAP entitlement
+        let hasToolsPack = await MainActor.run { StoreService.shared.hasToolsPack }
+        if hasToolsPack {
+            tools.formUnion(shellTools)
+        }
+
+        let accountsService = ConnectedAccountsService.shared
+
+        if await accountsService.getConnectedAccount(for: .github) != nil {
+            tools.formUnion(githubTools)
+        }
+
+        if await accountsService.getConnectedAccount(for: .googleDrive) != nil {
+            tools.formUnion(googleDriveTools)
+        }
+
+        return tools
+    }
 }
 
 // MARK: - Supporting Types

@@ -121,19 +121,23 @@ struct ContextBuilder {
         }
     }
 
+    let threadRepository: ThreadRepository
+    let memoryRepository: MemoryRepository
+    let embeddingService: EmbeddingService
+    let toolService: ToolService
     let limits: Limits
 
     init(
-        threadRepository: ThreadRepository = .shared,
-        memoryRepository: MemoryRepository = .shared,
-        embeddingService: EmbeddingService = .shared,
-        toolService: ToolService = .shared,
+        threadRepository: ThreadRepository? = nil,
+        memoryRepository: MemoryRepository? = nil,
+        embeddingService: EmbeddingService? = nil,
+        toolService: ToolService? = nil,
         limits: Limits = .init(maxRecentMessages: 16, maxRecentMemories: 16)
     ) {
-        self.threadRepository = threadRepository
-        self.memoryRepository = memoryRepository
-        self.embeddingService = embeddingService
-        self.toolService = toolService
+        self.threadRepository = threadRepository ?? .shared
+        self.memoryRepository = memoryRepository ?? .shared
+        self.embeddingService = embeddingService ?? .shared
+        self.toolService = toolService ?? .shared
         self.limits = limits
     }
 
@@ -154,8 +158,10 @@ struct ContextBuilder {
         threadID: String?,
         userMessage: String,
         maxContextTokens: Int? = nil,
-        toolConfig: ToolConfig = .default
+        toolConfig: ToolConfig? = nil
     ) async throws -> [LLMMessage] {
+        let config = toolConfig ?? .default
+
         // Split combined user text into the visible question and any
         // tool-generated context block appended by the composer/tools layer.
         let split = Self.splitUserAndToolContext(from: userMessage)
@@ -165,21 +171,21 @@ struct ContextBuilder {
         var segments = ContextSegments()
 
         // Layer 1: system contract (with tool documentation if tools are enabled)
-        let systemPrompt: String = if !toolConfig.enabledTools.isEmpty {
-            if toolConfig.isLocalModel {
+        let systemPrompt: String = if !config.enabledTools.isEmpty {
+            if config.isLocalModel {
                 // Use lean MLX-optimized prompt for small local models
                 PromptTemplates.generateMLXAgentPrompt(
-                    enabledTools: toolConfig.enabledTools,
-                    mcpServers: toolConfig.mcpServers
+                    enabledTools: config.enabledTools,
+                    mcpServers: config.mcpServers
                 )
             } else {
                 // Generate full agent prompt with tool documentation
                 PromptTemplates.generateAgentPrompt(
-                    enabledTools: toolConfig.enabledTools,
-                    mcpServers: toolConfig.mcpServers,
-                    includeThoughtBlocks: toolConfig.includeThoughtBlocks,
-                    includeScratchpad: toolConfig.includeScratchpad,
-                    includeMemoryWrite: toolConfig.includeMemoryWrite
+                    enabledTools: config.enabledTools,
+                    mcpServers: config.mcpServers,
+                    includeThoughtBlocks: config.includeThoughtBlocks,
+                    includeScratchpad: config.includeScratchpad,
+                    includeMemoryWrite: config.includeMemoryWrite
                 )
             }
         } else {
