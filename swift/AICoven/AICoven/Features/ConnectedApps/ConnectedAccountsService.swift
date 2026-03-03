@@ -15,8 +15,19 @@ actor ConnectedAccountsService {
         await UserScope.scopedKey("connected_accounts")
     }
 
+    /// Keychain key prefix for MCP tokens (will be user-scoped)
+    private let mcpKeychainPrefix = "mcp_server_token_"
+
+    /// UserDefaults key for MCP servers list (will be user-scoped)
+    private func getMCPServersKey() async -> String {
+        await UserScope.scopedKey("mcp_servers")
+    }
+
     /// In-memory cache of accounts (nil means not yet loaded)
     private var accountsCache: [ConnectedAccount]?
+
+    /// In-memory cache of MCP servers (nil means not yet loaded)
+    private var mcpServersCache: [MCPServerAccount]?
 
     /// Flag to ensure we only load once
     private var hasLoadedAccounts = false
@@ -31,6 +42,7 @@ actor ConnectedAccountsService {
         guard !hasLoadedAccounts else { return }
         hasLoadedAccounts = true
         await loadAccountsFromStorage()
+        await loadMCPServersFromStorage()
     }
 
     // MARK: - Account Management
@@ -128,6 +140,113 @@ actor ConnectedAccountsService {
             // Also delete the tokens
             await deleteTokenBundle(forAccountId: id)
         }
+    }
+
+    // MARK: - MCP Server Management
+
+    /// Get all connected MCP servers
+    func getAllMCPServers() async -> [MCPServerAccount] {
+        await ensureAccountsLoaded()
+        return mcpServersCache ?? []
+    }
+
+    /// Get a specific MCP server by ID
+    func getMCPServer(id: String) async -> MCPServerAccount? {
+        await ensureAccountsLoaded()
+        return mcpServersCache?.first { $0.id == id }
+    }
+
+    /// Create a new MCP server connection
+    func createMCPServer(
+        name: String,
+        serverUrl: String,
+        transport: MCPTransportType,
+        authType: MCPAuthType,
+        token: String? = nil
+    ) async throws -> MCPServerAccount {
+        let id = UUID().uuidString
+        let now = Date()
+
+        let server = MCPServerAccount(
+            id: id,
+            name: name,
+            serverUrl: serverUrl,
+            transport: transport,
+            authType: authType,
+            status: .connected,
+            createdAt: now,
+            updatedAt: now
+        )
+
+        if authType != .none, let token {
+            try await storeMCPToken(token, forServerId: id)
+        }
+
+        await ensureAccountsLoaded()
+        if mcpServersCache == nil {
+            mcpServersCache = []
+        }
+        mcpServersCache?.append(server)
+        await saveMCPServersToStorage()
+
+        return server
+    }
+
+    /// Update an existing MCP server
+    func updateMCPServer(_ server: MCPServerAccount, token: String? = nil) async throws {
+        await ensureAccountsLoaded()
+        if let index = mcpServersCache?.firstIndex(where: { $0.id == server.id }) {
+            var updated = server
+            updated.updatedAt = Date()
+            mcpServersCache?[index] = updated
+
+            if let token {
+                try await storeMCPToken(token, forServerId: server.id)
+            }
+
+            await saveMCPServersToStorage()
+        }
+    }
+
+    /// Delete an MCP server
+    func deleteMCPServer(id: String) async throws {
+        await deleteMCPToken(forServerId: id)
+
+        await ensureAccountsLoaded()
+        mcpServersCache?.removeAll { $0.id == id }
+        await saveMCPServersToStorage()
+    }
+
+    /// Get the authentication token for an MCP server
+    func getMCPToken(forServerId id: String) async throws -> String? {
+        // If the server doesn't exist, we can't get its token
+        guard let server = await getMCPServer(id: id), server.authType != .none else {
+            return nil
+        }
+
+        let key = await UserScope.scopedKeychainService(mcpKeychainPrefix + id)
+
+        guard let tokenString = await MainActor.run(body: { KeychainHelper.load(key: key) }) else {
+            throw ConnectedAccountError.mcpTokenNotFound(serverId: id)
+        }
+
+        return tokenString
+    }
+
+    /// Store the authentication token for an MCP server
+    private func storeMCPToken(_ token: String, forServerId id: String) async throws {
+        let key = await UserScope.scopedKeychainService(mcpKeychainPrefix + id)
+        do {
+            try KeychainHelper.save(key: key, value: token)
+        } catch {
+            throw ConnectedAccountError.mcpTokenStorageFailed(underlying: error)
+        }
+    }
+
+    /// Delete the authentication token for an MCP server
+    private func deleteMCPToken(forServerId id: String) async {
+        let key = await UserScope.scopedKeychainService(mcpKeychainPrefix + id)
+        KeychainHelper.delete(key: key)
     }
 
     // MARK: - Token Management
@@ -343,6 +462,40 @@ actor ConnectedAccountsService {
             AppErrorReporter.log(error: error, context: "ConnectedAccountsService.saveAccountsToStorage")
         }
     }
+
+    /// Load MCP servers from UserDefaults
+    private func loadMCPServersFromStorage() async {
+        let key = await getMCPServersKey()
+        guard let data = UserDefaults.standard.data(forKey: key) else {
+            mcpServersCache = []
+            return
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        do {
+            mcpServersCache = try decoder.decode([MCPServerAccount].self, from: data)
+        } catch {
+            AppErrorReporter.log(error: error, context: "ConnectedAccountsService.loadMCPServersFromStorage")
+            mcpServersCache = []
+        }
+    }
+
+    /// Save MCP servers to UserDefaults
+    private func saveMCPServersToStorage() async {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+
+        let key = await getMCPServersKey()
+
+        do {
+            let data = try encoder.encode(mcpServersCache)
+            UserDefaults.standard.set(data, forKey: key)
+        } catch {
+            AppErrorReporter.log(error: error, context: "ConnectedAccountsService.saveMCPServersToStorage")
+        }
+    }
 }
 
 // MARK: - Errors
@@ -358,6 +511,8 @@ enum ConnectedAccountError: LocalizedError {
     case tokenRefreshFailed(provider: ConnectedAppProvider)
     case missingConfiguration(key: String)
     case oauthFailed(message: String)
+    case mcpTokenNotFound(serverId: String)
+    case mcpTokenStorageFailed(underlying: Error)
 
     var errorDescription: String? {
         switch self {
@@ -379,6 +534,10 @@ enum ConnectedAccountError: LocalizedError {
             "Missing OAuth configuration: \(key)"
         case let .oauthFailed(message):
             "OAuth authentication failed: \(message)"
+        case let .mcpTokenNotFound(id):
+            "MCP authentication token not found for server: \(id)"
+        case let .mcpTokenStorageFailed(error):
+            "Failed to store MCP authentication token: \(error.localizedDescription)"
         }
     }
 }

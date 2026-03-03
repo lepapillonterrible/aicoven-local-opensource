@@ -277,16 +277,22 @@ enum PromptTemplates {
     """
 
     /// Generate a lean system prompt for MLX models with only essential sections.
-    static func generateMLXAgentPrompt(enabledTools: Set<String>) -> String {
+    static func generateMLXAgentPrompt(
+        enabledTools: Set<String>,
+        mcpServers: [MCPServerAccount] = []
+    ) -> String {
         var sections: [String] = []
 
         // Brief role description
         sections.append("You are a helpful AI assistant running locally. You have tools to help you answer questions that need real-time or external data.")
 
-        // Tool documentation — only enabled tools
-        let enabledDefs = toolDefinitions.filter { enabledTools.contains($0.name) }
-        if !enabledDefs.isEmpty {
-            sections.append(generateToolDocumentation(for: enabledDefs))
+        // Tool documentation — combine native and MCP tools
+        let nativeDefs = toolDefinitions.filter { enabledTools.contains($0.name) }
+        let mcpDefs = mcpToolDefinitions(from: mcpServers).filter { enabledTools.contains($0.name) }
+        let allDefs = nativeDefs + mcpDefs
+
+        if !allDefs.isEmpty {
+            sections.append(generateToolDocumentation(for: allDefs))
         }
 
         // MLX-optimized protocol
@@ -391,12 +397,14 @@ enum PromptTemplates {
     /// Generate a complete agent system prompt with tool documentation.
     /// - Parameters:
     ///   - enabledTools: Set of tool names that are enabled for this agent.
+    ///   - mcpServers: List of MCP servers to append dynamic tools from.
     ///   - includeThoughtBlocks: Whether to include thought block instructions.
     ///   - includeScratchpad: Whether to include scratchpad instructions.
     ///   - includeMemoryWrite: Whether to include memory write instructions.
     /// - Returns: Complete system prompt string.
     static func generateAgentPrompt(
         enabledTools: Set<String>,
+        mcpServers: [MCPServerAccount] = [],
         includeThoughtBlocks: Bool = true,
         includeScratchpad: Bool = true,
         includeMemoryWrite: Bool = true
@@ -412,9 +420,12 @@ enum PromptTemplates {
 
         // Tool documentation
         if !enabledTools.isEmpty {
-            let enabledDefs = toolDefinitions.filter { enabledTools.contains($0.name) }
-            if !enabledDefs.isEmpty {
-                sections.append(generateToolDocumentation(for: enabledDefs))
+            let nativeDefs = toolDefinitions.filter { enabledTools.contains($0.name) }
+            let mcpDefs = mcpToolDefinitions(from: mcpServers).filter { enabledTools.contains($0.name) }
+            let allDefs = nativeDefs + mcpDefs
+
+            if !allDefs.isEmpty {
+                sections.append(generateToolDocumentation(for: allDefs))
             }
             sections.append(toolProtocolInstructions)
         }
@@ -511,14 +522,67 @@ struct ToolParameter: Sendable {
     let required: Bool
 }
 
+// MARK: - Integration Helpers
+
+extension PromptTemplates {
+    /// Convert MCP tools from servers into internal ToolDefinitions for prompting.
+    static func mcpToolDefinitions(from servers: [MCPServerAccount]) -> [ToolDefinition] {
+        var defs: [ToolDefinition] = []
+        for server in servers {
+            guard let tools = server.cachedTools else { continue }
+
+            let safeServerName = server.name.lowercased()
+                .replacingOccurrences(of: " ", with: "_")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            for tool in tools {
+                // E.g. mcp.zapier.send_slack_message
+                let combinedName = "mcp.\(safeServerName).\(tool.name)"
+                var params: [ToolParameter] = []
+
+                if let properties = tool.inputSchema["properties"]?.value as? [String: AnyJSONValue] {
+                    let requiredFields = tool.inputSchema["required"]?.value as? [String] ?? []
+
+                    // Note: Sorting keys for deterministic output in prompt
+                    for key in properties.keys.sorted() {
+                        if case let .dictionary(propDict) = properties[key] {
+                            let type = propDict["type"]?.value as? String ?? "string"
+                            let desc = propDict["description"]?.value as? String ?? ""
+                            params.append(ToolParameter(
+                                name: key,
+                                type: type,
+                                description: desc,
+                                required: requiredFields.contains(key)
+                            ))
+                        }
+                    }
+                }
+
+                defs.append(ToolDefinition(
+                    name: combinedName,
+                    description: tool.description ?? "MCP Tool from \(server.name)",
+                    parameters: params,
+                    example: "{\"tool\": \"\(combinedName)\", \"input\": {}, \"reason\": \"Use \(tool.name)\"}"
+                ))
+            }
+        }
+        return defs
+    }
+}
+
 // MARK: - Conversion to LLMToolDefinition
 
 extension PromptTemplates {
     /// Convert internal tool definitions to protocol-level `LLMToolDefinition`
     /// objects for native function calling via `ChatOptions.tools`.
-    static func llmToolDefinitions(for enabledTools: Set<String>) -> [LLMToolDefinition] {
-        toolDefinitions
-            .filter { enabledTools.contains($0.name) }
+    static func llmToolDefinitions(
+        for enabledTools: Set<String>,
+        mcpServers: [MCPServerAccount] = []
+    ) -> [LLMToolDefinition] {
+        let nativeDefs = toolDefinitions.filter { enabledTools.contains($0.name) }
+        let mcpDefs = mcpToolDefinitions(from: mcpServers).filter { enabledTools.contains($0.name) }
+
+        return (nativeDefs + mcpDefs)
             .map { def in
                 LLMToolDefinition(
                     name: def.name,

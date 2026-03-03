@@ -442,7 +442,9 @@ actor ChatService {
 
         // Local models (MLX, Ollama) get a shorter, more assertive prompt.
         let isLocalModel = ["mlx", "ollama"].contains(descriptor.providerID)
-        let toolConfig: ContextBuilder.ToolConfig = isLocalModel ? .mlxTools : .allTools
+        let toolConfig: ContextBuilder.ToolConfig = isLocalModel
+            ? await .mlxTools()
+            : await .connected()
 
         // ── Context-aware repeat detection (ported from backend) ──────────
         // Tracks tool-call signatures across loop iterations so we can
@@ -555,7 +557,10 @@ actor ChatService {
             do {
                 // Pass native tool definitions for API providers (not local models).
                 let nativeTools: [LLMToolDefinition]? = isLocalModel ? nil
-                    : PromptTemplates.llmToolDefinitions(for: toolConfig.enabledTools)
+                    : PromptTemplates.llmToolDefinitions(
+                        for: toolConfig.enabledTools,
+                        mcpServers: toolConfig.mcpServers
+                    )
                 let options = ChatOptions(
                     temperature: 0.7,
                     maxTokens: nil,

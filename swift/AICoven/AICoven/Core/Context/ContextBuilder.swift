@@ -40,13 +40,17 @@ struct ContextBuilder {
         /// shorter, more directive prompts.
         let isLocalModel: Bool
 
+        /// All active MCP server configurations with their cached tools.
+        let mcpServers: [MCPServerAccount]
+
         /// Default configuration with basic chat tools enabled.
         static let `default` = ToolConfig(
             enabledTools: PromptTemplates.basicChatTools,
             includeThoughtBlocks: true,
             includeScratchpad: true,
             includeMemoryWrite: true,
-            isLocalModel: false
+            isLocalModel: false,
+            mcpServers: []
         )
 
         /// Configuration with no tools enabled.
@@ -55,7 +59,8 @@ struct ContextBuilder {
             includeThoughtBlocks: false,
             includeScratchpad: false,
             includeMemoryWrite: false,
-            isLocalModel: false
+            isLocalModel: false,
+            mcpServers: []
         )
 
         /// Configuration with all tools enabled.
@@ -64,20 +69,56 @@ struct ContextBuilder {
             includeThoughtBlocks: true,
             includeScratchpad: true,
             includeMemoryWrite: true,
-            isLocalModel: false
+            isLocalModel: false,
+            mcpServers: []
         )
+
+        /// Configuration that dynamically includes only tools whose backing
+        /// connected app (GitHub, Google Workspace) is actually linked.
+        /// Call this instead of `.allTools` so the LLM never sees tools it can't use.
+        static func connected() async -> ToolConfig {
+            let tools = await PromptTemplates.connectedToolSet()
+            let mcpServers = await ConnectedAccountsService.shared.getAllMCPServers()
+
+            // Add all cached tools to the enabled list so the prompt generator includes them.
+            var allTools = tools
+            for server in mcpServers {
+                let mcpToolNames = PromptTemplates.mcpToolDefinitions(from: [server]).map(\.name)
+                allTools.formUnion(mcpToolNames)
+            }
+
+            return ToolConfig(
+                enabledTools: allTools,
+                includeThoughtBlocks: true,
+                includeScratchpad: true,
+                includeMemoryWrite: true,
+                isLocalModel: false,
+                mcpServers: mcpServers
+            )
+        }
 
         /// Configuration optimized for small local models (MLX, Ollama).
         /// Uses fewer tools and no thought/scratchpad/memory instructions.
-        static let mlxTools = ToolConfig(
-            enabledTools: PromptTemplates.basicChatTools
+        static func mlxTools() async -> ToolConfig {
+            let mcpServers = await ConnectedAccountsService.shared.getAllMCPServers()
+            var tools = PromptTemplates.basicChatTools
                 .union(PromptTemplates.fileTools)
-                .union(PromptTemplates.shellTools),
-            includeThoughtBlocks: false,
-            includeScratchpad: false,
-            includeMemoryWrite: false,
-            isLocalModel: true
-        )
+                .union(PromptTemplates.shellTools)
+
+            for server in mcpServers {
+                let mcpToolNames = PromptTemplates.mcpToolDefinitions(from: [server]).map(\.name)
+                tools.formUnion(mcpToolNames)
+            }
+
+            return ToolConfig(
+                enabledTools: tools,
+                includeThoughtBlocks: false,
+                includeScratchpad: false,
+                includeMemoryWrite: false,
+                isLocalModel: true,
+                mcpServers: mcpServers
+            )
+        }
     }
 
     let limits: Limits
@@ -128,12 +169,14 @@ struct ContextBuilder {
             if toolConfig.isLocalModel {
                 // Use lean MLX-optimized prompt for small local models
                 PromptTemplates.generateMLXAgentPrompt(
-                    enabledTools: toolConfig.enabledTools
+                    enabledTools: toolConfig.enabledTools,
+                    mcpServers: toolConfig.mcpServers
                 )
             } else {
                 // Generate full agent prompt with tool documentation
                 PromptTemplates.generateAgentPrompt(
                     enabledTools: toolConfig.enabledTools,
+                    mcpServers: toolConfig.mcpServers,
                     includeThoughtBlocks: toolConfig.includeThoughtBlocks,
                     includeScratchpad: toolConfig.includeScratchpad,
                     includeMemoryWrite: toolConfig.includeMemoryWrite
