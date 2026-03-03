@@ -1,85 +1,381 @@
 import SwiftUI
 
+// MARK: - MCP Server Management View
+
+/// Main view for managing MCP servers (add/remove/test/view tools)
 struct MCPServerManagementView: View {
+    @EnvironmentObject var storeService: StoreService
+
     @State private var servers: [MCPServerAccount] = []
-    @State private var showingAddSheet = false
-    @State private var selectedServer: MCPServerAccount?
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+    @State private var showAddSheet = false
+    @State private var showSubscription = false
 
-    // Form state
-    @State private var newName = ""
-    @State private var newUrl = ""
+    let service = ConnectedAccountsService.shared
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: Spacing.xl) {
+                headerSection
+
+                if isLoading {
+                    ProgressView()
+                        .padding(.top, Spacing.xxl)
+                } else if servers.isEmpty {
+                    emptyStateSection
+                } else {
+                    serverListSection
+                }
+
+                addServerButton
+            }
+            .padding(.bottom, Spacing.xxl)
+        }
+        .background(NebulaBackground())
+        .task { await loadServers() }
+        .sheet(isPresented: $showAddSheet) {
+            AddMCPServerSheet(onAdded: {
+                Task { await loadServers() }
+            })
+        }
+        .alert("Error", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            if let errorMessage { Text(errorMessage) }
+        }
+    }
+
+    // MARK: - Sub-views
+
+    private var headerSection: some View {
+        VStack(spacing: Spacing.sm) {
+            IconBadge(icon: "server.rack", size: 60, color: .aicovenPurple)
+
+            Text("MCP Servers")
+                .font(.aicovenDisplaySmall)
+                .foregroundColor(.aicovenTextPrimary)
+
+            Text("Connect remote tool servers for extended agent capabilities")
+                .font(.aicovenBody)
+                .foregroundColor(.aicovenTextSecondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.top, Spacing.xl)
+        .padding(.horizontal, Spacing.lg)
+    }
+
+    private var emptyStateSection: some View {
+        VStack(spacing: Spacing.md) {
+            Image(systemName: "puzzlepiece.extension")
+                .font(.system(size: 48))
+                .foregroundColor(.aicovenTextTertiary)
+
+            Text("No MCP Servers")
+                .font(.aicovenH2)
+                .foregroundColor(.aicovenTextSecondary)
+
+            Text("Add an MCP server like Zapier to give your agents access to thousands of external tools and actions.")
+                .font(.aicovenBodySmall)
+                .foregroundColor(.aicovenTextTertiary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, Spacing.xl)
+        }
+        .padding(.top, Spacing.xl)
+    }
+
+    private var serverListSection: some View {
+        VStack(spacing: Spacing.md) {
+            ForEach(servers) { server in
+                MCPServerCard(
+                    server: server,
+                    onTest: { await testServer(server) },
+                    onDelete: { await deleteServer(server) }
+                )
+            }
+        }
+        .padding(.horizontal, Spacing.lg)
+    }
+
+    private var addServerButton: some View {
+        Button(action: {
+            if storeService.hasToolsPack {
+                showAddSheet = true
+            } else {
+                showSubscription = true
+            }
+        }) {
+            HStack(spacing: Spacing.sm) {
+                Image(systemName: "plus.circle.fill")
+                Text("Add MCP Server")
+            }
+            .font(.aicovenH3)
+            .foregroundColor(.aicovenPurple)
+            .padding(Spacing.md)
+            .frame(maxWidth: .infinity)
+            .background(Color.aicovenPurple.opacity(0.1))
+            .cornerRadius(BorderRadius.md)
+        }
+        .padding(.horizontal, Spacing.lg)
+        .sheet(isPresented: $showSubscription) {
+            FeatureUpsellView(
+                feature: .shellTool, // Gated by Tools Pack
+                featureDescription: "Connect remote MCP servers like Zapier or custom endpoints to give your agents powerful new capabilities."
+            )
+            .environmentObject(storeService)
+        }
+    }
+
+    // MARK: - API calls
+
+    private func loadServers() async {
+        isLoading = true
+        defer { isLoading = false }
+
+        let loaded = await service.getAllMCPServers()
+        await MainActor.run {
+            servers = loaded
+        }
+    }
+
+    private func testServer(_ server: MCPServerAccount) async {
+        do {
+            let token = try? await service.getMCPToken(forServerId: server.id)
+            let client = MCPClient(server: server, token: token)
+            try await client.connect()
+
+            // Wait a moment for tools to cache
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+
+            await loadServers()
+        } catch {
+            // Suggest switching transport if the connection failed
+            let transportHint = server.transport == .sse
+                ? "\n\nTip: Try removing this server and re-adding it with 'Streamable HTTP' transport."
+                : server.transport == .streamableHttp
+                ? "\n\nTip: Try removing this server and re-adding it with 'SSE' transport."
+                : ""
+            errorMessage = "Connection test failed: \(error.localizedDescription)\(transportHint)"
+        }
+    }
+
+    private func deleteServer(_ server: MCPServerAccount) async {
+        do {
+            try await service.deleteMCPServer(id: server.id)
+            await loadServers()
+        } catch {
+            errorMessage = "Failed to remove server: \(error.localizedDescription)"
+        }
+    }
+}
+
+// MARK: - MCP Server Card
+
+/// Card displaying a single MCP server with status, tools, and actions
+struct MCPServerCard: View {
+    let server: MCPServerAccount
+    let onTest: () async -> Void
+    let onDelete: () async -> Void
+
+    @State private var isTesting = false
+    @State private var showTools = false
+    @State private var showDeleteConfirm = false
+
+    /// Status indicator color
+    private var statusColor: Color {
+        switch server.status {
+        case .connected: .green
+        case .error: .red
+        case .pending: .orange
+        case .disconnected: .red
+        case .revoked: .gray
+        }
+    }
+
+    var body: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                // Header row: name + status
+                HStack(spacing: Spacing.md) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.aicovenPurple.opacity(0.2))
+                            .frame(width: 48, height: 48)
+
+                        Image(systemName: "server.rack")
+                            .font(.system(size: 22))
+                            .foregroundColor(.aicovenPurple)
+                    }
+
+                    VStack(alignment: .leading, spacing: Spacing.xxs) {
+                        Text(server.name)
+                            .font(.aicovenH3)
+                            .foregroundColor(.aicovenTextPrimary)
+
+                        Text(server.serverUrl)
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextTertiary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
+
+                    // Status badge
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(statusColor)
+                            .frame(width: 8, height: 8)
+                        Text(server.status.rawValue.capitalized)
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(statusColor.opacity(0.15))
+                    .clipShape(Capsule())
+                }
+
+                // Tool count
+                if let tools = server.cachedTools, !tools.isEmpty {
+                    Button(action: { showTools.toggle() }) {
+                        HStack(spacing: Spacing.xs) {
+                            Image(systemName: "wrench.and.screwdriver")
+                                .font(.caption)
+                            Text("\(tools.count) tool\(tools.count == 1 ? "" : "s") available")
+                                .font(.aicovenCaption)
+                            Image(systemName: showTools ? "chevron.up" : "chevron.down")
+                                .font(.caption2)
+                        }
+                        .foregroundColor(.aicovenTeal)
+                    }
+
+                    // Expandable tools list
+                    if showTools {
+                        VStack(alignment: .leading, spacing: Spacing.xs) {
+                            ForEach(tools, id: \.name) { tool in
+                                HStack(spacing: Spacing.xs) {
+                                    Image(systemName: "gearshape")
+                                        .font(.caption2)
+                                        .foregroundColor(.aicovenTextTertiary)
+                                    Text(tool.name)
+                                        .font(.aicovenCaption)
+                                        .foregroundColor(.aicovenTextSecondary)
+                                }
+                            }
+                        }
+                        .padding(.leading, Spacing.md)
+                    }
+                }
+
+                // Action buttons
+                HStack(spacing: Spacing.md) {
+                    // Test connection
+                    Button(action: {
+                        isTesting = true
+                        Task {
+                            await onTest()
+                            isTesting = false
+                        }
+                    }) {
+                        HStack(spacing: 4) {
+                            if isTesting {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                            } else {
+                                Image(systemName: "bolt.fill")
+                            }
+                            Text(isTesting ? "Testing..." : "Test")
+                        }
+                        .font(.aicovenCaption)
+                        .foregroundColor(.aicovenTeal)
+                        .padding(.horizontal, Spacing.sm)
+                        .padding(.vertical, Spacing.xs)
+                        .background(Color.aicovenTeal.opacity(0.1))
+                        .cornerRadius(BorderRadius.sm)
+                    }
+                    .disabled(isTesting)
+
+                    Spacer()
+
+                    // Delete
+                    Button(action: { showDeleteConfirm = true }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "trash")
+                            Text("Remove")
+                        }
+                        .font(.aicovenCaption)
+                        .foregroundColor(.red.opacity(0.8))
+                        .padding(.horizontal, Spacing.sm)
+                        .padding(.vertical, Spacing.xs)
+                        .background(Color.red.opacity(0.1))
+                        .cornerRadius(BorderRadius.sm)
+                    }
+                    .confirmationDialog("Remove MCP Server?", isPresented: $showDeleteConfirm) {
+                        Button("Remove \(server.name)", role: .destructive) {
+                            Task { await onDelete() }
+                        }
+                    } message: {
+                        Text("This will remove the MCP server and its tools from all agents.")
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Add MCP Server Sheet
+
+/// Sheet for adding a new MCP server
+struct AddMCPServerSheet: View {
+    @Environment(\.dismiss) var dismiss
+
+    let onAdded: () -> Void
+
+    @State private var name = ""
+    @State private var serverUrl = ""
+    @State private var transport = "sse"
     @State private var authType = "none"
-    @State private var bearerToken = ""
-
-    // Status state
-    @State private var isSaving = false
+    @State private var authToken = ""
+    @State private var isSubmitting = false
     @State private var errorMessage: String?
 
     let service = ConnectedAccountsService.shared
 
     var body: some View {
-        Form {
-            Section(header: Text("Model Context Protocol Servers"), footer: Text("Connect to external tools and services using the MCP protocol.")) {
-                if servers.isEmpty {
-                    Text("No MCP servers connected.")
-                        .foregroundColor(.secondary)
-                } else {
-                    List {
-                        ForEach(servers) { server in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(server.name)
-                                        .font(.headline)
-                                    Text(server.serverUrl)
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-
-                                Spacer()
-
-                                // Status indicator
-                                Circle()
-                                    .fill(statusColor(for: server.status))
-                                    .frame(width: 10, height: 10)
-
-                                Text(server.status.rawValue)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            .contentShape(Rectangle())
-                            .contextMenu {
-                                Button("Delete", role: .destructive) {
-                                    deleteServer(server)
-                                }
-                            }
-                        }
-                        .onDelete(perform: deleteServersAt)
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: Spacing.lg) {
+                    // Info banner
+                    HStack(spacing: Spacing.sm) {
+                        Image(systemName: "info.circle.fill")
+                            .foregroundColor(.aicovenTeal)
+                        Text("Enter the details for your remote MCP server (e.g. Zapier, custom server).")
+                            .font(.aicovenBodySmall)
+                            .foregroundColor(.aicovenTextSecondary)
                     }
-                }
+                    .padding(Spacing.md)
+                    .background(Color.aicovenGlass)
+                    .cornerRadius(BorderRadius.md)
 
-                Button(action: { showingAddSheet = true }) {
-                    HStack {
-                        Image(systemName: "plus.circle.fill")
-                        Text("Add MCP Server")
+                    // Name field
+                    VStack(alignment: .leading, spacing: Spacing.xs) {
+                        Text("Server Name")
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextSecondary)
+                        TextField("e.g. Zapier", text: $name)
+                            .textFieldStyle(.roundedBorder)
                     }
-                }
-            }
-        }
-        .navigationTitle("MCP Servers")
-        .interactiveDismissDisabled(false)
-        .onAppear {
-            loadServers()
-        }
-        #if os(macOS)
-        .formStyle(.grouped)
-        .frame(minWidth: 450, minHeight: 350)
-        #endif
-        .sheet(isPresented: $showingAddSheet) {
-            NavigationView {
-                Form {
-                    Section("Server Details") {
-                        TextField("Name", text: $newName)
-                        TextField("URL (SSE/HTTP)", text: $newUrl)
+
+                    // URL field
+                    VStack(alignment: .leading, spacing: Spacing.xs) {
+                        Text("Server URL")
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextSecondary)
+                        TextField("https://actions.zapier.com/mcp/...", text: $serverUrl)
+                            .textFieldStyle(.roundedBorder)
                             .disableAutocorrection(true)
                         #if os(iOS)
                             .keyboardType(.URL)
@@ -87,143 +383,126 @@ struct MCPServerManagementView: View {
                         #endif
                     }
 
-                    Section("Authentication") {
-                        Picker("Type", selection: $authType) {
+                    // Transport picker
+                    VStack(alignment: .leading, spacing: Spacing.xs) {
+                        Text("Transport")
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextSecondary)
+                        Picker("Transport", selection: $transport) {
+                            Text("SSE").tag("sse")
+                            Text("Streamable HTTP").tag("streamable_http")
+                        }
+                        .pickerStyle(.segmented)
+                    }
+
+                    // Auth type picker
+                    VStack(alignment: .leading, spacing: Spacing.xs) {
+                        Text("Authentication")
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextSecondary)
+                        Picker("Auth", selection: $authType) {
                             Text("None").tag("none")
                             Text("Bearer Token").tag("bearer")
-                            // Basic auth could be added later
+                            Text("API Key").tag("api_key")
                         }
+                        .pickerStyle(.segmented)
+                    }
 
-                        if authType == "bearer" {
-                            SecureField("API Key / Token", text: $bearerToken)
+                    // Auth token field (shown when auth is required)
+                    if authType != "none" {
+                        VStack(alignment: .leading, spacing: Spacing.xs) {
+                            Text(authType == "bearer" ? "Bearer Token" : "API Key")
+                                .font(.aicovenCaption)
+                                .foregroundColor(.aicovenTextSecondary)
+                            SecureField("Enter token...", text: $authToken)
+                                .textFieldStyle(.roundedBorder)
                         }
                     }
 
-                    if let error = errorMessage {
-                        Section {
-                            Text(error)
-                                .foregroundColor(.red)
-                                .font(.footnote)
+                }
+                .padding(Spacing.lg)
+            }
+            .background(NebulaBackground())
+            .navigationTitle("Add MCP Server")
+            #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+            #endif
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(action: { Task { await submit() } }) {
+                            if isSubmitting {
+                                ProgressView()
+                            } else {
+                                Text("Add")
+                                    .fontWeight(.bold)
+                            }
                         }
+                        .disabled(!isFormValid || isSubmitting)
                     }
                 }
-                .navigationTitle("Add Server")
-                #if os(macOS)
-                    .formStyle(.grouped)
-                #else
-                    .navigationBarTitleDisplayMode(.inline)
-                #endif
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Cancel") {
-                                showingAddSheet = false
-                                resetForm()
-                            }
-                        }
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Save") {
-                                saveServer()
-                            }
-                            .disabled(newName.isEmpty || newUrl.isEmpty || isSaving)
-                        }
-                    }
-            }
-            #if os(macOS)
-            .frame(width: 450, height: 350)
-            #endif
+                // Show errors as an alert so they're always visible
+                .alert("Error", isPresented: Binding(
+                    get: { errorMessage != nil },
+                    set: { if !$0 { errorMessage = nil } }
+                )) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    if let errorMessage { Text(errorMessage) }
+                }
         }
     }
 
-    private func statusColor(for status: ConnectionStatus) -> Color {
-        switch status {
-        case .connected: .green
-        case .disconnected: .red
-        case .pending: .orange
-        case .error: .red
-        case .revoked: .gray
-        }
+    /// Form validation
+    private var isFormValid: Bool {
+        !name.trimmingCharacters(in: .whitespaces).isEmpty &&
+            !serverUrl.trimmingCharacters(in: .whitespaces).isEmpty &&
+            (authType == "none" || !authToken.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
-    private func loadServers() {
-        Task {
-            let loaded = await service.getAllMCPServers()
-            await MainActor.run {
-                servers = loaded
-            }
-        }
-    }
-
-    private func saveServer() {
-        guard let url = URL(string: newUrl) else {
+    /// Submit the new MCP server locally
+    private func submit() async {
+        guard let url = URL(string: serverUrl.trimmingCharacters(in: .whitespaces)) else {
             errorMessage = "Invalid URL"
             return
         }
 
-        isSaving = true
+        isSubmitting = true
         errorMessage = nil
+        defer { isSubmitting = false }
 
-        Task {
-            // First logic check to see if we can connect or fetch tools?
-            // For now, let's just save the configuration. The MCPClient will connect when needed.
-            var newAccount: MCPServerAccount?
-            do {
-                newAccount = try await service.createMCPServer(
-                    name: newName,
-                    serverUrl: url.absoluteString,
-                    transport: .sse, // Default for HTTP
-                    authType: MCPAuthType(rawValue: authType) ?? .none,
-                    token: authType == "bearer" && !bearerToken.isEmpty ? bearerToken : nil
-                )
+        let mcpTransport: MCPTransportType = transport == "sse" ? .sse : .streamableHttp
+        let mcpAuthType = MCPAuthType(rawValue: authType) ?? .none
+        let tokenToSave = authType != "none" ? authToken.trimmingCharacters(in: .whitespaces) : nil
 
-                await MainActor.run {
-                    isSaving = false
-                    showingAddSheet = false
-                    resetForm()
-                    loadServers()
+        do {
+            let newAccount = try await service.createMCPServer(
+                name: name.trimmingCharacters(in: .whitespaces),
+                serverUrl: url.absoluteString,
+                transport: mcpTransport,
+                authType: mcpAuthType,
+                token: tokenToSave
+            )
+
+            // Trigger background connect
+            Task.detached {
+                let client = MCPClient(server: newAccount, token: tokenToSave)
+                do {
+                    try await client.connect()
+                } catch {
+                    print("Initial MCP connection failed: \(error)")
                 }
-            } catch {
-                await MainActor.run {
-                    errorMessage = error.localizedDescription
-                    isSaving = false
-                }
-                return
             }
 
-            // Background task: trigger a test connection to cache tools immediately
-            if let newAccount {
-                Task.detached {
-                    let client = MCPClient(server: newAccount, token: newAccount.authType == .bearer ? bearerToken : (newAccount.authType == .apiKey ? bearerToken : nil))
-                    do {
-                        // connect() will fetch and store tools in the account
-                        try await client.connect()
-                    } catch {
-                        print("Initial MCP connection failed: \(error)")
-                    }
-                }
+            await MainActor.run {
+                onAdded()
+                dismiss()
             }
-        }
-    }
 
-    private func deleteServer(_ server: MCPServerAccount) {
-        Task {
-            // Remove server config and token
-            try? await service.deleteMCPServer(id: server.id)
-            loadServers()
+        } catch {
+            errorMessage = "Failed to add server: \(error.localizedDescription)"
         }
-    }
-
-    private func deleteServersAt(_ indexSet: IndexSet) {
-        let serversToDelete = indexSet.map { servers[$0] }
-        for server in serversToDelete {
-            deleteServer(server)
-        }
-    }
-
-    private func resetForm() {
-        newName = ""
-        newUrl = ""
-        authType = "none"
-        bearerToken = ""
-        errorMessage = nil
     }
 }

@@ -34,62 +34,66 @@ struct ConnectedAppsView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 24) {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 24) {
 
-                // Header
-                headerSection
+                    // Header
+                    headerSection
 
-                // Info banner
-                infoBanner
+                    // Info banner
+                    infoBanner
 
-                // Connected apps list
-                VStack(spacing: 16) {
-                    ForEach(ConnectedAppProvider.allCases, id: \.rawValue) { provider in
-                        ConnectedAppRow(
-                            provider: provider,
-                            account: accounts.first { $0.provider == provider && $0.status == .connected },
-                            isConnecting: connectingProvider == provider,
-                            onConnect: { await connect(provider: provider) },
-                            onDisconnect: { await disconnect(provider: provider) },
-                            onBrowseDrive: provider == .googleDrive ? { showingGooglePicker = true } : nil
-                        )
-                    }
-                }
-                .padding(.horizontal)
-
-                // Show recently picked files if any
-                if !pickedFiles.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Recently Picked Files")
-                            .font(.aicovenH3)
-                            .foregroundColor(.aicovenTextSecondary)
-                        ForEach(pickedFiles) { file in
-                            HStack {
-                                Image(systemName: "doc.fill")
-                                    .foregroundColor(.aicovenTeal)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(file.name)
-                                        .font(.aicovenBodySmall)
-                                        .foregroundColor(.aicovenTextPrimary)
-                                    Text(file.id)
-                                        .font(.aicovenCaption)
-                                        .foregroundColor(.aicovenTextTertiary)
-                                }
-                                Spacer()
-                            }
-                            .padding(8)
-                            .background(Color.aicovenGlass)
-                            .cornerRadius(8)
+                    // Connected apps list
+                    VStack(spacing: 16) {
+                        ForEach(ConnectedAppProvider.allCases, id: \.rawValue) { provider in
+                            ConnectedAppRow(
+                                provider: provider,
+                                account: accounts.first { $0.provider == provider && $0.status == .connected },
+                                isConnecting: connectingProvider == provider,
+                                onConnect: { await connect(provider: provider) },
+                                onDisconnect: { await disconnect(provider: provider) },
+                                onBrowseDrive: provider == .googleDrive ? { showingGooglePicker = true } : nil
+                            )
                         }
                     }
                     .padding(.horizontal)
-                }
 
-                Spacer(minLength: 40)
+                    // Show recently picked files if any
+                    if !pickedFiles.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Recently Picked Files")
+                                .font(.aicovenH3)
+                                .foregroundColor(.aicovenTextSecondary)
+                            ForEach(pickedFiles) { file in
+                                HStack {
+                                    Image(systemName: "doc.fill")
+                                        .foregroundColor(.aicovenTeal)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(file.name)
+                                            .font(.aicovenBodySmall)
+                                            .foregroundColor(.aicovenTextPrimary)
+                                        Text(file.id)
+                                            .font(.aicovenCaption)
+                                            .foregroundColor(.aicovenTextTertiary)
+                                    }
+                                    Spacer()
+                                }
+                                .padding(8)
+                                .background(Color.aicovenGlass)
+                                .cornerRadius(8)
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
+
+                    mcpServersSection
+
+                    Spacer(minLength: 40)
+                }
             }
+            .background(NebulaBackground())
         }
-        .background(NebulaBackground())
         .task { await loadAccounts() }
         .alert("Error", isPresented: Binding(
             get: { errorMessage != nil },
@@ -138,22 +142,6 @@ struct ConnectedAppsView: View {
             )
             .environmentObject(storeService)
         }
-        .sheet(isPresented: $showingMCPServers) {
-            NavigationView {
-                MCPServerManagementView()
-                #if os(macOS)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Close") { showingMCPServers = false }
-                        }
-                    }
-                #endif
-            }
-            #if os(macOS)
-            .frame(width: 500, height: 550)
-            #endif
-        }
-
     }
 
     // MARK: - View Components
@@ -198,6 +186,46 @@ struct ConnectedAppsView: View {
         .background(Color.aicovenGlass)
         .cornerRadius(12)
         .padding(.horizontal)
+    }
+
+    /// MCP Servers section – navigates to the dedicated management view
+    private var mcpServersSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("MCP Servers")
+                .font(.aicovenH3)
+                .foregroundColor(.aicovenTextSecondary)
+                .padding(.horizontal, 16)
+
+            // Navigation link to full MCP management view
+            NavigationLink(destination: MCPServerManagementView()) {
+                GlassCard {
+                    HStack(spacing: 16) {
+                        // Icon badge for MCP servers
+                        IconBadge(icon: "server.rack", size: 40, color: .aicovenPurple)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Remote MCP Servers")
+                                .font(.aicovenBodyMedium)
+                                .foregroundColor(.aicovenTextPrimary)
+
+                            Text("Connect tools like Zapier, n8n, and custom MCP endpoints")
+                                .font(.aicovenCaption)
+                                .foregroundColor(.aicovenTextSecondary)
+                                .lineLimit(2)
+                        }
+
+                        Spacer()
+
+                        // Chevron indicator for navigation
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(.aicovenTextTertiary)
+                            .font(.aicovenCaption)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
+        }
     }
 
     // MARK: - Actions
@@ -355,70 +383,65 @@ struct ConnectedAppRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 16) {
-            // Icon
-            ZStack {
-                Circle()
-                    .fill(providerColor.opacity(0.15))
-                    .frame(width: 48, height: 48)
+        GlassCard {
+            HStack(spacing: 16) {
+                // Icon
+                ZStack {
+                    Circle()
+                        .fill(providerColor.opacity(0.15))
+                        .frame(width: 48, height: 48)
 
-                Image(systemName: provider.iconName)
-                    .font(.system(size: 24))
-                    .foregroundColor(providerColor)
-            }
-
-            // Info
-            VStack(alignment: .leading, spacing: 4) {
-                Text(provider.displayName)
-                    .font(.aicovenH3)
-                    .foregroundColor(.aicovenTextPrimary)
-
-                if let account {
-                    Text(account.displayName)
-                        .font(.aicovenCaption)
-                        .foregroundColor(.aicovenTextSecondary)
-                } else {
-                    Text("Not connected")
-                        .font(.aicovenCaption)
-                        .foregroundColor(.aicovenTextTertiary)
+                    Image(systemName: provider.iconName)
+                        .font(.system(size: 24))
+                        .foregroundColor(providerColor)
                 }
-            }
 
-            Spacer()
+                // Info
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(provider.displayName)
+                        .font(.aicovenH3)
+                        .foregroundColor(.aicovenTextPrimary)
 
-            // Action buttons
-            if isConnecting {
-                ProgressView()
-                    .scaleEffect(0.8)
-            } else if isConnected {
-                HStack(spacing: 8) {
+                    if let account {
+                        Text(account.displayName)
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextSecondary)
+                    } else {
+                        Text("Not connected")
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextTertiary)
+                    }
+                }
+
+                Spacer()
+
+                // Action buttons stacked vertically
+                VStack(spacing: 8) {
                     if let onBrowseDrive {
-                        Button("Browse Files") {
-                            onBrowseDrive()
+                        Button(action: { onBrowseDrive() }) {
+                            Label("Browse", systemImage: "folder.badge.plus")
+                                .font(.aicovenBodySmall)
                         }
-                        .buttonStyle(.bordered)
-                        .tint(.blue)
+                        .buttonStyle(ConnectButtonStyle())
                     }
-                    Button("Disconnect") {
-                        Task { await onDisconnect() }
+
+                    if isConnecting {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    } else if isConnected {
+                        Button("Disconnect") {
+                            Task { await onDisconnect() }
+                        }
+                        .buttonStyle(DisconnectButtonStyle())
+                    } else {
+                        Button("Connect") {
+                            Task { await onConnect() }
+                        }
+                        .buttonStyle(ConnectButtonStyle())
                     }
-                    .buttonStyle(.bordered)
-                    .tint(.red)
                 }
-            } else {
-                Button("Connect") {
-                    Task { await onConnect() }
-                }
-                .buttonStyle(.borderedProminent)
             }
         }
-        .padding()
-        .background(Color.aicovenGlass)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.aicovenBorder, lineWidth: 1)
-        )
-        .cornerRadius(12)
     }
 
     /// Color for each provider
@@ -627,3 +650,37 @@ struct GitHubDeviceCodeSheet_Previews: PreviewProvider {
     }
 }
 #endif
+
+// MARK: - Button Styles
+
+struct ConnectButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.aicovenBodySmall)
+            .foregroundColor(.white)
+            .padding(.horizontal, Spacing.md)
+            .padding(.vertical, Spacing.sm)
+            .background(
+                LinearGradient(
+                    colors: [Color.aicovenTeal, Color.aicovenPurple],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .cornerRadius(BorderRadius.md)
+            .opacity(configuration.isPressed ? 0.7 : 1.0)
+    }
+}
+
+struct DisconnectButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.aicovenBodySmall)
+            .foregroundColor(.aicovenTextSecondary)
+            .padding(.horizontal, Spacing.md)
+            .padding(.vertical, Spacing.sm)
+            .background(Color.aicovenGlass)
+            .cornerRadius(BorderRadius.md)
+            .opacity(configuration.isPressed ? 0.7 : 1.0)
+    }
+}

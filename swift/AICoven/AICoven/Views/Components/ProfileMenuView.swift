@@ -30,6 +30,20 @@ struct ProfileMenuView: View {
                 Label("Provider Keys", systemImage: "key")
             }
 
+            // Connected Apps
+            Button {
+                onOpenTab?(.connectedApps)
+            } label: {
+                Label("Connected Apps", systemImage: "app.connected.to.app.below.fill")
+            }
+
+            // MCP Servers
+            Button {
+                onOpenTab?(.mcpServers)
+            } label: {
+                Label("MCP Servers", systemImage: "server.rack")
+            }
+
             // Budgets & Usage
             Button {
                 onOpenTab?(.usage)
