@@ -253,7 +253,7 @@ actor ToolExecutionService {
             return await .error(tool: toolCall.name, message: "MCP server '\(serverSlug)' not found or not connected.")
         }
 
-        let client = MCPClient(account: server)
+        let client = MCPClient(server: server, token: nil)
 
         do {
             let items = try await client.callTool(name: actionName, arguments: toolCall.args)
@@ -792,8 +792,6 @@ actor ToolExecutionService {
 
         // For Coven agents, we might not have set whitelists yet.
         // Let's implement a fallback allow-list for basic tools.
-        let defaultTools: Set<String> = ["current_time"]
-
         if let allowed = toolWhitelist[agentType] {
             return allowed.contains(toolName)
         }

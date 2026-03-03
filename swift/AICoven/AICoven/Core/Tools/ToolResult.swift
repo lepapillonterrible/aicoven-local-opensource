@@ -55,7 +55,7 @@ struct ToolExecutionResult: Codable, Sendable {
     // MARK: - Convenience Initializers
 
     /// Create a successful result with optional context block for the LLM.
-    static func success(
+    nonisolated static func success(
         tool: String,
         result: [String: AnyJSONValue] = [:],
         contextBlock: String? = nil
@@ -69,7 +69,7 @@ struct ToolExecutionResult: Codable, Sendable {
     }
 
     /// Create an error result.
-    static func error(
+    nonisolated static func error(
         tool: String,
         message: String,
         errorType: String = "execution_failed",
@@ -87,7 +87,7 @@ struct ToolExecutionResult: Codable, Sendable {
     }
 
     /// Create a validation error result (agent can fix parameters).
-    static func validationError(
+    nonisolated static func validationError(
         tool: String,
         message: String,
         field: String? = nil,
@@ -105,7 +105,7 @@ struct ToolExecutionResult: Codable, Sendable {
     }
 
     /// Create a permission denied result.
-    static func permissionDenied(
+    nonisolated static func permissionDenied(
         tool: String,
         message: String,
         helpfulInstructions: String? = nil
@@ -121,7 +121,7 @@ struct ToolExecutionResult: Codable, Sendable {
     }
 
     /// Create a denied result (user declined approval).
-    static func denied(tool: String, reason: String = "User denied execution") -> ToolExecutionResult {
+    nonisolated static func denied(tool: String, reason: String = "User denied execution") -> ToolExecutionResult {
         ToolExecutionResult(
             tool: tool,
             status: "denied",
@@ -131,7 +131,7 @@ struct ToolExecutionResult: Codable, Sendable {
     }
 
     /// Create a timeout result.
-    static func timeout(tool: String, timeoutSeconds: Int) -> ToolExecutionResult {
+    nonisolated static func timeout(tool: String, timeoutSeconds: Int) -> ToolExecutionResult {
         ToolExecutionResult(
             tool: tool,
             status: "timeout",

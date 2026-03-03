@@ -121,10 +121,6 @@ struct ContextBuilder {
         }
     }
 
-    let threadRepository: ThreadRepository
-    let memoryRepository: MemoryRepository
-    let embeddingService: EmbeddingService
-    let toolService: ToolService
     let limits: Limits
 
     init(
