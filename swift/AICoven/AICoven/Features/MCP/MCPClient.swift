@@ -103,6 +103,7 @@ actor MCPClient {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
 
         if let token, server.authType == .bearer {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -135,7 +136,37 @@ actor MCPClient {
             throw MCPClientError.serverError("HTTP \(httpResponse.statusCode): \(errorBody)")
         }
 
-        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        // The server may respond with plain JSON or an SSE stream.
+        // Detect the Content-Type and extract the JSON-RPC payload accordingly.
+        let contentType = httpResponse.value(forHTTPHeaderField: "Content-Type") ?? ""
+        let jsonData: Data
+
+        if contentType.contains("text/event-stream") {
+            // SSE response: extract JSON from `data:` lines
+            guard let body = String(data: data, encoding: .utf8) else {
+                throw MCPClientError.invalidResponse("Could not decode SSE body as UTF-8")
+            }
+            // Collect all `data:` payloads and concatenate (some servers split across lines)
+            let dataLines = body.components(separatedBy: "\n")
+                .filter { $0.hasPrefix("data:") }
+                .map { String($0.dropFirst(5)).trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+
+            guard !dataLines.isEmpty else {
+                throw MCPClientError.invalidResponse("SSE stream contained no data lines")
+            }
+
+            // Use the last non-empty data payload (the JSON-RPC result)
+            guard let payloadData = dataLines.last?.data(using: .utf8) else {
+                throw MCPClientError.invalidResponse("Could not encode SSE data as UTF-8")
+            }
+            jsonData = payloadData
+        } else {
+            // Plain JSON response
+            jsonData = data
+        }
+
+        let json = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
         guard let dict = json else {
             throw MCPClientError.invalidResponse("Invalid JSON format")
         }
