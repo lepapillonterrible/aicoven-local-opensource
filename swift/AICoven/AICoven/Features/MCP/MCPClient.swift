@@ -67,6 +67,7 @@ actor MCPClient {
     func discoverTools() async throws -> [MCPToolDefinition] {
         guard isConnected else {
             try await connect()
+            return try await discoverTools()
         }
 
         // Send tools/list JSON-RPC request
@@ -78,6 +79,7 @@ actor MCPClient {
     func callTool(name: String, arguments: [String: AnyJSONValue]) async throws -> [MCPContentItem] {
         guard isConnected else {
             try await connect()
+            return try await callTool(name: name, arguments: arguments)
         }
 
         let params = CallToolParams(name: name, arguments: arguments)
@@ -93,7 +95,7 @@ actor MCPClient {
 
     // MARK: - Internal RPC Helpers
 
-    private func sendRpcRequest<T: Decodable & Sendable>(method: String, params: (some Encodable & Sendable)?) async throws -> T {
+    private func sendRpcRequest<T: Decodable>(method: String, params: (some Encodable)?) async throws -> T {
         guard let endpoint = postEndpoint else {
             throw MCPClientError.notConnected
         }
@@ -108,8 +110,19 @@ actor MCPClient {
             request.setValue(token, forHTTPHeaderField: "X-Api-Key")
         }
 
-        let rpcReq = JsonRpcRequest(id: UUID().uuidString, method: method, params: params)
-        request.httpBody = try JSONEncoder().encode(rpcReq)
+        var dict: [String: Any] = [
+            "jsonrpc": "2.0",
+            "id": UUID().uuidString,
+            "method": method
+        ]
+
+        if let params {
+            let paramsData = try JSONEncoder().encode(params)
+            let paramsObj = try JSONSerialization.jsonObject(with: paramsData)
+            dict["params"] = paramsObj
+        }
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: dict)
 
         let (data, response) = try await session.data(for: request)
 
@@ -122,44 +135,48 @@ actor MCPClient {
             throw MCPClientError.serverError("HTTP \(httpResponse.statusCode): \(errorBody)")
         }
 
-        let rpcRes = try JSONDecoder().decode(JsonRpcResponse<T>.self, from: data)
-
-        if let error = rpcRes.error {
-            throw MCPClientError.serverError(error.message)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let dict = json else {
+            throw MCPClientError.invalidResponse("Invalid JSON format")
         }
 
-        guard let result = rpcRes.result else {
+        let decoder = JSONDecoder()
+
+        if let rawError = dict["error"] {
+            let errorData = try JSONSerialization.data(withJSONObject: rawError)
+            let parsedError = try decoder.decode(JsonRpcError.self, from: errorData)
+            throw MCPClientError.serverError(parsedError.message)
+        }
+
+        guard let rawResult = dict["result"] else {
             throw MCPClientError.invalidResponse("Missing result in JSON-RPC response")
         }
 
-        return result
+        let resultData = try JSONSerialization.data(withJSONObject: rawResult)
+        return try decoder.decode(T.self, from: resultData)
     }
 }
 
 // MARK: - JSON-RPC Models
 
-private struct JsonRpcRequest<P: Encodable & Sendable>: Encodable, Sendable {
-    let jsonrpc = "2.0"
-    let id: String
-    let method: String
-    let params: P?
-}
-
-private struct JsonRpcResponse<T: Decodable & Sendable>: Decodable, Sendable {
-    let jsonrpc: String
-    let id: String?
-    let result: T?
-    let error: JsonRpcError?
-}
-
 private struct JsonRpcError: Decodable, Sendable {
     let code: Int
     let message: String
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        code = try container.decode(Int.self, forKey: .code)
+        message = try container.decode(String.self, forKey: .message)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case code, message
+    }
 }
 
 // MARK: - MCP Models
 
-struct MCPToolDefinition: Codable, Identifiable, Sendable {
+struct MCPToolDefinition: Codable, Equatable, Identifiable, Sendable {
     let name: String
     let description: String?
     let inputSchema: [String: AnyJSONValue]
@@ -167,24 +184,81 @@ struct MCPToolDefinition: Codable, Identifiable, Sendable {
     var id: String {
         name
     }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        inputSchema = try container.decode([String: AnyJSONValue].self, forKey: .inputSchema)
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+        try container.encodeIfPresent(description, forKey: .description)
+        try container.encode(inputSchema, forKey: .inputSchema)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name, description, inputSchema
+    }
 }
 
 struct MCPListToolsResponse: Decodable, Sendable {
     let tools: [MCPToolDefinition]
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        tools = try container.decode([MCPToolDefinition].self, forKey: .tools)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case tools
+    }
 }
 
 struct CallToolParams: Encodable, Sendable {
     let name: String
     let arguments: [String: AnyJSONValue]
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+        try container.encode(arguments, forKey: .arguments)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name, arguments
+    }
 }
 
 struct MCPContentItem: Decodable, Sendable {
     let type: String
     let text: String?
     // other data like 'data' for base64 resources can be added here
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        type = try container.decode(String.self, forKey: .type)
+        text = try container.decodeIfPresent(String.self, forKey: .text)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type, text
+    }
 }
 
 struct MCPCallToolResponse: Decodable, Sendable {
     let content: [MCPContentItem]
     let isError: Bool?
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        content = try container.decode([MCPContentItem].self, forKey: .content)
+        isError = try container.decodeIfPresent(Bool.self, forKey: .isError)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case content, isError
+    }
 }

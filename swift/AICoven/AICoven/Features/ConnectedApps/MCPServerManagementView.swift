@@ -70,15 +70,21 @@ struct MCPServerManagementView: View {
         .onAppear {
             loadServers()
         }
+        #if os(macOS)
+        .formStyle(.grouped)
+        .frame(minWidth: 450, minHeight: 350)
+        #endif
         .sheet(isPresented: $showingAddSheet) {
             NavigationView {
                 Form {
                     Section("Server Details") {
                         TextField("Name", text: $newName)
                         TextField("URL (SSE/HTTP)", text: $newUrl)
+                            .disableAutocorrection(true)
+                        #if os(iOS)
                             .keyboardType(.URL)
                             .autocapitalization(.none)
-                            .disableAutocorrection(true)
+                        #endif
                     }
 
                     Section("Authentication") {
@@ -102,7 +108,9 @@ struct MCPServerManagementView: View {
                     }
                 }
                 .navigationTitle("Add Server")
-                #if os(iOS)
+                #if os(macOS)
+                    .formStyle(.grouped)
+                #else
                     .navigationBarTitleDisplayMode(.inline)
                 #endif
                     .toolbar {
@@ -121,7 +129,7 @@ struct MCPServerManagementView: View {
                     }
             }
             #if os(macOS)
-            .frame(width: 400, height: 400)
+            .frame(width: 450, height: 350)
             #endif
         }
     }
@@ -132,6 +140,7 @@ struct MCPServerManagementView: View {
         case .disconnected: .red
         case .pending: .orange
         case .error: .red
+        case .revoked: .gray
         }
     }
 
@@ -156,60 +165,49 @@ struct MCPServerManagementView: View {
         Task {
             // First logic check to see if we can connect or fetch tools?
             // For now, let's just save the configuration. The MCPClient will connect when needed.
-            let serverId = UUID().uuidString
-            let account = MCPServerAccount(
-                id: serverId,
-                name: newName,
-                serverUrl: url.absoluteString,
-                transport: "sse", // Default for HTTP
-                authType: authType,
-                status: .pending,
-                cachedTools: nil,
-                toolsCachedAt: nil,
-                createdAt: Date(),
-                updatedAt: Date()
-            )
+            var newAccount: MCPServerAccount?
+            do {
+                newAccount = try await service.createMCPServer(
+                    name: newName,
+                    serverUrl: url.absoluteString,
+                    transport: .sse, // Default for HTTP
+                    authType: MCPAuthType(rawValue: authType) ?? .none,
+                    token: authType == "bearer" && !bearerToken.isEmpty ? bearerToken : nil
+                )
 
-            await service.addMCPServer(account)
-
-            if authType == "bearer", !bearerToken.isEmpty {
-                do {
-                    try await service.storeMCPTokenFor(serverId: serverId, token: bearerToken)
-                } catch {
-                    await MainActor.run {
-                        errorMessage = "Failed to secure token: \(error.localizedDescription)"
-                        isSaving = false
-                    }
-                    return
+                await MainActor.run {
+                    isSaving = false
+                    showingAddSheet = false
+                    resetForm()
+                    loadServers()
                 }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    isSaving = false
+                }
+                return
             }
 
             // Background task: trigger a test connection to cache tools immediately
-            Task.detached {
-                let client = MCPClient(account: account)
-                do {
-                    // connect() will fetch and store tools in the account
-                    try await client.connect()
-                } catch {
-                    print("Initial MCP connection failed: \(error)")
+            if let newAccount {
+                Task.detached {
+                    let client = MCPClient(server: newAccount, token: newAccount.authType == .bearer ? bearerToken : (newAccount.authType == .apiKey ? bearerToken : nil))
+                    do {
+                        // connect() will fetch and store tools in the account
+                        try await client.connect()
+                    } catch {
+                        print("Initial MCP connection failed: \(error)")
+                    }
                 }
-            }
-
-            await MainActor.run {
-                isSaving = false
-                showingAddSheet = false
-                resetForm()
-                loadServers()
             }
         }
     }
 
     private func deleteServer(_ server: MCPServerAccount) {
         Task {
-            // Remove token from keychain
-            try? await service.deleteMCPTokenFor(serverId: server.id)
-            // Remove config
-            await service.removeMCPServer(id: server.id)
+            // Remove server config and token
+            try? await service.deleteMCPServer(id: server.id)
             loadServers()
         }
     }
