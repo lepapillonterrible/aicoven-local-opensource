@@ -37,9 +37,6 @@ struct EditRoleView: View {
     /// Keyed by provider account ID.
     @State private var accountModelOptions: [String: [(String, String)]] = [:]
 
-    /// Tools state
-    @State private var selectedTools: Set<String> = []
-
     /// Collaborators state
     @State private var selectedCollaborators: Set<String> = []
 
@@ -482,9 +479,7 @@ struct EditRoleView: View {
 
                 // Populate tools, collaborators, and autonomous config from settings
                 if let settings = role.settings {
-                    if let tools = settings.allowedTools {
-                        selectedTools = Set(tools)
-                    }
+
                     if let collaborators = settings.collaboratorRoleIds {
                         selectedCollaborators = Set(collaborators)
                     }
@@ -561,7 +556,7 @@ struct EditRoleView: View {
                 providerAccountId: providerAccountId,
                 temperature: temperature,
                 maxTokens: maxTokensInt,
-                allowedTools: Array(selectedTools),
+                allowedTools: nil,
                 collaboratorRoleIds: Array(selectedCollaborators),
                 autonomousMode: autonomousMode,
                 autonomousMaxSteps: stepsInt,

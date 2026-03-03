@@ -88,6 +88,10 @@ final class AgentRunner {
         var toolContextLog = ""
         var stepHistory: [String] = [] // Track tool signatures for loop detection
 
+        // Dynamically build the tool config so every connected tool and MCP
+        // server is available to the agent by default.
+        let toolConfig = await ContextBuilder.ToolConfig.connected()
+
         do {
             let run = try await agentRunRepository.createRun(
                 threadID: threadID,
@@ -130,7 +134,8 @@ final class AgentRunner {
                 let contextMessages = try await contextBuilder.buildContext(
                     threadID: tID,
                     userMessage: effectiveUserMessage,
-                    maxContextTokens: promptBudget
+                    maxContextTokens: promptBudget,
+                    toolConfig: toolConfig
                 )
 
                 let options = ChatOptions(temperature: 0.2, maxTokens: nil, stream: false)

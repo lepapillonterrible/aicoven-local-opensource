@@ -42,9 +42,6 @@ struct AddRoleView: View {
     /// Dynamically discovered Ollama models (from /api/tags).
     @State private var ollamaModels: [(String, String)] = []
 
-    /// Tools state
-    @State private var selectedTools: Set<String> = Set(DEFAULT_ALLOWED_TOOLS)
-
     /// Collaborators state
     @State private var selectedCollaborators: Set<String> = []
 
@@ -437,51 +434,6 @@ struct AddRoleView: View {
                         }
                     }
 
-                    // Tools
-                    GlassCard {
-                        VStack(alignment: .leading, spacing: Spacing.sm) {
-                            Text("Allowed Tools")
-                                .font(.aicovenH3)
-                                .foregroundColor(.aicovenTextPrimary)
-
-                            Text("Select which tools this role can use when acting on your behalf")
-                                .font(.aicovenCaption)
-                                .foregroundColor(.aicovenTextTertiary)
-
-                            ForEach(groupToolsByFamily(), id: \.family) { group in
-                                VStack(alignment: .leading, spacing: Spacing.xs) {
-                                    Text(group.family.replacingOccurrences(of: "_", with: " ").capitalized)
-                                        .font(.aicovenH3)
-                                        .foregroundColor(.aicovenTextSecondary)
-                                        .padding(.top, Spacing.sm)
-
-                                    ForEach(group.tools) { tool in
-                                        Button {
-                                            if selectedTools.contains(tool.id) {
-                                                selectedTools.remove(tool.id)
-                                            } else {
-                                                selectedTools.insert(tool.id)
-                                            }
-                                        } label: {
-                                            HStack(spacing: Spacing.sm) {
-                                                Image(systemName: selectedTools.contains(tool.id) ? "checkmark.square.fill" : "square")
-                                                    .foregroundColor(selectedTools.contains(tool.id) ? .aicovenTeal : .aicovenTextTertiary)
-
-                                                Text(tool.label)
-                                                    .font(.aicovenBody)
-                                                    .foregroundColor(.aicovenTextPrimary)
-
-                                                Spacer()
-                                            }
-                                            .padding(.vertical, Spacing.xs)
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                }
-                            }
-                        }
-                    }
-
                     // Collaborators
                     if !roles.isEmpty {
                         GlassCard {
@@ -624,15 +576,8 @@ struct AddRoleView: View {
             description = template.purpose.joined(separator: "\n")
             systemPrompt = template.systemPrompt ?? ""
 
-            // Extract tools from tool policy
-            if let toolPolicy = template.toolPolicy {
-                var tools: [String] = []
-                if let read = toolPolicy.read { tools.append(contentsOf: read) }
-                if let generate = toolPolicy.generate { tools.append(contentsOf: generate) }
-                if let critique = toolPolicy.critique { tools.append(contentsOf: critique) }
-                if let proposeOnly = toolPolicy.proposeOnly { tools.append(contentsOf: proposeOnly) }
-                selectedTools = Set(tools)
-            }
+            // Tool policy from templates is no longer used;
+            // all tools are enabled by default.
         } catch {
             print("❌ Failed to load template: \(error.localizedDescription)")
         }
@@ -662,7 +607,7 @@ struct AddRoleView: View {
                 providerAccountId: providerAccountId,
                 temperature: temperature,
                 maxTokens: maxTokensInt,
-                allowedTools: Array(selectedTools),
+                allowedTools: nil,
                 collaboratorRoleIds: Array(selectedCollaborators),
                 autonomousMode: autonomousMode,
                 autonomousMaxSteps: stepsInt,

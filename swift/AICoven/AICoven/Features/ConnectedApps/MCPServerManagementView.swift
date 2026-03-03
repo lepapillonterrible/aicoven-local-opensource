@@ -113,12 +113,19 @@ struct MCPServerManagementView: View {
                 Text("Add MCP Server")
             }
             .font(.aicovenH3)
-            .foregroundColor(.aicovenPurple)
+            .foregroundColor(.white)
             .padding(Spacing.md)
             .frame(maxWidth: .infinity)
-            .background(Color.aicovenPurple.opacity(0.1))
+            .background(
+                LinearGradient(
+                    colors: [.aicovenPurple, .aicovenPurple.opacity(0.7)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
             .cornerRadius(BorderRadius.md)
         }
+        .buttonStyle(.plain)
         .padding(.horizontal, Spacing.lg)
         .sheet(isPresented: $showSubscription) {
             FeatureUpsellView(
@@ -147,8 +154,13 @@ struct MCPServerManagementView: View {
             let client = MCPClient(server: server, token: token)
             try await client.connect()
 
-            // Wait a moment for tools to cache
-            try await Task.sleep(nanoseconds: 1_000_000_000)
+            // Discover tools and cache them on the server account
+            let tools = try await client.discoverTools()
+            var updated = server
+            updated.cachedTools = tools
+            updated.toolsCachedAt = Date()
+            updated.status = .connected
+            try await service.updateMCPServer(updated)
 
             await loadServers()
         } catch {
@@ -486,13 +498,19 @@ struct AddMCPServerSheet: View {
                 token: tokenToSave
             )
 
-            // Trigger background connect
+            // Connect, discover tools, and cache them
             Task.detached {
                 let client = MCPClient(server: newAccount, token: tokenToSave)
                 do {
                     try await client.connect()
+                    let tools = try await client.discoverTools()
+                    var updated = newAccount
+                    updated.cachedTools = tools
+                    updated.toolsCachedAt = Date()
+                    updated.status = .connected
+                    try await service.updateMCPServer(updated)
                 } catch {
-                    print("Initial MCP connection failed: \(error)")
+                    print("Initial MCP connection/tool discovery failed: \(error)")
                 }
             }
 
