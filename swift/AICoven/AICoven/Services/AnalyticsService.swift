@@ -277,6 +277,14 @@ final class AnalyticsService {
         logEventIfEnabled("settings_opened", parameters: nil)
     }
 
+    func trackConnectedAppsOpened() {
+        logEventIfEnabled("connected_apps_opened", parameters: nil)
+    }
+
+    func trackMCPServersOpened() {
+        logEventIfEnabled("mcp_servers_opened", parameters: nil)
+    }
+
     func trackProfileOpened() {
         logEventIfEnabled("profile_opened", parameters: nil)
     }

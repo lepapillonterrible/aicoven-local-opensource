@@ -277,6 +277,11 @@ struct WorkspaceContentView: View {
             BudgetView()
         case .usage:
             UsageSettingsView()
+        case .connectedApps:
+            ConnectedAppsView()
+                .environmentObject(StoreService.shared)
+        case .mcpServers:
+            MCPServerManagementView()
         case let .addRole(covenId):
             AddRoleView(covenId: covenId, roles: roles) {
                 // Refresh roles list and close tab
@@ -363,6 +368,10 @@ struct WorkspaceContentView: View {
             tab = .budget
         case .usage:
             tab = .usage
+        case .connectedApps:
+            tab = .connectedApps
+        case .mcpServers:
+            tab = .mcpServers
         case .personalStrixSettings:
             tab = WorkspaceTab.personalStrix
         case let .memoryList(covenId):

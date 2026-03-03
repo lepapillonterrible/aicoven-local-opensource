@@ -3,8 +3,6 @@ import SwiftUI
 /// View for managing connected app integrations (GitHub, Google Drive).
 /// All OAuth tokens are stored locally in Keychain.
 struct ConnectedAppsView: View {
-    /// Environment to dismiss the view (used on macOS when presented as a sheet)
-    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var storeService: StoreService
 
     @State private var accounts: [ConnectedAccount] = []
@@ -25,9 +23,6 @@ struct ConnectedAppsView: View {
     @State private var showingGooglePicker = false
     @State private var pickedFiles: [GooglePickerFile] = []
 
-    /// MCP Server state
-    @State private var showingMCPServers = false
-
     /// OAuth client IDs – pre-configured with AICoven's apps via Info.plist / xcconfig.
     /// Developers who fork the repo can override these in their own xcconfig.
     private var githubClientId: String {
@@ -41,22 +36,6 @@ struct ConnectedAppsView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 24) {
-                #if os(macOS)
-                // Close button for macOS (sheets don't have a default close button)
-                HStack {
-                    Spacer()
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.title2)
-                            .foregroundColor(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.trailing, 16)
-                    .padding(.top, 12)
-                }
-                #endif
 
                 // Header
                 headerSection
@@ -76,46 +55,6 @@ struct ConnectedAppsView: View {
                             onBrowseDrive: provider == .googleDrive ? { showingGooglePicker = true } : nil
                         )
                     }
-
-                    Divider()
-                        .padding(.vertical, 8)
-
-                    Button {
-                        showingMCPServers = true
-                    } label: {
-                        HStack(spacing: 16) {
-                            ZStack {
-                                Circle()
-                                    .fill(Color.orange.opacity(0.15))
-                                    .frame(width: 48, height: 48)
-
-                                Image(systemName: "server.rack")
-                                    .font(.system(size: 24))
-                                    .foregroundColor(.orange)
-                            }
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("MCP Servers")
-                                    .font(.aicovenH3)
-                                    .foregroundColor(.aicovenTextPrimary)
-
-                                Text("Connect to external tools and APIs")
-                                    .font(.aicovenCaption)
-                                    .foregroundColor(.aicovenTextSecondary)
-                            }
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .foregroundColor(.secondary)
-                        }
-                        .padding()
-                        .background(Color.aicovenGlass)
-                        .cornerRadius(12)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color.aicovenBorder, lineWidth: 1)
-                        )
-                    }
-                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal)
 

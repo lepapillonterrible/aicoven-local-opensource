@@ -116,6 +116,13 @@ struct PersonalContentView: View {
                 .onAppear { AnalyticsService.shared.trackUsageViewed() }
         case .budget:
             BudgetView()
+        case .connectedApps:
+            ConnectedAppsView()
+                .environmentObject(StoreService.shared)
+                .onAppear { AnalyticsService.shared.trackConnectedAppsOpened() }
+        case .mcpServers:
+            MCPServerManagementView()
+                .onAppear { AnalyticsService.shared.trackMCPServersOpened() }
         case .personalStrixSettings:
             StrixSettingsView(
                 onClose: {
@@ -186,6 +193,10 @@ struct PersonalContentView: View {
             tab = .usage
         case .budget:
             tab = .budget
+        case .connectedApps:
+            tab = .connectedApps
+        case .mcpServers:
+            tab = .mcpServers
         case .personalStrixSettings:
             tab = WorkspaceTab.personalStrix
         case let .memoryList(covenId):

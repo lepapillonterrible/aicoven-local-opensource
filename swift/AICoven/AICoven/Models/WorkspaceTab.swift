@@ -8,6 +8,7 @@ enum WorkspaceTabType: Equatable {
     case providerKeys
     case budget
     case connectedApps
+    case mcpServers
     case usage
     case addRole(covenId: String)
     case editRole(roleId: String)
@@ -46,6 +47,7 @@ enum WorkspaceTabType: Equatable {
              (.budget, .budget),
              (.usage, .usage),
              (.connectedApps, .connectedApps),
+             (.mcpServers, .mcpServers),
              (.personalStrixSettings, .personalStrixSettings),
              (.store, .store),
              (.terms, .terms),
@@ -64,6 +66,7 @@ enum WorkspaceTabType: Equatable {
         case .providerKeys: "provider_keys"
         case .budget: "budget"
         case .connectedApps: "connected_apps"
+        case .mcpServers: "mcp_servers"
         case .usage: "usage"
         case .addRole: "add_role"
         case .editRole: "edit_role"
@@ -140,6 +143,15 @@ struct WorkspaceTab: Identifiable, Equatable {
             id: "connected-apps",
             type: .connectedApps,
             title: "Connected Apps"
+        )
+    }
+
+    /// Create a tab for MCP Servers
+    static var mcpServers: WorkspaceTab {
+        WorkspaceTab(
+            id: "mcp-servers",
+            type: .mcpServers,
+            title: "MCP Servers"
         )
     }
 

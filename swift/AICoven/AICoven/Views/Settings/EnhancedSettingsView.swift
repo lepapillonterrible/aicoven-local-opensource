@@ -143,46 +143,6 @@ struct EnhancedSettingsView: View {
                     FileAccessSettingsSection()
                     #endif
 
-                    // Integrations section
-                    VStack(spacing: Spacing.md) {
-                        HStack {
-                            Text("Integrations")
-                                .font(.aicovenH3)
-                                .foregroundColor(.aicovenTextPrimary)
-                            Spacer()
-                        }
-
-                        Button {
-                            showConnectedApps = true
-                        } label: {
-                            GlassCard {
-                                HStack(spacing: Spacing.md) {
-                                    Image(systemName: "app.connected.to.app.below.fill")
-                                        .font(.aicovenH3)
-                                        .foregroundColor(.aicovenPurple)
-                                        .frame(width: 32)
-
-                                    VStack(alignment: .leading, spacing: Spacing.xxs) {
-                                        Text("Connected Apps")
-                                            .font(.aicovenBody)
-                                            .foregroundColor(.aicovenTextPrimary)
-                                        Text("Connect GitHub, Google Drive, and more")
-                                            .font(.aicovenCaption)
-                                            .foregroundColor(.aicovenTextSecondary)
-                                    }
-
-                                    Spacer()
-
-                                    Image(systemName: "chevron.right")
-                                        .font(.aicovenCaption)
-                                        .foregroundColor(.aicovenTextTertiary)
-                                }
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, Spacing.lg)
-
                     // About section
                     VStack(spacing: Spacing.md) {
                         HStack {
@@ -253,10 +213,6 @@ struct EnhancedSettingsView: View {
         .background(NebulaBackground())
         .task {
             await loadSettings()
-        }
-        .sheet(isPresented: $showConnectedApps) {
-            ConnectedAppsView()
-                .environmentObject(StoreService.shared)
         }
     }
 
