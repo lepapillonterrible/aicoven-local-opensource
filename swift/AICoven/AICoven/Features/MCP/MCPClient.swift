@@ -70,7 +70,7 @@ actor MCPClient {
         }
 
         // Send tools/list JSON-RPC request
-        let response: MCPListToolsResponse = try await sendRpcRequest(method: "tools/list", params: nil)
+        let response: MCPListToolsResponse = try await sendRpcRequest(method: "tools/list", params: [String: String]?.none)
         return response.tools
     }
 
@@ -93,7 +93,7 @@ actor MCPClient {
 
     // MARK: - Internal RPC Helpers
 
-    private func sendRpcRequest<T: Decodable>(method: String, params: (some Encodable)?) async throws -> T {
+    private func sendRpcRequest<T: Decodable & Sendable>(method: String, params: (some Encodable & Sendable)?) async throws -> T {
         guard let endpoint = postEndpoint else {
             throw MCPClientError.notConnected
         }
@@ -138,21 +138,21 @@ actor MCPClient {
 
 // MARK: - JSON-RPC Models
 
-private struct JsonRpcRequest<P: Encodable>: Encodable {
+private struct JsonRpcRequest<P: Encodable & Sendable>: Encodable, Sendable {
     let jsonrpc = "2.0"
     let id: String
     let method: String
     let params: P?
 }
 
-private struct JsonRpcResponse<T: Decodable>: Decodable {
+private struct JsonRpcResponse<T: Decodable & Sendable>: Decodable, Sendable {
     let jsonrpc: String
     let id: String?
     let result: T?
     let error: JsonRpcError?
 }
 
-private struct JsonRpcError: Decodable {
+private struct JsonRpcError: Decodable, Sendable {
     let code: Int
     let message: String
 }
@@ -169,22 +169,22 @@ struct MCPToolDefinition: Codable, Identifiable, Sendable {
     }
 }
 
-struct MCPListToolsResponse: Decodable {
+struct MCPListToolsResponse: Decodable, Sendable {
     let tools: [MCPToolDefinition]
 }
 
-struct CallToolParams: Encodable {
+struct CallToolParams: Encodable, Sendable {
     let name: String
     let arguments: [String: AnyJSONValue]
 }
 
-struct MCPContentItem: Decodable {
+struct MCPContentItem: Decodable, Sendable {
     let type: String
     let text: String?
     // other data like 'data' for base64 resources can be added here
 }
 
-struct MCPCallToolResponse: Decodable {
+struct MCPCallToolResponse: Decodable, Sendable {
     let content: [MCPContentItem]
     let isError: Bool?
 }
