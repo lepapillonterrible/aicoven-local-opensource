@@ -23,10 +23,10 @@ struct MCPServerAccount: Identifiable, Codable, Equatable, Sendable {
     var status: ConnectionStatus
 
     /// Cached list of tools provided by this server
-    var cachedTools: [MCPToolDefinition]?
+    var cachedTools: [MCPToolDefinition]? = nil
 
     /// When the tools were last cached
-    var toolsCachedAt: Date?
+    var toolsCachedAt: Date? = nil
 
     /// When the connection was created
     let createdAt: Date
