@@ -174,6 +174,87 @@ final class EmbeddingService {
         return selected
     }
 
+    // MARK: - Semantic Tool Search
+
+    /// Search for the most relevant MCP tools for a user query using the same
+    /// hybrid semantic + lexical scoring used for memory retrieval.
+    ///
+    /// Returns the top-K tools sorted by relevance. Falls back to nil if no
+    /// embedding provider is configured (caller should use keyword matching).
+    ///
+    /// - Parameters:
+    ///   - query: The user's natural language message.
+    ///   - tools: All available MCP tool definitions.
+    ///   - topK: Maximum number of tools to return.
+    ///   - similarityThreshold: Minimum combined score to include a tool.
+    /// - Returns: Sorted array of (tool, score) pairs, or nil if embeddings unavailable.
+    func searchRelevantTools(
+        query: String,
+        tools: [ToolDefinition],
+        topK: Int = 8,
+        similarityThreshold: Float = 0.10
+    ) async -> [(tool: ToolDefinition, score: Float)]? {
+        guard !tools.isEmpty else { return nil }
+
+        // Get or compute tool embeddings from the cache.
+        guard let toolEmbeddings = await MCPToolEmbeddingCache.shared.getEmbeddings(for: tools) else {
+            // No embedding provider configured — caller should fall back to
+            // keyword matching.
+            return nil
+        }
+
+        // Embed the user query.
+        let queryEmbedding: [Float]?
+        do {
+            queryEmbedding = try await embedText(query)
+        } catch {
+            AppErrorReporter.log(error: error, context: "EmbeddingService.searchRelevantTools.embedQuery")
+            return nil
+        }
+
+        let lowerQuery = query.lowercased()
+        let queryTokens = tokenize(lowerQuery)
+
+        // Blend semantic + lexical scoring, same pattern as memory retrieval.
+        // Alpha = 0.7 means 70% semantic, 30% lexical.
+        let alpha: Float = 0.7
+
+        var scored: [(tool: ToolDefinition, score: Float)] = []
+        for tool in tools {
+            // Build a searchable text from the tool name + description.
+            let searchText = "\(tool.name) \(tool.description)".lowercased()
+            let toolTokens = tokenize(searchText)
+
+            // Lexical score: fraction of query tokens found in the tool text.
+            let lexicalScore: Float
+            if queryTokens.isEmpty || toolTokens.isEmpty {
+                lexicalScore = 0
+            } else {
+                let querySet = Set(queryTokens)
+                let toolSet = Set(toolTokens)
+                let overlap = Float(querySet.intersection(toolSet).count)
+                lexicalScore = overlap / Float(querySet.count)
+            }
+
+            // Semantic score via cosine similarity if we have both embeddings.
+            let semanticScore: Float = if let qEmb = queryEmbedding,
+                                          let tEmb = toolEmbeddings[tool.name],
+                                          qEmb.count == tEmb.count {
+                cosineSimilarity(qEmb, tEmb)
+            } else {
+                0
+            }
+
+            let combined = alpha * semanticScore + (1 - alpha) * lexicalScore
+            guard combined >= similarityThreshold else { continue }
+            scored.append((tool, combined))
+        }
+
+        // Sort by score descending and return top-K.
+        let sorted = scored.sorted { $0.score > $1.score }
+        return Array(sorted.prefix(topK))
+    }
+
     // MARK: - Cosine similarity
 
     private func cosineSimilarity(_ a: [Float], _ b: [Float]) -> Float {

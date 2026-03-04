@@ -284,20 +284,22 @@ enum PromptTemplates {
     /// For MCP tools, this uses a two-tier approach:
     ///   1. A compressed catalog (~200 tokens) listing all servers and tool names
     ///   2. Full documentation only for the ~8 tools most relevant to the
-    ///      current user message (selected by keyword matching)
+    ///      current user message (selected by semantic + keyword hybrid search)
     ///
-    /// This prevents dumping 200+ tool docs into the prompt, which would
-    /// overwhelm small local models and waste most of their context window.
+    /// Tool selection uses `EmbeddingService.searchRelevantTools` when an
+    /// embedding provider is configured (semantic cosine + lexical overlap),
+    /// falling back to pure keyword matching otherwise.
     ///
     /// - Parameters:
     ///   - enabledTools: Set of tool names that are enabled.
     ///   - mcpServers: Active MCP server configurations.
     ///   - userMessage: Current user message, used to select relevant MCP tools.
+    @MainActor
     static func generateMLXAgentPrompt(
         enabledTools: Set<String>,
         mcpServers: [MCPServerAccount] = [],
         userMessage: String = ""
-    ) -> String {
+    ) async -> String {
         var sections: [String] = []
 
         // Brief role description
@@ -314,8 +316,9 @@ enum PromptTemplates {
         let relevantMCPDefs: [ToolDefinition]
 
         if allMCPDefs.count > maxLocalModelMCPTools {
-            // Too many MCP tools for full docs — select the most relevant.
-            relevantMCPDefs = selectRelevantMCPTools(
+            // Too many MCP tools for full docs — select the most relevant
+            // using semantic search (with keyword fallback).
+            relevantMCPDefs = await selectRelevantMCPTools(
                 userMessage: userMessage,
                 allMCPTools: allMCPDefs
             )
@@ -642,20 +645,56 @@ extension PromptTemplates {
     /// local model (MLX/Ollama) prompts. Keeps context usage predictable.
     private static let maxLocalModelMCPTools = 8
 
-    /// Select the most relevant MCP tools for a user message using keyword
-    /// matching against tool names and descriptions. Returns at most `limit`
-    /// tool definitions with full documentation.
+    /// Select the most relevant MCP tools for a user message using hybrid
+    /// semantic + keyword matching. Tries embedding-based search first via
+    /// `EmbeddingService`; falls back to pure keyword matching if no
+    /// embedding provider is configured.
     ///
-    /// This is entirely dynamic — it works with any MCP server and any tool
-    /// names, since it matches the user's words against the tool metadata
-    /// that was cached when the server was connected.
+    /// Entirely dynamic — works with any MCP server and tool names.
+    @MainActor
     static func selectRelevantMCPTools(
         userMessage: String,
         allMCPTools: [ToolDefinition],
         limit: Int = maxLocalModelMCPTools
-    ) -> [ToolDefinition] {
+    ) async -> [ToolDefinition] {
         guard !allMCPTools.isEmpty else { return [] }
 
+        // Try semantic search first — uses the same hybrid cosine + lexical
+        // scoring as memory retrieval. Returns nil if no embedding provider
+        // is configured, in which case we fall back to keyword matching.
+        if let semanticResults = await EmbeddingService.shared.searchRelevantTools(
+            query: userMessage,
+            tools: allMCPTools,
+            topK: limit
+        ), !semanticResults.isEmpty {
+            let selected = semanticResults.map(\.tool)
+            // Pad with defaults if semantic search returned very few.
+            if selected.count < 3 {
+                let selectedNames = Set(selected.map(\.name))
+                let extras = allMCPTools
+                    .filter { !selectedNames.contains($0.name) }
+                    .prefix(limit - selected.count)
+                return selected + Array(extras)
+            }
+            return selected
+        }
+
+        // Fallback: pure keyword matching (works without any provider).
+        return selectRelevantMCPToolsByKeyword(
+            userMessage: userMessage,
+            allMCPTools: allMCPTools,
+            limit: limit
+        )
+    }
+
+    /// Keyword-only fallback for tool selection when no embedding provider
+    /// is available. Scores tools by word overlap between the user message
+    /// and tool names/descriptions.
+    private static func selectRelevantMCPToolsByKeyword(
+        userMessage: String,
+        allMCPTools: [ToolDefinition],
+        limit: Int
+    ) -> [ToolDefinition] {
         // Tokenize user message into lowercase words for matching.
         let messageWords = userMessage.lowercased()
             .components(separatedBy: .alphanumerics.inverted)
@@ -754,16 +793,50 @@ extension PromptTemplates {
 // MARK: - Conversion to LLMToolDefinition
 
 extension PromptTemplates {
+
+    /// Maximum MCP tools to include in cloud model native function calling.
+    /// Cloud models handle more tools than local ones, but 200+ still wastes
+    /// tokens the user pays for on every request. 20 is generous enough to
+    /// cover multi-step workflows while keeping costs reasonable.
+    private static let maxCloudModelMCPTools = 20
+
     /// Convert internal tool definitions to protocol-level `LLMToolDefinition`
     /// objects for native function calling via `ChatOptions.tools`.
+    ///
+    /// When there are many MCP tools, applies the same semantic + keyword
+    /// selection used for local models (but with a higher limit) to avoid
+    /// sending 200+ tool schemas on every API call.
+    ///
+    /// - Parameters:
+    ///   - enabledTools: Set of tool names that are enabled.
+    ///   - mcpServers: Active MCP server configurations.
+    ///   - userMessage: Current user message for relevance-based tool selection.
+    @MainActor
     static func llmToolDefinitions(
         for enabledTools: Set<String>,
-        mcpServers: [MCPServerAccount] = []
-    ) -> [LLMToolDefinition] {
+        mcpServers: [MCPServerAccount] = [],
+        userMessage: String = ""
+    ) async -> [LLMToolDefinition] {
+        // Native tools are always included in full (small fixed set).
         let nativeDefs = toolDefinitions.filter { enabledTools.contains($0.name) }
-        let mcpDefs = mcpToolDefinitions(from: mcpServers).filter { enabledTools.contains($0.name) }
 
-        return (nativeDefs + mcpDefs)
+        // MCP tools: select the most relevant subset to avoid token waste.
+        let allMCPDefs = mcpToolDefinitions(from: mcpServers)
+            .filter { enabledTools.contains($0.name) }
+        let selectedMCPDefs: [ToolDefinition] = if allMCPDefs.count > maxCloudModelMCPTools {
+            // Too many MCP tools — select the most relevant using the same
+            // semantic + keyword hybrid used for local models.
+            await selectRelevantMCPTools(
+                userMessage: userMessage,
+                allMCPTools: allMCPDefs,
+                limit: maxCloudModelMCPTools
+            )
+        } else {
+            // Few enough to include all.
+            allMCPDefs
+        }
+
+        return (nativeDefs + selectedMCPDefs)
             .map { def in
                 LLMToolDefinition(
                     name: def.name,

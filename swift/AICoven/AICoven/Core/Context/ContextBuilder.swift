@@ -172,7 +172,9 @@ struct ContextBuilder {
                 // Use lean MLX-optimized prompt for small local models.
                 // Pass the user message so the tool selector can pick only
                 // the most relevant MCP tools instead of all 200+.
-                PromptTemplates.generateMLXAgentPrompt(
+                // This is async because it may use EmbeddingService for
+                // semantic tool selection.
+                await PromptTemplates.generateMLXAgentPrompt(
                     enabledTools: config.enabledTools,
                     mcpServers: config.mcpServers,
                     userMessage: question

@@ -556,10 +556,14 @@ actor ChatService {
 
             do {
                 // Pass native tool definitions for API providers (not local models).
+                // Uses the same semantic selection as local models (but with a
+                // higher limit) so users don't pay for 200+ tool schemas on
+                // every API call.
                 let nativeTools: [LLMToolDefinition]? = isLocalModel ? nil
-                    : PromptTemplates.llmToolDefinitions(
+                    : await PromptTemplates.llmToolDefinitions(
                         for: toolConfig.enabledTools,
-                        mcpServers: toolConfig.mcpServers
+                        mcpServers: toolConfig.mcpServers,
+                        userMessage: message
                     )
                 let options = ChatOptions(
                     temperature: 0.7,
