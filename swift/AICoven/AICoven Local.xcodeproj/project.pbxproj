@@ -605,7 +605,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "Resources/AICoven-macOS-Debug.entitlements";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = H99A45HA22;
 				ENABLE_APP_SANDBOX = NO;
@@ -662,7 +662,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "Resources/AICoven-iOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "Resources/AICoven-macOS.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = H99A45HA22;
 				ENABLE_APP_SANDBOX = NO;
@@ -717,7 +717,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "Resources/AICoven-iOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "Resources/AICoven-macOS.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				GENERATE_INFOPLIST_FILE = YES;
 				"INFOPLIST_FILE[sdk=iphoneos*]" = "Resources/Info-iOS.plist";
 				"INFOPLIST_FILE[sdk=macosx*]" = "Resources/Info-macOS.plist";

@@ -12,6 +12,24 @@ import MLXLMCommon
 
 // MARK: - MLX Model Catalog
 
+/// Use-case category for a model.
+enum MLXModelCategory: String, Codable, CaseIterable, Sendable {
+    /// General-purpose chat and tool calling.
+    case general
+    /// Optimised for code generation and developer tools.
+    case coding
+    /// Lightweight models suitable for iPhones / constrained devices.
+    case mobile
+}
+
+/// Download priority tier.
+enum MLXModelTier: String, Codable, Sendable {
+    /// Recommended for all users.
+    case core
+    /// Optional download for specialised use-cases.
+    case specialized
+}
+
 /// Metadata for a model available in the MLX curated catalog.
 struct MLXModelInfo: Identifiable, Codable, Sendable {
     /// Hugging Face model ID (e.g. "mlx-community/Qwen3-4B-4bit").
@@ -28,6 +46,14 @@ struct MLXModelInfo: Identifiable, Codable, Sendable {
     let parameterCount: String
     /// Quantization level (e.g. "4-bit").
     let quantization: String
+    /// Use-case category (general / coding / mobile).
+    let category: MLXModelCategory
+    /// Download priority tier (core / specialized).
+    let tier: MLXModelTier
+    /// Tags describing ideal use-cases (e.g. "GitHub", "MCP Tools").
+    let recommendedFor: [String]
+    /// Whether this model is a top pick for its category.
+    let isRecommended: Bool
 
     var formattedDownloadSize: String {
         ByteCountFormatter.string(fromByteCount: downloadSizeBytes, countStyle: .file)
@@ -78,6 +104,7 @@ final class MLXModelManager: ObservableObject {
     // MARK: - Curated catalog
 
     static let defaultCatalog: [MLXModelInfo] = [
+        // ── Core: General ────────────────────────────────────────────
         MLXModelInfo(
             id: "mlx-community/Qwen3-4B-4bit",
             displayName: "Qwen 3 4B",
@@ -85,7 +112,11 @@ final class MLXModelManager: ObservableObject {
             downloadSizeBytes: 2_400_000_000,
             minRAMGB: 4,
             parameterCount: "4B",
-            quantization: "4-bit"
+            quantization: "4-bit",
+            category: .general,
+            tier: .core,
+            recommendedFor: ["MCP Tools", "Chat", "Reasoning"],
+            isRecommended: true
         ),
         MLXModelInfo(
             id: "mlx-community/Llama-3.2-3B-Instruct-4bit",
@@ -94,16 +125,11 @@ final class MLXModelManager: ObservableObject {
             downloadSizeBytes: 1_800_000_000,
             minRAMGB: 3,
             parameterCount: "3B",
-            quantization: "4-bit"
-        ),
-        MLXModelInfo(
-            id: "mlx-community/Mistral-7B-Instruct-v0.3-4bit",
-            displayName: "Mistral 7B v0.3",
-            summary: "Strong reasoning and coding. Needs more RAM.",
-            downloadSizeBytes: 4_100_000_000,
-            minRAMGB: 6,
-            parameterCount: "7B",
-            quantization: "4-bit"
+            quantization: "4-bit",
+            category: .general,
+            tier: .core,
+            recommendedFor: ["MCP Tools", "Chat"],
+            isRecommended: true
         ),
         MLXModelInfo(
             id: "mlx-community/Phi-4-mini-instruct-4bit",
@@ -112,7 +138,11 @@ final class MLXModelManager: ObservableObject {
             downloadSizeBytes: 2_200_000_000,
             minRAMGB: 4,
             parameterCount: "3.8B",
-            quantization: "4-bit"
+            quantization: "4-bit",
+            category: .general,
+            tier: .core,
+            recommendedFor: ["Fast Inference", "Reasoning"],
+            isRecommended: false
         ),
         MLXModelInfo(
             id: "mlx-community/gemma-3-4b-it-4bit",
@@ -121,35 +151,113 @@ final class MLXModelManager: ObservableObject {
             downloadSizeBytes: 2_500_000_000,
             minRAMGB: 4,
             parameterCount: "4B",
-            quantization: "4-bit"
+            quantization: "4-bit",
+            category: .general,
+            tier: .core,
+            recommendedFor: ["Multilingual", "Chat"],
+            isRecommended: false
+        ),
+        // ── Specialized: Coding ─────────────────────────────────────
+        MLXModelInfo(
+            id: "mlx-community/Qwen2.5-Coder-7B-Instruct-4bit",
+            displayName: "Qwen 2.5 Coder 7B",
+            summary: "Purpose-built for code. Best for GitHub and developer tools.",
+            downloadSizeBytes: 4_000_000_000,
+            minRAMGB: 8,
+            parameterCount: "7B",
+            quantization: "4-bit",
+            category: .coding,
+            tier: .specialized,
+            recommendedFor: ["GitHub", "Code", "Debugging"],
+            isRecommended: true
+        ),
+        MLXModelInfo(
+            id: "mlx-community/DeepSeek-R1-Distill-Qwen-8B-4bit",
+            displayName: "DeepSeek R1 8B",
+            summary: "Reasoning powerhouse. Great for complex multi-step tasks.",
+            downloadSizeBytes: 4_500_000_000,
+            minRAMGB: 8,
+            parameterCount: "8B",
+            quantization: "4-bit",
+            category: .coding,
+            tier: .specialized,
+            recommendedFor: ["Reasoning", "Debugging", "Architecture"],
+            isRecommended: false
+        ),
+        MLXModelInfo(
+            id: "mlx-community/Mistral-7B-Instruct-v0.3-4bit",
+            displayName: "Mistral 7B v0.3",
+            summary: "Strong reasoning and coding. Needs more RAM.",
+            downloadSizeBytes: 4_100_000_000,
+            minRAMGB: 6,
+            parameterCount: "7B",
+            quantization: "4-bit",
+            category: .general,
+            tier: .specialized,
+            recommendedFor: ["Reasoning", "Code"],
+            isRecommended: false
+        ),
+        // ── Specialized: Mobile ─────────────────────────────────────
+        MLXModelInfo(
+            id: "mlx-community/gemma-2-2b-it-4bit",
+            displayName: "Gemma 2 2B",
+            summary: "Ultra-lightweight. Ideal for iPhone and constrained devices.",
+            downloadSizeBytes: 1_500_000_000,
+            minRAMGB: 3,
+            parameterCount: "2B",
+            quantization: "4-bit",
+            category: .mobile,
+            tier: .specialized,
+            recommendedFor: ["iOS", "Low RAM"],
+            isRecommended: true
         )
     ]
 
     // MARK: - Platform check
 
-    /// Minimum RAM required for MLX inference (8 GB).
+    /// Minimum RAM for full-catalog MLX inference (8 GB — iPads & Macs).
     private static let minimumRAMBytes: UInt64 = 8_000_000_000
+    /// Lower threshold for mobile-tier models on iPhone (6 GB — iPhone 15 Pro+).
+    private static let mobileMinRAMBytes: UInt64 = 6_000_000_000
 
-    /// Whether the current device supports MLX inference.
-    /// Supported on: macOS with Apple Silicon, iPadOS on M-series iPads with 8GB+ RAM.
-    /// Not supported on: iPhones (insufficient memory headroom).
+    /// Whether the current device supports MLX inference (any model).
+    /// Supported on: macOS with Apple Silicon, iPads with 8 GB+ RAM,
+    /// and iPhones with 6 GB+ RAM (mobile-tier models only).
     nonisolated static var isSupported: Bool {
         #if arch(arm64)
         #if os(macOS)
-        // All Apple Silicon Macs are supported
         return true
         #elseif os(iOS)
-        // Only support iPads with M-series chips (8GB+ RAM)
-        // iPhones are excluded even if they have enough RAM due to aggressive memory limits
+        let physicalRAM = ProcessInfo.processInfo.physicalMemory
         let isIPad = UIDevice.current.userInterfaceIdiom == .pad
-        let hasEnoughRAM = ProcessInfo.processInfo.physicalMemory >= minimumRAMBytes
-        return isIPad && hasEnoughRAM
+        // iPads: 8 GB+   iPhones: 6 GB+ (mobile-tier only)
+        return (isIPad && physicalRAM >= minimumRAMBytes)
+            || (!isIPad && physicalRAM >= mobileMinRAMBytes)
         #else
         return false
         #endif
         #else
         return false
         #endif
+    }
+
+    /// Whether the device is limited to mobile-tier models (iPhones).
+    nonisolated static var isMobileOnly: Bool {
+        #if os(iOS)
+        return UIDevice.current.userInterfaceIdiom != .pad
+        #else
+        return false
+        #endif
+    }
+
+    /// Catalog filtered for the current device's capabilities.
+    /// On iPhone this only returns `.mobile` models and small general
+    /// models (≤ 3 GB RAM). On Mac/iPad it returns everything.
+    var deviceFilteredCatalog: [MLXModelInfo] {
+        if Self.isMobileOnly {
+            return catalog.filter { $0.category == .mobile || $0.minRAMGB <= 3 }
+        }
+        return catalog
     }
 
     // MARK: - Download management
