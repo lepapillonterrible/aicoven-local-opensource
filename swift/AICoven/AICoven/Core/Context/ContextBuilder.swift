@@ -169,10 +169,13 @@ struct ContextBuilder {
         // Layer 1: system contract (with tool documentation if tools are enabled)
         let systemPrompt: String = if !config.enabledTools.isEmpty {
             if config.isLocalModel {
-                // Use lean MLX-optimized prompt for small local models
+                // Use lean MLX-optimized prompt for small local models.
+                // Pass the user message so the tool selector can pick only
+                // the most relevant MCP tools instead of all 200+.
                 PromptTemplates.generateMLXAgentPrompt(
                     enabledTools: config.enabledTools,
-                    mcpServers: config.mcpServers
+                    mcpServers: config.mcpServers,
+                    userMessage: question
                 )
             } else {
                 // Generate full agent prompt with tool documentation
@@ -269,7 +272,20 @@ struct ContextBuilder {
             let recent = try await ChatService.shared.loadMessages(threadId: threadID, limit: limits.maxRecentMessages)
             for msg in recent {
                 let role: LLMMessage.Role = (msg.role == "user") ? .user : .assistant
-                segments.recents.append(LLMMessage(role: role, content: msg.content))
+                let content = msg.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                // Deduplicate: skip the last user message if it matches the
+                // current user question. The caller persists the user message
+                // before calling buildContext, so it already appears in the
+                // message store. Without this check, the same message would
+                // appear twice: once here in recents and again in Layer 7.
+                if role == .user, content == question {
+                    // Only skip if this is the very last message in history
+                    // (i.e. the one just persisted before this call).
+                    if msg.id == recent.last?.id {
+                        continue
+                    }
+                }
+                segments.recents.append(LLMMessage(role: role, content: content))
             }
         }
 

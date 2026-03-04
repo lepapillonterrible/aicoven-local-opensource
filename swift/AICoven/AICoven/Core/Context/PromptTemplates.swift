@@ -273,23 +273,64 @@ enum PromptTemplates {
     - If the user asks to run a command or script → use shell.execute
     - Call ONE tool at a time, wait for the result
     - After receiving a tool result, answer the user's question using that data
-    - Do NOT wrap your response in <think> or any XML tags
+    - Do NOT wrap your response in <think>, <thought>, or any XML/HTML tags
+    - Do NOT include internal reasoning or chain-of-thought in your response
+    - Respond directly with either a tool call JSON or a natural-language answer
+    /no_think
     """
 
     /// Generate a lean system prompt for MLX models with only essential sections.
+    ///
+    /// For MCP tools, this uses a two-tier approach:
+    ///   1. A compressed catalog (~200 tokens) listing all servers and tool names
+    ///   2. Full documentation only for the ~8 tools most relevant to the
+    ///      current user message (selected by keyword matching)
+    ///
+    /// This prevents dumping 200+ tool docs into the prompt, which would
+    /// overwhelm small local models and waste most of their context window.
+    ///
+    /// - Parameters:
+    ///   - enabledTools: Set of tool names that are enabled.
+    ///   - mcpServers: Active MCP server configurations.
+    ///   - userMessage: Current user message, used to select relevant MCP tools.
     static func generateMLXAgentPrompt(
         enabledTools: Set<String>,
-        mcpServers: [MCPServerAccount] = []
+        mcpServers: [MCPServerAccount] = [],
+        userMessage: String = ""
     ) -> String {
         var sections: [String] = []
 
         // Brief role description
         sections.append("You are a helpful AI assistant running locally. You have tools to help you answer questions that need real-time or external data.")
 
-        // Tool documentation — combine native and MCP tools
+        // Native tool documentation (always included in full — these are a
+        // small fixed set like web_search, file.read, shell.execute).
         let nativeDefs = toolDefinitions.filter { enabledTools.contains($0.name) }
-        let mcpDefs = mcpToolDefinitions(from: mcpServers).filter { enabledTools.contains($0.name) }
-        let allDefs = nativeDefs + mcpDefs
+
+        // MCP tools: use tiered approach for local models.
+        // 1) Compressed catalog of ALL MCP tools (~200 tokens).
+        // 2) Full docs only for the most relevant tools to this message.
+        let allMCPDefs = mcpToolDefinitions(from: mcpServers)
+        let relevantMCPDefs: [ToolDefinition]
+
+        if allMCPDefs.count > maxLocalModelMCPTools {
+            // Too many MCP tools for full docs — select the most relevant.
+            relevantMCPDefs = selectRelevantMCPTools(
+                userMessage: userMessage,
+                allMCPTools: allMCPDefs
+            )
+            // Add the compressed catalog so the model knows what else exists.
+            if let catalog = generateCompressedMCPCatalog(from: mcpServers) {
+                sections.append(catalog)
+            }
+        } else {
+            // Few enough MCP tools to include all with full docs.
+            relevantMCPDefs = allMCPDefs
+        }
+
+        // Filter to only enabled tools and combine native + selected MCP.
+        let enabledMCPDefs = relevantMCPDefs.filter { enabledTools.contains($0.name) }
+        let allDefs = nativeDefs + enabledMCPDefs
 
         if !allDefs.isEmpty {
             sections.append(generateToolDocumentation(for: allDefs))
@@ -590,6 +631,123 @@ extension PromptTemplates {
             }
         }
         return defs
+    }
+}
+
+// MARK: - MCP Tool Tiering for Local Models
+
+extension PromptTemplates {
+
+    /// Maximum number of MCP tools to include with full documentation in
+    /// local model (MLX/Ollama) prompts. Keeps context usage predictable.
+    private static let maxLocalModelMCPTools = 8
+
+    /// Select the most relevant MCP tools for a user message using keyword
+    /// matching against tool names and descriptions. Returns at most `limit`
+    /// tool definitions with full documentation.
+    ///
+    /// This is entirely dynamic — it works with any MCP server and any tool
+    /// names, since it matches the user's words against the tool metadata
+    /// that was cached when the server was connected.
+    static func selectRelevantMCPTools(
+        userMessage: String,
+        allMCPTools: [ToolDefinition],
+        limit: Int = maxLocalModelMCPTools
+    ) -> [ToolDefinition] {
+        guard !allMCPTools.isEmpty else { return [] }
+
+        // Tokenize user message into lowercase words for matching.
+        let messageWords = userMessage.lowercased()
+            .components(separatedBy: .alphanumerics.inverted)
+            .filter { $0.count >= 3 } // Skip short noise words
+
+        guard !messageWords.isEmpty else {
+            // No meaningful words — return a small default set.
+            return Array(allMCPTools.prefix(min(5, limit)))
+        }
+
+        // Score each tool based on how many user words appear in its name
+        // or description. Name matches are weighted higher since they're
+        // more specific (e.g. "send_email" matches "email" directly).
+        var scored: [(tool: ToolDefinition, score: Int)] = []
+        for tool in allMCPTools {
+            let lowerName = tool.name.lowercased()
+            let lowerDesc = tool.description.lowercased()
+            var score = 0
+            for word in messageWords {
+                if lowerName.contains(word) { score += 3 }
+                if lowerDesc.contains(word) { score += 1 }
+            }
+            if score > 0 {
+                scored.append((tool, score))
+            }
+        }
+
+        // Sort by score descending, take top N.
+        let selected = scored
+            .sorted { $0.score > $1.score }
+            .prefix(limit)
+            .map(\.tool)
+
+        // If keyword matching found very few, pad with the first few tools
+        // from the full list so the model has some MCP awareness.
+        if selected.count < 3 {
+            let selectedNames = Set(selected.map(\.name))
+            let extras = allMCPTools
+                .filter { !selectedNames.contains($0.name) }
+                .prefix(limit - selected.count)
+            return selected + extras
+        }
+
+        return Array(selected)
+    }
+
+    /// Generate a compressed one-line-per-server catalog of all MCP tools.
+    /// This gives the model awareness of what tools exist (~200 tokens for
+    /// 200+ tools) without burning context on full parameter documentation.
+    ///
+    /// Completely dynamic — works with any server name and any tool names.
+    ///
+    /// Example output:
+    ///   MCP TOOL CATALOG (207 tools across 12 servers):
+    ///   - zapier_mcp (15): send_email, find_email, draft_email, ...
+    ///   - my_notion (40): create_page, find_page, update_block, ...
+    static func generateCompressedMCPCatalog(
+        from servers: [MCPServerAccount]
+    ) -> String? {
+        // Group tools by server name for the catalog.
+        var serverEntries: [(name: String, toolNames: [String])] = []
+        var totalCount = 0
+
+        for server in servers {
+            guard let tools = server.cachedTools, !tools.isEmpty else { continue }
+            let safeServerName = server.name.lowercased()
+                .replacingOccurrences(of: " ", with: "_")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            // Use the short tool name (not mcp.server.tool prefix) to keep
+            // the catalog compact.
+            let names = tools.map(\.name)
+            serverEntries.append((name: safeServerName, toolNames: names))
+            totalCount += names.count
+        }
+
+        guard totalCount > 0 else { return nil }
+
+        var lines: [String] = []
+        lines.append("MCP TOOL CATALOG (\(totalCount) tools across \(serverEntries.count) servers):")
+        lines.append("To call: {\"tool\": \"mcp.<server>.<tool_name>\", \"input\": {...}, \"reason\": \"...\"}")
+
+        for entry in serverEntries {
+            // Show up to 5 tool names per server for brevity.
+            let preview = entry.toolNames.prefix(5).joined(separator: ", ")
+            let suffix = entry.toolNames.count > 5 ? ", ... (\(entry.toolNames.count - 5) more)" : ""
+            lines.append("- \(entry.name) (\(entry.toolNames.count)): \(preview)\(suffix)")
+        }
+
+        lines.append("")
+        lines.append("Only the most relevant tools are documented in detail below. For others, use the naming pattern above.")
+
+        return lines.joined(separator: "\n")
     }
 }
 
