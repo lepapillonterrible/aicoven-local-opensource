@@ -253,7 +253,10 @@ actor ToolExecutionService {
             return await .error(tool: toolCall.name, message: "MCP server '\(serverSlug)' not found or not connected.")
         }
 
-        let client = MCPClient(server: server, token: nil)
+        // Fetch the stored auth token (Bearer/API key) from keychain so
+        // runtime tool calls use the same auth path as MCP connection tests.
+        let token = try? await connectedAccountsService.getMCPToken(forServerId: server.id)
+        let client = MCPClient(server: server, token: token)
 
         do {
             let items = try await client.callTool(name: actionName, arguments: toolCall.args)

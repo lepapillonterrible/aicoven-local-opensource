@@ -548,36 +548,52 @@ actor ChatService {
         // pre-execution we skip the tool loop entirely (set remaining = 0)
         // so the model goes straight to the final-answer phase where we
         // reframe the request as a summarization task.
+        //
+        // The entire block is wrapped in do/catch so that a network failure
+        // (e.g. socket disconnected, timeout) does not abort streamMessage
+        // and leave the user with zero output.
         if isLocalModel, toolsAllowed, remainingToolSteps > 0 {
-            // Try MCP tools first (email, slack, calendar, etc.)
-            if let forcedMCP = Self.forceMCPToolCall(
-                userMessage: message,
-                mcpServers: toolConfig.mcpServers
-            ) {
-                #if DEBUG
-                AppErrorReporter.log(message: "Pre-executing MCP tool for local model: \(forcedMCP.tool)", context: "ChatService.streamMessage.preExecute")
-                #endif
-                onToolEvent(Self.friendlyToolSummary(for: forcedMCP.tool))
-                AnalyticsService.shared.trackToolUsed(toolName: forcedMCP.tool, threadId: threadId)
-                let (_, contextBlock) = try await executeChatToolCall(forcedMCP)
-                if let block = contextBlock {
-                    toolContextLog = block
+            do {
+                // Try MCP tools first (email, slack, calendar, etc.)
+                if let forcedMCP = Self.forceMCPToolCall(
+                    userMessage: message,
+                    mcpServers: toolConfig.mcpServers
+                ) {
+                    #if DEBUG
+                    AppErrorReporter.log(message: "Pre-executing MCP tool for local model: \(forcedMCP.tool)", context: "ChatService.streamMessage.preExecute")
+                    #endif
+                    onToolEvent(Self.friendlyToolSummary(for: forcedMCP.tool))
+                    AnalyticsService.shared.trackToolUsed(toolName: forcedMCP.tool, threadId: threadId)
+                    let (_, contextBlock) = try await executeChatToolCall(forcedMCP)
+                    if let block = contextBlock {
+                        toolContextLog = block
+                    }
+                    #if DEBUG
+                    AppErrorReporter.log(message: "Pre-execution completed. toolContextLog length=\(toolContextLog.count)", context: "ChatService.streamMessage.preExecute")
+                    #endif
+                    // Skip the tool loop — go straight to final-answer phase
+                    // where the prompt is reframed as summarization.
+                    remainingToolSteps = 0
+                } else if let forcedNative = Self.forceNativeToolCall(userMessage: message) {
+                    // Fallback to native tools (current_time, web_search)
+                    #if DEBUG
+                    AppErrorReporter.log(message: "Pre-executing native tool for local model: \(forcedNative.tool)", context: "ChatService.streamMessage.preExecute")
+                    #endif
+                    onToolEvent(Self.friendlyToolSummary(for: forcedNative.tool))
+                    AnalyticsService.shared.trackToolUsed(toolName: forcedNative.tool, threadId: threadId)
+                    let (_, contextBlock) = try await executeChatToolCall(forcedNative)
+                    if let block = contextBlock {
+                        toolContextLog = block
+                    }
+                    // Skip the tool loop.
+                    remainingToolSteps = 0
                 }
-                // Skip the tool loop — go straight to final-answer phase
-                // where the prompt is reframed as summarization.
-                remainingToolSteps = 0
-            } else if let forcedNative = Self.forceNativeToolCall(userMessage: message) {
-                // Fallback to native tools (current_time, web_search)
-                #if DEBUG
-                AppErrorReporter.log(message: "Pre-executing native tool for local model: \(forcedNative.tool)", context: "ChatService.streamMessage.preExecute")
-                #endif
-                onToolEvent(Self.friendlyToolSummary(for: forcedNative.tool))
-                AnalyticsService.shared.trackToolUsed(toolName: forcedNative.tool, threadId: threadId)
-                let (_, contextBlock) = try await executeChatToolCall(forcedNative)
-                if let block = contextBlock {
-                    toolContextLog = block
-                }
-                // Skip the tool loop.
+            } catch {
+                // Pre-execution failed (network error, MCP timeout, etc.).
+                // Log the error and fall through — the model will still
+                // attempt to answer without tool results.
+                AppErrorReporter.log(error: error, context: "ChatService.streamMessage.preExecute")
+                toolContextLog = "[Tool Error] Pre-execution failed: \(error.localizedDescription)"
                 remainingToolSteps = 0
             }
         }
@@ -889,10 +905,27 @@ actor ChatService {
                 // is already retrieved. By presenting the data as something
                 // that has already been fetched, the model treats it as a
                 // simple summarization task and avoids the refusal reflex.
+                //
+                // Cap the tool results at ~6 000 chars (~1 500 tokens) so
+                // the combined prompt fits safely inside the MLX context
+                // window and inference doesn't crash on huge payloads
+                // (e.g. listing hundreds of unread emails).
+                let maxToolChars = 6000
+                let cappedToolResults: String
+                if toolContextLog.count > maxToolChars {
+                    let truncated = String(toolContextLog.prefix(maxToolChars))
+                    let droppedCount = toolContextLog.count - maxToolChars
+                    cappedToolResults = truncated + "\n\n... [truncated — \(droppedCount) more characters omitted]"
+                    #if DEBUG
+                    AppErrorReporter.log(message: "Capped toolContextLog from \(toolContextLog.count) to \(maxToolChars) chars", context: "ChatService.streamMessage.finalPhase")
+                    #endif
+                } else {
+                    cappedToolResults = toolContextLog
+                }
                 composedUserMessage = """
                 A tool was executed on the user's behalf and returned the following data:
 
-                \(toolContextLog)
+                \(cappedToolResults)
 
                 The user's original question was: \(message)
 
