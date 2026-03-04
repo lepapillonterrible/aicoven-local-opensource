@@ -263,6 +263,14 @@ enum PromptTemplates {
     User: What is 2+2?
     Correct response: 2+2 = 4 (no tool needed, answer directly)
 
+    User: Check my gmail for emails from App Store Connect
+    Correct response: {"tool": "mcp.zapier.find_email", "input": {"search": "from:appstoreconnect"}, "reason": "Search Gmail for App Store Connect emails"}
+
+    User: Send a Slack message to #general saying hello
+    Correct response: {"tool": "mcp.zapier.send_slack_message", "input": {"channel": "#general", "message": "hello"}, "reason": "Send Slack message"}
+
+    IMPORTANT: You DO have access to external services (email, Slack, calendar, etc.) through MCP tools. NEVER say "I can't access external systems." If a user asks about their email, calendar, or any connected service, use the appropriate mcp.* tool.
+
     RULES:
     - ONLY use tools from the AVAILABLE TOOLS list above. Do NOT invent tools.
     - There is NO "python" tool, NO "code" tool, NO "execute" tool. Use shell.execute to run ANY command or script.

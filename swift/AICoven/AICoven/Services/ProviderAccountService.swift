@@ -394,7 +394,10 @@ actor ProviderAccountService {
                 ModelDescriptor(
                     providerID: "mlx",
                     modelID: activeMLX,
-                    maxContextTokens: 8_192,
+                    // Most MLX catalog models (Qwen3-4B, Mistral-7B, etc.)
+                    // support 32K+ context; 8K was far too small for system
+                    // prompt + MCP catalog + memories + recent turns.
+                    maxContextTokens: 32_768,
                     supportsTools: true,
                     supportsEmbeddings: false,
                     costClass: .free

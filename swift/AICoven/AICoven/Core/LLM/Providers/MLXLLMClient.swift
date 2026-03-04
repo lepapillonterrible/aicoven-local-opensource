@@ -152,10 +152,17 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
     // properly applied, including system messages (tool documentation,
     // instructions, policies) that would otherwise be lost.
     //
-    // Consecutive system messages are merged into a single `.system()` entry
-    // to keep the prompt compact for small local models.
+    // Consecutive messages of the same role are merged into a single
+    // entry. This is required because many chat templates (e.g. Mistral)
+    // enforce strictly alternating user/assistant turns and crash with
+    // a Jinja TemplateException if consecutive same-role messages appear.
     #if canImport(MLXLLM)
     private static func toChatMessages(from messages: [LLMMessage]) -> [Chat.Message] {
+        // Pre-merge consecutive same-role LLMMessages before converting
+        // to Chat.Message. This avoids pattern-matching issues with the
+        // Chat.Message enum and handles tool→user role coalescing.
+        let normalized = mergeConsecutiveRoles(messages)
+
         var chatMessages: [Chat.Message] = []
         var pendingSystemContent: [String] = []
 
@@ -167,7 +174,7 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
             pendingSystemContent.removeAll()
         }
 
-        for msg in messages {
+        for msg in normalized {
             switch msg.role {
             case .system:
                 // Accumulate consecutive system messages for merging.
@@ -189,6 +196,35 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
         flushSystem()
 
         return chatMessages
+    }
+
+    /// Merge consecutive messages that share the same effective role so
+    /// that strict chat templates (Mistral, etc.) don't crash. Tool
+    /// messages are treated as "user" for merging purposes since they
+    /// become user messages in the final Chat.Message array.
+    private static func mergeConsecutiveRoles(_ messages: [LLMMessage]) -> [LLMMessage] {
+        guard !messages.isEmpty else { return [] }
+        var result: [LLMMessage] = []
+
+        /// Effective role for merging: .tool counts as .user.
+        func effectiveRole(_ role: LLMMessage.Role) -> LLMMessage.Role {
+            role == .tool ? .user : role
+        }
+
+        for msg in messages {
+            if let last = result.last,
+               effectiveRole(last.role) == effectiveRole(msg.role) {
+                // Merge with the previous message.
+                let merged = last.content + "\n\n" + msg.content
+                result[result.count - 1] = LLMMessage(
+                    role: last.role,
+                    content: merged
+                )
+            } else {
+                result.append(msg)
+            }
+        }
+        return result
     }
     #else
     private static func toChatMessages(from messages: [LLMMessage]) -> [[String: String]] {

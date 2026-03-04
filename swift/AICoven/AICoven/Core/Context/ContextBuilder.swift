@@ -339,7 +339,10 @@ private extension ContextBuilder {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return (userText: "", toolContext: nil) }
 
-        let markers = ["[Web search results]", "[Attachment analysis]"]
+        // Markers that separate user text from tool-generated context.
+        // "You have tool results below" is prepended by ChatService when
+        // appending MCP / tool-loop results to the composed message.
+        let markers = ["[Web search results]", "[Attachment analysis]", "You have tool results below"]
         guard let range = markers
             .compactMap({ trimmed.range(of: $0) })
             .sorted(by: { $0.lowerBound < $1.lowerBound })
