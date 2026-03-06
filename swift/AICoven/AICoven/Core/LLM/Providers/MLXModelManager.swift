@@ -104,6 +104,33 @@ final class MLXModelManager: ObservableObject {
     // MARK: - Curated catalog
 
     static let defaultCatalog: [MLXModelInfo] = [
+        // ── AICoven Fine-Tuned ──────────────────────────────────────
+        MLXModelInfo(
+            id: "aicoven/Llama-3.2-3B-Instruct-4bit-MCP-LoRA",
+            displayName: "AICoven MCP 3B ⚡",
+            summary: "Fine-tuned for MCP tool calling. Best accuracy for AICoven workflows.",
+            downloadSizeBytes: 1_800_000_000,
+            minRAMGB: 3,
+            parameterCount: "3B",
+            quantization: "4-bit",
+            category: .general,
+            tier: .core,
+            recommendedFor: ["MCP Tools", "Tool Calling", "Agents"],
+            isRecommended: true
+        ),
+        MLXModelInfo(
+            id: "aicoven/Gemma-2-2B-IT-4bit-MCP-iOS",
+            displayName: "AICoven MCP 2B iOS 📱",
+            summary: "Compact model fine-tuned for iOS MCP tool calling. No file/shell tools.",
+            downloadSizeBytes: 1_470_000_000,
+            minRAMGB: 2,
+            parameterCount: "2B",
+            quantization: "4-bit",
+            category: .general,
+            tier: .core,
+            recommendedFor: ["MCP Tools", "iOS", "On-Device"],
+            isRecommended: true
+        ),
         // ── Core: General ────────────────────────────────────────────
         MLXModelInfo(
             id: "mlx-community/Qwen3-4B-4bit",
