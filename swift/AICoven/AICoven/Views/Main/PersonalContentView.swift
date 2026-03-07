@@ -345,17 +345,6 @@ struct PersonalChatView: View {
             // Messages area
             ScrollViewReader { proxy in
                 ScrollView {
-                    // Invisible tap target so tapping empty space dismisses the keyboard on iOS
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            #if os(iOS)
-                            UIApplication.shared.sendAction(
-                                #selector(UIResponder.resignFirstResponder),
-                                to: nil, from: nil, for: nil
-                            )
-                            #endif
-                        }
                     LazyVStack(spacing: Spacing.md) {
                         // Load-more sentinel at the top. This appears above the
                         // oldest loaded message and triggers when the user
@@ -428,6 +417,15 @@ struct PersonalChatView: View {
                     .padding(.top, Spacing.lg)
                     .padding(.bottom, Spacing.xxl)
                 }
+                #if os(iOS)
+                .scrollDismissesKeyboard(.interactively)
+                .onTapGesture {
+                    UIApplication.shared.sendAction(
+                        #selector(UIResponder.resignFirstResponder),
+                        to: nil, from: nil, for: nil
+                    )
+                }
+                #endif
                 .onChange(of: messages.count) { _, _ in
                     // When we're prepending older messages, keep the previously
                     // visible first message pinned in place instead of jumping

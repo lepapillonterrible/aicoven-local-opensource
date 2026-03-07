@@ -276,10 +276,12 @@ struct NewThreadView: View {
 
         do {
             AppErrorReporter.log(message: "Creating thread '\(title)' covenId=\(covenId ?? "nil") roleId=\(selectedRoleId ?? "none")", context: "NewThreadView.createThread")
+            let selectedRole = roles.first(where: { $0.id == selectedRoleId })
             let thread = try await ThreadService.shared.createThread(
                 title: title.isEmpty ? nil : title,
                 covenId: covenId,
-                agentId: covenId == nil ? nil : selectedRoleId
+                agentId: covenId == nil ? nil : selectedRoleId,
+                agentName: covenId == nil ? nil : selectedRole?.name
             )
             AppErrorReporter.log(message: "Thread created successfully (id: \(thread.id))", context: "NewThreadView.createThread")
             onThreadCreated(thread)

@@ -38,17 +38,37 @@ struct StrixSettingsView: View {
     /// Keyed by provider account ID.
     @State private var accountModelOptions: [String: [(String, String)]] = [:]
 
+    /// Dynamically discovered Ollama models (from /api/tags).
+    @State private var ollamaModels: [(String, String)] = []
+
     private let providerOptions: [(String, String)] = [
         ("openai", "OpenAI"),
         ("anthropic", "Anthropic"),
         ("google", "Google AI"),
         ("mistral", "Mistral AI"),
+        ("ollama", "Ollama (Local)"),
+        ("mlx", "MLX (On-Device)"),
     ]
+
+    /// Whether the selected provider is local (no API key needed).
+    private var isLocalProvider: Bool {
+        provider == "mlx" || provider == "ollama"
+    }
 
     /// Available models for the currently selected provider account. We use
     /// dynamically discovered models from provider_initializations when
     /// possible so the list always matches what the specific key supports.
     private var availableModels: [(String, String)] {
+        if provider == "mlx" {
+            return MLXModelManager.defaultCatalog.map { ($0.id, $0.displayName) }
+        }
+        if provider == "ollama" {
+            if !ollamaModels.isEmpty {
+                return ollamaModels
+            }
+            let ollamaModel = UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model")) ?? "llama3.2"
+            return [(ollamaModel, ollamaModel)]
+        }
         if let accountId = providerAccountId,
            let dynamic = accountModelOptions[accountId],
            !dynamic.isEmpty {
@@ -198,115 +218,174 @@ struct StrixSettingsView: View {
                             .background(Color.aicovenGlass)
                             .cornerRadius(BorderRadius.md)
                         } else {
-                            // Provider account selection backed by the user's BYOK
-                            // accounts. This keeps Strix aligned with a real API
-                            // key and its supported models.
+                            // Provider selection grouped by provider type
                             VStack(alignment: .leading, spacing: Spacing.xs) {
-                                Text("Provider Account")
+                                Text("Provider")
                                     .font(.aicovenCaption)
                                     .foregroundColor(.aicovenTextSecondary)
 
-                                if providerAccounts.count <= 1, let account = providerAccounts.first {
-                                    // Single account – auto-selected, show compact info
-                                    HStack {
-                                        VStack(alignment: .leading, spacing: Spacing.xxs) {
-                                            Text(account.displayName)
-                                                .font(.aicovenBody)
-                                                .foregroundColor(.aicovenTextPrimary)
-                                            let providerLabel = providerOptions.first(where: { $0.0 == account.provider.lowercased() })?.1 ?? account.provider
-                                            Text(providerLabel)
-                                                .font(.aicovenCaption)
-                                                .foregroundColor(.aicovenTextSecondary)
-                                        }
-                                        Spacer()
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundColor(.aicovenTeal)
-                                    }
-                                    .padding(Spacing.sm)
-                                    .background(Color.aicovenGlass)
-                                    .cornerRadius(BorderRadius.sm)
-                                } else {
-                                    ForEach(providerAccounts) { account in
+                                let accountsByProvider = Dictionary(grouping: providerAccounts) { $0.provider.lowercased() }
+
+                                ForEach(providerOptions, id: \.0) { option in
+                                    let accountsForProvider = accountsByProvider[option.0] ?? []
+                                    let isLocal = option.0 == "mlx" || option.0 == "ollama"
+
+                                    if isLocal {
+                                        // Local provider – one tap selects provider and model
+                                        let isSelected = provider == option.0
                                         Button {
-                                            providerAccountId = account.id
-                                            provider = account.provider
-                                            Task {
-                                                await loadModelsForAccount(account)
+                                            provider = option.0
+                                            providerAccountId = nil
+                                            if option.0 == "mlx" {
+                                                model = MLXModelManager.shared.activeModelID
+                                                    ?? MLXModelManager.defaultCatalog.first?.id ?? ""
+                                            } else {
+                                                model = ollamaModels.first?.0
+                                                    ?? UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model"))
+                                                    ?? "llama3.2"
                                             }
                                         } label: {
                                             HStack {
+                                                Image(systemName: "desktopcomputer")
+                                                    .foregroundColor(.aicovenTeal)
                                                 VStack(alignment: .leading, spacing: Spacing.xxs) {
-                                                    Text(account.displayName)
+                                                    Text(option.1)
                                                         .font(.aicovenBody)
                                                         .foregroundColor(.aicovenTextPrimary)
-
-                                                    if let modelLabel = accountModelOptions[account.id]?.first(where: { $0.0 == account.defaultModel })?.1 ?? account.defaultModel {
-                                                        Text("Model: \(modelLabel)")
+                                                    if isSelected {
+                                                        let modelLabel = availableModels.first(where: { $0.0 == model })?.1 ?? model
+                                                        Text(modelLabel)
                                                             .font(.aicovenCaption)
-                                                            .foregroundColor(.aicovenTextTertiary)
+                                                            .foregroundColor(.aicovenTextSecondary)
+                                                    } else {
+                                                        Text(option.0 == "mlx" ? "On-device via Apple Silicon" : "Running locally")
+                                                            .font(.aicovenCaption)
+                                                            .foregroundColor(.aicovenTextSecondary)
                                                     }
                                                 }
-
                                                 Spacer()
-
-                                                if providerAccountId == account.id {
+                                                if isSelected {
                                                     Image(systemName: "checkmark.circle.fill")
                                                         .foregroundColor(.aicovenTeal)
                                                 }
                                             }
                                             .padding(Spacing.sm)
-                                            .background(providerAccountId == account.id ? Color.aicovenGlass : Color.clear)
+                                            .background(isSelected ? Color.aicovenGlass : Color.clear)
                                             .cornerRadius(BorderRadius.sm)
                                         }
                                         .buttonStyle(.plain)
+                                    } else if accountsForProvider.count == 1, let account = accountsForProvider.first {
+                                        // Single key – one tap selects provider + key
+                                        let isSelected = providerAccountId == account.id
+                                        Button {
+                                            providerAccountId = account.id
+                                            provider = account.provider
+                                            Task { await loadModelsForAccount(account) }
+                                        } label: {
+                                            HStack {
+                                                VStack(alignment: .leading, spacing: Spacing.xxs) {
+                                                    Text(option.1)
+                                                        .font(.aicovenBody)
+                                                        .foregroundColor(.aicovenTextPrimary)
+                                                    Text(account.displayName)
+                                                        .font(.aicovenCaption)
+                                                        .foregroundColor(.aicovenTextSecondary)
+                                                }
+                                                Spacer()
+                                                if isSelected {
+                                                    Image(systemName: "checkmark.circle.fill")
+                                                        .foregroundColor(.aicovenTeal)
+                                                }
+                                            }
+                                            .padding(Spacing.sm)
+                                            .background(isSelected ? Color.aicovenGlass : Color.clear)
+                                            .cornerRadius(BorderRadius.sm)
+                                        }
+                                        .buttonStyle(.plain)
+                                    } else if accountsForProvider.count > 1 {
+                                        // Multiple keys – show provider header + each key
+                                        VStack(alignment: .leading, spacing: Spacing.xs) {
+                                            Text(option.1)
+                                                .font(.aicovenH3)
+                                                .foregroundColor(.aicovenTextSecondary)
+                                                .padding(.top, Spacing.sm)
+                                            ForEach(accountsForProvider) { account in
+                                                Button {
+                                                    providerAccountId = account.id
+                                                    provider = account.provider
+                                                    Task { await loadModelsForAccount(account) }
+                                                } label: {
+                                                    HStack {
+                                                        VStack(alignment: .leading, spacing: Spacing.xxs) {
+                                                            Text(account.displayName)
+                                                                .font(.aicovenBody)
+                                                                .foregroundColor(.aicovenTextPrimary)
+                                                            if let modelLabel = accountModelOptions[account.id]?.first(where: { $0.0 == account.defaultModel })?.1 ?? account.defaultModel {
+                                                                Text("Model: \(modelLabel)")
+                                                                    .font(.aicovenCaption)
+                                                                    .foregroundColor(.aicovenTextTertiary)
+                                                            }
+                                                        }
+                                                        Spacer()
+                                                        if providerAccountId == account.id {
+                                                            Image(systemName: "checkmark.circle.fill")
+                                                                .foregroundColor(.aicovenTeal)
+                                                        }
+                                                    }
+                                                    .padding(Spacing.sm)
+                                                    .background(providerAccountId == account.id ? Color.aicovenGlass : Color.clear)
+                                                    .cornerRadius(BorderRadius.sm)
+                                                }
+                                                .buttonStyle(.plain)
+                                            }
+                                        }
                                     }
                                 }
                             }
 
-                            // Model picker; prefers dynamically discovered models
-                            // for the selected account, with static fallbacks.
-                            if !availableModels.isEmpty {
-                                VStack(alignment: .leading, spacing: Spacing.xs) {
-                                    Text("Model")
-                                        .font(.aicovenCaption)
-                                        .foregroundColor(.aicovenTextSecondary)
+                            // Model picker – only for cloud providers
+                            if !isLocalProvider {
+                                if !availableModels.isEmpty {
+                                    VStack(alignment: .leading, spacing: Spacing.xs) {
+                                        Text("Model")
+                                            .font(.aicovenCaption)
+                                            .foregroundColor(.aicovenTextSecondary)
 
-                                    Menu {
-                                        ForEach(availableModels, id: \.0) { option in
-                                            Button(option.1) {
-                                                model = option.0
+                                        Menu {
+                                            ForEach(availableModels, id: \.0) { option in
+                                                Button(option.1) {
+                                                    model = option.0
+                                                }
                                             }
+                                        } label: {
+                                            HStack {
+                                                let current = availableModels.first(where: { $0.0 == model })
+                                                Text(current?.1 ?? model)
+                                                    .font(.aicovenBody)
+                                                    .foregroundColor(.aicovenTextPrimary)
+                                                Spacer()
+                                                Image(systemName: "chevron.down")
+                                                    .foregroundColor(.aicovenTextSecondary)
+                                            }
+                                            .padding(Spacing.sm)
+                                            .background(Color.aicovenGlass)
+                                            .cornerRadius(BorderRadius.sm)
                                         }
-                                    } label: {
-                                        HStack {
-                                            let current = availableModels.first(where: { $0.0 == model })
-                                            Text(current?.1 ?? model)
-                                                .font(.aicovenBody)
-                                                .foregroundColor(.aicovenTextPrimary)
-                                            Spacer()
-                                            Image(systemName: "chevron.down")
-                                                .foregroundColor(.aicovenTextSecondary)
-                                        }
-                                        .padding(Spacing.sm)
-                                        .background(Color.aicovenGlass)
-                                        .cornerRadius(BorderRadius.sm)
                                     }
-                                }
-                            } else {
-                                // If we don't have any model metadata yet, fall
-                                // back to a free-form text field.
-                                VStack(alignment: .leading, spacing: Spacing.xs) {
-                                    Text("Model ID")
-                                        .font(.aicovenCaption)
-                                        .foregroundColor(.aicovenTextSecondary)
+                                } else if !provider.isEmpty {
+                                    VStack(alignment: .leading, spacing: Spacing.xs) {
+                                        Text("Model ID")
+                                            .font(.aicovenCaption)
+                                            .foregroundColor(.aicovenTextSecondary)
 
-                                    TextField("gpt-4o", text: $model)
-                                        .font(.aicovenBody)
-                                        .foregroundColor(.aicovenTextPrimary)
-                                        .padding(Spacing.sm)
-                                        .background(Color.aicovenGlass)
-                                        .cornerRadius(BorderRadius.sm)
-                                        .disableAutocorrection(true)
+                                        TextField("gpt-4o", text: $model)
+                                            .font(.aicovenBody)
+                                            .foregroundColor(.aicovenTextPrimary)
+                                            .padding(Spacing.sm)
+                                            .background(Color.aicovenGlass)
+                                            .cornerRadius(BorderRadius.sm)
+                                            .disableAutocorrection(true)
+                                    }
                                 }
                             }
                         }
@@ -460,6 +539,14 @@ struct StrixSettingsView: View {
             let accounts = try await ProviderAccountService.shared.loadProviderAccounts()
             providerAccounts = accounts
 
+            // Discover Ollama models in the background regardless of current provider.
+            await discoverOllamaModels()
+
+            // If the saved provider is local, keep it — don't override with a cloud account.
+            if isLocalProvider {
+                return
+            }
+
             // Prefer the account already bound to Strix, if it still exists.
             if let id = providerAccountId,
                let account = accounts.first(where: { $0.id == id }) {
@@ -501,6 +588,24 @@ struct StrixSettingsView: View {
             }
         } catch {
             AppErrorReporter.log(error: error, context: "StrixSettingsView.loadModelsForAccount.\(account.id)")
+        }
+    }
+
+    /// Discover locally available Ollama models via /api/tags.
+    private func discoverOllamaModels() async {
+        let client = OllamaLLMClient()
+        do {
+            let models = try await client.discoverModels()
+            if !models.isEmpty {
+                ollamaModels = models.map { m in
+                    (m.name, m.formattedSize.map { s in "\(m.name) (\(s))" } ?? m.name)
+                }
+                if provider == "ollama", !ollamaModels.contains(where: { $0.0 == model }) {
+                    model = ollamaModels.first?.0 ?? model
+                }
+            }
+        } catch {
+            // Ollama not running or unreachable — keep fallback
         }
     }
 
