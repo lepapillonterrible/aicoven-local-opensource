@@ -889,17 +889,27 @@ struct MobileCovenRolesView: View {
 struct MobileCovenChatView: View {
     let thread: Thread
     let coven: Coven
+    @Environment(\.dismiss) private var dismiss
+    @State private var showStrixSettings = false
 
     var body: some View {
         PersonalChatView(
             thread: thread,
-            onEditAgent: nil,
-            onBack: nil
+            onEditAgent: { showStrixSettings = true },
+            onBack: { dismiss() }
         )
         #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarHidden(true)
         #endif
         .background(NebulaBackground())
+        .sheet(isPresented: $showStrixSettings) {
+            NavigationStack {
+                StrixSettingsView(onClose: {
+                    showStrixSettings = false
+                })
+                .environmentObject(StoreService.shared)
+            }
+        }
     }
 }
 
@@ -929,6 +939,12 @@ struct MobileProfileRootView: View {
                         }
                         NavigationLink(destination: StrixSettingsView()) {
                             Label("Default Agent", systemImage: "sparkles")
+                        }
+                        NavigationLink(destination: ConnectedAppsView().environmentObject(StoreService.shared)) {
+                            Label("Connected Apps", systemImage: "app.connected.to.app.below.fill")
+                        }
+                        NavigationLink(destination: MCPServerManagementView()) {
+                            Label("MCP Servers", systemImage: "server.rack")
                         }
                     }
 

@@ -333,13 +333,29 @@ struct PersonalChatView: View {
                 onEditAgent: onEditAgent,
                 onBack: onBack
             )
+            #if os(iOS)
+            .padding(.horizontal, Spacing.md)
+            .padding(.vertical, Spacing.sm)
+            #else
             .padding(Spacing.md)
+            #endif
 
             GradientDivider()
 
             // Messages area
             ScrollViewReader { proxy in
                 ScrollView {
+                    // Invisible tap target so tapping empty space dismisses the keyboard on iOS
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            #if os(iOS)
+                            UIApplication.shared.sendAction(
+                                #selector(UIResponder.resignFirstResponder),
+                                to: nil, from: nil, for: nil
+                            )
+                            #endif
+                        }
                     LazyVStack(spacing: Spacing.md) {
                         // Load-more sentinel at the top. This appears above the
                         // oldest loaded message and triggers when the user

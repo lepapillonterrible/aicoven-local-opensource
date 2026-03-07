@@ -17,6 +17,16 @@ struct MarkdownView: View {
             ForEach(parseBlocks(from: text).indices, id: \.self) { i in
                 switch parseBlocks(from: text)[i] {
                 case let .paragraph(md):
+                    #if os(macOS)
+                    // On macOS, render the paragraph as a single Text so users
+                    // can select across lines freely.
+                    Text(attributedMarkdown(md))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contextMenu {
+                            Button("Copy") { copyToClipboard(md) }
+                        }
+                    #else
                     VStack(alignment: .leading, spacing: 4) {
                         let lines = md.split(separator: "\n", omittingEmptySubsequences: false)
                         ForEach(Array(lines.enumerated()), id: \.offset) { _, rawLine in
@@ -51,6 +61,7 @@ struct MarkdownView: View {
                     .contextMenu {
                         Button("Copy") { copyToClipboard(md) }
                     }
+                    #endif
                 case let .code(code, _):
                     CodeBlockView(code: code)
                 }
