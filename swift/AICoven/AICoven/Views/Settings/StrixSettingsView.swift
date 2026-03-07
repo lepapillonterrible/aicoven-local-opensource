@@ -60,7 +60,7 @@ struct StrixSettingsView: View {
     /// possible so the list always matches what the specific key supports.
     private var availableModels: [(String, String)] {
         if provider == "mlx" {
-            return MLXModelManager.defaultCatalog.map { ($0.id, $0.displayName) }
+            return MLXModelManager.shared.deviceFilteredCatalog.map { ($0.id, $0.displayName) }
         }
         if provider == "ollama" {
             if !ollamaModels.isEmpty {
@@ -238,7 +238,7 @@ struct StrixSettingsView: View {
                                             providerAccountId = nil
                                             if option.0 == "mlx" {
                                                 model = MLXModelManager.shared.activeModelID
-                                                    ?? MLXModelManager.defaultCatalog.first?.id ?? ""
+                                                    ?? MLXModelManager.shared.deviceFilteredCatalog.first?.id ?? ""
                                             } else {
                                                 model = ollamaModels.first?.0
                                                     ?? UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model"))

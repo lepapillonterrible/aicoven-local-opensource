@@ -62,7 +62,7 @@ struct AddRoleView: View {
     var availableModels: [(String, String)] {
         // Local providers: return models from local catalog.
         if provider == "mlx" {
-            return MLXModelManager.defaultCatalog.map { ($0.id, $0.displayName) }
+            return MLXModelManager.shared.deviceFilteredCatalog.map { ($0.id, $0.displayName) }
         }
         if provider == "ollama" {
             if !ollamaModels.isEmpty {
@@ -271,7 +271,7 @@ struct AddRoleView: View {
                                                 provider = option.0
                                                 providerAccountId = nil
                                                 let models: [(String, String)] = if option.0 == "mlx" {
-                                                    MLXModelManager.defaultCatalog.map { ($0.id, $0.displayName) }
+                                                    MLXModelManager.shared.deviceFilteredCatalog.map { ($0.id, $0.displayName) }
                                                 } else {
                                                     ollamaModels.isEmpty
                                                         ? [(UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model")) ?? "llama3.2", "llama3.2")]

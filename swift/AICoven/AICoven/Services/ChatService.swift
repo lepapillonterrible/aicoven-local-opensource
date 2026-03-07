@@ -1,5 +1,9 @@
 import Foundation
 
+#if canImport(UIKit)
+import UIKit
+#endif
+
 /// Task from an agent's planning scratchpad
 struct AgentTask: Identifiable, Codable, Equatable {
     let id: String
@@ -149,8 +153,13 @@ actor ChatService {
     /// configured via ProviderKeysView / ProviderAccountService.
     static let shared: ChatService = {
         let env = LLMConfiguration.makeEnvironment()
+        // Use tighter context limits on iPhone to leave headroom for the
+        // MLX model weights in memory.
+        let limits: ContextBuilder.Limits = MLXModelManager.isMobileOnly
+            ? .mobile
+            : .init(maxRecentMessages: 16, maxRecentMemories: 16)
         return ChatService(
-            contextBuilder: ContextBuilder(),
+            contextBuilder: ContextBuilder(limits: limits),
             modelRouter: HeuristicModelRouter(availableModels: env.models),
             llmClients: env.clients,
             threadStore: ThreadRepository.shared,
@@ -480,8 +489,10 @@ actor ChatService {
 
         // ── Tool result compression threshold ────────────────────────────
         // Once toolContextLog exceeds this length (chars), older results
-        // are truncated to prevent context overflow.
-        let toolContextCompressThreshold = 3000
+        // are truncated to prevent context overflow. Use a lower limit on
+        // iPhone to reduce peak memory alongside the MLX model.
+        let isMobileDevice = Self.isMobileDevice
+        let toolContextCompressThreshold = isMobileDevice ? 2000 : 3000
 
         // Track initial message sent
         AnalyticsService.shared.trackMessageSent(threadId: threadId, hasAttachments: !(attachments?.isEmpty ?? true), attachmentCount: attachments?.count ?? 0)
@@ -567,6 +578,13 @@ actor ChatService {
                     let (_, contextBlock) = try await executeChatToolCall(forcedMCP)
                     if let block = contextBlock {
                         toolContextLog = block
+                    }
+                    // Eagerly cap MCP results on mobile to avoid carrying
+                    // oversized strings through the rest of the pipeline.
+                    let preExecCap = isMobileDevice ? 4000 : 8000
+                    if toolContextLog.count > preExecCap {
+                        toolContextLog = String(toolContextLog.prefix(preExecCap))
+                            + "\n... [truncated for device memory]"
                     }
                     #if DEBUG
                     AppErrorReporter.log(message: "Pre-execution completed. toolContextLog length=\(toolContextLog.count)", context: "ChatService.streamMessage.preExecute")
@@ -910,7 +928,7 @@ actor ChatService {
                 // the combined prompt fits safely inside the MLX context
                 // window and inference doesn't crash on huge payloads
                 // (e.g. listing hundreds of unread emails).
-                let maxToolChars = 6000
+                let maxToolChars = isMobileDevice ? 4000 : 6000
                 let cappedToolResults: String
                 if toolContextLog.count > maxToolChars {
                     let truncated = String(toolContextLog.prefix(maxToolChars))
@@ -1202,6 +1220,23 @@ actor ChatService {
             AppErrorReporter.log(error: error, context: "ChatService.currentSystemPrompt.loadPersonalStrix")
             return nil
         }
+    }
+
+    // MARK: - Platform helpers
+
+    /// Whether we're running on an iPhone (not iPad or Mac).
+    /// Used to apply tighter memory limits for tool context, context builder,
+    /// and other allocations that compete with the MLX model for RAM.
+    nonisolated static var isMobileDevice: Bool {
+        #if os(iOS)
+        // Must be evaluated on MainActor because UIDevice is main-only.
+        // Use a simple synchronous check that's safe at this call-site.
+        return MainActor.assumeIsolated {
+            UIDevice.current.userInterfaceIdiom == .phone
+        }
+        #else
+        return false
+        #endif
     }
 }
 

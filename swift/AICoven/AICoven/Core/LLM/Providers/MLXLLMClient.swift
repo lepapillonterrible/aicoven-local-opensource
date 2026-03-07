@@ -6,6 +6,10 @@ import MLXLLM
 import MLXLMCommon
 #endif
 
+#if canImport(UIKit)
+import UIKit
+#endif
+
 /// LLM client that runs models locally via Apple's MLX framework on Apple
 /// Silicon. Chat completions happen entirely on-device — no network calls,
 /// no API key required.
@@ -30,8 +34,50 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
     private let lock = OSAllocatedUnfairLock()
     #endif
 
+    /// Observer token for memory warning notifications.
+    private var memoryWarningObserver: NSObjectProtocol?
+
     init(modelID: String) {
         defaultModelID = modelID
+        registerMemoryWarningObserver()
+    }
+
+    deinit {
+        if let observer = memoryWarningObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    // MARK: - Memory Pressure
+
+    /// Listen for OS memory warnings and proactively release cached model
+    /// containers (~1–2 GB each). `ensureModelLoaded` will reload on next use.
+    private func registerMemoryWarningObserver() {
+        #if canImport(UIKit)
+        memoryWarningObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.unloadAllModels()
+        }
+        #endif
+    }
+
+    /// Release all cached model containers to free memory.
+    /// Called from the memory warning notification (main queue) and may
+    /// also be called directly. Thread-safe via `lock`.
+    func unloadAllModels() {
+        #if canImport(MLXLLM)
+        let unloaded = lock.withLock { () -> Int in
+            let n = loadedContainers.count
+            loadedContainers.removeAll()
+            return n
+        }
+        if unloaded > 0 {
+            print("⚠️ [MLXLLMClient] Memory warning: unloaded \(unloaded) model container(s)")
+        }
+        #endif
     }
 
     // MARK: - LLMClient (full response)
@@ -56,18 +102,21 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
             // the model's chat template (e.g. Qwen3, Mistral, Llama formats).
             let input = try await context.processor.prepare(input: userInput)
 
-            // Set up generation parameters
+            // Set up generation parameters.
             let parameters = GenerateParameters(maxTokens: maxTokens)
 
-            // Generate text using MLXLMCommon.generate
-            // Explicit [Int] type to disambiguate between the two generate overloads
-            return try MLXLMCommon.generate(
-                input: input,
-                parameters: parameters,
-                context: context
-            ) { (_: [Int]) -> GenerateDisposition in
-                // Continue generating until done
-                return .more
+            // Generate text using MLXLMCommon.generate.
+            // autoreleasepool around the synchronous generate call frees
+            // transient Obj-C allocations promptly on iPhones.
+            // Explicit [Int] type to disambiguate between the two generate overloads.
+            return try autoreleasepool {
+                try MLXLMCommon.generate(
+                    input: input,
+                    parameters: parameters,
+                    context: context
+                ) { (_: [Int]) -> GenerateDisposition in
+                    .more
+                }
             }
         }
 

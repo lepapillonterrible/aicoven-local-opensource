@@ -23,6 +23,11 @@ struct ContextBuilder {
     struct Limits: Sendable {
         let maxRecentMessages: Int
         let maxRecentMemories: Int
+
+        /// Tighter limits for iPhones running local models where RAM is shared
+        /// with the MLX model weights (~1–2 GB). Fewer messages and memories
+        /// means smaller strings in the context sandwich.
+        static let mobile = Limits(maxRecentMessages: 6, maxRecentMemories: 4)
     }
 
     /// Configuration for tool-enabled prompts.

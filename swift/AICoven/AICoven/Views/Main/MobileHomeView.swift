@@ -890,24 +890,35 @@ struct MobileCovenChatView: View {
     let thread: Thread
     let coven: Coven
     @Environment(\.dismiss) private var dismiss
-    @State private var showStrixSettings = false
+    @State private var showEditRole = false
+    @State private var covenRoles: [Role] = []
 
     var body: some View {
         PersonalChatView(
             thread: thread,
-            onEditAgent: { showStrixSettings = true },
+            onEditAgent: {
+                if thread.agentId != nil {
+                    showEditRole = true
+                }
+            },
             onBack: { dismiss() }
         )
         #if os(iOS)
         .navigationBarHidden(true)
         #endif
         .background(NebulaBackground())
-        .sheet(isPresented: $showStrixSettings) {
-            NavigationStack {
-                StrixSettingsView(onClose: {
-                    showStrixSettings = false
-                })
-                .environmentObject(StoreService.shared)
+        .task {
+            do {
+                covenRoles = try await RoleService.shared.loadRoles(covenId: coven.id)
+            } catch {}
+        }
+        .sheet(isPresented: $showEditRole) {
+            if let roleId = thread.agentId {
+                NavigationStack {
+                    EditRoleView(roleId: roleId, roles: covenRoles) {
+                        showEditRole = false
+                    }
+                }
             }
         }
     }
