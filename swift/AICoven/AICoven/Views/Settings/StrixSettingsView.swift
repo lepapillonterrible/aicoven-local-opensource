@@ -206,39 +206,60 @@ struct StrixSettingsView: View {
                                     .font(.aicovenCaption)
                                     .foregroundColor(.aicovenTextSecondary)
 
-                                ForEach(providerAccounts) { account in
-                                    Button {
-                                        providerAccountId = account.id
-                                        provider = account.provider
-                                        Task {
-                                            await loadModelsForAccount(account)
+                                if providerAccounts.count <= 1, let account = providerAccounts.first {
+                                    // Single account – auto-selected, show compact info
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: Spacing.xxs) {
+                                            Text(account.displayName)
+                                                .font(.aicovenBody)
+                                                .foregroundColor(.aicovenTextPrimary)
+                                            let providerLabel = providerOptions.first(where: { $0.0 == account.provider.lowercased() })?.1 ?? account.provider
+                                            Text(providerLabel)
+                                                .font(.aicovenCaption)
+                                                .foregroundColor(.aicovenTextSecondary)
                                         }
-                                    } label: {
-                                        HStack {
-                                            VStack(alignment: .leading, spacing: Spacing.xxs) {
-                                                Text(account.displayName)
-                                                    .font(.aicovenBody)
-                                                    .foregroundColor(.aicovenTextPrimary)
+                                        Spacer()
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundColor(.aicovenTeal)
+                                    }
+                                    .padding(Spacing.sm)
+                                    .background(Color.aicovenGlass)
+                                    .cornerRadius(BorderRadius.sm)
+                                } else {
+                                    ForEach(providerAccounts) { account in
+                                        Button {
+                                            providerAccountId = account.id
+                                            provider = account.provider
+                                            Task {
+                                                await loadModelsForAccount(account)
+                                            }
+                                        } label: {
+                                            HStack {
+                                                VStack(alignment: .leading, spacing: Spacing.xxs) {
+                                                    Text(account.displayName)
+                                                        .font(.aicovenBody)
+                                                        .foregroundColor(.aicovenTextPrimary)
 
-                                                if let modelLabel = accountModelOptions[account.id]?.first(where: { $0.0 == account.defaultModel })?.1 ?? account.defaultModel {
-                                                    Text("Model: \(modelLabel)")
-                                                        .font(.aicovenCaption)
-                                                        .foregroundColor(.aicovenTextTertiary)
+                                                    if let modelLabel = accountModelOptions[account.id]?.first(where: { $0.0 == account.defaultModel })?.1 ?? account.defaultModel {
+                                                        Text("Model: \(modelLabel)")
+                                                            .font(.aicovenCaption)
+                                                            .foregroundColor(.aicovenTextTertiary)
+                                                    }
+                                                }
+
+                                                Spacer()
+
+                                                if providerAccountId == account.id {
+                                                    Image(systemName: "checkmark.circle.fill")
+                                                        .foregroundColor(.aicovenTeal)
                                                 }
                                             }
-
-                                            Spacer()
-
-                                            if providerAccountId == account.id {
-                                                Image(systemName: "checkmark.circle.fill")
-                                                    .foregroundColor(.aicovenTeal)
-                                            }
+                                            .padding(Spacing.sm)
+                                            .background(providerAccountId == account.id ? Color.aicovenGlass : Color.clear)
+                                            .cornerRadius(BorderRadius.sm)
                                         }
-                                        .padding(Spacing.sm)
-                                        .background(providerAccountId == account.id ? Color.aicovenGlass : Color.clear)
-                                        .cornerRadius(BorderRadius.sm)
+                                        .buttonStyle(.plain)
                                     }
-                                    .buttonStyle(.plain)
                                 }
                             }
 
