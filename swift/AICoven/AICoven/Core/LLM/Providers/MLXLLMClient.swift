@@ -291,7 +291,58 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
             chatMessages.append(.user(systemBlock))
         }
 
-        return chatMessages
+        // Post-merge: folding system messages into user messages and
+        // stripping system entries can leave consecutive .user() entries
+        // (e.g. when ContextBuilder's dedup fails for rewritten prompts).
+        // Gemma 2's template enforces strict alternation and throws
+        // TemplateException if adjacent roles match. Merge them here.
+        return mergeAdjacentChatMessages(chatMessages)
+    }
+
+    /// Merge consecutive Chat.Messages that share the same role so that
+    /// strict chat templates (Gemma 2, etc.) never see adjacent
+    /// user-user or assistant-assistant pairs.
+    private static func mergeAdjacentChatMessages(_ messages: [Chat.Message]) -> [Chat.Message] {
+        guard messages.count > 1 else { return messages }
+        var result: [Chat.Message] = [messages[0]]
+
+        for msg in messages.dropFirst() {
+            let prevRole = chatMessageRole(result.last!)
+            let curRole = chatMessageRole(msg)
+
+            if prevRole == curRole, prevRole != "system" {
+                // Merge adjacent same-role messages.
+                let prevText = chatMessageContent(result.last!)
+                let curText = chatMessageContent(msg)
+                let merged = prevText + "\n\n" + curText
+                if prevRole == "user" {
+                    result[result.count - 1] = .user(merged)
+                } else {
+                    result[result.count - 1] = .assistant(merged)
+                }
+            } else {
+                result.append(msg)
+            }
+        }
+        return result
+    }
+
+    /// Extract the role string from a Chat.Message.
+    private static func chatMessageRole(_ msg: Chat.Message) -> String {
+        switch msg {
+        case .user: "user"
+        case .assistant: "assistant"
+        case .system: "system"
+        }
+    }
+
+    /// Extract the text content from a Chat.Message.
+    private static func chatMessageContent(_ msg: Chat.Message) -> String {
+        switch msg {
+        case let .user(c, _, _): c
+        case let .assistant(c, _, _): c
+        case let .system(c): c
+        }
     }
 
     /// Merge consecutive messages that share the same effective role so

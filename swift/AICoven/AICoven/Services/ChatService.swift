@@ -565,8 +565,24 @@ actor ChatService {
         // and leave the user with zero output.
         if isLocalModel, toolsAllowed, remainingToolSteps > 0 {
             do {
-                // Try MCP tools first (email, slack, calendar, etc.)
-                if let forcedMCP = Self.forceMCPToolCall(
+                // Try native tools first (current_time, web_search) — these
+                // are cheap, local, and have high-confidence keyword matching.
+                // MCP tools are checked second because their fuzzy scoring can
+                // produce false positives (e.g. "time" matching "timestamp"
+                // in a Slack tool name).
+                if let forcedNative = Self.forceNativeToolCall(userMessage: message) {
+                    #if DEBUG
+                    AppErrorReporter.log(message: "Pre-executing native tool for local model: \(forcedNative.tool)", context: "ChatService.streamMessage.preExecute")
+                    #endif
+                    onToolEvent(Self.friendlyToolSummary(for: forcedNative.tool))
+                    AnalyticsService.shared.trackToolUsed(toolName: forcedNative.tool, threadId: threadId)
+                    let (_, contextBlock) = try await executeChatToolCall(forcedNative)
+                    if let block = contextBlock {
+                        toolContextLog = block
+                    }
+                    // Skip the tool loop.
+                    remainingToolSteps = 0
+                } else if let forcedMCP = Self.forceMCPToolCall(
                     userMessage: message,
                     mcpServers: toolConfig.mcpServers
                 ) {
@@ -591,19 +607,6 @@ actor ChatService {
                     #endif
                     // Skip the tool loop — go straight to final-answer phase
                     // where the prompt is reframed as summarization.
-                    remainingToolSteps = 0
-                } else if let forcedNative = Self.forceNativeToolCall(userMessage: message) {
-                    // Fallback to native tools (current_time, web_search)
-                    #if DEBUG
-                    AppErrorReporter.log(message: "Pre-executing native tool for local model: \(forcedNative.tool)", context: "ChatService.streamMessage.preExecute")
-                    #endif
-                    onToolEvent(Self.friendlyToolSummary(for: forcedNative.tool))
-                    AnalyticsService.shared.trackToolUsed(toolName: forcedNative.tool, threadId: threadId)
-                    let (_, contextBlock) = try await executeChatToolCall(forcedNative)
-                    if let block = contextBlock {
-                        toolContextLog = block
-                    }
-                    // Skip the tool loop.
                     remainingToolSteps = 0
                 }
             } catch {
