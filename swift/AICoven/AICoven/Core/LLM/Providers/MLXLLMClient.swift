@@ -93,9 +93,10 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
         #if canImport(MLXLLM)
 
         // On iOS, set a strict metal cache limit to prevent jetsam (OOM crashes).
-        // E.g., cap MLX memory to ~2GB (adjust based on device total RAM if needed).
+        // iPhones typically allow ~3–4 GB for apps; keep GPU cache small so the
+        // model weights + KV cache don't push us over the limit.
         #if os(iOS)
-        let memoryLimit = 2 * 1024 * 1024 * 1024 // 2GB
+        let memoryLimit = 512 * 1024 * 1024 // 512 MB
         MLX.GPU.set(cacheLimit: memoryLimit)
         #endif
 
@@ -148,6 +149,13 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
             completionTokens: estimatedCompletionTokens
         )
 
+        // On iOS, proactively unload the model after each inference to prevent
+        // jetsam (OOM kill). The ~1.5 GB model weights staying resident is the
+        // primary cause of memory pressure. The model will reload on next chat.
+        #if os(iOS)
+        unloadAllModels()
+        #endif
+
         return LLMChatResponse(
             message: LLMMessage(role: .assistant, content: result.output),
             providerID: "mlx",
@@ -193,6 +201,21 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
         if let existing = lock.withLock({ loadedContainers[modelID] }) {
             return existing
         }
+
+        // On iOS, evict any OTHER cached models before loading a new one.
+        // Two models (~1.5 GB each) will exceed the jetsam limit. This
+        // ensures at most one model is cached at a time.
+        #if os(iOS)
+        let evicted = lock.withLock { () -> Int in
+            let n = loadedContainers.count
+            if n > 0 { loadedContainers.removeAll() }
+            return n
+        }
+        if evicted > 0 {
+            MLX.GPU.clearCache()
+            print("🔄 [MLXLLMClient] Evicted \(evicted) model(s) before loading \(modelID)")
+        }
+        #endif
 
         // Load the model (outside lock to avoid blocking)
         // Create configuration from model ID (e.g. "mlx-community/Llama-3.2-1B-Instruct-4bit")

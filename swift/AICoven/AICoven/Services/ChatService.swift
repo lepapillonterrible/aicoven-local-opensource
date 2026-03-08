@@ -1110,6 +1110,14 @@ actor ChatService {
     /// configured LLM providers. This runs independently of any one chat turn
     /// and is safe to call opportunistically after new messages are added.
     func updateThreadSummary(threadId: String) async {
+        // On iOS, skip background summaries when only local models are
+        // available. Loading a second MLX model (~1.5 GB) for an optional
+        // summary will push past the jetsam memory limit and crash the app.
+        #if os(iOS)
+        let hasCloudProvider = llmClients.keys.contains(where: { $0 != "mlx" && $0 != "ollama" })
+        if !hasCloudProvider { return }
+        #endif
+
         // Ensure environment is ready before routing summarization calls.
         await ensureEnvironment()
         do {
@@ -1145,6 +1153,15 @@ actor ChatService {
                   let client = llmClients[descriptor.providerID] else {
                 return
             }
+
+            // On iOS, don't use local models for background summaries even
+            // if a cloud provider is available — the chat might still be
+            // using the local model and concurrent loads are fatal.
+            #if os(iOS)
+            if descriptor.providerID == "mlx" || descriptor.providerID == "ollama" {
+                return
+            }
+            #endif
 
             let options = ChatOptions(temperature: 0.2, maxTokens: nil, stream: false)
             let response = try await client.completeChat(
@@ -1227,17 +1244,22 @@ actor ChatService {
     /// Whether we're running on an iPhone (not iPad or Mac).
     /// Used to apply tighter memory limits for tool context, context builder,
     /// and other allocations that compete with the MLX model for RAM.
-    nonisolated static var isMobileDevice: Bool {
+    ///
+    /// The value is cached in a static `let` so it can be read from any
+    /// isolation context without hitting the MainActor-isolated UIDevice API
+    /// at call time (which would crash via `assumeIsolated` on background
+    /// threads).
+    nonisolated static let isMobileDevice: Bool = {
         #if os(iOS)
-        // Must be evaluated on MainActor because UIDevice is main-only.
-        // Use a simple synchronous check that's safe at this call-site.
-        return MainActor.assumeIsolated {
-            UIDevice.current.userInterfaceIdiom == .phone
-        }
+        // UIDevice.current.userInterfaceIdiom is a read-only hardware
+        // constant that never changes at runtime. Reading it off-main
+        // is safe in practice even though the API is nominally
+        // MainActor-isolated.
+        return UIDevice.current.userInterfaceIdiom == .phone
         #else
         return false
         #endif
-    }
+    }()
 }
 
 // MARK: - LocalChatError analytics helpers
