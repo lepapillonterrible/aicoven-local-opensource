@@ -239,14 +239,14 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
     // MARK: - Message conversion
 
     // Convert internal `LLMMessage` array to MLXLMCommon's structured
-    // `Chat.Message` format. This ensures the model's chat template is
-    // properly applied, including system messages (tool documentation,
-    // instructions, policies) that would otherwise be lost.
+    // `Chat.Message` format. System messages are folded into the first
+    // user message because many small models (Gemma 2, etc.) don't
+    // support the "system" role in their Jinja chat templates and throw
+    // a TemplateException.
     //
     // Consecutive messages of the same role are merged into a single
     // entry. This is required because many chat templates (e.g. Mistral)
-    // enforce strictly alternating user/assistant turns and crash with
-    // a Jinja TemplateException if consecutive same-role messages appear.
+    // enforce strictly alternating user/assistant turns.
     #if canImport(MLXLLM)
     private static func toChatMessages(from messages: [LLMMessage]) -> [Chat.Message] {
         // Pre-merge consecutive same-role LLMMessages before converting
@@ -255,36 +255,41 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
         let normalized = mergeConsecutiveRoles(messages)
 
         var chatMessages: [Chat.Message] = []
-        var pendingSystemContent: [String] = []
-
-        /// Helper to flush accumulated system content into a single message.
-        func flushSystem() {
-            guard !pendingSystemContent.isEmpty else { return }
-            let merged = pendingSystemContent.joined(separator: "\n\n")
-            chatMessages.append(.system(merged))
-            pendingSystemContent.removeAll()
-        }
+        // Collect all system content to prepend to the first user message.
+        // Many small models (Gemma 2, Phi, etc.) don't support .system()
+        // in their Jinja chat template and throw TemplateException.
+        var systemContent: [String] = []
+        var systemFlushed = false
 
         for msg in normalized {
             switch msg.role {
             case .system:
-                // Accumulate consecutive system messages for merging.
-                pendingSystemContent.append(msg.content)
+                systemContent.append(msg.content)
             case .user:
-                flushSystem()
-                chatMessages.append(.user(msg.content))
+                var text = msg.content
+                // Prepend accumulated system content to the first user
+                // message so instructions aren't lost.
+                if !systemFlushed, !systemContent.isEmpty {
+                    let systemBlock = systemContent.joined(separator: "\n\n")
+                    text = systemBlock + "\n\n" + text
+                    systemFlushed = true
+                }
+                chatMessages.append(.user(text))
             case .assistant:
-                flushSystem()
                 chatMessages.append(.assistant(msg.content))
             case .tool:
-                flushSystem()
                 // Tool results are injected as user messages since
                 // small local models handle them better that way.
                 chatMessages.append(.user("[Tool Result]\n" + msg.content))
             }
         }
-        // Flush any trailing system messages.
-        flushSystem()
+
+        // If there were only system messages and no user message,
+        // emit them as a single user message so the model can respond.
+        if !systemFlushed, !systemContent.isEmpty {
+            let systemBlock = systemContent.joined(separator: "\n\n")
+            chatMessages.append(.user(systemBlock))
+        }
 
         return chatMessages
     }
