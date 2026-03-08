@@ -108,6 +108,13 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
         // messages (tool docs, instructions, policies) that were previously
         // silently dropped by the old flat-prompt approach.
         let chatMessages = Self.toChatMessages(from: messages)
+        #if DEBUG
+        print("🔍 [MLXLLMClient] Chat messages (\(chatMessages.count)):")
+        for (i, m) in chatMessages.enumerated() {
+            let preview = m.content.prefix(120).replacingOccurrences(of: "\n", with: "⏎")
+            print("   [\(i)] role=\(m.role.rawValue) content=\"\(preview)...\"")
+        }
+        #endif
         let userInput = UserInput(chat: chatMessages)
         // Cap generation length strictly on iOS to save KV cache memory.
         #if os(iOS)
@@ -276,6 +283,19 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
                 }
                 chatMessages.append(.user(text))
             case .assistant:
+                // If we have unflushed system content and we're about to add
+                // an assistant message first, flush it as a user message so
+                // the conversation starts with user role (required by Gemma 2
+                // and other strict chat templates).
+                if !systemFlushed, !systemContent.isEmpty {
+                    let systemBlock = systemContent.joined(separator: "\n\n")
+                    chatMessages.append(.user(systemBlock))
+                    systemFlushed = true
+                } else if chatMessages.isEmpty {
+                    // No system content at all — still need a user message
+                    // before the first assistant message.
+                    chatMessages.append(.user("Continue."))
+                }
                 chatMessages.append(.assistant(msg.content))
             case .tool:
                 // Tool results are injected as user messages since
@@ -329,20 +349,12 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
 
     /// Extract the role string from a Chat.Message.
     private static func chatMessageRole(_ msg: Chat.Message) -> String {
-        switch msg {
-        case .user: "user"
-        case .assistant: "assistant"
-        case .system: "system"
-        }
+        msg.role.rawValue
     }
 
     /// Extract the text content from a Chat.Message.
     private static func chatMessageContent(_ msg: Chat.Message) -> String {
-        switch msg {
-        case let .user(c, _, _): c
-        case let .assistant(c, _, _): c
-        case let .system(c): c
-        }
+        msg.content
     }
 
     /// Merge consecutive messages that share the same effective role so
