@@ -118,19 +118,18 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
         // Generate using MLX's perform + generate pattern.
         // The container.perform block gives us a ModelContext for generation.
         let result = try await container.perform { [userInput] context in
-            // Wrap generation in an autoreleasepool to ensure intermediate
-            // MLX buffers are eagerly freed during the tight generation loop.
-            return try autoreleasepool { () -> GenerateResult in
-                // Prepare the input using the context's processor, which applies
-                // the model's chat template (e.g. Qwen3, Mistral, Llama formats).
-                let input = try await context.processor.prepare(input: userInput)
+            // Prepare the input using the context's processor, which applies
+            // the model's chat template (e.g. Qwen3, Mistral, Llama formats).
+            let input = try await context.processor.prepare(input: userInput)
 
-                // Set up generation parameters.
-                let parameters = GenerateParameters(maxTokens: maxTokens)
+            // Set up generation parameters.
+            let parameters = GenerateParameters(maxTokens: maxTokens)
 
-                // Generate text using MLXLMCommon.generate.
-                // Explicit [Int] type to disambiguate between the two generate overloads.
-                return try MLXLMCommon.generate(
+            // Wrap the synchronous generate call in autoreleasepool to ensure
+            // intermediate MLX buffers are eagerly freed.
+            // Explicit [Int] type to disambiguate between the two generate overloads.
+            return try autoreleasepool {
+                try MLXLMCommon.generate(
                     input: input,
                     parameters: parameters,
                     context: context

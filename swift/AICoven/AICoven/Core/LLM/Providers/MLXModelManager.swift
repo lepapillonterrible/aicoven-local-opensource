@@ -139,7 +139,11 @@ final class MLXModelManager: ObservableObject {
             downloadSizeBytes: 1_100_000_000,
             minRAMGB: 4,
             parameterCount: "1.5B",
-            quantization: "4-bit"
+            quantization: "4-bit",
+            category: .mobile,
+            tier: .core,
+            recommendedFor: ["iOS", "Low RAM"],
+            isRecommended: false
         ),
         MLXModelInfo(
             id: "mlx-community/Qwen3-4B-4bit",
