@@ -133,6 +133,15 @@ final class MLXModelManager: ObservableObject {
         ),
         // ── Core: General ────────────────────────────────────────────
         MLXModelInfo(
+            id: "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
+            displayName: "Qwen 2.5 1.5B",
+            summary: "Ultra-compact model. Ideal for iPhones with strict memory limits.",
+            downloadSizeBytes: 1_100_000_000,
+            minRAMGB: 4,
+            parameterCount: "1.5B",
+            quantization: "4-bit"
+        ),
+        MLXModelInfo(
             id: "mlx-community/Qwen3-4B-4bit",
             displayName: "Qwen 3 4B",
             summary: "Great all-rounder with strong reasoning and instruction following.",

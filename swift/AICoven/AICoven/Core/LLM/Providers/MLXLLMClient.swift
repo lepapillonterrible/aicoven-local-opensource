@@ -1,9 +1,14 @@
 import Foundation
 import os
 
+#if canImport(UIKit)
+import UIKit
+#endif
+
 #if canImport(MLXLLM)
 import MLXLLM
 import MLXLMCommon
+import MLX
 #endif
 
 #if canImport(UIKit)
@@ -77,6 +82,8 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
         if unloaded > 0 {
             print("⚠️ [MLXLLMClient] Memory warning: unloaded \(unloaded) model container(s)")
         }
+        // Free GPU memory after unloading model containers.
+        MLX.GPU.clearCache()
         #endif
     }
 
@@ -84,6 +91,14 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
 
     func completeChat(messages: [LLMMessage], model: String, options: ChatOptions) async throws -> LLMChatResponse {
         #if canImport(MLXLLM)
+
+        // On iOS, set a strict metal cache limit to prevent jetsam (OOM crashes).
+        // E.g., cap MLX memory to ~2GB (adjust based on device total RAM if needed).
+        #if os(iOS)
+        let memoryLimit = 2 * 1024 * 1024 * 1024 // 2GB
+        MLX.GPU.set(cacheLimit: memoryLimit)
+        #endif
+
         let effectiveModel = model.isEmpty ? defaultModelID : model
         let container = try await ensureModelLoaded(effectiveModel)
 
@@ -93,24 +108,29 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
         // silently dropped by the old flat-prompt approach.
         let chatMessages = Self.toChatMessages(from: messages)
         let userInput = UserInput(chat: chatMessages)
+        // Cap generation length strictly on iOS to save KV cache memory.
+        #if os(iOS)
+        let maxTokens = min(options.maxTokens ?? 512, 512)
+        #else
         let maxTokens = options.maxTokens ?? 1024
+        #endif
 
         // Generate using MLX's perform + generate pattern.
         // The container.perform block gives us a ModelContext for generation.
         let result = try await container.perform { [userInput] context in
-            // Prepare the input using the context's processor, which applies
-            // the model's chat template (e.g. Qwen3, Mistral, Llama formats).
-            let input = try await context.processor.prepare(input: userInput)
+            // Wrap generation in an autoreleasepool to ensure intermediate
+            // MLX buffers are eagerly freed during the tight generation loop.
+            return try autoreleasepool { () -> GenerateResult in
+                // Prepare the input using the context's processor, which applies
+                // the model's chat template (e.g. Qwen3, Mistral, Llama formats).
+                let input = try await context.processor.prepare(input: userInput)
 
-            // Set up generation parameters.
-            let parameters = GenerateParameters(maxTokens: maxTokens)
+                // Set up generation parameters.
+                let parameters = GenerateParameters(maxTokens: maxTokens)
 
-            // Generate text using MLXLMCommon.generate.
-            // autoreleasepool around the synchronous generate call frees
-            // transient Obj-C allocations promptly on iPhones.
-            // Explicit [Int] type to disambiguate between the two generate overloads.
-            return try autoreleasepool {
-                try MLXLMCommon.generate(
+                // Generate text using MLXLMCommon.generate.
+                // Explicit [Int] type to disambiguate between the two generate overloads.
+                return try MLXLMCommon.generate(
                     input: input,
                     parameters: parameters,
                     context: context
