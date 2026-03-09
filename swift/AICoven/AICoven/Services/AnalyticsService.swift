@@ -32,18 +32,16 @@ final class AnalyticsService {
         // UserDefaults.bool(forKey:) returns false for missing keys, so we
         // check whether the key has ever been set to distinguish "never
         // configured" (default ON) from "explicitly disabled" (user chose OFF).
-        let productAnalyticsEnabled: Bool
-        if UserDefaults.standard.object(forKey: "analytics_product_enabled") != nil {
-            productAnalyticsEnabled = UserDefaults.standard.bool(forKey: "analytics_product_enabled")
+        let productAnalyticsEnabled = if UserDefaults.standard.object(forKey: "analytics_product_enabled") != nil {
+            UserDefaults.standard.bool(forKey: "analytics_product_enabled")
         } else {
-            productAnalyticsEnabled = true
+            true
         }
 
-        let performanceAnalyticsEnabled: Bool
-        if UserDefaults.standard.object(forKey: "analytics_performance_enabled") != nil {
-            performanceAnalyticsEnabled = UserDefaults.standard.bool(forKey: "analytics_performance_enabled")
+        let performanceAnalyticsEnabled = if UserDefaults.standard.object(forKey: "analytics_performance_enabled") != nil {
+            UserDefaults.standard.bool(forKey: "analytics_performance_enabled")
         } else {
-            performanceAnalyticsEnabled = true
+            true
         }
 
         // Enable analytics only if at least one category is consented to
