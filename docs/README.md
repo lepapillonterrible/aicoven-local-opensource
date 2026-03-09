@@ -1,7 +1,7 @@
 # Documentation Index
 
 **AICoven Local (Open Source Swift Client)**  
-Last Updated: February 10, 2026
+Last Updated: March 9, 2026
 
 ---
 
@@ -41,32 +41,38 @@ Last Updated: February 10, 2026
 
 ### [local-context-architecture.md](local-context-architecture.md) 🏗️
 **Deep dive into the local-first architecture**
-- Context sandwich composition
+- Context sandwich composition with device-aware limits (mobile vs. desktop)
 - GRDB persistence layer
 - Encryption and key hierarchy (passphrase-based)
-- Model routing and selection
+- Model routing and selection (including `.mcpToolCalling` task type)
+- MLX on-device inference with iOS memory management
 - Autonomous agent execution
 - Memory storage and retrieval
+- MCP server integration overview
 
 **Topics Covered:**
 - Data flow and lifecycle
 - Repository pattern implementation
 - Security model and encryption
 - Agent safety constraints
+- iOS memory pressure handling for MLX models
 
 ---
 
 ### [tools-and-providers.md](tools-and-providers.md) 🔧
 **Provider integration and tools layer**
 - LLMClient abstraction
-- ModelRouter capabilities (including user-preference routing via `findExact`)
-- Provider-specific implementations (OpenAI, Anthropic, Gemini)
+- ModelRouter capabilities (including user-preference routing via `findExact` and `.mcpToolCalling`)
+- Provider-specific implementations (OpenAI, Anthropic, Gemini, Ollama, MLX)
 - Tools layer (web search, file/image generation, attachment analysis)
+- MCP server integration (MCPClient, tool discovery, semantic tool selection, benchmark suite)
 - Provider key management
+- Pre-execution of tools for local models
 
 **Topics Covered:**
 - Adding new providers
 - Tool registration and execution
+- MCP server configuration and tool caching
 - Model capability mapping
 - API key security
 
@@ -154,10 +160,10 @@ Last Updated: February 10, 2026
 
 | Document | Accuracy | Completeness | Last Updated |
 |----------|----------|--------------|--------------|
-| README.md | ✅ High | ✅ Complete | 2026-02-10 |
-| AGENTS.md | ✅ High | ✅ Complete | 2026-02-10 |
-| local-context-architecture.md | ✅ High | 🟡 Good | 2026-02-03 |
-| tools-and-providers.md | ✅ High | 🟡 Good | 2026-02-03 |
+| README.md | ✅ High | ✅ Complete | 2026-03-09 |
+| AGENTS.md | ✅ High | ✅ Complete | 2026-03-09 |
+| local-context-architecture.md | ✅ High | ✅ Complete | 2026-03-09 |
+| tools-and-providers.md | ✅ High | ✅ Complete | 2026-03-09 |
 | TEST_COVERAGE.md | ✅ High | ✅ Complete | 2026-02-09 |
 | CODE_REVIEW.md | 🟡 Medium | ✅ Complete | 2026-02-03 |
 | REVIEW_SUMMARY.md | 🟡 Medium | ✅ Complete | 2026-02-09 |
