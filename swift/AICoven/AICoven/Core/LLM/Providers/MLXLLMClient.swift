@@ -11,10 +11,6 @@ import MLXLMCommon
 import MLX
 #endif
 
-#if canImport(UIKit)
-import UIKit
-#endif
-
 /// LLM client that runs models locally via Apple's MLX framework on Apple
 /// Silicon. Chat completions happen entirely on-device — no network calls,
 /// no API key required.
