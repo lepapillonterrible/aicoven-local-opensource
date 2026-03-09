@@ -27,10 +27,24 @@ final class AnalyticsService {
     }
 
     private init() {
-        // Load saved consent state from granular preferences
-        // Both default to false (opt-in model for privacy)
-        let productAnalyticsEnabled = UserDefaults.standard.bool(forKey: "analytics_product_enabled")
-        let performanceAnalyticsEnabled = UserDefaults.standard.bool(forKey: "analytics_performance_enabled")
+        // Load saved consent state from granular preferences.
+        // Default to true (enabled by default); users can opt out in Settings.
+        // UserDefaults.bool(forKey:) returns false for missing keys, so we
+        // check whether the key has ever been set to distinguish "never
+        // configured" (default ON) from "explicitly disabled" (user chose OFF).
+        let productAnalyticsEnabled: Bool
+        if UserDefaults.standard.object(forKey: "analytics_product_enabled") != nil {
+            productAnalyticsEnabled = UserDefaults.standard.bool(forKey: "analytics_product_enabled")
+        } else {
+            productAnalyticsEnabled = true
+        }
+
+        let performanceAnalyticsEnabled: Bool
+        if UserDefaults.standard.object(forKey: "analytics_performance_enabled") != nil {
+            performanceAnalyticsEnabled = UserDefaults.standard.bool(forKey: "analytics_performance_enabled")
+        } else {
+            performanceAnalyticsEnabled = true
+        }
 
         // Enable analytics only if at least one category is consented to
         analyticsConsent = productAnalyticsEnabled || performanceAnalyticsEnabled
