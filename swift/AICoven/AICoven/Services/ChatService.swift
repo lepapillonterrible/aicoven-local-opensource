@@ -619,6 +619,23 @@ actor ChatService {
             }
         }
 
+        // ── Hallucination guard for local models ──────────────────────────────
+        // When a user asks about personal data (email, calendar, etc.)
+        // but no tool was pre-executed, small models will confidently
+        // fabricate an answer. Inject a guard message so the model
+        // knows it must refuse honestly instead of hallucinating.
+        if isLocalModel, toolContextLog.isEmpty,
+           Self.detectPersonalDataQuery(message) {
+            toolContextLog = """
+            [System Notice] The user is asking about personal data (email, calendar, messages, etc.) \
+            that you do NOT have access to. You have no connected tool that can retrieve this data. \
+            Do NOT make up or fabricate any content. Instead, tell the user honestly that you cannot \
+            access their personal data and suggest they connect an appropriate tool (e.g. an MCP \
+            server for email or calendar) in Settings → Connected Apps.
+            """
+            remainingToolSteps = 0
+        }
+
         // First phase: while we still have tool budget, let the model decide
         // whether to call a tool. Each successful tool invocation consumes one
         // step from the budget; a direct natural-language reply ends the loop.
@@ -1908,9 +1925,13 @@ extension ChatService {
             "what day", "today's date", "right now", "time is it",
         ]
         if timePatterns.contains(where: { lower.contains($0) }) {
+            // Extract the timezone the user asked about (e.g. "Bangkok"
+            // → "Asia/Bangkok"). Falls back to the device's local
+            // timezone so answers are immediately useful.
+            let tz = extractTimezoneFromMessage(lower)
             return ChatToolInvocation(
                 tool: "current_time",
-                input: AnyJSONValue(["timezone": AnyJSONValue("UTC")]),
+                input: AnyJSONValue(["timezone": AnyJSONValue(tz)]),
                 reason: "User asked about time/date"
             )
         }
@@ -1929,6 +1950,134 @@ extension ChatService {
         }
 
         return nil
+    }
+
+    // MARK: - Personal Data Query Detection
+
+    /// Returns `true` if the user is asking about personal data that requires
+    /// external access (email, calendar, messages, bank statements, etc.).
+    /// Used to inject a hallucination guard for local models that would
+    /// otherwise confidently fabricate answers about user-specific content.
+    nonisolated static func detectPersonalDataQuery(_ userMessage: String) -> Bool {
+        let lower = userMessage.lowercased()
+        let personalPatterns = [
+            // Email
+            "my email", "my mail", "my inbox", "my gmail",
+            "latest email", "last email", "recent email",
+            "unread email", "unread mail",
+            "email from", "mail from",
+            // Calendar / schedule
+            "my calendar", "my schedule", "my meeting",
+            "my appointment", "my event",
+            "next meeting", "upcoming meeting",
+            // Messages
+            "my messages", "my texts", "my sms",
+            "my slack", "my discord",
+            "my whatsapp", "my telegram",
+            // Notifications
+            "my notification", "my alert",
+            // Finance
+            "my bank", "my balance", "my transaction",
+            "my account balance",
+            // Social
+            "my tweet", "my post", "my feed",
+            "my instagram", "my facebook",
+            // Notes / docs
+            "my notes", "my documents", "my files on",
+            "my google doc", "my notion",
+        ]
+        return personalPatterns.contains(where: { lower.contains($0) })
+    }
+
+    // MARK: - Timezone Extraction
+
+    /// Map common city and region names mentioned in a user's message to
+    /// IANA timezone identifiers. Returns the device's local timezone
+    /// identifier when no city is recognised.
+    private nonisolated static func extractTimezoneFromMessage(_ lowerMessage: String) -> String {
+        // Lightweight lookup — covers the most commonly asked cities.
+        // Keys are lowercase substrings to match against the message.
+        let cityToTimezone: [(keyword: String, tz: String)] = [
+            // Asia
+            ("bangkok", "Asia/Bangkok"),
+            ("tokyo", "Asia/Tokyo"),
+            ("japan", "Asia/Tokyo"),
+            ("seoul", "Asia/Seoul"),
+            ("korea", "Asia/Seoul"),
+            ("shanghai", "Asia/Shanghai"),
+            ("beijing", "Asia/Shanghai"),
+            ("china", "Asia/Shanghai"),
+            ("hong kong", "Asia/Hong_Kong"),
+            ("singapore", "Asia/Singapore"),
+            ("mumbai", "Asia/Kolkata"),
+            ("delhi", "Asia/Kolkata"),
+            ("india", "Asia/Kolkata"),
+            ("dubai", "Asia/Dubai"),
+            ("taipei", "Asia/Taipei"),
+            ("taiwan", "Asia/Taipei"),
+            ("jakarta", "Asia/Jakarta"),
+            ("kuala lumpur", "Asia/Kuala_Lumpur"),
+            // Europe
+            ("london", "Europe/London"),
+            ("paris", "Europe/Paris"),
+            ("berlin", "Europe/Berlin"),
+            ("germany", "Europe/Berlin"),
+            ("amsterdam", "Europe/Amsterdam"),
+            ("rome", "Europe/Rome"),
+            ("madrid", "Europe/Madrid"),
+            ("moscow", "Europe/Moscow"),
+            ("istanbul", "Europe/Istanbul"),
+            ("zurich", "Europe/Zurich"),
+            ("stockholm", "Europe/Stockholm"),
+            ("lisbon", "Europe/Lisbon"),
+            ("warsaw", "Europe/Warsaw"),
+            ("vienna", "Europe/Vienna"),
+            ("bucharest", "Europe/Bucharest"),
+            // Americas
+            ("new york", "America/New_York"),
+            ("los angeles", "America/Los_Angeles"),
+            ("chicago", "America/Chicago"),
+            ("denver", "America/Denver"),
+            ("san francisco", "America/Los_Angeles"),
+            ("toronto", "America/Toronto"),
+            ("vancouver", "America/Vancouver"),
+            ("mexico city", "America/Mexico_City"),
+            ("são paulo", "America/Sao_Paulo"),
+            ("sao paulo", "America/Sao_Paulo"),
+            ("buenos aires", "America/Argentina/Buenos_Aires"),
+            ("bogota", "America/Bogota"),
+            ("lima", "America/Lima"),
+            // Oceania
+            ("sydney", "Australia/Sydney"),
+            ("melbourne", "Australia/Melbourne"),
+            ("auckland", "Pacific/Auckland"),
+            ("new zealand", "Pacific/Auckland"),
+            // Africa
+            ("cairo", "Africa/Cairo"),
+            ("johannesburg", "Africa/Johannesburg"),
+            ("lagos", "Africa/Lagos"),
+            ("nairobi", "Africa/Nairobi"),
+            // Named zones
+            ("utc", "UTC"),
+            ("gmt", "GMT"),
+            ("est", "America/New_York"),
+            ("pst", "America/Los_Angeles"),
+            ("cst", "America/Chicago"),
+            ("mst", "America/Denver"),
+            ("cet", "Europe/Paris"),
+            ("jst", "Asia/Tokyo"),
+            ("ist", "Asia/Kolkata"),
+            ("aest", "Australia/Sydney"),
+        ]
+
+        for entry in cityToTimezone {
+            if lowerMessage.contains(entry.keyword) {
+                return entry.tz
+            }
+        }
+
+        // No city recognised — use the device's local timezone.
+        return TimeZone.current.identifier
     }
 
     // MARK: - Response Text Deduplication (ported from backend _dedupe_response_text)

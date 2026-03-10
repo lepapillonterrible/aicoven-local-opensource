@@ -171,7 +171,27 @@ actor ToolExecutionService {
             let localFormatter = ISO8601DateFormatter()
             localFormatter.timeZone = tz
             let localISO8601 = localFormatter.string(from: now)
-            let block = "[Current Time]\n\(localISO8601) (Zone: \(tz.identifier))"
+
+            // Build a human-readable format so small models (2B-4B) don't
+            // need to parse ISO8601 or do timezone math.
+            let readableFmt = DateFormatter()
+            readableFmt.timeZone = tz
+            readableFmt.dateFormat = "h:mm a, EEEE MMMM d, yyyy"
+            let readableTime = readableFmt.string(from: now)
+
+            let gmtOffset = tz.secondsFromGMT(for: now)
+            let gmtHours = gmtOffset / 3600
+            let gmtMins = abs(gmtOffset % 3600) / 60
+            let gmtLabel = gmtMins == 0
+                ? String(format: "GMT%+d", gmtHours)
+                : String(format: "GMT%+d:%02d", gmtHours, gmtMins)
+
+            let block = """
+            [Current Time]
+            Timezone: \(tz.identifier) (\(gmtLabel))
+            Local time: \(readableTime)
+            ISO8601: \(localISO8601)
+            """
             return await .success(tool: toolCall.name, result: ["iso8601": AnyJSONValue(localISO8601)], contextBlock: block)
 
         // --- GitHub Tools ---
