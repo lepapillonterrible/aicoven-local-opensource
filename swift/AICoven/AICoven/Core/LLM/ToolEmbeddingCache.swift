@@ -1,6 +1,6 @@
 import Foundation
 
-/// In-memory cache for MCP tool description embeddings.
+/// In-memory cache for tool description embeddings (both MCP and native).
 ///
 /// Embeddings are computed lazily via `EmbeddingService` the first time a
 /// semantic tool search is requested. The cache is invalidated whenever the
@@ -8,17 +8,22 @@ import Foundation
 ///
 /// Storage is trivial (~600 KB for 200 tools × 768-dim × 4 bytes) so we
 /// keep everything in memory and recompute on app relaunch.
-actor MCPToolEmbeddingCache {
-    static let shared = MCPToolEmbeddingCache()
+actor ToolEmbeddingCache {
+    static let shared = ToolEmbeddingCache()
 
     // MARK: - State
 
     /// Cached embeddings keyed by the full tool name (e.g. "mcp.zapier.send_email").
     private var embeddings: [String: [Float]] = [:]
 
-    /// Fingerprint of the tool set that was last embedded, used to detect
-    /// when the cache needs to be rebuilt (e.g. server reconnect, tool list change).
-    private var toolSetFingerprint: String = ""
+    /// Fingerprint of the MCP tool set that was last embedded.
+    private var mcpToolSetFingerprint: String = ""
+
+    /// Separate cache for native (built-in) tool embeddings.
+    private var nativeEmbeddings: [String: [Float]] = [:]
+
+    /// Fingerprint of the native tool set that was last embedded.
+    private var nativeToolSetFingerprint: String = ""
 
     /// Whether an embedding computation is already in progress.
     /// Prevents redundant concurrent computations.
@@ -36,7 +41,7 @@ actor MCPToolEmbeddingCache {
         let fingerprint = computeFingerprint(for: tools)
 
         // Cache is valid — return immediately.
-        if fingerprint == toolSetFingerprint, !embeddings.isEmpty {
+        if fingerprint == mcpToolSetFingerprint, !embeddings.isEmpty {
             return embeddings
         }
 
@@ -79,15 +84,62 @@ actor MCPToolEmbeddingCache {
             newCache[name] = vectors[i]
         }
         embeddings = newCache
-        toolSetFingerprint = fingerprint
+        mcpToolSetFingerprint = fingerprint
 
         return embeddings
     }
 
-    /// Clear the cache, forcing recomputation on next access.
+    /// Returns cached embeddings for native (built-in) tools, computing
+    /// them if necessary. Uses the same embedding pipeline as MCP tools.
+    func getNativeEmbeddings(for tools: [ToolDefinition]) async -> [String: [Float]]? {
+        let fingerprint = computeFingerprint(for: tools)
+
+        // Cache is valid — return immediately.
+        if fingerprint == nativeToolSetFingerprint, !nativeEmbeddings.isEmpty {
+            return nativeEmbeddings
+        }
+
+        // Reuse the MCP embedding pipeline — it's the same computation.
+        guard !isComputing else { return nativeEmbeddings.isEmpty ? nil : nativeEmbeddings }
+        isComputing = true
+        defer { isComputing = false }
+
+        let descriptions = tools.map { buildSearchableDescription(for: $0) }
+        let names = tools.map(\.name)
+
+        let vectors: [[Float]]
+        do {
+            let embeddingService = await EmbeddingService.shared
+            var results: [[Float]] = []
+            for desc in descriptions {
+                if let vec = try await embeddingService.embedText(desc) {
+                    results.append(vec)
+                } else {
+                    return nil
+                }
+            }
+            vectors = results
+        } catch {
+            AppErrorReporter.log(error: error, context: "ToolEmbeddingCache.getNativeEmbeddings")
+            return nil
+        }
+
+        var newCache: [String: [Float]] = [:]
+        for (i, name) in names.enumerated() where i < vectors.count {
+            newCache[name] = vectors[i]
+        }
+        nativeEmbeddings = newCache
+        nativeToolSetFingerprint = fingerprint
+
+        return nativeEmbeddings
+    }
+
+    /// Clear all caches, forcing recomputation on next access.
     func invalidate() {
         embeddings = [:]
-        toolSetFingerprint = ""
+        mcpToolSetFingerprint = ""
+        nativeEmbeddings = [:]
+        nativeToolSetFingerprint = ""
     }
 
     // MARK: - Helpers
