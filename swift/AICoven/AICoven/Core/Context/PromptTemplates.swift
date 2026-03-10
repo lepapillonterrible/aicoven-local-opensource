@@ -348,9 +348,26 @@ enum PromptTemplates {
         // Brief role description
         sections.append("You are a helpful AI assistant running locally. You have tools to help you answer questions that need real-time or external data.")
 
-        // Native tool documentation (always included in full — these are a
-        // small fixed set like web_search, file.read, shell.execute).
-        let nativeDefs = toolDefinitions.filter { enabledTools.contains($0.name) }
+        // Native tools: use ToolRelevanceService to select the most relevant
+        // subset when many native tools are enabled (GitHub + Google Drive
+        // can push the count above 15). Always-loaded tools (current_time,
+        // web_search, shell.execute) bypass scoring.
+        let allNativeDefs = toolDefinitions.filter { enabledTools.contains($0.name) }
+        let nativeDefs: [ToolDefinition]
+        if allNativeDefs.count > 8, !userMessage.isEmpty {
+            nativeDefs = await ToolRelevanceService.shared.selectRelevantNativeTools(
+                userMessage: userMessage,
+                allTools: allNativeDefs,
+                limit: 8
+            )
+            // Add compressed catalog for excluded native tools.
+            let excluded = allNativeDefs.filter { def in !nativeDefs.contains(where: { $0.name == def.name }) }
+            if let catalog = ToolRelevanceService.generateCompressedNativeCatalog(excluded: excluded) {
+                sections.append(catalog)
+            }
+        } else {
+            nativeDefs = allNativeDefs
+        }
 
         // MCP tools: use tiered approach for local models.
         // 1) Compressed catalog of ALL MCP tools (~200 tokens).
