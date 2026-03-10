@@ -2003,6 +2003,23 @@ extension ChatService {
             )
         }
 
+        // Shell command queries → shell.execute
+        // Checked BEFORE file.list because "run `ls -la /tmp`" should
+        // match shell, not file.list (which also matches "ls ").
+        let shellPatterns = [
+            "run ", "execute ", "run the command", "run this command",
+            "run a command", "run the script", "run this script",
+            "in the terminal", "in terminal",
+        ]
+        if shellPatterns.contains(where: { lower.contains($0) }) {
+            let command = extractShellCommand(from: userMessage) ?? userMessage
+            return ChatToolInvocation(
+                tool: "shell.execute",
+                input: AnyJSONValue(["command": AnyJSONValue(command)]),
+                reason: "User asked to run a command"
+            )
+        }
+
         // File list queries → file.list
         let fileListPatterns = [
             "list files", "list the files", "show directory", "show the directory",
@@ -2015,24 +2032,6 @@ extension ChatService {
                 tool: "file.list",
                 input: AnyJSONValue(["path": AnyJSONValue(path)]),
                 reason: "User asked to list files in a directory"
-            )
-        }
-
-        // Shell command queries → shell.execute
-        let shellPatterns = [
-            "run ", "execute ", "run the command", "run this command",
-            "run a command", "run the script", "run this script",
-            "in the terminal", "in terminal",
-        ]
-        if shellPatterns.contains(where: { lower.contains($0) }) {
-            // Extract the command from the message. Look for quoted
-            // strings or backtick-fenced code first, then fall back
-            // to using the entire message as the command.
-            let command = extractShellCommand(from: userMessage) ?? userMessage
-            return ChatToolInvocation(
-                tool: "shell.execute",
-                input: AnyJSONValue(["command": AnyJSONValue(command)]),
-                reason: "User asked to run a command"
             )
         }
 

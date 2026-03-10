@@ -40,11 +40,10 @@ enum ToolChainResolver {
         // Return the first chain that matches and has all required tools enabled.
         for resolver in patternResolvers {
             if let chain = resolver(lower, userMessage, enabledTools, mcpServers),
-               chain.count >= 2 {
+               !chain.isEmpty {
                 return chain
             }
         }
-
         return nil
     }
 
@@ -207,11 +206,21 @@ enum ToolChainResolver {
         ]
 
         // If a specific filename is mentioned after "and read", construct
-        // a file.read call with the combined path.
-        if let readTarget = extractAfterContinuation(lower, continuations: readContinuations) {
-            let trimmed = readTarget.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                let fullPath = dirPath.hasSuffix("/") ? dirPath + trimmed : dirPath + "/" + trimmed
+        // a file.read call with the combined path. Use the original-case
+        // message for extraction so filenames preserve their casing.
+        if let readTarget = extractAfterContinuation(original.lowercased(), continuations: readContinuations) {
+            // Strip common articles ("the", "a", "an") that precede the filename.
+            let stripped = readTarget
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "^(the|a|an)\\s+", with: "", options: .regularExpression)
+            // Re-extract the original-case filename from the message.
+            let filename: String = if let originalRange = original.range(of: stripped, options: .caseInsensitive) {
+                String(original[originalRange])
+            } else {
+                stripped
+            }
+            if !filename.isEmpty {
+                let fullPath = dirPath.hasSuffix("/") ? dirPath + filename : dirPath + "/" + filename
                 chain.append(ChatToolInvocation(
                     tool: "file.read",
                     input: AnyJSONValue(["path": AnyJSONValue(fullPath)]),
