@@ -565,14 +565,48 @@ actor ChatService {
         // and leave the user with zero output.
         if isLocalModel, toolsAllowed, remainingToolSteps > 0 {
             do {
-                // Try native tools first (current_time, web_search,
-                // file.read, file.list, shell.execute) — these are cheap,
-                // local, and have high-confidence keyword matching with
-                // semantic scoring fallback via ToolRelevanceService.
-                // MCP tools are checked second because their fuzzy scoring can
-                // produce false positives (e.g. "time" matching "timestamp"
-                // in a Slack tool name).
-                if let forcedNative = await Self.forceNativeToolCallWithSemantic(
+                // Try multi-step tool chains first. ToolChainResolver detects
+                // composite intents ("search X and summarize", "read file and
+                // explain", "time in X and Y") and returns an ordered chain.
+                if let chain = ToolChainResolver.resolve(
+                    userMessage: message,
+                    enabledTools: toolConfig.enabledTools,
+                    mcpServers: toolConfig.mcpServers
+                ) {
+                    #if DEBUG
+                    AppErrorReporter.log(
+                        message: "ToolChainResolver matched \(chain.count)-step chain: \(chain.map(\.tool).joined(separator: " → "))",
+                        context: "ChatService.streamMessage.toolChain"
+                    )
+                    #endif
+                    // Execute each tool in the chain sequentially, accumulating
+                    // results into toolContextLog.
+                    for invocation in chain {
+                        onToolEvent(Self.friendlyToolSummary(for: invocation.tool))
+                        AnalyticsService.shared.trackToolUsed(toolName: invocation.tool, threadId: threadId)
+                        let (_, contextBlock) = try await executeChatToolCall(invocation)
+                        if let block = contextBlock {
+                            if toolContextLog.isEmpty {
+                                toolContextLog = block
+                            } else {
+                                toolContextLog += "\n\n" + block
+                            }
+                        }
+                    }
+                    // Eagerly cap on mobile.
+                    let chainCap = isMobileDevice ? 4000 : 8000
+                    if toolContextLog.count > chainCap {
+                        toolContextLog = String(toolContextLog.prefix(chainCap))
+                            + "\n... [truncated for device memory]"
+                    }
+                    remainingToolSteps = 0
+                }
+                // Try native tools (current_time, web_search, file.read,
+                // file.list, shell.execute) — keyword matching with semantic
+                // scoring fallback via ToolRelevanceService.
+                // MCP tools are checked last because their fuzzy scoring can
+                // produce false positives.
+                else if let forcedNative = await Self.forceNativeToolCallWithSemantic(
                     userMessage: message,
                     enabledTools: toolConfig.enabledTools
                 ) {
@@ -2160,7 +2194,7 @@ extension ChatService {
     /// Map common city and region names mentioned in a user's message to
     /// IANA timezone identifiers. Returns the device's local timezone
     /// identifier when no city is recognised.
-    private nonisolated static func extractTimezoneFromMessage(_ lowerMessage: String) -> String {
+    nonisolated static func extractTimezoneFromMessage(_ lowerMessage: String) -> String {
         // Lightweight lookup — covers the most commonly asked cities.
         // Keys are lowercase substrings to match against the message.
         let cityToTimezone: [(keyword: String, tz: String)] = [
