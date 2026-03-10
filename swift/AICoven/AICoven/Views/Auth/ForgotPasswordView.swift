@@ -88,6 +88,7 @@ struct ForgotPasswordView: View {
                             x: 0,
                             y: 4
                         )
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .disabled(isLoading || email.isEmpty)

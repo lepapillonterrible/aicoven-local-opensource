@@ -366,19 +366,25 @@ private extension LoginView {
                                 x: 0,
                                 y: 4
                             )
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .disabled(isLoading || !isFormValid)
                         .opacity(isFormValid && !isLoading ? 1.0 : 0.5)
 
                         // Link to sign in
-                        Button("Already have an account? Sign in") {
+                        Button {
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 mode = .signin
                             }
+                        } label: {
+                            Text("Already have an account? Sign in")
+                                .font(.aicovenBodySmall)
+                                .foregroundColor(.aicovenTeal)
+                                .padding(.vertical, Spacing.xs)
+                                .padding(.horizontal, Spacing.sm)
+                                .contentShape(Rectangle())
                         }
-                        .font(.aicovenBodySmall)
-                        .foregroundColor(.aicovenTeal)
                         .buttonStyle(.plain)
                         .padding(.top, Spacing.sm)
                     }
@@ -470,6 +476,7 @@ private extension LoginView {
                                     .autocapitalization(.none)
                                 #endif
                                     .foregroundColor(.aicovenTextPrimary)
+                                    .tint(.aicovenTeal)
                                     .disabled(isLoading)
                             }
                             .padding(16)
@@ -503,6 +510,7 @@ private extension LoginView {
                                 SecureField("", text: $password, prompt: Text("Enter your password").foregroundColor(.aicovenTextTertiary))
                                     .textContentType(.password)
                                     .foregroundColor(.aicovenTextPrimary)
+                                    .tint(.aicovenTeal)
                                     .disabled(isLoading)
                             }
                             .padding(16)
@@ -531,6 +539,9 @@ private extension LoginView {
                                 Text("Forgot Password?")
                                     .font(.aicovenBodySmall)
                                     .foregroundColor(.aicovenTeal)
+                                    .padding(.vertical, Spacing.xs)
+                                    .padding(.horizontal, Spacing.sm)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .disabled(isLoading)
@@ -564,18 +575,24 @@ private extension LoginView {
                                 x: 0,
                                 y: 4
                             )
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .disabled(isLoading || !isFormValid)
                         .opacity(isFormValid && !isLoading ? 1.0 : 0.5)
 
-                        Button("Create account") {
+                        Button {
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 mode = .signup
                             }
+                        } label: {
+                            Text("Create account")
+                                .font(.aicovenBodySmall)
+                                .foregroundColor(.aicovenTeal)
+                                .padding(.vertical, Spacing.xs)
+                                .padding(.horizontal, Spacing.sm)
+                                .contentShape(Rectangle())
                         }
-                        .font(.aicovenBodySmall)
-                        .foregroundColor(.aicovenTeal)
                         .buttonStyle(.plain)
                         .padding(.top, Spacing.sm)
                     }

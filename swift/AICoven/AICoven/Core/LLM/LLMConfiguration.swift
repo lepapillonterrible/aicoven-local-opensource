@@ -47,10 +47,31 @@ struct LLMConfiguration: Sendable {
         return result
     }
 
-    /// Returns only the configured clients. ModelDescriptors are now provided
-    /// by ProviderAccountService based on live ListModels responses.
+    /// Returns configured clients plus any locally-available model descriptors.
+    /// Cloud provider descriptors are provided dynamically by
+    /// ProviderAccountService; MLX on-device models are registered here
+    /// so the router can include them in routing decisions.
     static func makeEnvironment() -> (models: [ModelDescriptor], clients: [String: LLMClient]) {
         let clients = makeDefaultClients()
-        return ([], clients)
+        var models: [ModelDescriptor] = []
+
+        // Register the active MLX model so it participates in routing.
+        if let mlxModelID = UserDefaults.standard.string(forKey: "MLXModelManager.activeModelID"),
+           !mlxModelID.isEmpty, clients["mlx"] != nil {
+            // Look up catalog metadata for context-window heuristic.
+            let catalogEntry = MLXModelManager.defaultCatalog.first { $0.id == mlxModelID }
+            // Small local models typically support ~4K context; 7B+ can do ~8K.
+            let contextTokens = (catalogEntry?.minRAMGB ?? 4) >= 8 ? 8_192 : 4_096
+            models.append(ModelDescriptor(
+                providerID: "mlx",
+                modelID: mlxModelID,
+                maxContextTokens: contextTokens,
+                supportsTools: true,
+                supportsEmbeddings: false,
+                costClass: .free
+            ))
+        }
+
+        return (models, clients)
     }
 }

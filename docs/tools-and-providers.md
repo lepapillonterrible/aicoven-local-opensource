@@ -14,9 +14,11 @@ The `LLMClient` layer is designed to work with multiple providers. The exact lis
 - **OpenAI-compatible APIs** – chat completions and embeddings.
 - **Anthropic** – Claude models via the Messages API.
 - **Google / Gemini** – Gemini models via the Generative Language API.
-- **Local / custom runtimes** – future integrations for localhost or on-device models.
+- **Ollama** – local model server running on `http://localhost:11434`. Models are discovered automatically via `/api/tags`. No API key required.
+- **MLX (on-device)** – runs models directly on Apple Silicon (Mac, iPad 8 GB+, iPhone 6 GB+) using Apple's MLX framework. Models are downloaded from HuggingFace and cached locally. The curated catalog includes 11 models organized by category (General, Coding, Mobile) and tier (Core, Specialized), with device-aware filtering for iPhones.
+- **MCP servers** – external tool servers connected via the Model Context Protocol. See the [MCP server integration](#mcp-server-integration) section below.
 
-`ModelRouter` selects a `(providerID, modelID)` pair for each task (chat, summarization, embeddings, etc.) based on the set of providers that have keys configured on your device.
+`ModelRouter` selects a `(providerID, modelID)` pair for each task (chat, summarization, embeddings, MCP tool calling, etc.) based on the set of providers that have keys configured on your device. The `.mcpToolCalling` task type prefers models flagged as tool-capable, falling back to the cheapest available model.
 
 ## Where keys are stored
 
@@ -44,10 +46,12 @@ Once a key is configured and validated, the `LLMConfiguration` environment and `
 
 When you send a message or an agent step runs, the app:
 
-1. Builds a **context sandwich** via `ContextBuilder` (system contract, time, policies, memories, history, current message).
+1. Builds a **context sandwich** via `ContextBuilder` (system contract, time, policies, memories, history, current message). On iPhone, the builder uses tighter limits (6 recent messages, 4 memories) to leave headroom for MLX model weights.
 2. Constructs a `RoutingContext` (task type, quality vs. cost preferences, long-context requirements, etc.).
-3. Asks `ModelRouter` to choose the best available `ModelDescriptor` for that context, limited to providers with valid keys.
+3. Asks `ModelRouter` to choose the best available `ModelDescriptor` for that context, limited to providers with valid keys. The active MLX model is registered as a `ModelDescriptor` by `LLMConfiguration.makeEnvironment()` so it participates in routing.
 4. Invokes the chosen `LLMClient` with your message(s) and the selected `modelID`.
+
+For local models (MLX, Ollama), `ChatService` supports **pre-execution**: before sending the user's message to the model, it checks for keyword matches against native tools (time, web search) and MCP tools (via fuzzy scoring). If a match is found, the tool is executed eagerly and the result injected into the prompt. This significantly improves tool-calling reliability for simple single-tool queries.
 
 If no matching provider/model is available (e.g. no keys set, or only incompatible models), the router returns `nil` and the caller shows a human-readable error instead of failing silently.
 
@@ -139,10 +143,41 @@ Agent UI and tooling are still evolving, but the intent is to expose:
 - Links to any generated files/images.
 - A clear way to stop or limit tool usage.
 
+## MCP server integration
+
+The app supports the [Model Context Protocol (MCP)](https://modelcontextprotocol.io), allowing users to connect external tool servers and use their tools from chat.
+
+### Architecture
+
+- `MCPClient` (actor, `Features/MCP/MCPClient.swift`) handles the JSON-RPC 2.0 transport. Connects via HTTP POST and supports both plain JSON and SSE (`text/event-stream`) response formats.
+- `MCPServerAccount` (`Features/ConnectedApps/MCPServerAccount.swift`) stores per-server configuration: URL, transport type (`sse` or `streamable_http`), auth type (`none`, `bearer`, `api_key`), and cached tool definitions.
+- `ConnectedAccountsService` persists server configs in `UserDefaults` and stores auth tokens in Keychain.
+- `MCPServerManagementView` provides the settings UI for managing servers.
+
+### Tool discovery and caching
+
+When an MCP server is connected, the app calls `tools/list` to discover available tools. The response is cached in `MCPServerAccount.cachedTools` and refreshed on reconnect or when the cache is stale. Tools are surfaced to `ChatService` via `PromptTemplates.mcpToolDefinitions`, which converts them into the internal `ToolDefinition` format.
+
+### Semantic tool selection
+
+When many MCP tools are available, the app uses `MCPToolEmbeddingCache` to compute and cache embedding vectors for tool descriptions. During a chat turn, `ChatService` ranks tools by cosine similarity to the user's query and includes only the top candidates in the prompt. This reduces prompt size and improves accuracy, especially for local models with limited context windows.
+
+### MCP tool-calling benchmark
+
+`MCPToolCallingBenchmark` (`Core/LLM/MCPToolCallingBenchmark.swift`) provides a lightweight evaluation suite for testing a local model's ability to select the correct tool from a JSON prompt. The default suite includes 10 test cases covering web search, time, file operations, GitHub, shell, and Google Drive tools. Results (accuracy, refusal rate, hallucination rate, average latency) are persisted in `UserDefaults` and displayed in the MLX model settings UI.
+
+### Tool execution flow
+
+1. `ChatService` checks connected MCP servers for tools matching the user's message (keyword/fuzzy matching for local models, native function declarations for cloud providers).
+2. For local models, the best-matching MCP tool is pre-executed before the model generates a response.
+3. Tool execution goes through `MCPClient.callTool(name:arguments:)`, which sends a `tools/call` JSON-RPC request.
+4. Results are injected into the context sandwich as a `[Tool Result]` block, truncated to device-appropriate limits (4 KB on iPhone, 8 KB on Mac/iPad).
+
 ## Privacy considerations
 
 - Provider keys never leave the device except in HTTPS requests directly to the chosen provider.
-- Tool calls that talk to the network (currently only web search and provider APIs) are explicit and auditable.
+- Tool calls that talk to the network (web search, provider APIs, and MCP server calls) are explicit and auditable.
+- MCP server authentication tokens are stored in the system Keychain, not in plaintext.
 - All long-term state (including agent runs and tool outputs that are persisted) is stored in the encrypted SQLite database.
 
 If you intend to extend the tools layer (for example, to add Git or local shell access), please follow the same design constraints:

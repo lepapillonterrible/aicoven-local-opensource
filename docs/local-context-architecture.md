@@ -50,17 +50,25 @@ There is no mandatory backend: users bring their own LLM provider API keys or lo
 ### LLM Integration
 
 - A unified `LLMClient` protocol abstracts over:
-  - Cloud providers (OpenAI, Anthropic, etc.) using user-supplied keys.
-  - Local models on macOS (e.g., localhost runtime or Core ML wrappers).
+  - Cloud providers (OpenAI, Anthropic, Gemini) using user-supplied keys.
+  - Local models: Ollama (localhost HTTP server) and MLX (on-device via Apple Silicon).
 - `LLMClient` supports both chat completions and embeddings.
 - Concrete clients fetch provider configs and secrets from the local stores and Keychain.
+- `MLXLLMClient` runs inference directly on-device using Apple's MLX framework:
+  - Supported on Mac (Apple Silicon), iPad (M-series, 8 GB+ RAM), and iPhone (6 GB+ RAM).
+  - On iOS, the client manages aggressive memory constraints: sets a 512 MB GPU cache limit, unloads models after each inference, evicts other cached models before loading, and wraps generation in `autoreleasepool` to free intermediate buffers.
+  - System messages are folded into the first user message to support strict chat templates (Gemma 2, Phi, etc.) that don't allow a `system` role.
+  - Consecutive same-role messages are merged to satisfy templates requiring strict user/assistant alternation.
+- `MLXModelManager` maintains a curated catalog of 11 models with metadata (category, tier, recommended-for tags, min RAM) and device-aware filtering (iPhones only see models ≤ 3 GB RAM or `.mobile` category).
 
 ### Model Routing
 
 - A `ModelRouter` component selects the best model per task based on:
-  - Task type (chat, summarize, embed, judge, agent_step, etc.).
+  - Task type (chat, summarize, embed, judge, agent_step, mcpToolCalling, etc.).
   - User settings (preferred providers, cost sensitivity, local-only mode).
   - Capabilities (context length, tools support, quality tier).
+- The `.mcpToolCalling` task type prefers models explicitly flagged as tool-capable; if none are available, it falls back to the cheapest model so the orchestrator can still force a tool call.
+- `LLMConfiguration.makeEnvironment()` registers the active MLX model as a `ModelDescriptor` so it participates in routing alongside cloud providers.
 - The router returns a `(providerID, modelID)` pair used to pick the right `LLMClient` implementation and model name.
 - Optionally, routing itself can be delegated to a small model (local or cheap remote) in future iterations.
 
@@ -75,7 +83,11 @@ There is no mandatory backend: users bring their own LLM provider API keys or lo
   6. Recent turns (last N messages).
   7. Current user message.
   8. Response checklist (instructions for reasoning, actions, and output).
-- Truncation logic ensures the composed prompt fits within the target models context window while preserving critical layers.
+- `ContextBuilder.Limits` controls how much history and memory is included:
+  - Default: 16 recent messages, 16 memories.
+  - `.mobile` (iPhone): 6 recent messages, 4 memories — to leave headroom for MLX model weights (~1–2 GB) in shared memory.
+- `ChatService` selects limits based on `MLXModelManager.isMobileOnly`.
+- Truncation logic ensures the composed prompt fits within the target model’s context window while preserving critical layers.
 
 ### Autonomous Agents
 
@@ -151,7 +163,19 @@ The `dev` branch of this repo implements most of the architecture described abov
 
 Some areas remain intentionally flexible or partially implemented so contributors can help shape them:
 
-- Additional providers and local model runtimes.
 - Richer tools (e.g. structured browsing, repository-aware tools).
 - More sophisticated memory retrieval and summarization.
 - UI affordances for inspecting agent runs, tool usage, and memory writes.
+
+### MCP server integration
+
+The app supports the Model Context Protocol (MCP) for connecting external tool servers:
+
+- `MCPClient` (actor) handles JSON-RPC 2.0 over HTTP POST, supporting both plain JSON and SSE response formats.
+- `MCPServerAccount` stores per-server configuration (URL, transport, auth type, cached tools) in UserDefaults; auth tokens go to Keychain.
+- Tool discovery via `tools/list` is cached and refreshed on reconnect.
+- `MCPToolEmbeddingCache` computes and caches embedding vectors for tool descriptions, enabling semantic tool selection via cosine similarity when many tools are available.
+- `MCPToolCallingBenchmark` provides a 10-case evaluation suite for testing local model tool-calling accuracy.
+- For local models, `ChatService` pre-executes the best-matching MCP tool before sending to the model, injecting results into the context sandwich with device-appropriate truncation (4 KB on iPhone, 8 KB on Mac/iPad).
+
+See `docs/tools-and-providers.md` for the full MCP integration details.

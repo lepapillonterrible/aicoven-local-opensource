@@ -42,9 +42,6 @@ struct AddRoleView: View {
     /// Dynamically discovered Ollama models (from /api/tags).
     @State private var ollamaModels: [(String, String)] = []
 
-    /// Tools state
-    @State private var selectedTools: Set<String> = Set(DEFAULT_ALLOWED_TOOLS)
-
     /// Collaborators state
     @State private var selectedCollaborators: Set<String> = []
 
@@ -65,7 +62,7 @@ struct AddRoleView: View {
     var availableModels: [(String, String)] {
         // Local providers: return models from local catalog.
         if provider == "mlx" {
-            return MLXModelManager.defaultCatalog.map { ($0.id, $0.displayName) }
+            return MLXModelManager.shared.deviceFilteredCatalog.map { ($0.id, $0.displayName) }
         }
         if provider == "ollama" {
             if !ollamaModels.isEmpty {
@@ -251,42 +248,89 @@ struct AddRoleView: View {
                     // Model configuration
                     GlassCard {
                         VStack(spacing: Spacing.md) {
-                            // Provider Account
+                            // Provider
                             VStack(alignment: .leading, spacing: Spacing.sm) {
-                                Text("Provider Account")
+                                Text("Provider")
                                     .font(.aicovenH3)
                                     .foregroundColor(.aicovenTextPrimary)
 
-                                Text("Select which API key to use for this role")
-                                    .font(.aicovenCaption)
-                                    .foregroundColor(.aicovenTextTertiary)
-
-                                if isLocalProvider {
-                                    // Local providers don't need account selection.
-                                    HStack(spacing: Spacing.sm) {
-                                        Image(systemName: "desktopcomputer")
-                                            .foregroundColor(.aicovenTeal)
-                                        Text(provider == "mlx" ? "Running on-device via Apple Silicon" : "Running locally via Ollama")
-                                            .font(.aicovenBody)
-                                            .foregroundColor(.aicovenTextSecondary)
-                                    }
-                                    .padding(Spacing.sm)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(Color.aicovenGlass)
-                                    .cornerRadius(BorderRadius.sm)
-                                } else if loadingAccounts {
+                                if loadingAccounts {
                                     ProgressView()
-                                        .padding(Spacing.md)
-                                } else if providerAccounts.isEmpty {
-                                    Text("No provider accounts found. Add one in Settings.")
-                                        .font(.aicovenBody)
-                                        .foregroundColor(.aicovenTextTertiary)
                                         .padding(Spacing.md)
                                 } else {
                                     let accountsByProvider = Dictionary(grouping: providerAccounts) { $0.provider.lowercased() }
+
                                     ForEach(providerOptions, id: \.0) { option in
                                         let accountsForProvider = accountsByProvider[option.0] ?? []
-                                        if !accountsForProvider.isEmpty {
+                                        let isLocal = option.0 == "mlx" || option.0 == "ollama"
+
+                                        if isLocal {
+                                            // Local provider – no key needed, one tap selects it
+                                            let isSelected = provider == option.0
+                                            Button {
+                                                provider = option.0
+                                                providerAccountId = nil
+                                                let models: [(String, String)] = if option.0 == "mlx" {
+                                                    MLXModelManager.shared.deviceFilteredCatalog.map { ($0.id, $0.displayName) }
+                                                } else {
+                                                    ollamaModels.isEmpty
+                                                        ? [(UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model")) ?? "llama3.2", "llama3.2")]
+                                                        : ollamaModels
+                                                }
+                                                if let first = models.first { model = first.0 }
+                                            } label: {
+                                                HStack {
+                                                    Image(systemName: "desktopcomputer")
+                                                        .foregroundColor(.aicovenTeal)
+                                                    VStack(alignment: .leading, spacing: Spacing.xxs) {
+                                                        Text(option.1)
+                                                            .font(.aicovenBody)
+                                                            .foregroundColor(.aicovenTextPrimary)
+                                                        Text(option.0 == "mlx" ? "On-device via Apple Silicon" : "Running locally")
+                                                            .font(.aicovenCaption)
+                                                            .foregroundColor(.aicovenTextSecondary)
+                                                    }
+                                                    Spacer()
+                                                    if isSelected {
+                                                        Image(systemName: "checkmark.circle.fill")
+                                                            .foregroundColor(.aicovenTeal)
+                                                    }
+                                                }
+                                                .padding(Spacing.sm)
+                                                .background(isSelected ? Color.aicovenGlass : Color.clear)
+                                                .cornerRadius(BorderRadius.sm)
+                                            }
+                                            .buttonStyle(.plain)
+                                        } else if accountsForProvider.count == 1, let account = accountsForProvider.first {
+                                            // Single account – one tap selects provider + key
+                                            let isSelected = providerAccountId == account.id
+                                            Button {
+                                                providerAccountId = account.id
+                                                provider = account.provider
+                                                Task { await loadModelsForAccount(account) }
+                                            } label: {
+                                                HStack {
+                                                    VStack(alignment: .leading, spacing: Spacing.xxs) {
+                                                        Text(option.1)
+                                                            .font(.aicovenBody)
+                                                            .foregroundColor(.aicovenTextPrimary)
+                                                        Text(account.displayName)
+                                                            .font(.aicovenCaption)
+                                                            .foregroundColor(.aicovenTextSecondary)
+                                                    }
+                                                    Spacer()
+                                                    if isSelected {
+                                                        Image(systemName: "checkmark.circle.fill")
+                                                            .foregroundColor(.aicovenTeal)
+                                                    }
+                                                }
+                                                .padding(Spacing.sm)
+                                                .background(isSelected ? Color.aicovenGlass : Color.clear)
+                                                .cornerRadius(BorderRadius.sm)
+                                            }
+                                            .buttonStyle(.plain)
+                                        } else if accountsForProvider.count > 1 {
+                                            // Multiple accounts – show each
                                             VStack(alignment: .leading, spacing: Spacing.xs) {
                                                 Text(option.1)
                                                     .font(.aicovenH3)
@@ -296,9 +340,7 @@ struct AddRoleView: View {
                                                     Button {
                                                         providerAccountId = account.id
                                                         provider = account.provider
-                                                        Task {
-                                                            await loadModelsForAccount(account)
-                                                        }
+                                                        Task { await loadModelsForAccount(account) }
                                                     } label: {
                                                         HStack {
                                                             VStack(alignment: .leading, spacing: Spacing.xxs) {
@@ -311,9 +353,7 @@ struct AddRoleView: View {
                                                                         .foregroundColor(.aicovenTextTertiary)
                                                                 }
                                                             }
-
                                                             Spacer()
-
                                                             if providerAccountId == account.id {
                                                                 Image(systemName: "checkmark.circle.fill")
                                                                     .foregroundColor(.aicovenTeal)
@@ -327,6 +367,13 @@ struct AddRoleView: View {
                                                 }
                                             }
                                         }
+                                    }
+
+                                    if providerAccounts.isEmpty {
+                                        Text("No cloud API keys configured. Add one in Settings, or use a local model.")
+                                            .font(.aicovenCaption)
+                                            .foregroundColor(.aicovenTextTertiary)
+                                            .padding(.top, Spacing.sm)
                                     }
                                 }
                             }
@@ -432,51 +479,6 @@ struct AddRoleView: View {
                                         .font(.aicovenCaption)
                                         .foregroundColor(.aicovenTextTertiary)
                                         .padding(.top, Spacing.xs)
-                                }
-                            }
-                        }
-                    }
-
-                    // Tools
-                    GlassCard {
-                        VStack(alignment: .leading, spacing: Spacing.sm) {
-                            Text("Allowed Tools")
-                                .font(.aicovenH3)
-                                .foregroundColor(.aicovenTextPrimary)
-
-                            Text("Select which tools this role can use when acting on your behalf")
-                                .font(.aicovenCaption)
-                                .foregroundColor(.aicovenTextTertiary)
-
-                            ForEach(groupToolsByFamily(), id: \.family) { group in
-                                VStack(alignment: .leading, spacing: Spacing.xs) {
-                                    Text(group.family.replacingOccurrences(of: "_", with: " ").capitalized)
-                                        .font(.aicovenH3)
-                                        .foregroundColor(.aicovenTextSecondary)
-                                        .padding(.top, Spacing.sm)
-
-                                    ForEach(group.tools) { tool in
-                                        Button {
-                                            if selectedTools.contains(tool.id) {
-                                                selectedTools.remove(tool.id)
-                                            } else {
-                                                selectedTools.insert(tool.id)
-                                            }
-                                        } label: {
-                                            HStack(spacing: Spacing.sm) {
-                                                Image(systemName: selectedTools.contains(tool.id) ? "checkmark.square.fill" : "square")
-                                                    .foregroundColor(selectedTools.contains(tool.id) ? .aicovenTeal : .aicovenTextTertiary)
-
-                                                Text(tool.label)
-                                                    .font(.aicovenBody)
-                                                    .foregroundColor(.aicovenTextPrimary)
-
-                                                Spacer()
-                                            }
-                                            .padding(.vertical, Spacing.xs)
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
                                 }
                             }
                         }
@@ -624,15 +626,8 @@ struct AddRoleView: View {
             description = template.purpose.joined(separator: "\n")
             systemPrompt = template.systemPrompt ?? ""
 
-            // Extract tools from tool policy
-            if let toolPolicy = template.toolPolicy {
-                var tools: [String] = []
-                if let read = toolPolicy.read { tools.append(contentsOf: read) }
-                if let generate = toolPolicy.generate { tools.append(contentsOf: generate) }
-                if let critique = toolPolicy.critique { tools.append(contentsOf: critique) }
-                if let proposeOnly = toolPolicy.proposeOnly { tools.append(contentsOf: proposeOnly) }
-                selectedTools = Set(tools)
-            }
+            // Tool policy from templates is no longer used;
+            // all tools are enabled by default.
         } catch {
             print("❌ Failed to load template: \(error.localizedDescription)")
         }
@@ -662,7 +657,7 @@ struct AddRoleView: View {
                 providerAccountId: providerAccountId,
                 temperature: temperature,
                 maxTokens: maxTokensInt,
-                allowedTools: Array(selectedTools),
+                allowedTools: nil,
                 collaboratorRoleIds: Array(selectedCollaborators),
                 autonomousMode: autonomousMode,
                 autonomousMaxSteps: stepsInt,

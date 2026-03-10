@@ -889,17 +889,38 @@ struct MobileCovenRolesView: View {
 struct MobileCovenChatView: View {
     let thread: Thread
     let coven: Coven
+    @Environment(\.dismiss) private var dismiss
+    @State private var showEditRole = false
+    @State private var covenRoles: [Role] = []
 
     var body: some View {
         PersonalChatView(
             thread: thread,
-            onEditAgent: nil,
-            onBack: nil
+            onEditAgent: {
+                if thread.agentId != nil {
+                    showEditRole = true
+                }
+            },
+            onBack: { dismiss() }
         )
         #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarHidden(true)
         #endif
         .background(NebulaBackground())
+        .task {
+            do {
+                covenRoles = try await RoleService.shared.loadRoles(covenId: coven.id)
+            } catch {}
+        }
+        .sheet(isPresented: $showEditRole) {
+            if let roleId = thread.agentId {
+                NavigationStack {
+                    EditRoleView(roleId: roleId, roles: covenRoles) {
+                        showEditRole = false
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -929,6 +950,12 @@ struct MobileProfileRootView: View {
                         }
                         NavigationLink(destination: StrixSettingsView()) {
                             Label("Default Agent", systemImage: "sparkles")
+                        }
+                        NavigationLink(destination: ConnectedAppsView().environmentObject(StoreService.shared)) {
+                            Label("Connected Apps", systemImage: "app.connected.to.app.below.fill")
+                        }
+                        NavigationLink(destination: MCPServerManagementView()) {
+                            Label("MCP Servers", systemImage: "server.rack")
                         }
                     }
 

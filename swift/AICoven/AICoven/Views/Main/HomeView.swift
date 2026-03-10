@@ -190,7 +190,9 @@ struct PersonalWorkspaceView: View {
                     onNewThread: handleNewThread,
                     onSelectThread: handleOpenThread,
                     onDeleteThread: handleDeleteThread,
-                    onSwitchToCovens: onSwitchToCovens
+                    onSwitchToCovens: onSwitchToCovens,
+                    onOpenConnectedApps: { openTab(.connectedApps) },
+                    onOpenMCPServers: { openTab(.mcpServers) }
                 )
 
                 Rectangle()
@@ -259,6 +261,26 @@ struct PersonalWorkspaceView: View {
         // Make it active
         activeTabId = tab.id
         selectedThread = thread
+    }
+
+    private func openTab(_ type: WorkspaceTabType) {
+        if let existingTab = openTabs.first(where: { $0.type == type }) {
+            activeTabId = existingTab.id
+            return
+        }
+
+        let tab: WorkspaceTab
+        switch type {
+        case .connectedApps:
+            tab = .connectedApps
+        case .mcpServers:
+            tab = .mcpServers
+        default:
+            return
+        }
+
+        openTabs.append(tab)
+        activeTabId = tab.id
     }
 
     private func handleDeleteThread(_ thread: Thread) {

@@ -23,6 +23,11 @@ struct ContextBuilder {
     struct Limits: Sendable {
         let maxRecentMessages: Int
         let maxRecentMemories: Int
+
+        /// Tighter limits for iPhones running local models where RAM is shared
+        /// with the MLX model weights (~1–2 GB). Fewer messages and memories
+        /// means smaller strings in the context sandwich.
+        static let mobile = Limits(maxRecentMessages: 6, maxRecentMemories: 4)
     }
 
     /// Configuration for tool-enabled prompts.
@@ -40,13 +45,17 @@ struct ContextBuilder {
         /// shorter, more directive prompts.
         let isLocalModel: Bool
 
+        /// All active MCP server configurations with their cached tools.
+        let mcpServers: [MCPServerAccount]
+
         /// Default configuration with basic chat tools enabled.
         static let `default` = ToolConfig(
             enabledTools: PromptTemplates.basicChatTools,
             includeThoughtBlocks: true,
             includeScratchpad: true,
             includeMemoryWrite: true,
-            isLocalModel: false
+            isLocalModel: false,
+            mcpServers: []
         )
 
         /// Configuration with no tools enabled.
@@ -55,7 +64,8 @@ struct ContextBuilder {
             includeThoughtBlocks: false,
             includeScratchpad: false,
             includeMemoryWrite: false,
-            isLocalModel: false
+            isLocalModel: false,
+            mcpServers: []
         )
 
         /// Configuration with all tools enabled.
@@ -64,35 +74,71 @@ struct ContextBuilder {
             includeThoughtBlocks: true,
             includeScratchpad: true,
             includeMemoryWrite: true,
-            isLocalModel: false
+            isLocalModel: false,
+            mcpServers: []
         )
+
+        /// Configuration that dynamically includes only tools whose backing
+        /// connected app (GitHub, Google Workspace) is actually linked.
+        /// Call this instead of `.allTools` so the LLM never sees tools it can't use.
+        static func connected() async -> ToolConfig {
+            let tools = await PromptTemplates.connectedToolSet()
+            let mcpServers = await ConnectedAccountsService.shared.getAllMCPServers()
+
+            // Add all cached tools to the enabled list so the prompt generator includes them.
+            var allTools = tools
+            for server in mcpServers {
+                let mcpToolNames = PromptTemplates.mcpToolDefinitions(from: [server]).map(\.name)
+                allTools.formUnion(mcpToolNames)
+            }
+
+            return ToolConfig(
+                enabledTools: allTools,
+                includeThoughtBlocks: true,
+                includeScratchpad: true,
+                includeMemoryWrite: true,
+                isLocalModel: false,
+                mcpServers: mcpServers
+            )
+        }
 
         /// Configuration optimized for small local models (MLX, Ollama).
         /// Uses fewer tools and no thought/scratchpad/memory instructions.
-        static let mlxTools = ToolConfig(
-            enabledTools: PromptTemplates.basicChatTools
+        static func mlxTools() async -> ToolConfig {
+            let mcpServers = await ConnectedAccountsService.shared.getAllMCPServers()
+            var tools = PromptTemplates.basicChatTools
                 .union(PromptTemplates.fileTools)
-                .union(PromptTemplates.shellTools),
-            includeThoughtBlocks: false,
-            includeScratchpad: false,
-            includeMemoryWrite: false,
-            isLocalModel: true
-        )
+                .union(PromptTemplates.shellTools)
+
+            for server in mcpServers {
+                let mcpToolNames = PromptTemplates.mcpToolDefinitions(from: [server]).map(\.name)
+                tools.formUnion(mcpToolNames)
+            }
+
+            return ToolConfig(
+                enabledTools: tools,
+                includeThoughtBlocks: false,
+                includeScratchpad: false,
+                includeMemoryWrite: false,
+                isLocalModel: true,
+                mcpServers: mcpServers
+            )
+        }
     }
 
     let limits: Limits
 
     init(
-        threadRepository: ThreadRepository = .shared,
-        memoryRepository: MemoryRepository = .shared,
-        embeddingService: EmbeddingService = .shared,
-        toolService: ToolService = .shared,
+        threadRepository: ThreadRepository? = nil,
+        memoryRepository: MemoryRepository? = nil,
+        embeddingService: EmbeddingService? = nil,
+        toolService: ToolService? = nil,
         limits: Limits = .init(maxRecentMessages: 16, maxRecentMemories: 16)
     ) {
-        self.threadRepository = threadRepository
-        self.memoryRepository = memoryRepository
-        self.embeddingService = embeddingService
-        self.toolService = toolService
+        self.threadRepository = threadRepository ?? .shared
+        self.memoryRepository = memoryRepository ?? .shared
+        self.embeddingService = embeddingService ?? .shared
+        self.toolService = toolService ?? .shared
         self.limits = limits
     }
 
@@ -113,8 +159,10 @@ struct ContextBuilder {
         threadID: String?,
         userMessage: String,
         maxContextTokens: Int? = nil,
-        toolConfig: ToolConfig = .default
+        toolConfig: ToolConfig? = nil
     ) async throws -> [LLMMessage] {
+        let config = toolConfig ?? .default
+
         // Split combined user text into the visible question and any
         // tool-generated context block appended by the composer/tools layer.
         let split = Self.splitUserAndToolContext(from: userMessage)
@@ -124,19 +172,26 @@ struct ContextBuilder {
         var segments = ContextSegments()
 
         // Layer 1: system contract (with tool documentation if tools are enabled)
-        let systemPrompt: String = if !toolConfig.enabledTools.isEmpty {
-            if toolConfig.isLocalModel {
-                // Use lean MLX-optimized prompt for small local models
-                PromptTemplates.generateMLXAgentPrompt(
-                    enabledTools: toolConfig.enabledTools
+        let systemPrompt: String = if !config.enabledTools.isEmpty {
+            if config.isLocalModel {
+                // Use lean MLX-optimized prompt for small local models.
+                // Pass the user message so the tool selector can pick only
+                // the most relevant MCP tools instead of all 200+.
+                // This is async because it may use EmbeddingService for
+                // semantic tool selection.
+                await PromptTemplates.generateMLXAgentPrompt(
+                    enabledTools: config.enabledTools,
+                    mcpServers: config.mcpServers,
+                    userMessage: question
                 )
             } else {
                 // Generate full agent prompt with tool documentation
                 PromptTemplates.generateAgentPrompt(
-                    enabledTools: toolConfig.enabledTools,
-                    includeThoughtBlocks: toolConfig.includeThoughtBlocks,
-                    includeScratchpad: toolConfig.includeScratchpad,
-                    includeMemoryWrite: toolConfig.includeMemoryWrite
+                    enabledTools: config.enabledTools,
+                    mcpServers: config.mcpServers,
+                    includeThoughtBlocks: config.includeThoughtBlocks,
+                    includeScratchpad: config.includeScratchpad,
+                    includeMemoryWrite: config.includeMemoryWrite
                 )
             }
         } else {
@@ -224,7 +279,20 @@ struct ContextBuilder {
             let recent = try await ChatService.shared.loadMessages(threadId: threadID, limit: limits.maxRecentMessages)
             for msg in recent {
                 let role: LLMMessage.Role = (msg.role == "user") ? .user : .assistant
-                segments.recents.append(LLMMessage(role: role, content: msg.content))
+                let content = msg.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                // Deduplicate: skip the last user message if it matches the
+                // current user question. The caller persists the user message
+                // before calling buildContext, so it already appears in the
+                // message store. Without this check, the same message would
+                // appear twice: once here in recents and again in Layer 7.
+                if role == .user, content == question {
+                    // Only skip if this is the very last message in history
+                    // (i.e. the one just persisted before this call).
+                    if msg.id == recent.last?.id {
+                        continue
+                    }
+                }
+                segments.recents.append(LLMMessage(role: role, content: content))
             }
         }
 
@@ -276,7 +344,10 @@ private extension ContextBuilder {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return (userText: "", toolContext: nil) }
 
-        let markers = ["[Web search results]", "[Attachment analysis]"]
+        // Markers that separate user text from tool-generated context.
+        // "You have tool results below" is prepended by ChatService when
+        // appending MCP / tool-loop results to the composed message.
+        let markers = ["[Web search results]", "[Attachment analysis]", "You have tool results below"]
         guard let range = markers
             .compactMap({ trimmed.range(of: $0) })
             .sorted(by: { $0.lowerBound < $1.lowerBound })

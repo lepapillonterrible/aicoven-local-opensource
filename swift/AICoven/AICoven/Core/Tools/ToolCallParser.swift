@@ -324,25 +324,33 @@ enum ToolCallParser {
 
     // MARK: - Thought Parsing
 
-    /// Parse <thought> blocks from LLM output.
+    /// Parse <thought> and <think> blocks from LLM output.
+    /// Qwen3 and similar reasoning models use <think>...</think> while
+    /// the app's own prompt uses <thought>...</thought>.
     static func parseThoughts(_ text: String) -> [ParsedThought] {
         var results: [ParsedThought] = []
 
-        // Pattern: <thought>...</thought> with optional whitespace
-        let pattern = "<\\s*thought\\s*>(.*?)<\\s*/\\s*thought\\s*>"
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) else {
-            return results
-        }
+        // Match both <thought> and <think> tags (case-insensitive)
+        let patterns = [
+            "<\\s*thought\\s*>(.*?)<\\s*/\\s*thought\\s*>",
+            "<\\s*think\\s*>(.*?)<\\s*/\\s*think\\s*>"
+        ]
 
-        let nsText = text as NSString
-        let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsText.length))
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) else {
+                continue
+            }
 
-        for match in matches {
-            guard match.numberOfRanges >= 2 else { continue }
-            let contentRange = match.range(at: 1)
-            let content = nsText.substring(with: contentRange).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !content.isEmpty {
-                results.append(ParsedThought(content: content))
+            let nsText = text as NSString
+            let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsText.length))
+
+            for match in matches {
+                guard match.numberOfRanges >= 2 else { continue }
+                let contentRange = match.range(at: 1)
+                let content = nsText.substring(with: contentRange).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !content.isEmpty {
+                    results.append(ParsedThought(content: content))
+                }
             }
         }
 
@@ -473,6 +481,16 @@ enum ToolCallParser {
         // Strip thought blocks: <thought>...</thought>
         if let regex = try? NSRegularExpression(pattern: "<\\s*thought\\s*>.*?<\\s*/\\s*thought\\s*>", options: [.dotMatchesLineSeparators, .caseInsensitive]) {
             result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: (result as NSString).length), withTemplate: "")
+        }
+
+        // Strip <think> blocks emitted by reasoning models (e.g. Qwen3).
+        // Handles both closed (<think>...</think>) and unclosed (<think>...) tags.
+        if let regex = try? NSRegularExpression(pattern: "<\\s*think\\s*>.*?<\\s*/\\s*think\\s*>", options: [.dotMatchesLineSeparators, .caseInsensitive]) {
+            result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: (result as NSString).length), withTemplate: "")
+        }
+        // Handle unclosed <think> tags (model started thinking but response was cut off)
+        if let thinkStart = result.range(of: "<think>", options: .caseInsensitive) {
+            result = String(result[..<thinkStart.lowerBound])
         }
 
         // Strip scratchpad blocks: <scratchpad>...</scratchpad>

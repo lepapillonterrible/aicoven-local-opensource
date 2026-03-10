@@ -43,6 +43,10 @@ public struct RoutingContext: Sendable {
         case embed
         case judge
         case agentStep
+        /// MCP tool calling: prefer models tagged as tool-capable.
+        /// If no tool-optimised model is available, fallback to any
+        /// model — the orchestrator will still force the tool call.
+        case mcpToolCalling
     }
 
     public let task: TaskType
@@ -133,6 +137,15 @@ public final class HeuristicModelRouter: ModelRouter, @unchecked Sendable {
             return embedders.min(by: { $0.costClassWeight < $1.costClassWeight })
         case .judge, .agentStep:
             // Prefer cheaper / smaller models for control tasks.
+            return candidates.min(by: { $0.costClassWeight < $1.costClassWeight })
+        case .mcpToolCalling:
+            // Prefer models that explicitly support tools; if none are
+            // flagged, fall back to the cheapest available model so the
+            // orchestrator can still force a tool call.
+            let toolCapable = candidates.filter(\.supportsTools)
+            if let best = toolCapable.min(by: { $0.costClassWeight < $1.costClassWeight }) {
+                return best
+            }
             return candidates.min(by: { $0.costClassWeight < $1.costClassWeight })
         case .chat, .summarize:
             if context.preferHighQuality {

@@ -9,7 +9,8 @@ For the cloud version of the app go to https://aicoven.ai/
 - **No backend required**: everything happens on device. The only API calls are made to AI model providers.
 - **Local-first data**: chats, documents, and settings live on-device.
 - **User-provided API keys**: you bring your own keys for LLM/embedding providers.
-- **Local LLM support**: run models directly on your Mac via [MLX](https://github.com/ml-explore/mlx-swift) (on-device, no server needed) or via [Ollama](https://ollama.com) — no API key needed for either.
+- **Local LLM support**: run models directly on your Mac or iPhone via [MLX](https://github.com/ml-explore/mlx-swift) (on-device, no server needed) or via [Ollama](https://ollama.com) — no API key needed for either.
+- **MCP server integration**: connect to any [Model Context Protocol](https://modelcontextprotocol.io) server (e.g. Zapier, custom tools) to extend the assistant's capabilities with external actions.
 - **Simple default assistant**: a single configurable assistant that "just works" out of the box.
 
 ## Current status
@@ -18,8 +19,9 @@ This repo started as an extraction of the original multi-tenant AICoven app and 
 
 - A provider-agnostic `LLMClient` + `ModelRouter` used for all LLM calls, supporting OpenAI, Anthropic, Google Gemini, Ollama, and on-device MLX models.
 - Encrypted local context storage (threads, memories, settings) backed by SQLite/GRDB.
-- A "context sandwich" builder that composes system contract, policies, time, memories, history, and the current turn.
+- A "context sandwich" builder that composes system contract, policies, time, memories, history, and the current turn — with device-aware context limits for iPhones.
 - A tools layer (`ToolEnvironment` + `ToolService`) that exposes web search, file/image analysis, and local file/image generation using only your provider keys.
+- An MCP client (`MCPClient`) that connects to remote MCP servers over HTTP/SSE, discovers tools, and executes them — with semantic tool selection via embedding-based matching and a benchmark suite for evaluating local model tool-calling accuracy.
 - Shell command tools with an approval flow, and connected-app integrations (GitHub, Google Drive).
 - StoreKit 2 in-app purchase support with a community edition compile flag.
 
@@ -85,7 +87,11 @@ The local-first client is functional for core workflows but some features are st
 - Shell command tools with approval flow
 - Connected apps: GitHub and Google Drive integrations
 - Local LLM support via Ollama and on-device MLX with automatic model discovery
+- MLX model catalog with category/tier classification (General, Coding, Mobile), device-aware filtering, and AICoven fine-tuned MCP models
+- MLX on iPhone support (6 GB+ RAM) with automatic memory management (model eviction, GPU cache limits, tool context truncation)
 - Native tool calling for API providers (OpenAI, Anthropic, Gemini) with text-based fallback for local models
+- MCP server integration with tool discovery, execution, caching, SSE transport, and semantic tool selection
+- MCP tool-calling benchmark suite for evaluating local model accuracy (`MCPToolCallingBenchmark`)
 - StoreKit 2 in-app purchases for premium features
 - SwiftLint configuration (`.swiftlint.yml`) and CI workflow
 
@@ -114,6 +120,7 @@ The tools layer is provider-agnostic and designed to work with whatever keys you
 - **Attachment analysis** – Summarization/QA over attached files and images using the best available vision/chat model.
 - **Image generation** – Simple image generation using a chat model and local decoding; images are stored as local files and appear as attachments.
 - **Connected apps** – GitHub repository tools (read/write files, create branches/PRs, search code) and Google Drive file tools (list, read, upload, Sheets read/write), authenticated via user-provided tokens.
+- **MCP server tools** – Any tools exposed by connected [MCP](https://modelcontextprotocol.io) servers (e.g. email via Zapier, calendar, Slack). Tools are discovered automatically via `tools/list`, cached locally, and executed via JSON-RPC over HTTP or SSE. Semantic tool selection uses embedding-based matching when many tools are available.
 
 These tools are available both to the autonomous `AgentRunner` and to the interactive chat UI via the enhanced message composer.
 
@@ -124,12 +131,15 @@ These tools are available both to the autonomous `AgentRunner` and to the intera
 | **OpenAI** | Native function calling API | ✅ Fully supported |
 | **Anthropic** | Native tool use API | ✅ Fully supported |
 | **Google Gemini** | Native function declarations API | ✅ Fully supported |
-| **Ollama** (local) | Text-based (JSON in system prompt) | ⚠️ Needs improvement |
-| **MLX** (on-device) | Text-based (JSON in system prompt) | ⚠️ Needs improvement |
+| **Ollama** (local) | Text-based (JSON in system prompt) | ⚠️ Works, less reliable |
+| **MLX** (on-device) | Text-based (JSON in system prompt) + pre-execution | ⚠️ Works, less reliable |
+| **MCP servers** | JSON-RPC tool calls (HTTP/SSE) | ✅ Fully supported |
 
 API providers (OpenAI, Anthropic, Gemini) use **native tool calling** — tool schemas are sent as structured function declarations and the model returns structured tool calls. This is reliable and well-supported.
 
-Local models (Ollama, MLX) use **text-based tool calling** — tool definitions are embedded in the system prompt and the model is instructed to output raw JSON. A parser with several fallback strategies (code fence stripping, think-tag removal, brace matching) extracts tool calls from the response. A remapping layer corrects commonly hallucinated tool names (e.g. `python` → `shell.execute`). **This approach works but is less reliable than native tool calling**, especially with smaller models (4B-7B). Contributions to improve local model tool use are very welcome.
+Local models (Ollama, MLX) use **text-based tool calling** — tool definitions are embedded in the system prompt and the model is instructed to output raw JSON. A parser with several fallback strategies (code fence stripping, think-tag removal, brace matching) extracts tool calls from the response. A remapping layer corrects commonly hallucinated tool names (e.g. `python` → `shell.execute`). For local models, `ChatService` also supports **pre-execution**: before sending to the model, it checks the user's message for keyword matches against native tools (time, web search) and MCP tools (via fuzzy scoring), executes the matching tool eagerly, and injects the result into the prompt. This improves reliability significantly for simple single-tool queries.
+
+**MCP tools** are discovered from connected MCP servers and made available to all providers. When many MCP tools are available, **semantic tool selection** via `MCPToolEmbeddingCache` ranks tools by cosine similarity to the user's query, reducing prompt size and improving accuracy. A built-in **benchmark suite** (`MCPToolCallingBenchmark`) lets you evaluate any local model's tool-calling accuracy across 10 test cases covering web, file, GitHub, shell, and Google Drive tool categories.
 
 ## Privacy and security
 
@@ -146,7 +156,7 @@ See `docs/local-context-architecture.md` for more details on the encryption and 
 For a complete documentation index, see [`docs/README.md`](docs/README.md).
 
 - `docs/local-context-architecture.md` – Local context sandwich, GRDB persistence, encryption, routing, and autonomous agents.
-- `docs/tools-and-providers.md` – Provider keys, `LLMClient`/`ModelRouter` routing, and the tools layer (web search, attachment analysis, file/image generation).
+- `docs/tools-and-providers.md` – Provider keys, `LLMClient`/`ModelRouter` routing, the tools layer (web search, attachment analysis, file/image generation), and MCP server integration.
 - `docs/TEST_COVERAGE.md` – Comprehensive test coverage documentation with 18 test files and 41 test methods across all layers.
 - `docs/CODE_REVIEW.md` – Detailed code review findings and architectural recommendations.
 - `docs/REVIEW_SUMMARY.md` – High-level summary of code quality, implementation status, and readiness assessment.
@@ -178,18 +188,33 @@ For a complete documentation index, see [`docs/README.md`](docs/README.md).
 
 ### Using MLX (On-Device Models)
 
-AICoven can run models **directly on your Mac's GPU** using Apple's [MLX framework](https://github.com/ml-explore/mlx-swift) — no server, no API key, completely offline.
+AICoven can run models **directly on your device's GPU** using Apple's [MLX framework](https://github.com/ml-explore/mlx-swift) — no server, no API key, completely offline. Supported on Macs, iPads (M-series, 8 GB+ RAM), and iPhones (6 GB+ RAM, e.g. iPhone 15 Pro and newer).
 
-1. In the app, open a chat with a role configured to use an MLX model.
-2. On first use, the model weights are automatically downloaded from HuggingFace.
-3. Subsequent loads are instant from the local cache.
+1. In the app, go to **Settings → MLX Models** to browse the curated catalog.
+2. Models are organized by category (General, Coding, Mobile) and tier (Core, Specialized).
+3. Download a model — weights are fetched from HuggingFace and cached locally.
+4. Select a model to make it active, or go to **Settings → Strix AI → MLX (On-Device)** to set it as your default provider.
+5. On iPhone, only models suitable for constrained memory are shown (≤ 3 GB RAM or Mobile category).
 
-Tested models include:
-- `mlx-community/Mistral-7B-Instruct-v0.3-4bit`
-- `mlx-community/Qwen3-4B-4bit`
-- Any [mlx-community](https://huggingface.co/mlx-community) 4-bit quantized model
+**Curated model catalog:**
 
-> **Note:** MLX models run on Apple Silicon only. Performance depends on your Mac's unified memory — 7B models need ~4 GB, larger models need more. Tool use with MLX models is functional but less reliable than with API providers; see the [tool calling table](#tool-calling-by-provider) above.
+| Model | Size | Category | Recommended For |
+|-------|------|----------|----------------|
+| AICoven MCP 3B ⚡ | 3B, 4-bit | General (Core) | MCP Tools, Tool Calling, Agents |
+| AICoven MCP 2B iOS 📱 | 2B, 4-bit | General (Core) | MCP Tools, iOS, On-Device |
+| Qwen 2.5 1.5B | 1.5B, 4-bit | Mobile (Core) | iOS, Low RAM |
+| Qwen 3 4B | 4B, 4-bit | General (Core) | MCP Tools, Chat, Reasoning |
+| Llama 3.2 3B | 3B, 4-bit | General (Core) | MCP Tools, Chat |
+| Phi 4 Mini | 3.8B, 4-bit | General (Core) | Fast Inference, Reasoning |
+| Gemma 3 4B | 4B, 4-bit | General (Core) | Multilingual, Chat |
+| Qwen 2.5 Coder 7B | 7B, 4-bit | Coding (Specialized) | GitHub, Code, Debugging |
+| DeepSeek R1 8B | 8B, 4-bit | Coding (Specialized) | Reasoning, Debugging |
+| Mistral 7B v0.3 | 7B, 4-bit | General (Specialized) | Reasoning, Code |
+| Gemma 2 2B | 2B, 4-bit | Mobile (Specialized) | iOS, Low RAM |
+
+You can test any downloaded model's MCP tool-calling accuracy using the built-in benchmark (tap **Test** on a downloaded model card).
+
+> **Note:** MLX models run on Apple Silicon only. On iPhone, models are automatically unloaded after each inference to prevent memory pressure, and context/tool output is capped more aggressively. Tool use with MLX models is functional but less reliable than with API providers; see the [tool calling table](#tool-calling-by-provider) above.
 
 ### Using Ollama (Local LLMs)
 
@@ -204,41 +229,37 @@ You can run models on your machine with [Ollama](https://ollama.com) — no API 
    ollama serve          # leave running in a terminal
    ollama pull llama3.2  # or any model you prefer
    ```
-3. In the app, go to **Settings → Provider Keys → Add Provider Key**.
-4. Select **Ollama (Local)**, enter the server URL (default `http://localhost:11434`), and tap **Connect**.
-5. The app will discover available models automatically — select one and tap **Add Ollama**.
-6. Start chatting! Requests go directly to Ollama on your machine; nothing leaves your network.
+3. In the app, go to **Settings → Strix AI** and select **Ollama (Local)** from the provider list.
+4. Available models are discovered automatically from your running Ollama instance.
+5. Start chatting! Requests go directly to Ollama on your machine; nothing leaves your network.
 
-### Using MLX (On-Device, Apple Silicon)
+### Using MCP Servers
 
-AICoven Local also supports running models directly on-device using [MLX](https://github.com/ml-explore/mlx) on Apple Silicon.
+AICoven supports the [Model Context Protocol (MCP)](https://modelcontextprotocol.io), allowing you to connect external tool servers (e.g. Zapier, custom services) and use their tools directly from chat.
 
-**Hardware requirements**
+1. In the app, go to **Settings → Connected Apps → MCP Servers**.
+2. Tap **Add Server** and enter the server URL and authentication details (Bearer token or API key).
+3. The app will connect and discover available tools via `tools/list`.
+4. Discovered tools are cached locally and automatically included in chat prompts.
+5. When you ask the assistant to perform an action covered by an MCP tool, it will be executed via JSON-RPC.
 
-- macOS on Apple Silicon (M1 or newer) is required.
-- For a smooth experience, at least **16 GB RAM** is recommended for medium/large models.
+**How MCP tool selection works:**
 
-**Expected model sizes & memory usage**
+- For **cloud providers** (OpenAI, Anthropic, Gemini): MCP tools are injected as native function declarations alongside built-in tools. The model chooses which tool to call.
+- For **local models** (MLX, Ollama): `ChatService` uses keyword matching and fuzzy scoring to pre-select the most relevant MCP tool before sending to the model. When many MCP tools are available, **semantic tool selection** via embedding-based cosine similarity narrows the candidate set.
+- MCP tool results are injected into the context sandwich and truncated to fit device memory constraints (4 KB on iPhone, 8 KB on Mac/iPad).
 
-- Small models (e.g. 3–4B parameters): typically **2–4 GB** downloads; expect **4–8 GB** of free RAM.
-- Medium models (e.g. 7–8B parameters): typically **4–8 GB** downloads; expect **8–16 GB** of free RAM.
-- Larger models may require more disk space and RAM; choose a size appropriate for your machine.
+**Supported transports:** SSE (`text/event-stream`) and Streamable HTTP.
+**Authentication:** None, Bearer token, or API key.
 
-**Adding an MLX provider in the app**
+### MLX vs. Ollama
 
-1. Ensure you have an Apple Silicon Mac (M1 or newer) and that MLX models/tools are installed according to the MLX project’s instructions.
-2. Open the app and go to **Settings → Provider Keys → Add Provider Key**.
-3. Select **MLX (On-Device)** from the provider list.
-4. Configure the model or path options as prompted, then tap **Connect**.
-5. Once connected, select your preferred MLX model in the app and start chatting.
-
-**MLX vs. Ollama**
-
-- **MLX**: runs inference directly on your Apple Silicon GPU/CPU with no local HTTP server. Everything stays entirely on-device inside the app.
-- **Ollama**: runs a local HTTP server that manages models and serves requests at `http://localhost:11434`. AICoven Local connects to that server over localhost.
+- **MLX**: runs inference directly on your Apple Silicon GPU/CPU with no local HTTP server. Everything stays entirely on-device inside the app. Supports Mac, iPad (M-series), and iPhone (6 GB+ RAM).
+- **Ollama**: runs a local HTTP server that manages models and serves requests at `http://localhost:11434`. AICoven connects to that server over localhost.
 
 Use MLX if you want a fully in-process, Apple Silicon–optimized workflow, and Ollama if you prefer a local model server that can be shared across multiple tools.
-> **Note:** Tool use with Ollama models works but is less reliable than with API providers, especially for smaller models. See the [tool calling table](#tool-calling-by-provider) above.
+
+> **Note:** Tool use with local models works but is less reliable than with API providers, especially for smaller models. See the [tool calling table](#tool-calling-by-provider) above.
 
 ## Development Workflow
 

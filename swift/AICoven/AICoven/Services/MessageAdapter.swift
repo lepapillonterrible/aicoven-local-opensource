@@ -8,11 +8,13 @@ enum MessageAdapter {
     static func sanitizeContent(_ text: String) -> String {
         guard !text.isEmpty else { return text }
         var result = text
-        // Patterns for tool calls, thoughts, scratchpad, and memory proposals
+        // Patterns for tool calls, thoughts, scratchpad, memory proposals,
+        // and reasoning tags emitted by local models (e.g. Qwen3's <think>).
         let patterns = [
             #"\[TOOL_CALL:[\s\S]*?\[/TOOL_CALL\]"#,
             #"<TOOL_CALL>[\s\S]*?</TOOL_CALL>"#,
             #"<\s*thought\s*>[\s\S]*?</\s*thought\s*>"#,
+            #"<\s*think\s*>[\s\S]*?</\s*think\s*>"#,
             #"<\s*scratchpad\s*>[\s\S]*?</\s*scratchpad\s*>"#,
             #"\[MEMORY_WRITE:[\s\S]*?\[/MEMORY_WRITE\]"#
         ]
@@ -20,6 +22,10 @@ enum MessageAdapter {
             guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) else { continue }
             let range = NSRange(result.startIndex ..< result.endIndex, in: result)
             result = regex.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "")
+        }
+        // Handle unclosed <think> tags (model started reasoning but response was cut off)
+        if let thinkStart = result.range(of: "<think>", options: .caseInsensitive) {
+            result = String(result[..<thinkStart.lowerBound])
         }
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }

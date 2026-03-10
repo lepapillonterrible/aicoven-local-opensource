@@ -1,5 +1,9 @@
 import Foundation
 
+#if canImport(UIKit)
+import UIKit
+#endif
+
 /// Task from an agent's planning scratchpad
 struct AgentTask: Identifiable, Codable, Equatable {
     let id: String
@@ -100,11 +104,16 @@ enum ToolIntentDecision {
     static func heuristic(for message: String) -> ToolIntentDecision {
         let lower = message.lowercased()
 
-        // Obvious no-tool patterns (conversational, opinion, summarization)
+        // Obvious no-tool patterns (conversational, opinion, summarization).
+        // NOTE: broad phrases like "what is" were intentionally narrowed
+        // (e.g. "what is a ", "what is the meaning") so they don't block
+        // legitimate tool queries like "what is the time" or "what is my
+        // latest email".
         let noToolPatterns = [
             "give me a proposal", "explain", "summarize", "what do you think",
             "review this", "help me understand", "tell me about",
-            "what is", "what are", "how does", "how do",
+            "what is a ", "what is the meaning", "what is the definition",
+            "what are the differences", "how does a ", "how do you ",
             "can you describe", "opinion on", "compare",
             "write me", "draft", "rewrite", "translate",
             "hello", "hi ", "hey ", "thanks", "thank you"
@@ -113,7 +122,8 @@ enum ToolIntentDecision {
             return .noTools(reason: "Heuristic: conversational/opinion/writing request")
         }
 
-        // Obvious tool patterns (web search, file ops, github, time)
+        // Obvious tool patterns (web search, file ops, github, time,
+        // MCP / connected-app actions like email, calendar, Slack, etc.)
         let toolPatterns = [
             "search for", "look up", "find on github", "google",
             "what's the weather", "weather in", "current weather",
@@ -122,7 +132,11 @@ enum ToolIntentDecision {
             "what time", "current time", "what date",
             "open the url", "browse", "fetch",
             "github.com", "create a pr", "pull request",
-            "create branch", "list repos"
+            "create branch", "list repos",
+            // MCP / connected-app patterns
+            "inbox", "email", "slack", "send ", "check my",
+            "access my", "zapier", "calendar", "schedule",
+            "my messages", "my notifications"
         ]
         if toolPatterns.contains(where: { lower.contains($0) }) {
             return .useTools(suggested: [])
@@ -139,8 +153,13 @@ actor ChatService {
     /// configured via ProviderKeysView / ProviderAccountService.
     static let shared: ChatService = {
         let env = LLMConfiguration.makeEnvironment()
+        // Use tighter context limits on iPhone to leave headroom for the
+        // MLX model weights in memory.
+        let limits: ContextBuilder.Limits = MLXModelManager.isMobileOnly
+            ? .mobile
+            : .init(maxRecentMessages: 16, maxRecentMemories: 16)
         return ChatService(
-            contextBuilder: ContextBuilder(),
+            contextBuilder: ContextBuilder(limits: limits),
             modelRouter: HeuristicModelRouter(availableModels: env.models),
             llmClients: env.clients,
             threadStore: ThreadRepository.shared,
@@ -442,7 +461,9 @@ actor ChatService {
 
         // Local models (MLX, Ollama) get a shorter, more assertive prompt.
         let isLocalModel = ["mlx", "ollama"].contains(descriptor.providerID)
-        let toolConfig: ContextBuilder.ToolConfig = isLocalModel ? .mlxTools : .allTools
+        let toolConfig: ContextBuilder.ToolConfig = isLocalModel
+            ? await .mlxTools()
+            : await .connected()
 
         // ── Context-aware repeat detection (ported from backend) ──────────
         // Tracks tool-call signatures across loop iterations so we can
@@ -459,10 +480,19 @@ actor ChatService {
         var continuationCount = 0
         let maxContinuationPrompts = 2
 
+        // ── Tool refusal retry ────────────────────────────────────────────
+        // Small local models often refuse to use tools ("I'm a text-based AI
+        // model") despite having tool instructions. When detected, we inject
+        // a strong correction and retry up to this many times.
+        var toolRefusalCount = 0
+        let maxToolRefusalRetries = 1
+
         // ── Tool result compression threshold ────────────────────────────
         // Once toolContextLog exceeds this length (chars), older results
-        // are truncated to prevent context overflow.
-        let toolContextCompressThreshold = 3000
+        // are truncated to prevent context overflow. Use a lower limit on
+        // iPhone to reduce peak memory alongside the MLX model.
+        let isMobileDevice = Self.isMobileDevice
+        let toolContextCompressThreshold = isMobileDevice ? 2000 : 3000
 
         // Track initial message sent
         AnalyticsService.shared.trackMessageSent(threadId: threadId, hasAttachments: !(attachments?.isEmpty ?? true), attachmentCount: attachments?.count ?? 0)
@@ -522,6 +552,73 @@ actor ChatService {
         // Append attachment context to the message so the LLM can see the files
         let messageWithAttachments = attachmentContextBlock.isEmpty ? message : message + attachmentContextBlock
 
+        // ── Pre-execute tools for local models ────────────────────────────
+        // Small local models (MLX/Ollama) cannot reliably produce JSON tool
+        // calls. When the intent gate indicates tools are needed, bypass the
+        // model and pre-execute the best matching tool directly. After
+        // pre-execution we skip the tool loop entirely (set remaining = 0)
+        // so the model goes straight to the final-answer phase where we
+        // reframe the request as a summarization task.
+        //
+        // The entire block is wrapped in do/catch so that a network failure
+        // (e.g. socket disconnected, timeout) does not abort streamMessage
+        // and leave the user with zero output.
+        if isLocalModel, toolsAllowed, remainingToolSteps > 0 {
+            do {
+                // Try native tools first (current_time, web_search) — these
+                // are cheap, local, and have high-confidence keyword matching.
+                // MCP tools are checked second because their fuzzy scoring can
+                // produce false positives (e.g. "time" matching "timestamp"
+                // in a Slack tool name).
+                if let forcedNative = Self.forceNativeToolCall(userMessage: message) {
+                    #if DEBUG
+                    AppErrorReporter.log(message: "Pre-executing native tool for local model: \(forcedNative.tool)", context: "ChatService.streamMessage.preExecute")
+                    #endif
+                    onToolEvent(Self.friendlyToolSummary(for: forcedNative.tool))
+                    AnalyticsService.shared.trackToolUsed(toolName: forcedNative.tool, threadId: threadId)
+                    let (_, contextBlock) = try await executeChatToolCall(forcedNative)
+                    if let block = contextBlock {
+                        toolContextLog = block
+                    }
+                    // Skip the tool loop.
+                    remainingToolSteps = 0
+                } else if let forcedMCP = Self.forceMCPToolCall(
+                    userMessage: message,
+                    mcpServers: toolConfig.mcpServers
+                ) {
+                    #if DEBUG
+                    AppErrorReporter.log(message: "Pre-executing MCP tool for local model: \(forcedMCP.tool)", context: "ChatService.streamMessage.preExecute")
+                    #endif
+                    onToolEvent(Self.friendlyToolSummary(for: forcedMCP.tool))
+                    AnalyticsService.shared.trackToolUsed(toolName: forcedMCP.tool, threadId: threadId)
+                    let (_, contextBlock) = try await executeChatToolCall(forcedMCP)
+                    if let block = contextBlock {
+                        toolContextLog = block
+                    }
+                    // Eagerly cap MCP results on mobile to avoid carrying
+                    // oversized strings through the rest of the pipeline.
+                    let preExecCap = isMobileDevice ? 4000 : 8000
+                    if toolContextLog.count > preExecCap {
+                        toolContextLog = String(toolContextLog.prefix(preExecCap))
+                            + "\n... [truncated for device memory]"
+                    }
+                    #if DEBUG
+                    AppErrorReporter.log(message: "Pre-execution completed. toolContextLog length=\(toolContextLog.count)", context: "ChatService.streamMessage.preExecute")
+                    #endif
+                    // Skip the tool loop — go straight to final-answer phase
+                    // where the prompt is reframed as summarization.
+                    remainingToolSteps = 0
+                }
+            } catch {
+                // Pre-execution failed (network error, MCP timeout, etc.).
+                // Log the error and fall through — the model will still
+                // attempt to answer without tool results.
+                AppErrorReporter.log(error: error, context: "ChatService.streamMessage.preExecute")
+                toolContextLog = "[Tool Error] Pre-execution failed: \(error.localizedDescription)"
+                remainingToolSteps = 0
+            }
+        }
+
         // First phase: while we still have tool budget, let the model decide
         // whether to call a tool. Each successful tool invocation consumes one
         // step from the budget; a direct natural-language reply ends the loop.
@@ -554,8 +651,15 @@ actor ChatService {
 
             do {
                 // Pass native tool definitions for API providers (not local models).
+                // Uses the same semantic selection as local models (but with a
+                // higher limit) so users don't pay for 200+ tool schemas on
+                // every API call.
                 let nativeTools: [LLMToolDefinition]? = isLocalModel ? nil
-                    : PromptTemplates.llmToolDefinitions(for: toolConfig.enabledTools)
+                    : await PromptTemplates.llmToolDefinitions(
+                        for: toolConfig.enabledTools,
+                        mcpServers: toolConfig.mcpServers,
+                        userMessage: message
+                    )
                 let options = ChatOptions(
                     temperature: 0.7,
                     maxTokens: nil,
@@ -730,6 +834,53 @@ actor ChatService {
                         continue
                     }
 
+                    // ── Tool refusal detection ────────────────────────────
+                    // Small local models sometimes refuse to use tools
+                    // ("I can't access external systems") despite having
+                    // tool instructions. Instead of retrying with a
+                    // correction prompt (which doesn't work for small
+                    // models), bypass the model entirely and force-execute
+                    // the best matching MCP tool directly.
+                    if toolRefusalCount < maxToolRefusalRetries,
+                       Self.detectToolRefusal(rawText) {
+                        toolRefusalCount += 1
+                        #if DEBUG
+                        AppErrorReporter.log(message: "Tool refusal detected (\(toolRefusalCount)/\(maxToolRefusalRetries)); attempting forced MCP tool call.", context: "ChatService.streamMessage.toolRefusal")
+                        #endif
+
+                        // Try to find and force-execute the best matching
+                        // MCP tool for the user's message. This bypasses
+                        // the model entirely since small models can't be
+                        // nudged into producing JSON tool calls.
+                        if let forcedCall = Self.forceMCPToolCall(
+                            userMessage: message,
+                            mcpServers: toolConfig.mcpServers
+                        ) {
+                            remainingToolSteps -= 1
+                            #if DEBUG
+                            AppErrorReporter.log(message: "Forcing MCP tool call: \(forcedCall.tool)", context: "ChatService.streamMessage.toolRefusal")
+                            #endif
+
+                            // Track tool usage
+                            AnalyticsService.shared.trackToolUsed(toolName: forcedCall.tool, threadId: threadId)
+
+                            let (summary, contextBlock) = try await executeChatToolCall(forcedCall)
+                            onToolEvent(summary)
+                            if let block = contextBlock {
+                                // Replace context with fresh MCP results.
+                                toolContextLog = block
+                            }
+                            // Loop again — the model now has real tool
+                            // results and should produce a useful answer.
+                            continue
+                        } else {
+                            // No MCP tool matched — inject a correction
+                            // prompt as a last-resort fallback.
+                            toolContextLog = "[System CORRECTION] You have tools. Look at AVAILABLE TOOLS in your instructions and use them. Respond with ONLY a JSON tool call."
+                            continue
+                        }
+                    }
+
                     // Treat this as the final natural-language answer.
                     #if DEBUG
                     AppErrorReporter.log(message: "No tool call detected in provider response; treating as final answer.", context: "ChatService.streamMessage.toolLoop")
@@ -767,18 +918,60 @@ actor ChatService {
         if finalText == nil {
             // Final phase: no tool instructions — just ask the model to
             // answer in natural language using whatever it already knows.
-            // Include attachment context so the model can see any attached files.
-            var composedUserMessage = messageWithAttachments + "\n\nIMPORTANT: You must now answer the user directly in natural language. Do NOT call tools or return JSON. Provide the most helpful answer you can using your own reasoning and the information already available (including any tool results and your built-in knowledge). Do NOT say that you cannot answer because you cannot use tools or the web; instead, make your best effort to answer, even if it is an approximation, and clearly explain any uncertainty."
-            if !toolContextLog.isEmpty {
-                composedUserMessage += "\n\n" + toolContextLog
+            var composedUserMessage: String
+
+            if isLocalModel, !toolContextLog.isEmpty {
+                // ── Reframe as summarization for local models ───────────
+                // Small models refuse to "access email" even when the data
+                // is already retrieved. By presenting the data as something
+                // that has already been fetched, the model treats it as a
+                // simple summarization task and avoids the refusal reflex.
+                //
+                // Cap the tool results at ~6 000 chars (~1 500 tokens) so
+                // the combined prompt fits safely inside the MLX context
+                // window and inference doesn't crash on huge payloads
+                // (e.g. listing hundreds of unread emails).
+                let maxToolChars = isMobileDevice ? 4000 : 6000
+                let cappedToolResults: String
+                if toolContextLog.count > maxToolChars {
+                    let truncated = String(toolContextLog.prefix(maxToolChars))
+                    let droppedCount = toolContextLog.count - maxToolChars
+                    cappedToolResults = truncated + "\n\n... [truncated — \(droppedCount) more characters omitted]"
+                    #if DEBUG
+                    AppErrorReporter.log(message: "Capped toolContextLog from \(toolContextLog.count) to \(maxToolChars) chars", context: "ChatService.streamMessage.finalPhase")
+                    #endif
+                } else {
+                    cappedToolResults = toolContextLog
+                }
+                composedUserMessage = """
+                A tool was executed on the user's behalf and returned the following data:
+
+                \(cappedToolResults)
+
+                The user's original question was: \(message)
+
+                Using ONLY the data above, provide a helpful answer. The data has already been retrieved — do NOT say you cannot access external systems. Summarize and present the results clearly.
+                """
+            } else {
+                // Standard final-answer prompt for cloud models or no-tool cases.
+                composedUserMessage = messageWithAttachments + "\n\nIMPORTANT: You must now answer the user directly in natural language. Do NOT call tools or return JSON. Provide the most helpful answer you can using your own reasoning and the information already available (including any tool results and your built-in knowledge). Do NOT say that you cannot answer because you cannot use tools or the web; instead, make your best effort to answer, even if it is an approximation, and clearly explain any uncertainty."
+                if !toolContextLog.isEmpty {
+                    composedUserMessage += "\n\n" + toolContextLog
+                }
             }
+
+            // For local models with tool results, drop tool docs from the
+            // system prompt — the model just needs to summarize data, and
+            // tool documentation wastes limited context window.
+            let finalToolConfig: ContextBuilder.ToolConfig =
+                (isLocalModel && !toolContextLog.isEmpty) ? .noTools : toolConfig
 
             let promptBudget = Int(Double(descriptor.maxContextTokens) * 0.8)
             let contextMessages = try await contextBuilder.buildContext(
                 threadID: threadId,
                 userMessage: composedUserMessage,
                 maxContextTokens: promptBudget,
-                toolConfig: toolConfig
+                toolConfig: finalToolConfig
             )
 
             do {
@@ -920,6 +1113,14 @@ actor ChatService {
     /// configured LLM providers. This runs independently of any one chat turn
     /// and is safe to call opportunistically after new messages are added.
     func updateThreadSummary(threadId: String) async {
+        // On iOS, skip background summaries when only local models are
+        // available. Loading a second MLX model (~1.5 GB) for an optional
+        // summary will push past the jetsam memory limit and crash the app.
+        #if os(iOS)
+        let hasCloudProvider = llmClients.keys.contains(where: { $0 != "mlx" && $0 != "ollama" })
+        if !hasCloudProvider { return }
+        #endif
+
         // Ensure environment is ready before routing summarization calls.
         await ensureEnvironment()
         do {
@@ -955,6 +1156,15 @@ actor ChatService {
                   let client = llmClients[descriptor.providerID] else {
                 return
             }
+
+            // On iOS, don't use local models for background summaries even
+            // if a cloud provider is available — the chat might still be
+            // using the local model and concurrent loads are fatal.
+            #if os(iOS)
+            if descriptor.providerID == "mlx" || descriptor.providerID == "ollama" {
+                return
+            }
+            #endif
 
             let options = ChatOptions(temperature: 0.2, maxTokens: nil, stream: false)
             let response = try await client.completeChat(
@@ -1031,6 +1241,28 @@ actor ChatService {
             return nil
         }
     }
+
+    // MARK: - Platform helpers
+
+    /// Whether we're running on an iPhone (not iPad or Mac).
+    /// Used to apply tighter memory limits for tool context, context builder,
+    /// and other allocations that compete with the MLX model for RAM.
+    ///
+    /// The value is cached in a static `let` so it can be read from any
+    /// isolation context without hitting the MainActor-isolated UIDevice API
+    /// at call time (which would crash via `assumeIsolated` on background
+    /// threads).
+    nonisolated static let isMobileDevice: Bool = {
+        #if os(iOS)
+        // UIDevice.current.userInterfaceIdiom is a read-only hardware
+        // constant that never changes at runtime. Reading it off-main
+        // is safe in practice even though the API is nominally
+        // MainActor-isolated.
+        return UIDevice.current.userInterfaceIdiom == .phone
+        #else
+        return false
+        #endif
+    }()
 }
 
 // MARK: - LocalChatError analytics helpers
@@ -1468,6 +1700,235 @@ extension ChatService {
         hasher.combine(tail)
         let hash = hasher.finalize()
         return String(format: "%08x", abs(hash))
+    }
+
+    // MARK: - Tool Refusal Detection
+
+    /// Returns `true` if the model's response is a refusal to use tools — e.g.
+    /// "I'm a text-based AI model" or "I don't have access to external systems".
+    /// Small local models often produce these despite having tool instructions.
+    nonisolated static func detectToolRefusal(_ responseText: String) -> Bool {
+        guard !responseText.isEmpty else { return false }
+        let lower = responseText.lowercased()
+
+        // Common refusal snippets from small models that claim they can't
+        // access external systems, email, real-time data, etc.
+        let refusalSnippets = [
+            "i don't have the ability to access",
+            "i don't have access to",
+            "i do not have access to",
+            "i cannot access",
+            "i can't access",
+            "i'm a text-based ai",
+            "as a text-based ai",
+            "as an ai language model",
+            "as a language model",
+            "i don't have the capability to interact",
+            "i cannot interact with external",
+            "i can't interact with external",
+            "i cannot check your",
+            "i can't check your",
+            "i don't have access to real-time",
+            "i do not have access to real-time",
+            "i cannot browse",
+            "i can't browse",
+            "i don't have internet access",
+            "i do not have internet access",
+            "i cannot retrieve",
+            "i can't retrieve",
+            "i'm not able to access",
+            "i am not able to access",
+            "i don't have the tools",
+            "i do not have the tools",
+        ]
+        return refusalSnippets.contains(where: { lower.contains($0) })
+    }
+
+    // MARK: - Forced MCP Tool Call
+
+    /// When a local model can't produce JSON tool calls, find the best
+    /// matching MCP tool for the user's message and construct a forced
+    /// call. Returns `nil` if no MCP servers are configured or no tool
+    /// is a reasonable match.
+    ///
+    /// Scoring uses keyword overlap with stop-word filtering and basic
+    /// stemming (strip trailing "s") so that "emails" matches tools
+    /// containing "email". Common words like "from", "the", "mcp" are
+    /// excluded because they match many tool names without helping
+    /// discriminate. Action-intent words ("find", "check", "search")
+    /// get bonus weight when they match the tool's action verb.
+    nonisolated static func forceMCPToolCall(
+        userMessage: String,
+        mcpServers: [MCPServerAccount]
+    ) -> ChatToolInvocation? {
+        // Get all MCP tool definitions from configured servers.
+        let allDefs = PromptTemplates.mcpToolDefinitions(from: mcpServers)
+        guard !allDefs.isEmpty else { return nil }
+
+        // Common English stop words plus meta-words that match ALL MCP
+        // tools equally ("mcp", "zapier", "server", "tool", etc.).
+        let stopWords: Set<String> = [
+            "the", "and", "for", "from", "with", "that", "this",
+            "you", "your", "have", "has", "had", "are", "was",
+            "been", "will", "can", "not", "but", "they", "them",
+            "any", "all", "each", "one", "two", "how", "when",
+            "who", "what", "where", "which", "why", "its", "our",
+            "need", "want", "like", "also", "just", "get", "got",
+            "let", "may", "use", "set", "run", "new", "old",
+            "about", "into", "over", "than", "then", "some",
+            "there", "here", "through", "though",
+            "could", "would", "should", "does", "did",
+            "tell", "know", "think", "make", "take", "give",
+            "today", "yesterday", "tomorrow", "march", "2026",
+            // Meta-words that match every MCP tool equally.
+            "access", "tools", "tool", "server", "integration",
+            "mcp", "zapier",
+        ]
+
+        // Action-intent words that get bonus weight when they match
+        // the tool's action verb (the last segment of the tool name).
+        let actionIntentMap: [String: [String]] = [
+            "check": ["find", "search", "get", "list", "read"],
+            "find": ["find", "search", "get", "list"],
+            "search": ["find", "search", "get"],
+            "send": ["send", "create", "post"],
+            "create": ["create", "add", "new"],
+            "delete": ["delete", "remove"],
+            "remove": ["delete", "remove"],
+            "read": ["find", "get", "read"],
+            "list": ["list", "find", "search", "get"],
+            "update": ["update", "edit", "modify"],
+        ]
+
+        // Extract meaningful words: filter stop words, dedupe,
+        // and generate stemmed variants (strip trailing "s").
+        let rawWords = userMessage.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count >= 3 && !stopWords.contains($0) }
+        // Deduplicate while preserving order.
+        var seen = Set<String>()
+        var messageWords: [String] = []
+        for w in rawWords where !seen.contains(w) {
+            seen.insert(w)
+            messageWords.append(w)
+        }
+        guard !messageWords.isEmpty else { return nil }
+
+        // Build stemmed variants (strip trailing "s" for simple plurals).
+        // E.g. "emails" → also check "email".
+        var expandedWords: [(word: String, stemmed: String?)] = []
+        for word in messageWords {
+            let stemmed = (word.hasSuffix("s") && word.count > 4)
+                ? String(word.dropLast()) : nil
+            expandedWords.append((word, stemmed))
+        }
+
+        // Detect which action-intent words the user used.
+        let userActionWords = Set(messageWords).intersection(actionIntentMap.keys)
+
+        var bestTool: ToolDefinition?
+        var bestScore = 0
+
+        for tool in allDefs {
+            let lowerName = tool.name.lowercased()
+            let lowerDesc = tool.description.lowercased()
+            var score = 0
+
+            for (word, stemmed) in expandedWords {
+                // Check both original and stemmed form.
+                let nameHit = lowerName.contains(word)
+                    || (stemmed != nil && lowerName.contains(stemmed!))
+                let descHit = lowerDesc.contains(word)
+                    || (stemmed != nil && lowerDesc.contains(stemmed!))
+
+                if nameHit { score += 3 }
+                if descHit { score += 1 }
+            }
+
+            // Action-intent bonus: if the user said "check" and the
+            // tool name contains "find" or "search", boost the score.
+            // Extract the tool's action verb (last segment after ".").
+            let toolAction = lowerName
+                .split(separator: ".")
+                .last
+                .map(String.init) ?? lowerName
+            for actionWord in userActionWords {
+                if let synonyms = actionIntentMap[actionWord] {
+                    for synonym in synonyms {
+                        if toolAction.contains(synonym) {
+                            score += 5
+                            break
+                        }
+                    }
+                }
+            }
+
+            if score > bestScore {
+                bestScore = score
+                bestTool = tool
+            }
+        }
+
+        // Require a minimum score to avoid forcing irrelevant tools.
+        guard let tool = bestTool, bestScore >= 4 else { return nil }
+
+        // Build the tool call input. MCP servers (especially Zapier)
+        // accept an "instructions" field with natural language.
+        let inputDict: [String: AnyJSONValue] = [
+            "instructions": AnyJSONValue(userMessage)
+        ]
+
+        #if DEBUG
+        AppErrorReporter.log(
+            message: "forceMCPToolCall matched '\(tool.name)' (score=\(bestScore)) for: \(userMessage.prefix(80))",
+            context: "ChatService.forceMCPToolCall"
+        )
+        #endif
+
+        return ChatToolInvocation(
+            tool: tool.name,
+            input: AnyJSONValue(inputDict),
+            reason: "Forced MCP tool call — local model cannot produce JSON tool calls"
+        )
+    }
+
+    // MARK: - Forced Native Tool Call
+
+    /// For local models, attempt to match the user's message to a native
+    /// tool (current_time, web_search) and construct a forced call.
+    /// Returns `nil` if no native tool is a clear match.
+    nonisolated static func forceNativeToolCall(
+        userMessage: String
+    ) -> ChatToolInvocation? {
+        let lower = userMessage.lowercased()
+
+        // Time/date queries → current_time
+        let timePatterns = [
+            "what time", "current time", "what date", "current date",
+            "what day", "today's date", "right now", "time is it",
+        ]
+        if timePatterns.contains(where: { lower.contains($0) }) {
+            return ChatToolInvocation(
+                tool: "current_time",
+                input: AnyJSONValue(["timezone": AnyJSONValue("UTC")]),
+                reason: "User asked about time/date"
+            )
+        }
+
+        // Web search queries → web_search
+        let searchPatterns = [
+            "search for", "look up", "google ", "find out",
+            "what's the weather", "weather in", "current weather",
+        ]
+        if searchPatterns.contains(where: { lower.contains($0) }) {
+            return ChatToolInvocation(
+                tool: "web_search",
+                input: AnyJSONValue(["query": AnyJSONValue(userMessage)]),
+                reason: "User asked to search/look up information"
+            )
+        }
+
+        return nil
     }
 
     // MARK: - Response Text Deduplication (ported from backend _dedupe_response_text)

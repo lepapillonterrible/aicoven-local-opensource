@@ -6,9 +6,9 @@ struct SettingsView: View {
     @AppStorage("dark_mode_enabled") private var darkModeEnabled = true
     @AppStorage("compact_mode") private var compactMode = false
 
-    // Analytics consent preferences (opt-in model for privacy)
-    @AppStorage("analytics_product_enabled") private var productAnalyticsEnabled = false
-    @AppStorage("analytics_performance_enabled") private var performanceAnalyticsEnabled = false
+    // Analytics consent preferences (enabled by default; user can opt out)
+    @AppStorage("analytics_product_enabled") private var productAnalyticsEnabled = true
+    @AppStorage("analytics_performance_enabled") private var performanceAnalyticsEnabled = true
 
     private let analytics = AnalyticsService.shared
 

@@ -15,6 +15,8 @@ struct PersonalThreadsSidebar: View {
     let onSelectThread: (Thread) -> Void
     let onDeleteThread: (Thread) -> Void
     var onSwitchToCovens: (() -> Void)?
+    var onOpenConnectedApps: (() -> Void)?
+    var onOpenMCPServers: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -84,7 +86,7 @@ struct PersonalThreadsSidebar: View {
                                 HStack(spacing: Spacing.xs) {
                                     Image(systemName: "person.3")
                                         .font(.system(size: 12, weight: .semibold))
-                                    Text("Covens")
+                                    Text("Covens Workspace")
                                         .font(.aicovenBodyMedium)
                                 }
                                 .frame(maxWidth: .infinity)
@@ -96,6 +98,42 @@ struct PersonalThreadsSidebar: View {
                                     RoundedRectangle(cornerRadius: BorderRadius.md)
                                         .strokeBorder(Color.aicovenPurple.opacity(0.5), lineWidth: 1)
                                 )
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        // Connected Apps
+                        if let onOpenConnectedApps {
+                            Button(action: onOpenConnectedApps) {
+                                HStack(spacing: Spacing.xs) {
+                                    Image(systemName: "app.connected.to.app.below.fill")
+                                        .font(.system(size: 12, weight: .semibold))
+                                    Text("Connected Apps")
+                                        .font(.aicovenBodyMedium)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, Spacing.sm)
+                                .background(Color.aicovenGlass)
+                                .foregroundColor(.aicovenTextPrimary)
+                                .cornerRadius(BorderRadius.md)
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        // MCP Servers
+                        if let onOpenMCPServers {
+                            Button(action: onOpenMCPServers) {
+                                HStack(spacing: Spacing.xs) {
+                                    Image(systemName: "server.rack")
+                                        .font(.system(size: 12, weight: .semibold))
+                                    Text("MCP Servers")
+                                        .font(.aicovenBodyMedium)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, Spacing.sm)
+                                .background(Color.aicovenGlass)
+                                .foregroundColor(.aicovenTextPrimary)
+                                .cornerRadius(BorderRadius.md)
                             }
                             .buttonStyle(.plain)
                         }

@@ -18,7 +18,7 @@ public enum AnyJSONValue: Codable, Hashable, Sendable {
 
     /// Returns the stored value as `Any` for call sites that use
     /// `.value as? String`, `.value as? Int`, etc.
-    var value: Any {
+    nonisolated var value: Any {
         switch self {
         case let .string(v): v
         case let .int(v): v

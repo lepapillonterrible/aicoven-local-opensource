@@ -263,6 +263,14 @@ enum PromptTemplates {
     User: What is 2+2?
     Correct response: 2+2 = 4 (no tool needed, answer directly)
 
+    User: Check my gmail for emails from App Store Connect
+    Correct response: {"tool": "mcp.zapier.find_email", "input": {"search": "from:appstoreconnect"}, "reason": "Search Gmail for App Store Connect emails"}
+
+    User: Send a Slack message to #general saying hello
+    Correct response: {"tool": "mcp.zapier.send_slack_message", "input": {"channel": "#general", "message": "hello"}, "reason": "Send Slack message"}
+
+    IMPORTANT: You DO have access to external services (email, Slack, calendar, etc.) through MCP tools. NEVER say "I can't access external systems." If a user asks about their email, calendar, or any connected service, use the appropriate mcp.* tool.
+
     RULES:
     - ONLY use tools from the AVAILABLE TOOLS list above. Do NOT invent tools.
     - There is NO "python" tool, NO "code" tool, NO "execute" tool. Use shell.execute to run ANY command or script.
@@ -273,20 +281,70 @@ enum PromptTemplates {
     - If the user asks to run a command or script → use shell.execute
     - Call ONE tool at a time, wait for the result
     - After receiving a tool result, answer the user's question using that data
-    - Do NOT wrap your response in <think> or any XML tags
+    - Do NOT wrap your response in <think>, <thought>, or any XML/HTML tags
+    - Do NOT include internal reasoning or chain-of-thought in your response
+    - Respond directly with either a tool call JSON or a natural-language answer
+    /no_think
     """
 
     /// Generate a lean system prompt for MLX models with only essential sections.
-    static func generateMLXAgentPrompt(enabledTools: Set<String>) -> String {
+    ///
+    /// For MCP tools, this uses a two-tier approach:
+    ///   1. A compressed catalog (~200 tokens) listing all servers and tool names
+    ///   2. Full documentation only for the ~8 tools most relevant to the
+    ///      current user message (selected by semantic + keyword hybrid search)
+    ///
+    /// Tool selection uses `EmbeddingService.searchRelevantTools` when an
+    /// embedding provider is configured (semantic cosine + lexical overlap),
+    /// falling back to pure keyword matching otherwise.
+    ///
+    /// - Parameters:
+    ///   - enabledTools: Set of tool names that are enabled.
+    ///   - mcpServers: Active MCP server configurations.
+    ///   - userMessage: Current user message, used to select relevant MCP tools.
+    @MainActor
+    static func generateMLXAgentPrompt(
+        enabledTools: Set<String>,
+        mcpServers: [MCPServerAccount] = [],
+        userMessage: String = ""
+    ) async -> String {
         var sections: [String] = []
 
         // Brief role description
         sections.append("You are a helpful AI assistant running locally. You have tools to help you answer questions that need real-time or external data.")
 
-        // Tool documentation — only enabled tools
-        let enabledDefs = toolDefinitions.filter { enabledTools.contains($0.name) }
-        if !enabledDefs.isEmpty {
-            sections.append(generateToolDocumentation(for: enabledDefs))
+        // Native tool documentation (always included in full — these are a
+        // small fixed set like web_search, file.read, shell.execute).
+        let nativeDefs = toolDefinitions.filter { enabledTools.contains($0.name) }
+
+        // MCP tools: use tiered approach for local models.
+        // 1) Compressed catalog of ALL MCP tools (~200 tokens).
+        // 2) Full docs only for the most relevant tools to this message.
+        let allMCPDefs = mcpToolDefinitions(from: mcpServers)
+        let relevantMCPDefs: [ToolDefinition]
+
+        if allMCPDefs.count > maxLocalModelMCPTools {
+            // Too many MCP tools for full docs — select the most relevant
+            // using semantic search (with keyword fallback).
+            relevantMCPDefs = await selectRelevantMCPTools(
+                userMessage: userMessage,
+                allMCPTools: allMCPDefs
+            )
+            // Add the compressed catalog so the model knows what else exists.
+            if let catalog = generateCompressedMCPCatalog(from: mcpServers) {
+                sections.append(catalog)
+            }
+        } else {
+            // Few enough MCP tools to include all with full docs.
+            relevantMCPDefs = allMCPDefs
+        }
+
+        // Filter to only enabled tools and combine native + selected MCP.
+        let enabledMCPDefs = relevantMCPDefs.filter { enabledTools.contains($0.name) }
+        let allDefs = nativeDefs + enabledMCPDefs
+
+        if !allDefs.isEmpty {
+            sections.append(generateToolDocumentation(for: allDefs))
         }
 
         // MLX-optimized protocol
@@ -391,12 +449,14 @@ enum PromptTemplates {
     /// Generate a complete agent system prompt with tool documentation.
     /// - Parameters:
     ///   - enabledTools: Set of tool names that are enabled for this agent.
+    ///   - mcpServers: List of MCP servers to append dynamic tools from.
     ///   - includeThoughtBlocks: Whether to include thought block instructions.
     ///   - includeScratchpad: Whether to include scratchpad instructions.
     ///   - includeMemoryWrite: Whether to include memory write instructions.
     /// - Returns: Complete system prompt string.
     static func generateAgentPrompt(
         enabledTools: Set<String>,
+        mcpServers: [MCPServerAccount] = [],
         includeThoughtBlocks: Bool = true,
         includeScratchpad: Bool = true,
         includeMemoryWrite: Bool = true
@@ -412,9 +472,12 @@ enum PromptTemplates {
 
         // Tool documentation
         if !enabledTools.isEmpty {
-            let enabledDefs = toolDefinitions.filter { enabledTools.contains($0.name) }
-            if !enabledDefs.isEmpty {
-                sections.append(generateToolDocumentation(for: enabledDefs))
+            let nativeDefs = toolDefinitions.filter { enabledTools.contains($0.name) }
+            let mcpDefs = mcpToolDefinitions(from: mcpServers).filter { enabledTools.contains($0.name) }
+            let allDefs = nativeDefs + mcpDefs
+
+            if !allDefs.isEmpty {
+                sections.append(generateToolDocumentation(for: allDefs))
             }
             sections.append(toolProtocolInstructions)
         }
@@ -489,6 +552,29 @@ enum PromptTemplates {
         .union(shellTools)
         .union(githubTools)
         .union(googleDriveTools)
+
+    /// Dynamically resolve the Set of actual enabled native tools according to Connected Accounts + Entitlements.
+    static func connectedToolSet() async -> Set<String> {
+        var tools = basicChatTools.union(fileTools)
+
+        // The shell tool currently requires the Tools Pack IAP entitlement
+        let hasToolsPack = await MainActor.run { StoreService.shared.hasToolsPack }
+        if hasToolsPack {
+            tools.formUnion(shellTools)
+        }
+
+        let accountsService = ConnectedAccountsService.shared
+
+        if await accountsService.getConnectedAccount(for: .github) != nil {
+            tools.formUnion(githubTools)
+        }
+
+        if await accountsService.getConnectedAccount(for: .googleDrive) != nil {
+            tools.formUnion(googleDriveTools)
+        }
+
+        return tools
+    }
 }
 
 // MARK: - Supporting Types
@@ -511,14 +597,254 @@ struct ToolParameter: Sendable {
     let required: Bool
 }
 
+// MARK: - Integration Helpers
+
+extension PromptTemplates {
+    /// Convert MCP tools from servers into internal ToolDefinitions for prompting.
+    static func mcpToolDefinitions(from servers: [MCPServerAccount]) -> [ToolDefinition] {
+        var defs: [ToolDefinition] = []
+        for server in servers {
+            guard let tools = server.cachedTools else { continue }
+
+            let safeServerName = server.name.lowercased()
+                .replacingOccurrences(of: " ", with: "_")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            for tool in tools {
+                // E.g. mcp.zapier.send_slack_message
+                let combinedName = "mcp.\(safeServerName).\(tool.name)"
+                var params: [ToolParameter] = []
+
+                if let properties = tool.inputSchema["properties"]?.value as? [String: AnyJSONValue] {
+                    let requiredFields = tool.inputSchema["required"]?.value as? [String] ?? []
+
+                    // Note: Sorting keys for deterministic output in prompt
+                    for key in properties.keys.sorted() {
+                        if case let .dictionary(propDict) = properties[key] {
+                            let type = propDict["type"]?.value as? String ?? "string"
+                            let desc = propDict["description"]?.value as? String ?? ""
+                            params.append(ToolParameter(
+                                name: key,
+                                type: type,
+                                description: desc,
+                                required: requiredFields.contains(key)
+                            ))
+                        }
+                    }
+                }
+
+                defs.append(ToolDefinition(
+                    name: combinedName,
+                    description: tool.description ?? "MCP Tool from \(server.name)",
+                    parameters: params,
+                    example: "{\"tool\": \"\(combinedName)\", \"input\": {}, \"reason\": \"Use \(tool.name)\"}"
+                ))
+            }
+        }
+        return defs
+    }
+}
+
+// MARK: - MCP Tool Tiering for Local Models
+
+extension PromptTemplates {
+
+    /// Maximum number of MCP tools to include with full documentation in
+    /// local model (MLX/Ollama) prompts. Keeps context usage predictable.
+    private static let maxLocalModelMCPTools = 8
+
+    /// Select the most relevant MCP tools for a user message using hybrid
+    /// semantic + keyword matching. Tries embedding-based search first via
+    /// `EmbeddingService`; falls back to pure keyword matching if no
+    /// embedding provider is configured.
+    ///
+    /// Entirely dynamic — works with any MCP server and tool names.
+    @MainActor
+    static func selectRelevantMCPTools(
+        userMessage: String,
+        allMCPTools: [ToolDefinition],
+        limit: Int = maxLocalModelMCPTools
+    ) async -> [ToolDefinition] {
+        guard !allMCPTools.isEmpty else { return [] }
+
+        // Try semantic search first — uses the same hybrid cosine + lexical
+        // scoring as memory retrieval. Returns nil if no embedding provider
+        // is configured, in which case we fall back to keyword matching.
+        if let semanticResults = await EmbeddingService.shared.searchRelevantTools(
+            query: userMessage,
+            tools: allMCPTools,
+            topK: limit
+        ), !semanticResults.isEmpty {
+            let selected = semanticResults.map(\.tool)
+            // Pad with defaults if semantic search returned very few.
+            if selected.count < 3 {
+                let selectedNames = Set(selected.map(\.name))
+                let extras = allMCPTools
+                    .filter { !selectedNames.contains($0.name) }
+                    .prefix(limit - selected.count)
+                return selected + Array(extras)
+            }
+            return selected
+        }
+
+        // Fallback: pure keyword matching (works without any provider).
+        return selectRelevantMCPToolsByKeyword(
+            userMessage: userMessage,
+            allMCPTools: allMCPTools,
+            limit: limit
+        )
+    }
+
+    /// Keyword-only fallback for tool selection when no embedding provider
+    /// is available. Scores tools by word overlap between the user message
+    /// and tool names/descriptions.
+    private static func selectRelevantMCPToolsByKeyword(
+        userMessage: String,
+        allMCPTools: [ToolDefinition],
+        limit: Int
+    ) -> [ToolDefinition] {
+        // Tokenize user message into lowercase words for matching.
+        let messageWords = userMessage.lowercased()
+            .components(separatedBy: .alphanumerics.inverted)
+            .filter { $0.count >= 3 } // Skip short noise words
+
+        guard !messageWords.isEmpty else {
+            // No meaningful words — return a small default set.
+            return Array(allMCPTools.prefix(min(5, limit)))
+        }
+
+        // Score each tool based on how many user words appear in its name
+        // or description. Name matches are weighted higher since they're
+        // more specific (e.g. "send_email" matches "email" directly).
+        var scored: [(tool: ToolDefinition, score: Int)] = []
+        for tool in allMCPTools {
+            let lowerName = tool.name.lowercased()
+            let lowerDesc = tool.description.lowercased()
+            var score = 0
+            for word in messageWords {
+                if lowerName.contains(word) { score += 3 }
+                if lowerDesc.contains(word) { score += 1 }
+            }
+            if score > 0 {
+                scored.append((tool, score))
+            }
+        }
+
+        // Sort by score descending, take top N.
+        let selected = scored
+            .sorted { $0.score > $1.score }
+            .prefix(limit)
+            .map(\.tool)
+
+        // If keyword matching found very few, pad with the first few tools
+        // from the full list so the model has some MCP awareness.
+        if selected.count < 3 {
+            let selectedNames = Set(selected.map(\.name))
+            let extras = allMCPTools
+                .filter { !selectedNames.contains($0.name) }
+                .prefix(limit - selected.count)
+            return selected + extras
+        }
+
+        return Array(selected)
+    }
+
+    /// Generate a compressed one-line-per-server catalog of all MCP tools.
+    /// This gives the model awareness of what tools exist (~200 tokens for
+    /// 200+ tools) without burning context on full parameter documentation.
+    ///
+    /// Completely dynamic — works with any server name and any tool names.
+    ///
+    /// Example output:
+    ///   MCP TOOL CATALOG (207 tools across 12 servers):
+    ///   - zapier_mcp (15): send_email, find_email, draft_email, ...
+    ///   - my_notion (40): create_page, find_page, update_block, ...
+    static func generateCompressedMCPCatalog(
+        from servers: [MCPServerAccount]
+    ) -> String? {
+        // Group tools by server name for the catalog.
+        var serverEntries: [(name: String, toolNames: [String])] = []
+        var totalCount = 0
+
+        for server in servers {
+            guard let tools = server.cachedTools, !tools.isEmpty else { continue }
+            let safeServerName = server.name.lowercased()
+                .replacingOccurrences(of: " ", with: "_")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            // Use the short tool name (not mcp.server.tool prefix) to keep
+            // the catalog compact.
+            let names = tools.map(\.name)
+            serverEntries.append((name: safeServerName, toolNames: names))
+            totalCount += names.count
+        }
+
+        guard totalCount > 0 else { return nil }
+
+        var lines: [String] = []
+        lines.append("MCP TOOL CATALOG (\(totalCount) tools across \(serverEntries.count) servers):")
+        lines.append("To call: {\"tool\": \"mcp.<server>.<tool_name>\", \"input\": {...}, \"reason\": \"...\"}")
+
+        for entry in serverEntries {
+            // Show up to 5 tool names per server for brevity.
+            let preview = entry.toolNames.prefix(5).joined(separator: ", ")
+            let suffix = entry.toolNames.count > 5 ? ", ... (\(entry.toolNames.count - 5) more)" : ""
+            lines.append("- \(entry.name) (\(entry.toolNames.count)): \(preview)\(suffix)")
+        }
+
+        lines.append("")
+        lines.append("Only the most relevant tools are documented in detail below. For others, use the naming pattern above.")
+
+        return lines.joined(separator: "\n")
+    }
+}
+
 // MARK: - Conversion to LLMToolDefinition
 
 extension PromptTemplates {
+
+    /// Maximum MCP tools to include in cloud model native function calling.
+    /// Cloud models handle more tools than local ones, but 200+ still wastes
+    /// tokens the user pays for on every request. 20 is generous enough to
+    /// cover multi-step workflows while keeping costs reasonable.
+    private static let maxCloudModelMCPTools = 20
+
     /// Convert internal tool definitions to protocol-level `LLMToolDefinition`
     /// objects for native function calling via `ChatOptions.tools`.
-    static func llmToolDefinitions(for enabledTools: Set<String>) -> [LLMToolDefinition] {
-        toolDefinitions
+    ///
+    /// When there are many MCP tools, applies the same semantic + keyword
+    /// selection used for local models (but with a higher limit) to avoid
+    /// sending 200+ tool schemas on every API call.
+    ///
+    /// - Parameters:
+    ///   - enabledTools: Set of tool names that are enabled.
+    ///   - mcpServers: Active MCP server configurations.
+    ///   - userMessage: Current user message for relevance-based tool selection.
+    @MainActor
+    static func llmToolDefinitions(
+        for enabledTools: Set<String>,
+        mcpServers: [MCPServerAccount] = [],
+        userMessage: String = ""
+    ) async -> [LLMToolDefinition] {
+        // Native tools are always included in full (small fixed set).
+        let nativeDefs = toolDefinitions.filter { enabledTools.contains($0.name) }
+
+        // MCP tools: select the most relevant subset to avoid token waste.
+        let allMCPDefs = mcpToolDefinitions(from: mcpServers)
             .filter { enabledTools.contains($0.name) }
+        let selectedMCPDefs: [ToolDefinition] = if allMCPDefs.count > maxCloudModelMCPTools {
+            // Too many MCP tools — select the most relevant using the same
+            // semantic + keyword hybrid used for local models.
+            await selectRelevantMCPTools(
+                userMessage: userMessage,
+                allMCPTools: allMCPDefs,
+                limit: maxCloudModelMCPTools
+            )
+        } else {
+            // Few enough to include all.
+            allMCPDefs
+        }
+
+        return (nativeDefs + selectedMCPDefs)
             .map { def in
                 LLMToolDefinition(
                     name: def.name,

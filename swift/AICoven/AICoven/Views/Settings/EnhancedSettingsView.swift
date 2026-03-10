@@ -11,6 +11,12 @@ struct EnhancedSettingsView: View {
     @AppStorage("aicoven_animated_backgrounds") private var storedAnimatedBackgrounds = false
     @State private var showConnectedApps = false
 
+    // Analytics consent preferences (enabled by default)
+    @AppStorage("analytics_product_enabled") private var productAnalyticsEnabled = true
+    @AppStorage("analytics_performance_enabled") private var performanceAnalyticsEnabled = true
+
+    private let analytics = AnalyticsService.shared
+
     var body: some View {
         ScrollView {
             VStack(spacing: Spacing.xl) {
@@ -143,43 +149,61 @@ struct EnhancedSettingsView: View {
                     FileAccessSettingsSection()
                     #endif
 
-                    // Integrations section
+                    // Privacy & Analytics section
                     VStack(spacing: Spacing.md) {
                         HStack {
-                            Text("Integrations")
+                            Text("Privacy & Analytics")
                                 .font(.aicovenH3)
                                 .foregroundColor(.aicovenTextPrimary)
                             Spacer()
                         }
 
-                        Button {
-                            showConnectedApps = true
-                        } label: {
-                            GlassCard {
-                                HStack(spacing: Spacing.md) {
-                                    Image(systemName: "app.connected.to.app.below.fill")
-                                        .font(.aicovenH3)
-                                        .foregroundColor(.aicovenPurple)
-                                        .frame(width: 32)
-
-                                    VStack(alignment: .leading, spacing: Spacing.xxs) {
-                                        Text("Connected Apps")
-                                            .font(.aicovenBody)
-                                            .foregroundColor(.aicovenTextPrimary)
-                                        Text("Connect GitHub, Google Drive, and more")
-                                            .font(.aicovenCaption)
-                                            .foregroundColor(.aicovenTextSecondary)
+                        GlassCard {
+                            VStack(spacing: Spacing.md) {
+                                SettingToggleRow(
+                                    icon: "chart.bar.fill",
+                                    title: "Product Analytics",
+                                    description: "Help us improve AICoven by sharing anonymized usage patterns",
+                                    isOn: $productAnalyticsEnabled,
+                                    color: .aicovenTeal
+                                )
+                                .onChange(of: productAnalyticsEnabled) { _, newValue in
+                                    updateAnalyticsConsent()
+                                    if newValue {
+                                        analytics.track(
+                                            event: "analytics_consent_granted",
+                                            properties: ["type": "product"]
+                                        )
                                     }
+                                }
 
-                                    Spacer()
+                                Divider()
+                                    .background(Color.aicovenBorder)
 
-                                    Image(systemName: "chevron.right")
-                                        .font(.aicovenCaption)
-                                        .foregroundColor(.aicovenTextTertiary)
+                                SettingToggleRow(
+                                    icon: "speedometer",
+                                    title: "Performance Monitoring",
+                                    description: "Help us identify and fix crashes and performance issues",
+                                    isOn: $performanceAnalyticsEnabled,
+                                    color: .aicovenPurple
+                                )
+                                .onChange(of: performanceAnalyticsEnabled) { _, newValue in
+                                    updateAnalyticsConsent()
+                                    if newValue {
+                                        analytics.track(
+                                            event: "analytics_consent_granted",
+                                            properties: ["type": "performance"]
+                                        )
+                                    }
                                 }
                             }
                         }
-                        .buttonStyle(.plain)
+
+                        // Disclaimer
+                        Text("Analytics data is anonymized using SHA-256 hashing and never includes your messages, memories, documents, or personal content. We only collect usage patterns (e.g. which features are used, session duration) and performance data (e.g. crash reports, response times). You can disable analytics at any time.")
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextSecondary)
+                            .padding(.horizontal, Spacing.xs)
                     }
                     .padding(.horizontal, Spacing.lg)
 
@@ -197,7 +221,7 @@ struct EnhancedSettingsView: View {
                                 SettingInfoRow(
                                     icon: "info.circle.fill",
                                     title: "Version",
-                                    value: "1.0.0",
+                                    value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown",
                                     color: .aicovenTeal
                                 )
 
@@ -207,7 +231,7 @@ struct EnhancedSettingsView: View {
                                 SettingInfoRow(
                                     icon: "sparkles",
                                     title: "Build",
-                                    value: "Beta",
+                                    value: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown",
                                     color: .aicovenPurple
                                 )
                             }
@@ -254,10 +278,6 @@ struct EnhancedSettingsView: View {
         .task {
             await loadSettings()
         }
-        .sheet(isPresented: $showConnectedApps) {
-            ConnectedAppsView()
-                .environmentObject(StoreService.shared)
-        }
     }
 
     /// Load user settings
@@ -290,6 +310,12 @@ struct EnhancedSettingsView: View {
 
         animatedBackgrounds = effectiveAnimatedBackgrounds
         storedAnimatedBackgrounds = effectiveAnimatedBackgrounds
+    }
+
+    /// Update analytics consent based on user preferences
+    private func updateAnalyticsConsent() {
+        let analyticsEnabled = productAnalyticsEnabled || performanceAnalyticsEnabled
+        analytics.setAnalyticsConsent(analyticsEnabled)
     }
 
     /// Save settings (local-only)

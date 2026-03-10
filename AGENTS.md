@@ -121,23 +121,40 @@ This is the local-first backbone intended to replace many backend-oriented servi
 - `Core/LLM/`
   - Defines `LLMClient`, a provider-agnostic protocol for chat completions and embeddings.
   - `ToolEnvironment` inspects configured providers and derives per-provider capabilities.
-  - Provider implementations for OpenAI, Anthropic, Gemini, and local models.
+  - Provider implementations for OpenAI, Anthropic, Gemini, Ollama, and MLX (on-device via Apple Silicon).
+  - `MLXLLMClient` runs models locally via Apple's MLX framework. Handles iOS memory pressure (model eviction after inference, GPU cache limits, `autoreleasepool` for generation). System messages are folded into the first user message for compatibility with strict chat templates (Gemma 2, Phi, etc.).
+  - `MLXModelManager` manages a curated model catalog with category (`general`, `coding`, `mobile`), tier (`core`, `specialized`), recommended-for tags, and device-aware filtering (iPhones only see models ≤ 3 GB RAM or `.mobile` category).
+  - `MCPToolCallingBenchmark` evaluates a local model's MCP tool-calling accuracy across 10 test cases (web, file, GitHub, shell, Google Drive). Results are persisted in `UserDefaults` and displayed in the MLX settings UI.
+  - `MCPToolEmbeddingCache` caches embedding vectors for MCP tool descriptions, enabling semantic tool selection via cosine similarity when many tools are available.
+  - `LLMConfiguration.makeEnvironment()` now registers the active MLX model as a `ModelDescriptor` so it participates in routing.
 
 - `Core/Context/`
   - `ContextBuilder` assembles the layered context sandwich for each chat turn.
   - Composes system contract, runtime facts, policies, retrieved memories, thread history, and current message.
+  - Supports device-aware `Limits`: `.mobile` (6 recent messages, 4 memories) for iPhones running local models where RAM is shared with MLX model weights.
 
 - `Core/Routing/`
   - `HeuristicModelRouter` selects the best model per task based on capabilities, user preferences, and context requirements.
   - `findExact(providerID:modelID:)` prioritizes user-selected models from Strix settings before falling back to heuristic routing.
   - `ModelDescriptor` types define model capabilities (context length, tools support, quality tier).
+  - Task types include `.chat`, `.summarize`, `.embed`, `.judge`, `.agentStep`, and `.mcpToolCalling` (prefers tool-capable models, falls back to cheapest).
 
 - `Core/Agents/`
   - `AgentRunner` executes bounded multi-step autonomous runs.
   - `AgentProfile` describes agent types, allowed tools, memory scopes, and safety constraints.
 
 - `Core/Tools/`
-  - `ToolExecutionService` routes tool calls including shell commands (with approval via `ShellApprovalManager`) and connected-app tools (GitHub, Google Drive).
+  - `ToolExecutionService` routes tool calls including shell commands (with approval via `ShellApprovalManager`), connected-app tools (GitHub, Google Drive), and MCP server tools.
+
+- `Features/MCP/`
+  - `MCPClient` is an actor-based MCP (Model Context Protocol) client that connects to remote servers over HTTP/SSE, discovers tools via `tools/list`, and executes them via `tools/call` using JSON-RPC 2.0.
+  - Supports Bearer token and API key authentication.
+  - Handles both plain JSON and SSE (`text/event-stream`) response formats.
+
+- `Features/ConnectedApps/`
+  - `MCPServerAccount` represents a configured MCP server connection (URL, transport type, auth, cached tools).
+  - `MCPServerManagementView` provides UI for adding, editing, testing, and removing MCP server connections.
+  - `ConnectedAccountsService` manages MCP server persistence (UserDefaults) and Keychain storage for tokens.
 
 **Note:** Model types are in `swift/AICoven/AICoven/Models/` (not in Core). Some legacy types (`User`, `Coven`, `WorkspaceTab`) from the original multi-tenant design remain but are not used in the local client.
 
@@ -198,14 +215,14 @@ This directory contains a mix of active and legacy services:
 
 **Active services:**
 - `AppState.swift` – Shared application state (threads, selection, global actions), injected into the view hierarchy.
-- `ChatService.swift` – Encapsulates chat/thread operations using `LLMClient` and repositories. User-preference-first model selection via `resolveProviderAndModel()` + `findExact`.
+- `ChatService.swift` – Encapsulates chat/thread operations using `LLMClient` and repositories. User-preference-first model selection via `resolveProviderAndModel()` + `findExact`. For local models, supports pre-execution of native and MCP tools based on keyword/fuzzy matching before sending to the model. Applies device-aware memory limits on iPhone (tighter context, tool context truncation, skips background summaries when only local models are available).
 - `ThreadService.swift` – Thread CRUD and listing.
 - `MessageAdapter.swift` – Transforms between internal message models and LLM request/response formats.
 - `MemoryService.swift` – Manages context memory storage and retrieval.
 - `ProviderAccountService.swift` – Manages provider configurations and API keys.
 - `StoreService.swift` – StoreKit 2 in-app purchase management.
 - `StrixSettingsService.swift` – Reads/writes user preferences for model and provider selection.
-- `LLMClients.swift` – Concrete `LLMClient` implementations (OpenAI, Anthropic, Gemini).
+- `LLMClients.swift` – Concrete `LLMClient` implementations (OpenAI, Anthropic, Gemini, Ollama).
 - `AnalyticsService.swift` – Privacy-preserving, opt-in-only analytics.
 
 **Legacy cloud services (being refactored):**

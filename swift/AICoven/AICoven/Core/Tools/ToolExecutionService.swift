@@ -85,7 +85,12 @@ actor ToolExecutionService {
             }
         }
 
-        // 4. Routing
+        // 4. MCP Toll Routing
+        if toolCall.name.hasPrefix("mcp.") {
+            return await executeMCPTool(toolCall: toolCall)
+        }
+
+        // 5. Built-in Routing
         switch toolCall.name {
 
         // --- File Tools ---
@@ -220,6 +225,51 @@ actor ToolExecutionService {
                 errorType: "unknown_tool",
                 isRetryable: false
             )
+        }
+    }
+
+    // MARK: - MCP Tool Implementations
+
+    private func executeMCPTool(toolCall: ParsedToolCall) async -> ToolExecutionResult {
+        // e.g. "mcp.my_server.tool_name"
+        let parts = toolCall.name.split(separator: ".", maxSplits: 2)
+        guard parts.count == 3 else {
+            return await .validationError(tool: toolCall.name, message: "Invalid MCP tool name format")
+        }
+
+        let serverSlug = String(parts[1])
+        let actionName = String(parts[2])
+
+        // Find matching server
+        let servers = await connectedAccountsService.getAllMCPServers()
+        let matchingServer = servers.first { server in
+            let slug = server.name.lowercased()
+                .replacingOccurrences(of: " ", with: "_")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return slug == serverSlug
+        }
+
+        guard let server = matchingServer else {
+            return await .error(tool: toolCall.name, message: "MCP server '\(serverSlug)' not found or not connected.")
+        }
+
+        // Fetch the stored auth token (Bearer/API key) from keychain so
+        // runtime tool calls use the same auth path as MCP connection tests.
+        let token = try? await connectedAccountsService.getMCPToken(forServerId: server.id)
+        let client = MCPClient(server: server, token: token)
+
+        do {
+            let items = try await client.callTool(name: actionName, arguments: toolCall.args)
+            let texts = items.compactMap(\.text)
+            let block = "[MCP: \(actionName) on \(server.name)]\n" + texts.joined(separator: "\n\n")
+
+            return await .success(
+                tool: toolCall.name,
+                result: ["status": AnyJSONValue("success"), "item_count": AnyJSONValue(items.count)],
+                contextBlock: block
+            )
+        } catch {
+            return await .error(tool: toolCall.name, message: "MCP Server Error: \(error.localizedDescription)")
         }
     }
 
@@ -745,8 +795,6 @@ actor ToolExecutionService {
 
         // For Coven agents, we might not have set whitelists yet.
         // Let's implement a fallback allow-list for basic tools.
-        let defaultTools: Set<String> = ["current_time"]
-
         if let allowed = toolWhitelist[agentType] {
             return allowed.contains(toolName)
         }

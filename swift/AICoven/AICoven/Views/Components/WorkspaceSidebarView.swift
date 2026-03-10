@@ -95,6 +95,55 @@ struct WorkspaceSidebarView: View {
                         onTapRole: onTapRole
                     )
                 }
+
+                GradientDivider()
+
+                // Integrations section
+                VStack(spacing: Spacing.xs) {
+                    HStack {
+                        Text("Integrations")
+                            .font(.aicovenH3)
+                            .foregroundColor(.aicovenTextPrimary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, Spacing.md)
+                    .padding(.vertical, Spacing.sm)
+
+                    Button(action: { openTab(.connectedApps) }) {
+                        HStack(spacing: Spacing.xs) {
+                            Image(systemName: "app.connected.to.app.below.fill")
+                                .font(.system(size: 14))
+                            Text("Connected Apps")
+                                .font(.aicovenBodySmall)
+                            Spacer()
+                        }
+                        .padding(.horizontal, Spacing.md)
+                        .padding(.vertical, Spacing.sm)
+                        .background(Color.aicovenGlass)
+                        .foregroundColor(.aicovenTextPrimary)
+                        .cornerRadius(BorderRadius.sm)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, Spacing.sm)
+
+                    Button(action: { openTab(.mcpServers) }) {
+                        HStack(spacing: Spacing.xs) {
+                            Image(systemName: "server.rack")
+                                .font(.system(size: 14))
+                            Text("MCP Servers")
+                                .font(.aicovenBodySmall)
+                            Spacer()
+                        }
+                        .padding(.horizontal, Spacing.md)
+                        .padding(.vertical, Spacing.sm)
+                        .background(Color.aicovenGlass)
+                        .foregroundColor(.aicovenTextPrimary)
+                        .cornerRadius(BorderRadius.sm)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, Spacing.sm)
+                    .padding(.bottom, Spacing.md)
+                }
             }
         }
         .frame(width: isExpanded ? 280 : 60)
@@ -172,6 +221,25 @@ struct WorkspaceSidebarView: View {
         }
     }
 
+    private func openTab(_ type: WorkspaceTabType) {
+        if let existingTab = openTabs.first(where: { $0.type == type }) {
+            activeTabId = existingTab.id
+            return
+        }
+
+        let tab: WorkspaceTab
+        switch type {
+        case .connectedApps:
+            tab = .connectedApps
+        case .mcpServers:
+            tab = .mcpServers
+        default:
+            return
+        }
+
+        openTabs.append(tab)
+        activeTabId = tab.id
+    }
 }
 
 // MARK: - Coven Selector
