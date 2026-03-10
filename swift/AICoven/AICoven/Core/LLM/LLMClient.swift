@@ -27,15 +27,36 @@ public struct LLMMessage: Sendable {
 /// Providers convert this to their native format (OpenAI tools, Anthropic tools,
 /// Gemini functionDeclarations). Local models (MLX/Ollama) ignore these and
 /// rely on text-based tool instructions in the system prompt.
+/// Structured input example for native function-calling APIs.
+public struct LLMToolInputExample: Sendable {
+    public let description: String
+    public let input: [String: String]
+
+    public init(description: String, input: [String: String]) {
+        self.description = description
+        self.input = input
+    }
+}
+
 public struct LLMToolDefinition: Sendable {
     public let name: String
     public let description: String
     public let parameters: [LLMToolParameter]
+    /// Optional structured examples for providers that support them
+    /// (Anthropic `input_examples`). For other providers the examples
+    /// are injected into the description string.
+    public let inputExamples: [LLMToolInputExample]
 
-    public init(name: String, description: String, parameters: [LLMToolParameter]) {
+    public init(
+        name: String,
+        description: String,
+        parameters: [LLMToolParameter],
+        inputExamples: [LLMToolInputExample] = []
+    ) {
         self.name = name
         self.description = description
         self.parameters = parameters
+        self.inputExamples = inputExamples
     }
 }
 
