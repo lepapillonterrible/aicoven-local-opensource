@@ -565,12 +565,17 @@ actor ChatService {
         // and leave the user with zero output.
         if isLocalModel, toolsAllowed, remainingToolSteps > 0 {
             do {
-                // Try native tools first (current_time, web_search) — these
-                // are cheap, local, and have high-confidence keyword matching.
+                // Try native tools first (current_time, web_search,
+                // file.read, file.list, shell.execute) — these are cheap,
+                // local, and have high-confidence keyword matching with
+                // semantic scoring fallback via ToolRelevanceService.
                 // MCP tools are checked second because their fuzzy scoring can
                 // produce false positives (e.g. "time" matching "timestamp"
                 // in a Slack tool name).
-                if let forcedNative = Self.forceNativeToolCall(userMessage: message) {
+                if let forcedNative = await Self.forceNativeToolCallWithSemantic(
+                    userMessage: message,
+                    enabledTools: toolConfig.enabledTools
+                ) {
                     #if DEBUG
                     AppErrorReporter.log(message: "Pre-executing native tool for local model: \(forcedNative.tool)", context: "ChatService.streamMessage.preExecute")
                     #endif
@@ -1912,8 +1917,11 @@ extension ChatService {
     // MARK: - Forced Native Tool Call
 
     /// For local models, attempt to match the user's message to a native
-    /// tool (current_time, web_search) and construct a forced call.
-    /// Returns `nil` if no native tool is a clear match.
+    /// tool and construct a forced call. Returns `nil` if no native tool
+    /// is a clear match.
+    ///
+    /// Keyword matching covers: current_time, web_search, file.read,
+    /// file.list, and shell.execute.
     nonisolated static func forceNativeToolCall(
         userMessage: String
     ) -> ChatToolInvocation? {
@@ -1925,9 +1933,6 @@ extension ChatService {
             "what day", "today's date", "right now", "time is it",
         ]
         if timePatterns.contains(where: { lower.contains($0) }) {
-            // Extract the timezone the user asked about (e.g. "Bangkok"
-            // → "Asia/Bangkok"). Falls back to the device's local
-            // timezone so answers are immediately useful.
             let tz = extractTimezoneFromMessage(lower)
             return ChatToolInvocation(
                 tool: "current_time",
@@ -1947,6 +1952,167 @@ extension ChatService {
                 input: AnyJSONValue(["query": AnyJSONValue(userMessage)]),
                 reason: "User asked to search/look up information"
             )
+        }
+
+        // File read queries → file.read
+        let fileReadPatterns = [
+            "read the file", "read file", "show the file", "show file",
+            "cat ", "contents of", "what's in the file", "open the file",
+            "display the file", "print the file", "read this file",
+        ]
+        if fileReadPatterns.contains(where: { lower.contains($0) }),
+           let path = extractFilePath(from: userMessage) {
+            return ChatToolInvocation(
+                tool: "file.read",
+                input: AnyJSONValue(["path": AnyJSONValue(path)]),
+                reason: "User asked to read a file"
+            )
+        }
+
+        // File list queries → file.list
+        let fileListPatterns = [
+            "list files", "list the files", "show directory", "show the directory",
+            "what files", "what's in the directory", "what's in the folder",
+            "list directory", "ls ", "list the directory", "show folder",
+        ]
+        if fileListPatterns.contains(where: { lower.contains($0) }) {
+            let path = extractFilePath(from: userMessage) ?? "."
+            return ChatToolInvocation(
+                tool: "file.list",
+                input: AnyJSONValue(["path": AnyJSONValue(path)]),
+                reason: "User asked to list files in a directory"
+            )
+        }
+
+        // Shell command queries → shell.execute
+        let shellPatterns = [
+            "run ", "execute ", "run the command", "run this command",
+            "run a command", "run the script", "run this script",
+            "in the terminal", "in terminal",
+        ]
+        if shellPatterns.contains(where: { lower.contains($0) }) {
+            // Extract the command from the message. Look for quoted
+            // strings or backtick-fenced code first, then fall back
+            // to using the entire message as the command.
+            let command = extractShellCommand(from: userMessage) ?? userMessage
+            return ChatToolInvocation(
+                tool: "shell.execute",
+                input: AnyJSONValue(["command": AnyJSONValue(command)]),
+                reason: "User asked to run a command"
+            )
+        }
+
+        return nil
+    }
+
+    /// Async wrapper around `forceNativeToolCall` that adds a semantic
+    /// scoring fallback via `ToolRelevanceService`. When keyword matching
+    /// finds nothing, this scores all native tools against the user message
+    /// and picks the highest-scoring tool if it exceeds a confidence
+    /// threshold.
+    @MainActor
+    static func forceNativeToolCallWithSemantic(
+        userMessage: String,
+        enabledTools: Set<String>
+    ) async -> ChatToolInvocation? {
+        // Fast path: keyword matching.
+        if let keywordMatch = forceNativeToolCall(userMessage: userMessage) {
+            return keywordMatch
+        }
+
+        // Slow path: semantic scoring via ToolRelevanceService.
+        let allNativeDefs = PromptTemplates.toolDefinitions
+            .filter { enabledTools.contains($0.name) }
+        guard !allNativeDefs.isEmpty else { return nil }
+
+        let relevanceService = ToolRelevanceService.shared
+        let selected = await relevanceService.selectRelevantNativeTools(
+            userMessage: userMessage,
+            allTools: allNativeDefs,
+            limit: 1
+        )
+
+        // Only force-execute if the top tool scores above threshold.
+        guard let topTool = selected.first,
+              !ToolRelevanceService.alwaysLoadedTools.contains(topTool.name)
+        else { return nil }
+
+        let score = await relevanceService.scoreNativeTool(
+            toolName: topTool.name,
+            userMessage: userMessage,
+            allTools: allNativeDefs
+        )
+
+        // Require a meaningful score — 0.3 is conservative enough to avoid
+        // false positives while still catching intent the keywords missed.
+        guard score >= 0.3 else { return nil }
+
+        #if DEBUG
+        AppErrorReporter.log(
+            message: "Semantic fallback matched '\(topTool.name)' (score=\(score)) for: \(userMessage.prefix(80))",
+            context: "ChatService.forceNativeToolCallWithSemantic"
+        )
+        #endif
+
+        // Build a generic input — the tool execution pipeline will handle
+        // parameter extraction.
+        return ChatToolInvocation(
+            tool: topTool.name,
+            input: AnyJSONValue(["query": AnyJSONValue(userMessage)]),
+            reason: "Semantic match (score=\(String(format: "%.2f", score)))"
+        )
+    }
+
+    // MARK: - Input Extraction Helpers
+
+    /// Extract a file path from a user message. Looks for absolute paths
+    /// (`/...` or `~/...`), quoted strings, and backtick-fenced spans.
+    nonisolated static func extractFilePath(from message: String) -> String? {
+        // Try absolute paths first (e.g. /Users/me/file.txt, ~/Documents)
+        let pathRegex = try? NSRegularExpression(
+            pattern: "(?:~|/)[\\w/.\\-]+",
+            options: []
+        )
+        if let match = pathRegex?.firstMatch(
+            in: message,
+            range: NSRange(message.startIndex..., in: message)
+        ) {
+            let range = Range(match.range, in: message)!
+            return String(message[range])
+        }
+
+        // Try backtick-fenced paths
+        if let start = message.range(of: "`"),
+           let end = message[start.upperBound...].range(of: "`") {
+            let path = String(message[start.upperBound ..< end.lowerBound])
+            if !path.isEmpty { return path }
+        }
+
+        // Try quoted paths
+        if let start = message.range(of: "\""),
+           let end = message[start.upperBound...].range(of: "\"") {
+            let path = String(message[start.upperBound ..< end.lowerBound])
+            if !path.isEmpty { return path }
+        }
+
+        return nil
+    }
+
+    /// Extract a shell command from a user message. Tries backtick fences
+    /// and quoted strings before falling back to nil.
+    nonisolated static func extractShellCommand(from message: String) -> String? {
+        // Backtick-fenced command
+        if let start = message.range(of: "`"),
+           let end = message[start.upperBound...].range(of: "`") {
+            let cmd = String(message[start.upperBound ..< end.lowerBound])
+            if !cmd.isEmpty { return cmd }
+        }
+
+        // Quoted command
+        if let start = message.range(of: "\""),
+           let end = message[start.upperBound...].range(of: "\"") {
+            let cmd = String(message[start.upperBound ..< end.lowerBound])
+            if !cmd.isEmpty { return cmd }
         }
 
         return nil
