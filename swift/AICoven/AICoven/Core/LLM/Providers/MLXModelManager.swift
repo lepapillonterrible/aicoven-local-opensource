@@ -197,6 +197,20 @@ final class MLXModelManager: ObservableObject {
             recommendedFor: ["Multilingual", "Chat"],
             isRecommended: false
         ),
+        // ── Specialized: Large ──────────────────────────────────────
+        MLXModelInfo(
+            id: "mlx-community/Qwen3.5-27B-4bit",
+            displayName: "Qwen 3.5 27B ⚠️",
+            summary: "Frontier-class dense model. Native tool calling, 262K context. Requires 24GB+ RAM — tight on 24GB devices (limited context). Best with 32GB+.",
+            downloadSizeBytes: 14_500_000_000,
+            minRAMGB: 24,
+            parameterCount: "27B",
+            quantization: "4-bit",
+            category: .general,
+            tier: .specialized,
+            recommendedFor: ["Tool Calling", "Coding", "Reasoning", "Agents"],
+            isRecommended: false
+        ),
         // ── Specialized: Coding ─────────────────────────────────────
         MLXModelInfo(
             id: "mlx-community/Qwen2.5-Coder-7B-Instruct-4bit",
