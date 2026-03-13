@@ -131,6 +131,19 @@ final class MLXModelManager: ObservableObject {
             recommendedFor: ["MCP Tools", "iOS", "On-Device"],
             isRecommended: true
         ),
+        MLXModelInfo(
+            id: "aicoven/Qwen3-1.7B-MCP",
+            displayName: "AICoven MCP 1.7B 🆕",
+            summary: "Qwen3-based model fine-tuned for MCP tool routing. 87.9% accuracy, ultra-compact.",
+            downloadSizeBytes: 968_000_000,
+            minRAMGB: 2,
+            parameterCount: "1.7B",
+            quantization: "4-bit",
+            category: .mobile,
+            tier: .core,
+            recommendedFor: ["MCP Tools", "iOS", "On-Device", "Tool Calling"],
+            isRecommended: true
+        ),
         // ── Core: General ────────────────────────────────────────────
         MLXModelInfo(
             id: "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
