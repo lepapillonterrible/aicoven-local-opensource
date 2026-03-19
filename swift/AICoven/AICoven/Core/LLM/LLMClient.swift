@@ -30,9 +30,9 @@ public struct LLMMessage: Sendable {
 /// Structured input example for native function-calling APIs.
 public struct LLMToolInputExample: Sendable {
     public let description: String
-    public let input: [String: String]
+    public let input: [String: AnyJSONValue]
 
-    public init(description: String, input: [String: String]) {
+    public init(description: String, input: [String: AnyJSONValue]) {
         self.description = description
         self.input = input
     }

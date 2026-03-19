@@ -87,7 +87,7 @@ enum PromptTemplates {
             example: #"{"tool": "file.list", "input": {"path": "/Users/me/Documents", "recursive": false}, "reason": "Explore directory"}"#,
             inputExamples: [
                 ToolInputExample(description: "List a directory", input: ["path": "/Users/me/Documents"]),
-                ToolInputExample(description: "Recursive listing", input: ["path": "/Users/me/project/src", "recursive": "true"]),
+                ToolInputExample(description: "Recursive listing", input: ["path": "/Users/me/project/src", "recursive": true]),
             ]
         ),
 
@@ -657,7 +657,7 @@ struct ToolInputExample: Sendable {
     /// Human-readable description of what this example demonstrates.
     let description: String
     /// The exact input dictionary the model should produce for this case.
-    let input: [String: String]
+    let input: [String: AnyJSONValue]
 }
 
 /// Definition of a tool including its parameters and usage example.

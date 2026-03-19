@@ -80,8 +80,8 @@ enum ToolChainResolver {
         ]
 
         for pattern in patterns {
-            guard let triggerRange = lower.range(of: pattern.trigger) else { continue }
-            guard pattern.continuation.contains(where: { lower.contains($0) }) else { continue }
+            guard let triggerRange = original.range(of: pattern.trigger, options: .caseInsensitive) else { continue }
+            guard pattern.continuation.contains(where: { original.range(of: $0, options: .caseInsensitive) != nil }) else { continue }
 
             // Extract the query between trigger and continuation keyword
             let afterTrigger = String(original[triggerRange.upperBound...])
@@ -253,7 +253,7 @@ enum ToolChainResolver {
 
         // Extract the search query between trigger and continuation
         for trigger in triggers {
-            guard let triggerRange = lower.range(of: trigger) else { continue }
+            guard let triggerRange = original.range(of: trigger, options: .caseInsensitive) else { continue }
             let afterTrigger = String(original[triggerRange.upperBound...])
             let query = extractBeforeContinuation(afterTrigger, continuations: continuations)
             guard !query.isEmpty else { continue }
