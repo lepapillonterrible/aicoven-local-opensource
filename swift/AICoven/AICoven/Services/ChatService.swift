@@ -580,8 +580,8 @@ actor ChatService {
                     )
                     #endif
                     // Execute each tool in the chain sequentially, accumulating
-                    // results into toolContextLog.
-                    for invocation in chain {
+                    // results into toolContextLog. Respect the user's tool budget.
+                    for invocation in chain.prefix(remainingToolSteps) {
                         onToolEvent(Self.friendlyToolSummary(for: invocation.tool))
                         AnalyticsService.shared.trackToolUsed(toolName: invocation.tool, threadId: threadId)
                         let (_, contextBlock) = try await executeChatToolCall(invocation)
@@ -2247,10 +2247,7 @@ extension ChatService {
             "my account balance",
             // Social
             "my tweet", "my post", "my feed",
-            "my instagram", "my facebook",
-            // Notes / docs
-            "my notes", "my documents", "my files on",
-            "my google doc", "my notion",
+            "my instagram", "my facebook"
         ]
         return personalPatterns.contains(where: { lower.contains($0) })
     }

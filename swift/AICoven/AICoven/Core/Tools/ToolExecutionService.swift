@@ -175,6 +175,8 @@ actor ToolExecutionService {
             // Build a human-readable format so small models (2B-4B) don't
             // need to parse ISO8601 or do timezone math.
             let readableFmt = DateFormatter()
+            readableFmt.locale = Locale(identifier: "en_US_POSIX")
+            readableFmt.calendar = Calendar(identifier: .gregorian)
             readableFmt.timeZone = tz
             readableFmt.dateFormat = "h:mm a, EEEE MMMM d, yyyy"
             let readableTime = readableFmt.string(from: now)

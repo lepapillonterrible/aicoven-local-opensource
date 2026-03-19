@@ -40,11 +40,17 @@ final class ToolRelevanceService {
     ) async -> [ToolDefinition] {
         // Always-loaded tools go first.
         let alwaysLoaded = allTools.filter { Self.alwaysLoadedTools.contains($0.name) }
-        let candidates = allTools.filter { !Self.alwaysLoadedTools.contains($0.name) }
 
-        // If we have few enough tools, include all.
+        // If the limit can't even fit all always-loaded tools, just return a prefix.
+        if limit <= alwaysLoaded.count {
+            return Array(alwaysLoaded.prefix(limit))
+        }
+
+        let candidates = allTools.filter { !Self.alwaysLoadedTools.contains($0.name) }
         let remainingSlots = limit - alwaysLoaded.count
-        guard candidates.count > remainingSlots, remainingSlots > 0 else {
+
+        // If we have few enough candidates to fit in the remaining slots, include all.
+        guard candidates.count > remainingSlots else {
             return alwaysLoaded + candidates
         }
 
