@@ -2054,26 +2054,29 @@ extension ChatService {
         }
 
         // Slow path: semantic scoring via ToolRelevanceService.
-        let allNativeDefs = PromptTemplates.toolDefinitions
-            .filter { enabledTools.contains($0.name) }
-        guard !allNativeDefs.isEmpty else { return nil }
+        // Exclude always-loaded tools (current_time, web_search, shell.execute)
+        // because the keyword fast-path above already handles them. Passing them
+        // to selectRelevantNativeTools with a small limit would cause them to
+        // dominate the results and the non-always-loaded candidate would be lost.
+        let candidates = PromptTemplates.toolDefinitions
+            .filter { enabledTools.contains($0.name)
+                && !ToolRelevanceService.alwaysLoadedTools.contains($0.name)
+            }
+        guard !candidates.isEmpty else { return nil }
 
         let relevanceService = ToolRelevanceService.shared
         let selected = await relevanceService.selectRelevantNativeTools(
             userMessage: userMessage,
-            allTools: allNativeDefs,
+            allTools: candidates,
             limit: 1
         )
 
-        // Only force-execute if the top tool scores above threshold.
-        guard let topTool = selected.first,
-              !ToolRelevanceService.alwaysLoadedTools.contains(topTool.name)
-        else { return nil }
+        guard let topTool = selected.first else { return nil }
 
         let score = await relevanceService.scoreNativeTool(
             toolName: topTool.name,
             userMessage: userMessage,
-            allTools: allNativeDefs
+            allTools: candidates
         )
 
         // Require a meaningful score — 0.3 is conservative enough to avoid
@@ -2087,16 +2090,80 @@ extension ChatService {
         )
         #endif
 
-        // Build a generic input — the tool execution pipeline will handle
-        // parameter extraction.
+        // Build tool-specific input using the correct parameter keys.
+        // Tools that require complex multi-parameter inputs we can't
+        // reliably extract from a plain message are skipped (return nil).
+        let toolInput: [String: AnyJSONValue]
+        switch topTool.name {
+        case "web_search":
+            toolInput = ["query": AnyJSONValue(userMessage)]
+        case "web_browse":
+            // Try to extract a URL; if none found, skip.
+            guard let url = extractURL(from: userMessage) else { return nil }
+            toolInput = ["url": AnyJSONValue(url)]
+        case "file.read":
+            guard let path = extractFilePath(from: userMessage) else { return nil }
+            toolInput = ["path": AnyJSONValue(path)]
+        case "file.write":
+            // file.write needs both path and content — too complex to extract
+            // from a plain message reliably.
+            return nil
+        case "file.list":
+            let path = extractFilePath(from: userMessage) ?? "."
+            toolInput = ["path": AnyJSONValue(path)]
+        case "shell.execute":
+            let command = extractShellCommand(from: userMessage) ?? userMessage
+            toolInput = ["command": AnyJSONValue(command)]
+        case "current_time":
+            let tz = extractTimezoneFromMessage(userMessage.lowercased())
+            toolInput = ["timezone": AnyJSONValue(tz)]
+        default:
+            // GitHub, Google Drive/Sheets, and other multi-parameter tools
+            // can't be reliably invoked from a plain user message.
+            return nil
+        }
+
         return ChatToolInvocation(
             tool: topTool.name,
-            input: AnyJSONValue(["query": AnyJSONValue(userMessage)]),
+            input: AnyJSONValue(toolInput),
             reason: "Semantic match (score=\(String(format: "%.2f", score)))"
         )
     }
 
     // MARK: - Input Extraction Helpers
+
+    /// Extract a URL from a user message. Uses `NSDataDetector` for robust
+    /// link detection, with fallback to backtick/quoted strings.
+    nonisolated static func extractURL(from message: String) -> String? {
+        // NSDataDetector-based detection.
+        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+            let range = NSRange(message.startIndex..., in: message)
+            if let match = detector.firstMatch(in: message, range: range),
+               let url = match.url {
+                return url.absoluteString
+            }
+        }
+
+        // Backtick-fenced URL
+        if let start = message.range(of: "`"),
+           let end = message[start.upperBound...].range(of: "`") {
+            let candidate = String(message[start.upperBound ..< end.lowerBound])
+            if candidate.hasPrefix("http://") || candidate.hasPrefix("https://") {
+                return candidate
+            }
+        }
+
+        // Quoted URL
+        if let start = message.range(of: "\""),
+           let end = message[start.upperBound...].range(of: "\"") {
+            let candidate = String(message[start.upperBound ..< end.lowerBound])
+            if candidate.hasPrefix("http://") || candidate.hasPrefix("https://") {
+                return candidate
+            }
+        }
+
+        return nil
+    }
 
     /// Extract a file path from a user message. Looks for absolute paths
     /// (`/...` or `~/...`), quoted strings, and backtick-fenced spans.

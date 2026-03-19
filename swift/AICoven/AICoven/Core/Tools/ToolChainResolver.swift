@@ -277,10 +277,10 @@ enum ToolChainResolver {
         _ text: String,
         continuations: [String]
     ) -> String {
-        let lower = text.lowercased()
         var earliest = text.endIndex
         for cont in continuations {
-            if let range = lower.range(of: cont), range.lowerBound < earliest {
+            if let range = text.range(of: cont, options: .caseInsensitive),
+               range.lowerBound < earliest {
                 earliest = range.lowerBound
             }
         }
