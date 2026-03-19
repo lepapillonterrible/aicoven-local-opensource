@@ -200,6 +200,13 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
     #if canImport(MLXLLM)
     /// Loads the model container if not already cached, using thread-safe access.
     func ensureModelLoaded(_ modelID: String) async throws -> ModelContainer {
+        // Register newer custom model architectures (e.g. qwen3_5) as aliases
+        // of known robust models (like Qwen2) so MLXLMCommon can parse them.
+        await LLMModelFactory.shared.typeRegistry.registerModelType("qwen3_5") { configData in
+            let config = try JSONDecoder().decode(Qwen2Configuration.self, from: configData)
+            return Qwen2Model(config)
+        }
+
         // Check under lock if already loaded
         if let existing = lock.withLock({ loadedContainers[modelID] }) {
             return existing
