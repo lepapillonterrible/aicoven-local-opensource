@@ -4,7 +4,7 @@ import SwiftUI
 struct LoginView: View {
     @EnvironmentObject var authService: AuthService
 
-    @State private var mode: AuthMode = .signin
+    @State private var mode: AuthMode
     @State private var firstName = ""
     @State private var lastName = ""
     @State private var email = ""
@@ -24,6 +24,10 @@ struct LoginView: View {
 
     enum AuthMode {
         case signin, signup
+    }
+
+    init(initialMode: AuthMode = .signin) {
+        _mode = State(initialValue: initialMode)
     }
 
     var body: some View {
