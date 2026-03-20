@@ -1,0 +1,13 @@
+{
+  "images" : [
+    {
+      "filename" : "onboarding_agents.png",
+      "idiom" : "universal",
+      "scale" : "1x"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

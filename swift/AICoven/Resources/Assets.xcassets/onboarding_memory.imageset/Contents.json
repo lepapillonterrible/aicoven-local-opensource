@@ -1,0 +1,13 @@
+{
+  "images" : [
+    {
+      "filename" : "onboarding_memory.PNG",
+      "idiom" : "universal",
+      "scale" : "1x"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
