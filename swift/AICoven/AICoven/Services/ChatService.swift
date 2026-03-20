@@ -1202,13 +1202,8 @@ actor ChatService {
                 content: "Please provide the concise 3-6 bullet point summary of our conversation now."
             ))
 
-            let routingContext = RoutingContext(
-                task: .chat,
-                requireLocalOnly: false,
-                requireLongContext: false,
-                preferHighQuality: true
-            )
-            guard let descriptor = modelRouter.route(for: routingContext),
+            let (prefProvider, prefModel) = resolveProviderAndModel()
+            guard let descriptor = modelRouter.findExact(providerID: prefProvider, modelID: prefModel),
                   let client = llmClients[descriptor.providerID] else {
                 return
             }
@@ -1232,6 +1227,18 @@ actor ChatService {
             guard !summary.isEmpty else { return }
 
             try await threadStore.updateSummary(forThreadID: threadId, summary: summary)
+
+            _ = try? await MemoryProposalRepository.shared.insertProposal(
+                eventId: nil,
+                covenId: nil,
+                proposedContent: "Thread Summary:\n" + summary,
+                proposedTags: ["summary"],
+                scope: "user",
+                reason: "Automatic summary representing the key facts of a recent thread.",
+                sourceMessageId: nil,
+                proposedBy: "system",
+                title: "Thread Summary"
+            )
         } catch {
             // Thread summaries are an optional optimization. In the local-only
             // client we treat *all* failures as non-fatal and skip logging to
