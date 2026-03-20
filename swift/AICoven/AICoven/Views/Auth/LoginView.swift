@@ -3,6 +3,7 @@ import SwiftUI
 /// Enhanced login screen with improved UX and visual design
 struct LoginView: View {
     @EnvironmentObject var authService: AuthService
+    @Environment(\.dismiss) private var dismiss
 
     @State private var mode: AuthMode
     @State private var firstName = ""
@@ -165,9 +166,9 @@ struct LoginView: View {
                     )
 
                     try await authService.signIn(email: email, password: password)
-
                     // Track successful login
                     AnalyticsService.shared.trackLogin(method: "email")
+                    await MainActor.run { dismiss() }
                 } else {
                     let trimmedFirst = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
                     let trimmedLast = lastName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -185,9 +186,9 @@ struct LoginView: View {
                     )
 
                     try await authService.signUp(email: email, password: password, name: nameParam)
-
                     // Track successful signup
                     AnalyticsService.shared.trackSignUp(method: "email")
+                    await MainActor.run { dismiss() }
                 }
             } catch {
                 errorMessage = error.localizedDescription
