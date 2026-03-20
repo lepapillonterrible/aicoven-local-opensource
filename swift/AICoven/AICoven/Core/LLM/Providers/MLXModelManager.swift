@@ -159,10 +159,10 @@ final class MLXModelManager: ObservableObject {
             isRecommended: false
         ),
         MLXModelInfo(
-            id: "mlx-community/Qwen3.5-4B-MLX-4bit",
-            displayName: "Qwen 3.5 4B 🆕 Best Small",
-            summary: "Newest & best 4B model. Hybrid reasoning, native tool calling, 262K context. Replaces Qwen 3 4B.",
-            downloadSizeBytes: 3_030_000_000,
+            id: "mlx-community/Qwen3-4B-4bit",
+            displayName: "Qwen 3 4B ⚡ Best Small",
+            summary: "Best 4B model. Hybrid reasoning, native tool calling, 128K context.",
+            downloadSizeBytes: 2_400_000_000,
             minRAMGB: 4,
             parameterCount: "4B",
             quantization: "4-bit",
@@ -171,19 +171,7 @@ final class MLXModelManager: ObservableObject {
             recommendedFor: ["MCP Tools", "Chat", "Reasoning", "Agents"],
             isRecommended: true
         ),
-        MLXModelInfo(
-            id: "mlx-community/Qwen3-4B-4bit",
-            displayName: "Qwen 3 4B",
-            summary: "Previous-gen all-rounder. Use Qwen 3.5 4B for best results.",
-            downloadSizeBytes: 2_400_000_000,
-            minRAMGB: 4,
-            parameterCount: "4B",
-            quantization: "4-bit",
-            category: .general,
-            tier: .core,
-            recommendedFor: ["MCP Tools", "Chat", "Reasoning"],
-            isRecommended: false
-        ),
+
         MLXModelInfo(
             id: "mlx-community/Llama-3.2-3B-Instruct-4bit",
             displayName: "Llama 3.2 3B",
@@ -225,12 +213,12 @@ final class MLXModelManager: ObservableObject {
         ),
         // ── Core: Mid-Size ───────────────────────────────────────────
         MLXModelInfo(
-            id: "mlx-community/Qwen3.5-9B-MLX-4bit",
-            displayName: "Qwen 3.5 9B 🎯 Sweet Spot",
+            id: "mlx-community/Qwen3-8B-4bit",
+            displayName: "Qwen 3 8B 🎯 Sweet Spot",
             summary: "Best quality-to-speed ratio. Strong reasoning, coding, and tool calling. Ideal for 16GB Macs.",
-            downloadSizeBytes: 5_500_000_000,
+            downloadSizeBytes: 4_900_000_000,
             minRAMGB: 8,
-            parameterCount: "9B",
+            parameterCount: "8B",
             quantization: "4-bit",
             category: .general,
             tier: .core,
@@ -239,12 +227,12 @@ final class MLXModelManager: ObservableObject {
         ),
         // ── Specialized: Large ──────────────────────────────────────
         MLXModelInfo(
-            id: "mlx-community/Qwen3.5-35B-A3B-4bit",
-            displayName: "Qwen 3.5 35B MoE ⚡ Speed King",
-            summary: "35B knowledge at 3B speed — only 3B params active per token. Blazing fast inference with frontier quality. Best for 16GB+.",
-            downloadSizeBytes: 12_000_000_000,
+            id: "mlx-community/Qwen3-30B-A3B-4bit",
+            displayName: "Qwen 3 30B MoE ⚡ Speed King",
+            summary: "30B knowledge at 3B speed — only 3B params active per token. Blazing fast inference with frontier quality. Best for 16GB+.",
+            downloadSizeBytes: 10_500_000_000,
             minRAMGB: 16,
-            parameterCount: "35B (3B active)",
+            parameterCount: "30B (3B active)",
             quantization: "4-bit",
             category: .general,
             tier: .specialized,
@@ -252,12 +240,12 @@ final class MLXModelManager: ObservableObject {
             isRecommended: true
         ),
         MLXModelInfo(
-            id: "mlx-community/Qwen3.5-27B-4bit",
-            displayName: "Qwen 3.5 27B ⚠️",
-            summary: "Frontier-class dense model. Native tool calling, 262K context. Requires 24GB+ RAM — tight on 24GB devices (limited context). Best with 32GB+.",
-            downloadSizeBytes: 14_500_000_000,
+            id: "mlx-community/Qwen3-32B-4bit",
+            displayName: "Qwen 3 32B ⚠️",
+            summary: "Frontier-class dense model. Strong reasoning and tool calling. Requires 24GB+ RAM.",
+            downloadSizeBytes: 17_000_000_000,
             minRAMGB: 24,
-            parameterCount: "27B",
+            parameterCount: "32B",
             quantization: "4-bit",
             category: .general,
             tier: .specialized,
@@ -332,12 +320,12 @@ final class MLXModelManager: ObservableObject {
         ),
         // ── Specialized: Mobile ─────────────────────────────────────
         MLXModelInfo(
-            id: "mlx-community/Qwen3.5-2B-MLX-4bit",
-            displayName: "Qwen 3.5 2B 📱 Best Mobile",
-            summary: "Best small model for iPhones. Modern hybrid reasoning in a tiny package.",
-            downloadSizeBytes: 1_300_000_000,
+            id: "mlx-community/Qwen3-1.7B-4bit",
+            displayName: "Qwen 3 1.7B 📱 Best Mobile",
+            summary: "Best small model for iPhones. Modern Qwen3 hybrid reasoning in a tiny package.",
+            downloadSizeBytes: 1_030_000_000,
             minRAMGB: 3,
-            parameterCount: "2B",
+            parameterCount: "1.7B",
             quantization: "4-bit",
             category: .mobile,
             tier: .core,
@@ -422,6 +410,25 @@ final class MLXModelManager: ObservableObject {
 
         #if canImport(MLXLLM)
         do {
+            // Pre-create the HuggingFace Hub model directory so that the
+            // swift-transformers library can atomically move the downloaded
+            // `.incomplete` temp file into place. Without this, the move fails
+            // with "couldn't be moved … because the folder containing the latter
+            // doesn't exist" when the cache directory hasn't been created yet.
+            let cacheBase = FileManager.default.urls(
+                for: .cachesDirectory,
+                in: .userDomainMask
+            ).first
+            if let cacheBase {
+                let modelDir = cacheBase.appendingPathComponent(
+                    "huggingface/hub/models--" + modelID.replacingOccurrences(of: "/", with: "--")
+                )
+                try? FileManager.default.createDirectory(
+                    at: modelDir,
+                    withIntermediateDirectories: true
+                )
+            }
+
             // MLX's loadModel downloads from HF Hub and caches locally.
             // Progress is not directly observable in the current API,
             // so we show indeterminate and then mark complete.
