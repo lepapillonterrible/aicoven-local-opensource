@@ -2322,7 +2322,7 @@ extension ChatService {
         var trimmed = String(query[query.startIndex ..< earliest])
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        while trimmed.last == "," || trimmed.last == "." {
+        while trimmed.last == "," || trimmed.last == "." || trimmed.last == ";" || trimmed.last == "!" {
             trimmed.removeLast()
             trimmed = trimmed.trimmingCharacters(in: .whitespacesAndNewlines)
         }
