@@ -229,6 +229,7 @@ enum PromptTemplates {
     /// Shorter, more directive tool-calling instructions optimized for small
     /// models (4B-7B) that struggle with long prompts. Uses assertive language
     /// and few-shot examples to maximize compliance.
+    // swiftformat:disable indent,trailingSpace
     static let mlxToolProtocolInstructions: String = """
     CRITICAL TOOL-CALLING RULES:
 
@@ -286,6 +287,7 @@ enum PromptTemplates {
     - Respond directly with either a tool call JSON or a natural-language answer
     /no_think
     """
+    // swiftformat:enable indent,trailingSpace
 
     /// Generate a lean system prompt for MLX models with only essential sections.
     ///
@@ -353,6 +355,7 @@ enum PromptTemplates {
         return sections.joined(separator: "\n\n")
     }
 
+    // swiftformat:disable indent,trailingSpace
     static let toolProtocolInstructions: String = """
     TOOL-CALLING PROTOCOL:
 
@@ -373,10 +376,12 @@ enum PromptTemplates {
     - When you have enough information, provide your final answer in natural language
     - Do NOT include tool call syntax in your final answer
     """
+    // swiftformat:enable indent,trailingSpace
 
     // MARK: - Thought Block Instructions
 
     /// Instructions for using <thought> blocks for reasoning visibility.
+    // swiftformat:disable indent,trailingSpace
     static let thoughtBlockInstructions: String = """
     REASONING VISIBILITY:
 
@@ -391,10 +396,12 @@ enum PromptTemplates {
 
     Thought blocks help the user understand your reasoning but are stripped from the final display.
     """
+    // swiftformat:enable indent,trailingSpace
 
     // MARK: - Scratchpad Instructions
 
     /// Instructions for using <scratchpad> blocks to track multi-step tasks.
+    // swiftformat:disable indent,trailingSpace
     static let scratchpadInstructions: String = """
     TASK TRACKING (for multi-step operations):
 
@@ -410,10 +417,12 @@ enum PromptTemplates {
 
     Update the scratchpad as you complete each step. Mark completed items with [x].
     """
+    // swiftformat:enable indent,trailingSpace
 
     // MARK: - Memory Write Instructions
 
     /// Instructions for proposing memory writes.
+    // swiftformat:disable indent,trailingSpace
     static let memoryWriteInstructions: String = """
     MEMORY PROPOSALS:
 
@@ -429,6 +438,7 @@ enum PromptTemplates {
     - Keep memories concise and factual
     - Memory proposals require user confirmation before being saved
     """
+    // swiftformat:enable indent,trailingSpace
 
     // MARK: - Safety Policies
 
@@ -581,7 +591,7 @@ enum PromptTemplates {
 
 /// Definition of a tool including its parameters and usage example.
 /// Conforms to Sendable since all properties are value types.
-struct ToolDefinition: Sendable {
+struct ToolDefinition {
     let name: String
     let description: String
     let parameters: [ToolParameter]
@@ -590,7 +600,7 @@ struct ToolDefinition: Sendable {
 
 /// Parameter definition for a tool.
 /// Conforms to Sendable since all properties are value types.
-struct ToolParameter: Sendable {
+struct ToolParameter {
     let name: String
     let type: String
     let description: String

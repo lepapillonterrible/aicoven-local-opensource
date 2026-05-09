@@ -943,6 +943,7 @@ actor ChatService {
                 } else {
                     cappedToolResults = toolContextLog
                 }
+                // swiftformat:disable indent,trailingSpace
                 composedUserMessage = """
                 A tool was executed on the user's behalf and returned the following data:
 
@@ -952,6 +953,7 @@ actor ChatService {
 
                 Using ONLY the data above, provide a helpful answer. The data has already been retrieved — do NOT say you cannot access external systems. Summarize and present the results clearly.
                 """
+                // swiftformat:enable indent,trailingSpace
             } else {
                 // Standard final-answer prompt for cloud models or no-tool cases.
                 composedUserMessage = messageWithAttachments + "\n\nIMPORTANT: You must now answer the user directly in natural language. Do NOT call tools or return JSON. Provide the most helpful answer you can using your own reasoning and the information already available (including any tool results and your built-in knowledge). Do NOT say that you cannot answer because you cannot use tools or the web; instead, make your best effort to answer, even if it is an approximation, and clearly explain any uncertainty."
@@ -1500,6 +1502,7 @@ extension ChatService {
     /// This replaces the hardcoded chatToolInstruction with dynamic tool documentation.
     static func generateChatToolInstruction(enabledTools: Set<String>) -> String {
         // Generate a concise version for chat (full docs are in system prompt)
+        // swiftformat:disable indent,trailingSpace
         """
         You are the user's personal assistant. You can optionally call tools to
         help answer their question when your built-in knowledge or the local
@@ -1511,6 +1514,7 @@ extension ChatService {
 
         \(PromptTemplates.toolProtocolInstructions)
         """
+        // swiftformat:enable indent,trailingSpace
     }
 
     /// Legacy static instruction for backward compatibility.
@@ -1767,7 +1771,7 @@ extension ChatService {
 
         // Common English stop words plus meta-words that match ALL MCP
         // tools equally ("mcp", "zapier", "server", "tool", etc.).
-        let stopWords: Set<String> = [
+        let stopWords: Set = [
             "the", "and", "for", "from", "with", "that", "this",
             "you", "your", "have", "has", "had", "are", "was",
             "been", "will", "can", "not", "but", "they", "them",

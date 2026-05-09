@@ -2,7 +2,7 @@ import SwiftUI
 import WebKit
 
 /// Represents a file selected via the Google Picker
-struct GooglePickerFile: Identifiable, Codable, Sendable {
+struct GooglePickerFile: Identifiable, Codable {
     let id: String
     let name: String
     let mimeType: String
@@ -143,6 +143,7 @@ extension GooglePickerWebView {
             return "<html><body>Error: Failed to encode picker parameters</body></html>"
         }
 
+        // swiftformat:disable indent,trailingSpace
         return """
         <!DOCTYPE html>
         <html>
@@ -248,6 +249,7 @@ extension GooglePickerWebView {
         </body>
         </html>
         """
+        // swiftformat:enable indent,trailingSpace
     }
 }
 

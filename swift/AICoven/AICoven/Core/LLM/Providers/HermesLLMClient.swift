@@ -74,29 +74,17 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
         let defaults = UserDefaults.standard
 
         // Base URL is optional (defaults to Together AI)
-        let baseURL: URL? = if let urlString = defaults.string(forKey: UserScope.scopedKey("hermes_base_url")),
-            !urlString.isEmpty,
-            let url = URL(string: urlString) {
-            url
-        } else if let envURL = ProcessInfo.processInfo.environment["HERMES_BASE_URL"],
-            let url = URL(string: envURL) {
-            url
-        } else {
-            nil
-        }
+        let rawBaseURL = defaults.string(forKey: UserScope.scopedKey("hermes_base_url"))
+            ?? ProcessInfo.processInfo.environment["HERMES_BASE_URL"]
+        let baseURL = rawBaseURL.flatMap { $0.isEmpty ? nil : URL(string: $0) }
 
         // Resolve API key (hermes_api_key preferred, fallback to together_api_key)
-        let apiKey: String? = if let key = defaults.string(forKey: UserScope.scopedKey("hermes_api_key")), !key.isEmpty {
-            key
-        } else if let key = defaults.string(forKey: UserScope.scopedKey("together_api_key")), !key.isEmpty {
-            key
-        } else if let envKey = ProcessInfo.processInfo.environment["HERMES_API_KEY"], !envKey.isEmpty {
-            envKey
-        } else if let envKey = ProcessInfo.processInfo.environment["TOGETHER_API_KEY"], !envKey.isEmpty {
-            envKey
-        } else {
-            nil
-        }
+        let apiKey = [
+            defaults.string(forKey: UserScope.scopedKey("hermes_api_key")),
+            defaults.string(forKey: UserScope.scopedKey("together_api_key")),
+            ProcessInfo.processInfo.environment["HERMES_API_KEY"],
+            ProcessInfo.processInfo.environment["TOGETHER_API_KEY"]
+        ].compactMap { $0 }.first { !$0.isEmpty }
 
         // If no API key and no custom base URL, we can't do anything (Together AI requires an API key)
         if apiKey == nil, baseURL == nil {
