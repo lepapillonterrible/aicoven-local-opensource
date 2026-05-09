@@ -2075,6 +2075,13 @@ extension ChatService {
 
     // MARK: - Forced Native Tool Call
 
+    /// Minimum semantic-relevance score required before we auto-invoke a
+    /// native tool for a local model. Hand-tuned from local-model spot checks
+    /// during this feature work: lower values let loosely-related tools win
+    /// too often, while higher values started dropping obvious
+    /// "read this file"/"list files" matches.
+    private static let semanticToolMatchThreshold = 0.3
+
     /// For local models, attempt to match the user's message to a native
     /// tool and construct a forced call. Returns `nil` if no native tool
     /// is a clear match.
@@ -2204,11 +2211,7 @@ extension ChatService {
             allTools: candidates
         )
 
-        // Require a meaningful score. 0.3 is a hand-tuned threshold from
-        // local-model spot checks during this feature work: lower values let
-        // loosely-related tools win too often, while higher values started
-        // dropping obvious "read this file"/"list files" matches.
-        guard score >= 0.3 else { return nil }
+        guard score >= semanticToolMatchThreshold else { return nil }
 
         #if DEBUG
         AppErrorReporter.log(
