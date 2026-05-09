@@ -29,7 +29,7 @@ struct ContentView: View {
                 LoginView()
             }
         }
-        .preferredColorScheme(.dark)
+        .themedColorScheme()
     }
 }
 

@@ -4,14 +4,9 @@ import SwiftUI
 struct MobileRootView: View {
     var body: some View {
         TabView {
-            MobileHomeView()
+            MobileChatsRootView()
                 .tabItem {
-                    Label("Home", systemImage: "house.fill")
-                }
-
-            MobileCovensRootView()
-                .tabItem {
-                    Label("Covens", systemImage: "person.3.fill")
+                    Label("Chats", systemImage: "bubble.left.and.bubble.right.fill")
                 }
 
             MobileProfileRootView()
@@ -69,673 +64,186 @@ struct MobileMemoryRootView: View {
     }
 }
 
-// Mobile-optimized home view for iPhone (portrait)
-// Uses navigation-based layout focused on personal (non-coven) chat
-// MARK: - Navigation Destination
+// MARK: - Mobile Chats Root View
 
-enum MobilePersonalDestination: Hashable {
-    case threadsList
-    case chat(Thread)
-}
-
-/// Mobile-optimized home view for iPhone (portrait)
-/// Uses navigation-based layout focused on personal (non-coven) chat
-struct MobileHomeView: View {
-    @State private var personalThreads: [Thread] = []
-    @State private var isLoadingThreads = true
-    /// Simple navigation state for the mobile workspace. `nil` means we're on
-    /// the welcome screen, otherwise we show either the threads list or a
-    /// specific chat.
-    @State private var currentDestination: MobilePersonalDestination? = nil
-
-    var body: some View {
-        Group {
-            if isLoadingThreads {
-                CauldronLoadingView(message: "Loading workspace...", size: 80)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(NebulaBackground())
-            } else {
-                MobilePersonalWorkspace(
-                    personalThreads: $personalThreads,
-                    currentDestination: $currentDestination,
-                    onRefreshThreads: loadPersonalThreads
-                )
-            }
-        }
-        .task {
-            await loadPersonalThreads()
-        }
-    }
-
-    @MainActor
-    private func loadPersonalThreads() async {
-        isLoadingThreads = true
-        defer { isLoadingThreads = false }
-
-        do {
-            personalThreads = try await ThreadService.shared.loadThreads(covenId: nil)
-        } catch {
-            AppErrorReporter.log(error: error, context: "MobileHomeView.loadPersonalThreads")
-            personalThreads = []
-        }
-    }
-}
-
-// MARK: - Mobile Personal Workspace
-
-/// Mobile layout for personal workspace
-struct MobilePersonalWorkspace: View {
-    @Binding var personalThreads: [Thread]
-    /// Simple destination state instead of using `NavigationStack` to avoid
-    /// nested UINavigationController issues on iOS.
-    @Binding var currentDestination: MobilePersonalDestination?
-
-    let onRefreshThreads: () async -> Void
-
-    @State private var showProviderKeys = false
-    @State private var showStrixSettings = false
-
-    var body: some View {
-        ZStack {
-            NebulaBackground()
-
-            switch currentDestination {
-            case .threadsList:
-                MobileThreadsList(
-                    threads: $personalThreads,
-                    onSelectThread: { thread in
-                        currentDestination = .chat(thread)
-                    },
-                    onRefresh: onRefreshThreads,
-                    onBack: { currentDestination = nil }
-                )
-            case let .chat(thread):
-                // Use .id(thread.id) to ensure view refreshes when switching threads
-                PersonalChatView(
-                    thread: thread,
-                    onEditAgent: { showStrixSettings = true },
-                    onBack: { currentDestination = .threadsList }
-                )
-                .id(thread.id)
-            case nil:
-                // Root is the welcome screen
-                MobileWelcomeScreen(
-                    onNewChat: handleNewThread,
-                    onShowThreads: { currentDestination = .threadsList },
-                    onOpenProviderKeys: { showProviderKeys = true }
-                )
-            }
-        }
-        .sheet(isPresented: $showProviderKeys) {
-            NavigationStack {
-                ProviderKeysView()
-                    .navigationTitle("Provider Keys")
-            }
-        }
-        .sheet(isPresented: $showStrixSettings) {
-            NavigationStack {
-                // Pass StoreService so StrixSettingsView can check Creator entitlement
-                StrixSettingsView(onClose: {
-                    // Close the sheet after saving the agent configuration.
-                    showStrixSettings = false
-                })
-                .environmentObject(StoreService.shared)
-            }
-        }
-    }
-
-    private func handleNewThread() {
-        Task {
-            do {
-                let thread = try await ThreadService.shared.createThread(
-                    title: "New Chat",
-                    covenId: nil,
-                    agentId: nil
-                )
-                // Navigate to the new chat on the main actor and refresh
-                // threads so the sidebar/list stays in sync.
-                await MainActor.run {
-                    currentDestination = .chat(thread)
-                }
-                await onRefreshThreads()
-            } catch {
-                AppErrorReporter.log(error: error, context: "MobilePersonalWorkspace.handleNewThread")
-            }
-        }
-    }
-}
-
-// MARK: - Mobile Welcome Screen
-
-struct MobileWelcomeScreen: View {
-    let onNewChat: () -> Void
-    let onShowThreads: () -> Void
-    let onOpenProviderKeys: () -> Void
-
-    var body: some View {
-        VStack(spacing: Spacing.xl) {
-            Spacer()
-
-            // Icon
-            IconBadge(icon: "sparkles", size: 100, color: .aicovenTeal)
-
-            // Title & subtitle
-            VStack(spacing: Spacing.md) {
-                Text("Welcome to AICoven")
-                    .font(.aicovenDisplayMedium)
-                    .foregroundColor(.aicovenTextPrimary)
-
-                Text("Start a new conversation with Strix, your personal assistant.")
-                    .font(.aicovenBody)
-                    .foregroundColor(.aicovenTextSecondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, Spacing.xl)
-            }
-
-            // Action cards
-            VStack(spacing: Spacing.md) {
-                // Start a brand new chat
-                Button(action: onNewChat) {
-                    HStack(spacing: Spacing.md) {
-                        IconBadge(icon: "message", size: 48, color: .aicovenTeal)
-
-                        VStack(alignment: .leading, spacing: Spacing.xxs) {
-                            Text("Personal Chat")
-                                .font(.aicovenH2)
-                                .foregroundColor(.aicovenTextPrimary)
-                            Text("One-on-one with Strix")
-                                .font(.aicovenBodySmall)
-                                .foregroundColor(.aicovenTextTertiary)
-                        }
-
-                        Spacer()
-
-                        Image(systemName: "chevron.right")
-                            .foregroundColor(.aicovenTextSecondary)
-                    }
-                    .padding(Spacing.md)
-                    .frame(maxWidth: .infinity)
-                    .glassMorphism(cornerRadius: BorderRadius.lg, padding: 0)
-                }
-                .buttonStyle(.plain)
-
-                // Open existing conversations (replaces the old toolbar hamburger)
-                Button(action: onShowThreads) {
-                    HStack(spacing: Spacing.md) {
-                        IconBadge(icon: "line.3.horizontal", size: 40, color: .aicovenTeal)
-
-                        VStack(alignment: .leading, spacing: Spacing.xxs) {
-                            Text("Your Chats")
-                                .font(.aicovenH3)
-                                .foregroundColor(.aicovenTextPrimary)
-                            Text("Browse and reopen previous conversations")
-                                .font(.aicovenBodySmall)
-                                .foregroundColor(.aicovenTextTertiary)
-                        }
-
-                        Spacer()
-
-                        Image(systemName: "chevron.right")
-                            .foregroundColor(.aicovenTextSecondary)
-                    }
-                    .padding(Spacing.md)
-                    .frame(maxWidth: .infinity)
-                    .glassMorphism(cornerRadius: BorderRadius.lg, padding: 0)
-                }
-                .buttonStyle(.plain)
-
-                // Provider keys call-to-action when no keys are configured
-                AddProviderKeysCard(onOpenProviderKeys: onOpenProviderKeys)
-            }
-            .padding(.horizontal, Spacing.xl)
-
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-// MARK: - Mobile Threads List
-
-struct MobileThreadsList: View {
-    @Binding var threads: [Thread]
-    let onSelectThread: (Thread) -> Void
-    let onRefresh: () async -> Void
-    /// Optional back handler used on iOS mobile to return to the welcome
-    /// screen without relying on a NavigationStack.
-    let onBack: (() -> Void)?
-
-    var body: some View {
-        ZStack {
-            NebulaBackground()
-
-            VStack(spacing: Spacing.md) {
-                // Lightweight header with an optional back button so users can
-                // return to the welcome screen.
-                HStack(spacing: Spacing.md) {
-                    if let onBack {
-                        Button(action: onBack) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundColor(.aicovenTeal)
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    Text("Your Chats")
-                        .font(.aicovenH2)
-                        .foregroundColor(.aicovenTextPrimary)
-
-                    Spacer()
-                }
-                .padding(.horizontal, Spacing.lg)
-                .padding(.top, Spacing.lg)
-
-                if threads.isEmpty {
-                    VStack(spacing: Spacing.lg) {
-                        IconBadge(icon: "message", size: 60, color: .aicovenTeal)
-
-                        Text("No conversations yet")
-                            .font(.aicovenH2)
-                            .foregroundColor(.aicovenTextPrimary)
-
-                        Text("Start a new chat to begin")
-                            .font(.aicovenBody)
-                            .foregroundColor(.aicovenTextSecondary)
-                    }
-                } else {
-                    List {
-                        ForEach(threads) { thread in
-                            Button(action: {
-                                onSelectThread(thread)
-                            }) {
-                                HStack(spacing: Spacing.sm) {
-                                    IconBadge(
-                                        icon: "message.fill",
-                                        size: 32,
-                                        color: .aicovenTeal
-                                    )
-
-                                    VStack(alignment: .leading, spacing: Spacing.xxs) {
-                                        HStack(spacing: 4) {
-                                            Text(thread.title ?? "Untitled Chat")
-                                                .font(.aicovenBody)
-                                                .foregroundColor(.aicovenTextPrimary)
-
-                                            // Concisely show Agent Name if available or fallback
-                                            if let agentName = thread.agentName {
-                                                Text("• \(agentName)")
-                                                    .font(.aicovenBody)
-                                                    .foregroundColor(.aicovenTextSecondary)
-                                            } else {
-                                                Text("• Strix")
-                                                    .font(.aicovenBody)
-                                                    .foregroundColor(.aicovenTextSecondary)
-                                            }
-                                        }
-
-                                        HStack(spacing: 4) {
-                                            // Only show model if thread has one stored
-                                            if let model = thread.agentModel {
-                                                Text(model)
-                                                    .font(.aicovenCaption)
-                                                    .foregroundColor(.aicovenTeal)
-
-                                                if thread.updatedAt != nil {
-                                                    Text("•")
-                                                        .font(.aicovenCaption)
-                                                        .foregroundColor(.aicovenTextTertiary)
-                                                }
-                                            }
-
-                                            if let updatedAt = thread.updatedAt {
-                                                Text(relativeTime(from: updatedAt))
-                                                    .font(.aicovenCaption)
-                                                    .foregroundColor(.aicovenTextTertiary)
-                                            }
-                                        }
-                                    }
-
-                                    Spacer()
-                                    #if os(iOS)
-                                    Image(systemName: "chevron.right")
-                                        .font(.aicovenCaption)
-                                        .foregroundColor(.aicovenTextTertiary)
-                                    #endif
-                                }
-                                .padding(.vertical, Spacing.xs)
-                            }
-                            .listRowBackground(Color.aicovenGlass)
-                        }
-                        .onDelete(perform: deleteThreads)
-                    }
-                    .scrollContentBackground(.hidden)
-                }
-            }
-        }
-    }
-
-    private func deleteThreads(at offsets: IndexSet) {
-        let idsToDelete = offsets.map { threads[$0].id }
-
-        Task {
-            for id in idsToDelete {
-                do {
-                    try await ThreadService.shared.deleteThread(threadId: id)
-                    if let index = threads.firstIndex(where: { $0.id == id }) {
-                        threads.remove(at: index)
-                    }
-                } catch {
-                    AppErrorReporter.log(error: error, context: "MobileThreadsList.deleteThreads")
-                }
-            }
-        }
-    }
-
-    private func relativeTime(from date: Date) -> String {
-        let calendar = Calendar.current
-        let now = Date()
-        let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date, to: now)
-
-        if let years = components.year, years > 0 {
-            return "\(years)y ago"
-        } else if let months = components.month, months > 0 {
-            return "\(months)mo ago"
-        } else if let days = components.day, days > 0 {
-            return "\(days)d ago"
-        } else if let hours = components.hour, hours > 0 {
-            return "\(hours)h ago"
-        } else if let minutes = components.minute, minutes > 0 {
-            return "\(minutes)m ago"
-        } else {
-            return "Just now"
-        }
-    }
-}
-
-// Mobile personal chats now reuse PersonalChatView for a unified experience
-
-// MARK: - Mobile Coven Workspace
-
-/// Root coven tab for mobile – list covens, then threads, then chat
-struct MobileCovensRootView: View {
+struct MobileChatsRootView: View {
     @State private var covens: [Coven] = []
+    @State private var selectedCovenId: String? = nil // nil == Strix
+    @State private var threads: [Thread] = []
     @State private var isLoading = true
     @State private var showCreateCoven = false
-    @State private var errorMessage: String?
-    /// When the user first opens the Covens tab and has no covens yet,
-    /// automatically present the create-coven flow once.
-    @State private var hasPresentedFirstCovenOnboarding = false
-    /// Currently selected coven for navigation into its threads view.
-    @State private var selectedCovenItem: Coven?
+    @State private var showNewThread = false
+    @State private var showStrixSettings = false
+    @State private var selectedThread: Thread?
+    @State private var showMemory = false
+
+    private var selectedCoven: Coven? {
+        guard let selectedCovenId else { return nil }
+        return covens.first(where: { $0.id == selectedCovenId })
+    }
+
+    private var scopeTitle: String {
+        selectedCoven?.name ?? "Strix"
+    }
 
     var body: some View {
         NavigationStack {
             ZStack {
-                NebulaBackground().ignoresSafeArea()
+                NebulaBackground()
+
                 if isLoading {
                     ProgressView()
                         .scaleEffect(1.5)
                         .tint(.aicovenTeal)
-                } else if covens.isEmpty {
-                    VStack(spacing: Spacing.lg) {
-                        IconBadge(icon: "sparkles", size: 60, color: .aicovenTeal)
-                        Text("No Covens Yet")
-                            .font(.aicovenH2)
-                            .foregroundColor(.aicovenTextPrimary)
-                        Text("Create a coven to collaborate with multiple AI roles.")
-                            .font(.aicovenBody)
-                            .foregroundColor(.aicovenTextSecondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, Spacing.lg)
-                        // Use GradientButton directly with action (not wrapped in Button)
-                        GradientButton("Create Coven", icon: "plus", style: .primary) {
-                            showCreateCoven = true
-                        }
-                    }
-                    .padding(Spacing.xl)
-                    // First-time coven onboarding: when the user opens the
-                    // Covens tab and has no covens yet, automatically present
-                    // the create-coven flow once.
-                    .task {
-                        if !hasPresentedFirstCovenOnboarding {
-                            hasPresentedFirstCovenOnboarding = true
-                            showCreateCoven = true
-                        }
-                    }
                 } else {
                     List {
-                        ForEach(covens) { coven in
+                        Section {
                             Button {
-                                selectedCovenItem = coven
+                                selectedThread = nil
+                                showStrixSettings = false
+                                showMemory = true
                             } label: {
-                                HStack(spacing: Spacing.md) {
-                                    IconBadge(icon: "sparkles", size: 40, color: .aicovenTeal)
-                                    VStack(alignment: .leading, spacing: Spacing.xxs) {
-                                        Text(coven.name)
-                                            .font(.aicovenH2)
-                                            .foregroundColor(.aicovenTextPrimary)
-                                        if let description = coven.description {
-                                            Text(description)
-                                                .font(.aicovenBodySmall)
-                                                .foregroundColor(.aicovenTextSecondary)
-                                                .lineLimit(2)
-                                        }
-                                    }
+                                HStack(spacing: Spacing.sm) {
+                                    Image(systemName: "brain")
+                                        .foregroundColor(.aicovenTeal)
+                                    Text("Memory")
+                                        .font(.aicovenBody)
+                                        .foregroundColor(.aicovenTextPrimary)
                                     Spacer()
+                                    Text(scopeTitle)
+                                        .font(.aicovenCaption)
+                                        .foregroundColor(.aicovenTextTertiary)
                                 }
                                 .padding(.vertical, Spacing.xs)
                             }
                             .buttonStyle(.plain)
                             .listRowBackground(Color.aicovenGlass)
                         }
+
+                        Section {
+                            if threads.isEmpty {
+                                VStack(alignment: .leading, spacing: Spacing.sm) {
+                                    Text("No chats in \(scopeTitle) yet")
+                                        .font(.aicovenBody)
+                                        .foregroundColor(.aicovenTextPrimary)
+                                    HStack(spacing: Spacing.sm) {
+                                        Button {
+                                            showNewThread = true
+                                        } label: {
+                                            Label("New Chat", systemImage: "plus.message")
+                                                .font(.aicovenCaption)
+                                                .foregroundColor(.black)
+                                                .padding(.horizontal, Spacing.sm)
+                                                .padding(.vertical, Spacing.xxs)
+                                                .background(Color.aicovenTeal)
+                                                .cornerRadius(BorderRadius.md)
+                                        }
+                                    }
+                                }
+                                .padding(.vertical, Spacing.sm)
+                                .listRowBackground(Color.clear)
+                            } else {
+                                ForEach(threads) { thread in
+                                    Button {
+                                        selectedThread = thread
+                                    } label: {
+                                        ThreadRowView(thread: thread)
+                                    }
+                                    .listRowBackground(Color.aicovenGlass)
+                                    .swipeActions(edge: .trailing) {
+                                        Button(role: .destructive) {
+                                            deleteThread(thread)
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                     .scrollContentBackground(.hidden)
                 }
             }
-            .navigationTitle("Covens")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        showCreateCoven = true
-                    } label: {
-                        Image(systemName: "plus")
+            .navigationTitle(scopeTitle)
+            #if !os(macOS)
+                .navigationBarTitleDisplayMode(.inline)
+            #endif
+                .toolbar {
+                    ToolbarItem(placement: .principal) {
+                        Menu {
+                            Button { selectedCovenId = nil } label: { Label("Strix", systemImage: selectedCovenId == nil ? "checkmark" : "") }
+                            Divider()
+                            ForEach(covens) { coven in
+                                Button { selectedCovenId = coven.id } label: { Label(coven.name, systemImage: selectedCovenId == coven.id ? "checkmark" : "") }
+                            }
+                            Divider()
+                            Button { showCreateCoven = true } label: { Label("New Coven", systemImage: "plus") }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(scopeTitle)
+                                    .font(.headline)
+                                Image(systemName: "chevron.down")
+                                    .font(.caption)
+                            }
+                            .foregroundColor(.aicovenTextPrimary)
+                        }
                     }
-                    .foregroundColor(.aicovenTeal)
+                    ToolbarItem(placement: .primaryAction) {
+                        Button { showNewThread = true } label: { Image(systemName: "square.and.pencil") }
+                            .foregroundColor(.aicovenTeal)
+                    }
                 }
-            }
-            .sheet(isPresented: $showCreateCoven) {
-                // Pass StoreService so CreateCovenSheet can check entitlements
-                CreateCovenSheet(onCreated: { coven in
-                    Task {
-                        await loadCovens()
-                        selectedCovenItem = coven
+                .task { await loadCovens() }
+                .task(id: selectedCovenId) { await loadThreads() }
+                .sheet(isPresented: $showCreateCoven) {
+                    CreateCovenSheet(onCreated: { coven in
+                        Task {
+                            await loadCovens()
+                            selectedCovenId = coven.id
+                        }
+                    })
+                    .environmentObject(StoreService.shared)
+                }
+                .sheet(isPresented: $showNewThread) {
+                    NewThreadView(covenId: selectedCovenId) { thread in
+                        Task {
+                            await loadThreads()
+                            selectedThread = thread
+                        }
                     }
-                })
-                .environmentObject(StoreService.shared)
-            }
-            .alert("Error", isPresented: Binding(
-                get: { errorMessage != nil },
-                set: { if !$0 { errorMessage = nil } }
-            )) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                if let errorMessage { Text(errorMessage) }
-            }
-            .navigationDestination(item: $selectedCovenItem) { coven in
-                MobileCovenThreadsView(coven: coven)
-            }
+                }
+                .navigationDestination(item: $selectedThread) { thread in
+                    if let selectedCoven {
+                        MobileCovenChatView(thread: thread, coven: selectedCoven)
+                    } else {
+                        PersonalChatView(
+                            thread: thread,
+                            onEditAgent: { showStrixSettings = true },
+                            onBack: { selectedThread = nil }
+                        )
+                    }
+                }
+                .navigationDestination(isPresented: $showMemory) {
+                    if let selectedCoven {
+                        MobileCovenMemoryView(coven: selectedCoven)
+                    } else {
+                        MobileMemoryRootView()
+                    }
+                }
+                .sheet(isPresented: $showStrixSettings) {
+                    NavigationStack {
+                        StrixSettingsView(onClose: { showStrixSettings = false })
+                            .environmentObject(StoreService.shared)
+                    }
+                }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .task { await loadCovens() }
     }
 
     private func loadCovens() async {
-        isLoading = true
-        defer { isLoading = false }
-
         do {
             covens = try await CovenService.shared.loadCovens()
         } catch {
-            errorMessage = error.localizedDescription
-            covens = []
-        }
-    }
-}
-
-/// Threads list for a specific coven
-struct MobileCovenThreadsView: View {
-    let coven: Coven
-    @State private var threads: [Thread] = []
-    @State private var isLoading = true
-    @State private var showNewThread = false
-    @State private var errorMessage: String?
-    @State private var selectedThread: Thread?
-
-    var body: some View {
-        ZStack {
-            NebulaBackground()
-
-            List {
-                ForEach(threads) { thread in
-                    Button {
-                        selectedThread = thread
-                    } label: {
-                        HStack(spacing: Spacing.sm) {
-                            IconBadge(icon: "message", size: 28, color: .aicovenTeal)
-                            VStack(alignment: .leading, spacing: Spacing.xxs) {
-                                HStack(spacing: 4) {
-                                    Text(thread.title ?? "Untitled Chat")
-                                        .font(.aicovenBody)
-                                        .foregroundColor(.aicovenTextPrimary)
-
-                                    if let agentName = thread.agentName {
-                                        Text("• \(agentName)")
-                                            .font(.aicovenBody)
-                                            .foregroundColor(.aicovenTextSecondary)
-                                    }
-                                }
-
-                                HStack(spacing: 4) {
-                                    if let model = thread.agentModel {
-                                        Text(model)
-                                            .font(.aicovenCaption)
-                                            .foregroundColor(.aicovenTeal)
-                                    }
-
-                                    if thread.agentModel != nil, thread.updatedAt != nil {
-                                        Text("•")
-                                            .font(.aicovenCaption)
-                                            .foregroundColor(.aicovenTextTertiary)
-                                    }
-
-                                    if let updatedAt = thread.updatedAt {
-                                        Text(relativeTime(from: updatedAt))
-                                            .font(.aicovenCaption)
-                                            .foregroundColor(.aicovenTextSecondary)
-                                    }
-                                }
-                            }
-                            Spacer()
-                            #if os(iOS)
-                            Image(systemName: "chevron.right")
-                                .font(.aicovenCaption)
-                                .foregroundColor(.aicovenTextTertiary)
-                            #endif
-                        }
-                        .padding(.vertical, Spacing.xs)
-                    }
-                    .listRowBackground(Color.aicovenGlass)
-                }
-                .onDelete(perform: deleteThreads)
-            }
-            .scrollContentBackground(.hidden)
-
-            if !isLoading, threads.isEmpty {
-                VStack(spacing: Spacing.lg) {
-                    IconBadge(icon: "sparkles", size: 60, color: .aicovenTeal)
-                    Text("This coven is ready")
-                        .font(.aicovenH2)
-                        .foregroundColor(.aicovenTextPrimary)
-                    Text("Start a new chat, or add agent roles from the … menu in the top right.")
-                        .font(.aicovenBody)
-                        .foregroundColor(.aicovenTextSecondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, Spacing.lg)
-                    GradientButton("Start New Chat", icon: "square.and.pencil", style: .primary) {
-                        showNewThread = true
-                    }
-                }
-                .padding(Spacing.xl)
-            }
-        }
-        .navigationTitle(coven.name)
-        .toolbar {
-            // New thread
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showNewThread = true
-                } label: {
-                    Image(systemName: "square.and.pencil")
-                }
-                .foregroundColor(.aicovenTeal)
-            }
-            #if os(iOS)
-            // Coven tools: memory & roles
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Menu {
-                    NavigationLink(destination: MobileCovenMemoryView(coven: coven)) {
-                        Label("Memory", systemImage: "brain")
-                    }
-                    NavigationLink(destination: MobileCovenRolesView(coven: coven)) {
-                        Label("Agent Roles", systemImage: "person.3")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .foregroundColor(.aicovenTeal)
-                }
-            }
-            #endif
-        }
-        .sheet(isPresented: $showNewThread) {
-            NewThreadView(covenId: coven.id) { thread in
-                Task {
-                    await loadThreads()
-                    selectedThread = thread
-                }
-            }
-        }
-        .alert("Error", isPresented: Binding(
-            get: { errorMessage != nil },
-            set: { if !$0 { errorMessage = nil } }
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            if let errorMessage { Text(errorMessage) }
-        }
-        .task { await loadThreads() }
-        .navigationDestination(item: $selectedThread) { thread in
-            MobileCovenChatView(thread: thread, coven: coven)
-        }
-    }
-
-    private func deleteThreads(at offsets: IndexSet) {
-        let idsToDelete = offsets.map { threads[$0].id }
-
-        Task {
-            for id in idsToDelete {
-                do {
-                    try await ThreadService.shared.deleteThread(threadId: id)
-                    if let index = threads.firstIndex(where: { $0.id == id }) {
-                        threads.remove(at: index)
-                    }
-                    if selectedThread?.id == id {
-                        selectedThread = nil
-                    }
-                } catch {
-                    AppErrorReporter.log(error: error, context: "MobileCovenThreadsView.deleteThreads")
-                }
-            }
+            print("❌ Failed to load covens: \(error)")
         }
     }
 
@@ -743,11 +251,66 @@ struct MobileCovenThreadsView: View {
         isLoading = true
         defer { isLoading = false }
         do {
-            threads = try await ThreadService.shared.loadThreads(covenId: coven.id)
+            threads = try await ThreadService.shared.loadThreads(covenId: selectedCovenId)
         } catch {
-            errorMessage = error.localizedDescription
-            threads = []
+            print("❌ Failed to load threads: \(error)")
         }
+    }
+
+    private func deleteThread(_ thread: Thread) {
+        Task {
+            do {
+                try await ThreadService.shared.deleteThread(threadId: thread.id)
+                if let index = threads.firstIndex(where: { $0.id == thread.id }) {
+                    threads.remove(at: index)
+                }
+            } catch {
+                print("❌ Failed to delete thread: \(error)")
+            }
+        }
+    }
+}
+
+struct ThreadRowView: View {
+    let thread: Thread
+    var body: some View {
+        HStack(spacing: Spacing.sm) {
+            IconBadge(icon: "message", size: 28, color: .aicovenTeal)
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                HStack(spacing: 4) {
+                    Text(thread.title ?? "Untitled Chat")
+                        .font(.aicovenBody)
+                        .foregroundColor(.aicovenTextPrimary)
+                    if let agentName = thread.agentName {
+                        Text("• \(agentName)")
+                            .font(.aicovenBody)
+                            .foregroundColor(.aicovenTextSecondary)
+                    }
+                }
+                HStack(spacing: 4) {
+                    if let model = thread.agentModel {
+                        Text(model)
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTeal)
+                    }
+                    if let updatedAt = thread.updatedAt {
+                        if thread.agentModel != nil {
+                            Text("•")
+                                .font(.aicovenCaption)
+                                .foregroundColor(.aicovenTextTertiary)
+                        }
+                        Text(relativeTime(from: updatedAt))
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextSecondary)
+                    }
+                }
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.aicovenCaption)
+                .foregroundColor(.aicovenTextTertiary)
+        }
+        .padding(.vertical, Spacing.xs)
     }
 
     private func relativeTime(from date: Date) -> String {
@@ -755,19 +318,12 @@ struct MobileCovenThreadsView: View {
         let now = Date()
         let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date, to: now)
 
-        if let years = components.year, years > 0 {
-            return "\(years)y"
-        } else if let months = components.month, months > 0 {
-            return "\(months)mo"
-        } else if let days = components.day, days > 0 {
-            return "\(days)d"
-        } else if let hours = components.hour, hours > 0 {
-            return "\(hours)h"
-        } else if let minutes = components.minute, minutes > 0 {
-            return "\(minutes)m"
-        } else {
-            return "now"
-        }
+        if let years = components.year, years > 0 { return "\(years)y" }
+        else if let months = components.month, months > 0 { return "\(months)mo" }
+        else if let days = components.day, days > 0 { return "\(days)d" }
+        else if let hours = components.hour, hours > 0 { return "\(hours)h" }
+        else if let minutes = components.minute, minutes > 0 { return "\(minutes)m" }
+        else { return "now" }
     }
 }
 

@@ -34,7 +34,7 @@ struct RichMessageBubble: View {
                 .padding(16)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
-                        .fill(isUser ? Color.aicovenPurple : Color(hex: "#1E1E1E"))
+                        .fill(isUser ? Color.aicovenPurple : Color.aicovenSurfaceElevated)
                         .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
                 )
                 .foregroundStyle(isUser ? Color.white : Color.aicovenTextPrimary)

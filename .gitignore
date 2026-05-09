@@ -4,3 +4,10 @@
 swift/AICoven/Configuration/Secrets.xcconfig
 swift/AICoven/build_error.log
 swift/AICoven/build.log
+build.log
+build2.log
+build_mobile.log
+build_mobile_final.log
+rewrite_mobile.py
+update_pbxproj.rb
+swift/AICoven/AICoven Local.xcodeproj/project.pbxproj

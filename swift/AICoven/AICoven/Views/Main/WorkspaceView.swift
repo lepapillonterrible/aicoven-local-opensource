@@ -9,6 +9,10 @@ import UniformTypeIdentifiers
 /// Redesigned workspace with enhanced sidebar and profile menu
 struct WorkspaceView: View {
     @EnvironmentObject var authService: AuthService
+
+    let initialCoven: Coven?
+    let initialThread: Thread?
+
     @State private var selectedCoven: Coven?
     @State private var openTabs: [WorkspaceTab] = []
     @State private var activeTabId: String?
@@ -20,6 +24,20 @@ struct WorkspaceView: View {
     private let analytics = AnalyticsService.shared
 
     let onSwitchToHome: () -> Void
+
+    init(initialCoven: Coven? = nil, initialThread: Thread? = nil, onSwitchToHome: @escaping () -> Void) {
+        self.initialCoven = initialCoven
+        self.initialThread = initialThread
+        self.onSwitchToHome = onSwitchToHome
+        // Initialize State with the passed initial values
+        _selectedCoven = State(initialValue: initialCoven)
+
+        if let thread = initialThread {
+            let tab = WorkspaceTab.thread(thread)
+            _openTabs = State(initialValue: [tab])
+            _activeTabId = State(initialValue: tab.id)
+        }
+    }
 
     var body: some View {
         ZStack {
@@ -33,7 +51,6 @@ struct WorkspaceView: View {
                     selectedCoven: $selectedCoven,
                     openTabs: $openTabs,
                     activeTabId: $activeTabId,
-                    threadRefreshTrigger: $threadRefreshTrigger,
                     showNewThreadSheet: $showNewThreadSheet,
                     roles: roles,
                     onAddRole: handleAddRole,

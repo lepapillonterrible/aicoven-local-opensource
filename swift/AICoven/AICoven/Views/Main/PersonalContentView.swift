@@ -402,7 +402,7 @@ struct PersonalChatView: View {
                                         .padding(16)
                                         .background(
                                             RoundedRectangle(cornerRadius: 12)
-                                                .fill(Color(hex: "#1E1E1E"))
+                                                .fill(Color.aicovenSurfaceElevated)
                                                 .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
                                         )
                                 }
