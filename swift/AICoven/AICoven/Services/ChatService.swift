@@ -2321,8 +2321,9 @@ extension ChatService {
 
         var trimmed = String(query[query.startIndex ..< earliest])
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let trailingPunctuation: Set<Character> = [",", ".", ";", "!"]
 
-        while trimmed.last == "," || trimmed.last == "." || trimmed.last == ";" || trimmed.last == "!" {
+        while let last = trimmed.last, trailingPunctuation.contains(last) {
             trimmed.removeLast()
             trimmed = trimmed.trimmingCharacters(in: .whitespacesAndNewlines)
         }
