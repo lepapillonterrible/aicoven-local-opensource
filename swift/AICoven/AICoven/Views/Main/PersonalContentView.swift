@@ -807,6 +807,9 @@ struct PersonalChatView: View {
                             )
                             messages.append(aiMessage)
                             await ChatService.shared.addLocalMessage(aiMessage)
+                            Task {
+                                await ChatService.shared.updateThreadSummary(threadId: thread.id)
+                            }
 
                             lastResponse = nil
                             lastResponseId = aiMessage.id

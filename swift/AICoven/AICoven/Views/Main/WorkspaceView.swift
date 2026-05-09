@@ -80,6 +80,7 @@ struct WorkspaceView: View {
             analytics.trackScreenView(screenName: "WorkspaceView", screenClass: "WorkspaceView")
         }
         .onChange(of: selectedCoven) { _, newValue in
+            pruneTabsForSelectedCoven(newValue?.id)
             if let coven = newValue {
                 analytics.trackCovenView(covenId: coven.id)
                 Task {
@@ -88,6 +89,31 @@ struct WorkspaceView: View {
             } else {
                 roles = []
             }
+        }
+    }
+
+    private func pruneTabsForSelectedCoven(_ covenId: String?) {
+        openTabs.removeAll { tab in
+            switch tab.type {
+            case let .thread(thread):
+                thread.covenId != covenId
+            case let .addRole(tabCovenId):
+                tabCovenId != covenId
+            case .editRole:
+                true
+            case let .memoryList(tabCovenId),
+                 let .memoryProposals(tabCovenId),
+                 let .addMemory(tabCovenId):
+                tabCovenId != covenId
+            case let .editMemory(_, tabCovenId):
+                tabCovenId != covenId
+            default:
+                false
+            }
+        }
+
+        if !openTabs.contains(where: { $0.id == activeTabId }) {
+            activeTabId = openTabs.last?.id
         }
     }
 

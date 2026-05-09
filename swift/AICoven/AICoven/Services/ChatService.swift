@@ -570,6 +570,11 @@ actor ChatService {
         // and leave the user with zero output.
         if isLocalModel, toolsAllowed, remainingToolSteps > 0 {
             do {
+                // Precedence matters for local models:
+                // 1. deterministic multi-step chains
+                // 2. native tools with keyword/semantic matching
+                // 3. MCP fuzzy fallback
+                // This keeps the most structured / lowest-ambiguity path first.
                 // Try multi-step tool chains first. ToolChainResolver detects
                 // composite intents ("search X and summarize", "read file and
                 // explain", "time in X and Y") and returns an ordered chain.
@@ -2103,7 +2108,7 @@ extension ChatService {
         if searchPatterns.contains(where: { lower.contains($0) }) {
             return ChatToolInvocation(
                 tool: "web_search",
-                input: AnyJSONValue(["query": AnyJSONValue(userMessage)]),
+                input: AnyJSONValue(["query": AnyJSONValue(extractWebSearchQuery(from: userMessage))]),
                 reason: "User asked to search/look up information"
             )
         }
@@ -2199,8 +2204,10 @@ extension ChatService {
             allTools: candidates
         )
 
-        // Require a meaningful score — 0.3 is conservative enough to avoid
-        // false positives while still catching intent the keywords missed.
+        // Require a meaningful score. 0.3 is a hand-tuned threshold from
+        // local-model spot checks during this feature work: lower values let
+        // loosely-related tools win too often, while higher values started
+        // dropping obvious "read this file"/"list files" matches.
         guard score >= 0.3 else { return nil }
 
         #if DEBUG
@@ -2216,7 +2223,7 @@ extension ChatService {
         let toolInput: [String: AnyJSONValue]
         switch topTool.name {
         case "web_search":
-            toolInput = ["query": AnyJSONValue(userMessage)]
+            toolInput = ["query": AnyJSONValue(extractWebSearchQuery(from: userMessage))]
         case "web_browse":
             // Try to extract a URL; if none found, skip.
             guard let url = extractURL(from: userMessage) else { return nil }
@@ -2251,6 +2258,67 @@ extension ChatService {
     }
 
     // MARK: - Input Extraction Helpers
+
+    /// Extract the most likely standalone search query from a user message.
+    /// This strips common lead-in phrases ("search for", "find information
+    /// about") plus follow-on clauses such as "and summarize it".
+    nonisolated static func extractWebSearchQuery(from message: String) -> String {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+
+        let continuations = [
+            "and then summarize it", "and then summarize",
+            "and summarize it", "and summarize", "then summarize it", "then summarize",
+            "and then explain it", "and then explain",
+            "and explain it", "and explain", "then explain it", "then explain",
+            "and then tell me about it", "and then tell me",
+            "and tell me about it", "and tell me", "then tell me about it", "then tell me",
+        ]
+        let triggers = [
+            "search for ", "look up ", "find out about ", "find information about ",
+            "find info about ", "find me information about ", "find me info about ",
+            "google ",
+        ]
+
+        for trigger in triggers {
+            guard let triggerRange = trimmed.range(of: trigger, options: .caseInsensitive) else { continue }
+            let candidate = String(trimmed[triggerRange.upperBound...])
+            let query = trimSearchContinuation(candidate, continuations: continuations)
+            if !query.isEmpty {
+                return query
+            }
+        }
+
+        let weatherTriggers = [
+            "what's the weather in ", "what is the weather in ", "weather in ", "current weather in ",
+        ]
+        for trigger in weatherTriggers {
+            guard let triggerRange = trimmed.range(of: trigger, options: .caseInsensitive) else { continue }
+            let candidate = String(trimmed[triggerRange.lowerBound...])
+            let query = trimSearchContinuation(candidate, continuations: continuations)
+            if !query.isEmpty {
+                return query
+            }
+        }
+
+        return trimSearchContinuation(trimmed, continuations: continuations)
+    }
+
+    private nonisolated static func trimSearchContinuation(
+        _ query: String,
+        continuations: [String]
+    ) -> String {
+        var earliest = query.endIndex
+        for continuation in continuations {
+            if let range = query.range(of: continuation, options: .caseInsensitive),
+               range.lowerBound < earliest {
+                earliest = range.lowerBound
+            }
+        }
+
+        return String(query[query.startIndex ..< earliest])
+            .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+    }
 
     /// Extract a URL from a user message. Uses `NSDataDetector` for robust
     /// link detection, with fallback to backtick/quoted strings.
@@ -2344,6 +2412,9 @@ extension ChatService {
     /// external access (email, calendar, messages, bank statements, etc.).
     /// Used to inject a hallucination guard for local models that would
     /// otherwise confidently fabricate answers about user-specific content.
+    /// This is intentionally heuristic: it favors a low-cost first-pass guard
+    /// over perfect recall, so some edge cases may still require future
+    /// pattern additions.
     nonisolated static func detectPersonalDataQuery(_ userMessage: String) -> Bool {
         let lower = userMessage.lowercased()
         let personalPatterns = [

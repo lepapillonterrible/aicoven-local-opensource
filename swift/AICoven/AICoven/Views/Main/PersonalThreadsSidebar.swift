@@ -454,9 +454,6 @@ struct PersonalThreadRow: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button("Rename") { /* TODO: */ }
-            Button("Pin") { /* TODO: */ }
-            Divider()
             Button("Delete", role: .destructive) {
                 onDelete()
             }

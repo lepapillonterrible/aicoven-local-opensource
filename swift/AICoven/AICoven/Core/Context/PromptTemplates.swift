@@ -583,14 +583,29 @@ enum PromptTemplates {
             if !compact, !tool.inputExamples.isEmpty {
                 lines.append("Input examples:")
                 for ex in tool.inputExamples {
-                    let params = ex.input.map { "\"\($0.key)\": \"\($0.value)\"" }.joined(separator: ", ")
-                    let inputStr = ex.input.isEmpty ? "{}" : "{\(params)}"
+                    let inputStr = formatToolInputExampleJSON(ex.input)
                     lines.append("  \(ex.description): \(inputStr)")
                 }
             }
         }
 
         return lines.joined(separator: "\n")
+    }
+
+    static func formatToolInputExampleJSON(_ input: [String: AnyJSONValue]) -> String {
+        guard !input.isEmpty else { return "{}" }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+
+        guard
+            let data = try? encoder.encode(input),
+            let json = String(data: data, encoding: .utf8)
+        else {
+            return "{}"
+        }
+
+        return json
     }
 
     // MARK: - Default Tool Sets

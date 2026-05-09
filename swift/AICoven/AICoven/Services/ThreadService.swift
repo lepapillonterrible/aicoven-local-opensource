@@ -316,7 +316,7 @@ actor ThreadService {
             let newAgentId = agentId ?? thread.agentId
             let newPinned = isPinned ?? thread.isPinned
             let newArchived = isArchived ?? thread.isArchived
-            let updated = await Thread(
+            let updated = Thread(
                 id: thread.id,
                 userId: thread.userId,
                 covenId: thread.covenId,

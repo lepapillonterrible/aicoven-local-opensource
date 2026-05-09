@@ -76,6 +76,7 @@ struct MobileChatsRootView: View {
     @State private var showStrixSettings = false
     @State private var selectedThread: Thread?
     @State private var showMemory = false
+    @State private var errorMessage: String?
 
     private var selectedCoven: Coven? {
         guard let selectedCovenId else { return nil }
@@ -171,10 +172,18 @@ struct MobileChatsRootView: View {
                 .toolbar {
                     ToolbarItem(placement: .principal) {
                         Menu {
-                            Button { selectedCovenId = nil } label: { Label("Strix", systemImage: selectedCovenId == nil ? "checkmark" : "") }
+                            Button {
+                                setSelectedScope(covenId: nil)
+                            } label: {
+                                scopeMenuLabel("Strix", isSelected: selectedCovenId == nil)
+                            }
                             Divider()
                             ForEach(covens) { coven in
-                                Button { selectedCovenId = coven.id } label: { Label(coven.name, systemImage: selectedCovenId == coven.id ? "checkmark" : "") }
+                                Button {
+                                    setSelectedScope(covenId: coven.id)
+                                } label: {
+                                    scopeMenuLabel(coven.name, isSelected: selectedCovenId == coven.id)
+                                }
                             }
                             Divider()
                             Button { showCreateCoven = true } label: { Label("New Coven", systemImage: "plus") }
@@ -199,7 +208,7 @@ struct MobileChatsRootView: View {
                     CreateCovenSheet(onCreated: { coven in
                         Task {
                             await loadCovens()
-                            selectedCovenId = coven.id
+                            setSelectedScope(covenId: coven.id)
                         }
                     })
                     .environmentObject(StoreService.shared)
@@ -236,6 +245,16 @@ struct MobileChatsRootView: View {
                             .environmentObject(StoreService.shared)
                     }
                 }
+                .alert("Error", isPresented: Binding(
+                    get: { errorMessage != nil },
+                    set: { if !$0 { errorMessage = nil } }
+                )) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    if let errorMessage {
+                        Text(errorMessage)
+                    }
+                }
         }
     }
 
@@ -243,7 +262,12 @@ struct MobileChatsRootView: View {
         do {
             covens = try await CovenService.shared.loadCovens()
         } catch {
-            print("❌ Failed to load covens: \(error)")
+            AppErrorReporter.log(error: error, context: "MobileChatsRootView.loadCovens")
+            covens = []
+            threads = []
+            selectedThread = nil
+            setSelectedScope(covenId: nil)
+            errorMessage = "Couldn’t load covens right now."
         }
     }
 
@@ -253,7 +277,10 @@ struct MobileChatsRootView: View {
         do {
             threads = try await ThreadService.shared.loadThreads(covenId: selectedCovenId)
         } catch {
-            print("❌ Failed to load threads: \(error)")
+            AppErrorReporter.log(error: error, context: "MobileChatsRootView.loadThreads")
+            threads = []
+            selectedThread = nil
+            errorMessage = "Couldn’t load chats for this workspace."
         }
     }
 
@@ -265,9 +292,26 @@ struct MobileChatsRootView: View {
                     threads.remove(at: index)
                 }
             } catch {
-                print("❌ Failed to delete thread: \(error)")
+                AppErrorReporter.log(error: error, context: "MobileChatsRootView.deleteThread")
+                errorMessage = "Couldn’t delete that chat."
             }
         }
+    }
+
+    @ViewBuilder
+    private func scopeMenuLabel(_ title: String, isSelected: Bool) -> some View {
+        if isSelected {
+            Label(title, systemImage: "checkmark")
+        } else {
+            Text(title)
+        }
+    }
+
+    private func setSelectedScope(covenId: String?) {
+        guard selectedCovenId != covenId else { return }
+        selectedCovenId = covenId
+        selectedThread = nil
+        threads = []
     }
 }
 

@@ -49,9 +49,9 @@ struct HomeView: View {
                             showCreateCoven = true
                         }
                     },
-                    onSelectCoven: { _ in
-                        // Handle selecting a specific coven directly from the dropdown
-                        // Needs state changes to pass to WorkspaceView
+                    onSelectCoven: { coven in
+                        pendingCovenSelection = coven
+                        pendingThreadSelection = nil
                         currentWorkspace = .covens
                         analytics.trackTabSwitch(fromTab: "home", toTab: "covens")
                     }

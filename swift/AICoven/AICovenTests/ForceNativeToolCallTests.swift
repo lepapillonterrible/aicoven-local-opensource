@@ -26,6 +26,8 @@ final class ForceNativeToolCallTests: XCTestCase {
 
         XCTAssertNotNil(result)
         XCTAssertEqual(result?.tool, "web_search")
+        let query = (result?.input?.value as? [String: AnyJSONValue])?["query"]?.value as? String
+        XCTAssertEqual(query, "Swift concurrency")
     }
 
     func testForceNative_matchesWeatherIn() {
@@ -33,6 +35,8 @@ final class ForceNativeToolCallTests: XCTestCase {
 
         XCTAssertNotNil(result)
         XCTAssertEqual(result?.tool, "web_search")
+        let query = (result?.input?.value as? [String: AnyJSONValue])?["query"]?.value as? String
+        XCTAssertEqual(query, "What's the weather in Tokyo")
     }
 
     // MARK: - File read patterns (new)
@@ -211,5 +215,23 @@ final class ForceNativeToolCallTests: XCTestCase {
     func testExtractShellCommand_nilForNoCommand() {
         let cmd = ChatService.extractShellCommand(from: "Run the tests please")
         XCTAssertNil(cmd)
+    }
+
+    // MARK: - extractWebSearchQuery
+
+    func testExtractWebSearchQuery_stripsContinuationClauses() {
+        let query = ChatService.extractWebSearchQuery(
+            from: "Find me information about Swift concurrency and then summarize it"
+        )
+
+        XCTAssertEqual(query, "Swift concurrency")
+    }
+
+    func testExtractWebSearchQuery_fallsBackToWholeMessageWhenNoTrigger() {
+        let query = ChatService.extractWebSearchQuery(
+            from: "Latest news about Foundation models"
+        )
+
+        XCTAssertEqual(query, "Latest news about Foundation models")
     }
 }
