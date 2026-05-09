@@ -62,6 +62,9 @@ jobs:
       - name: Install SwiftFormat
         run: brew install swiftformat
 
+      - name: SwiftFormat version
+        run: swiftformat --version
+
       - name: Run SwiftFormat (check mode)
         run: |
           # Lint without the default disk cache so CI matches a fresh checkout (local
