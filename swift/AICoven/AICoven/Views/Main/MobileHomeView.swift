@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Root mobile UI: tab bar for Home / Covens / Profile
+/// Root mobile UI: tab bar for Home / Workspace / Activity / Profile
 struct MobileRootView: View {
     var body: some View {
         TabView {
@@ -9,9 +9,19 @@ struct MobileRootView: View {
                     Label("Chats", systemImage: "bubble.left.and.bubble.right.fill")
                 }
 
+            MobileWorkspaceRootView()
+                .tabItem {
+                    Label("Workspace", systemImage: "briefcase.fill")
+                }
+
+            MobileActivityRootView()
+                .tabItem {
+                    Label("Activity", systemImage: "bell.fill")
+                }
+
             MobileProfileRootView()
                 .tabItem {
-                    Label("Profile", systemImage: "person.crop.circle")
+                    Label("Profile", systemImage: "person.crop.circle.fill")
                 }
         }
         .tint(.aicovenTeal)
@@ -76,6 +86,7 @@ struct MobileChatsRootView: View {
     @State private var showStrixSettings = false
     @State private var selectedThread: Thread?
     @State private var showMemory = false
+    @State private var errorMessage: String?
 
     private var selectedCoven: Coven? {
         guard let selectedCovenId else { return nil }
@@ -171,10 +182,22 @@ struct MobileChatsRootView: View {
                 .toolbar {
                     ToolbarItem(placement: .principal) {
                         Menu {
-                            Button { selectedCovenId = nil } label: { Label("Strix", systemImage: selectedCovenId == nil ? "checkmark" : "") }
+                            Button { selectedCovenId = nil } label: {
+                                if selectedCovenId == nil {
+                                    Label("Strix", systemImage: "checkmark")
+                                } else {
+                                    Text("Strix")
+                                }
+                            }
                             Divider()
                             ForEach(covens) { coven in
-                                Button { selectedCovenId = coven.id } label: { Label(coven.name, systemImage: selectedCovenId == coven.id ? "checkmark" : "") }
+                                Button { selectedCovenId = coven.id } label: {
+                                    if selectedCovenId == coven.id {
+                                        Label(coven.name, systemImage: "checkmark")
+                                    } else {
+                                        Text(coven.name)
+                                    }
+                                }
                             }
                             Divider()
                             Button { showCreateCoven = true } label: { Label("New Coven", systemImage: "plus") }
@@ -236,6 +259,14 @@ struct MobileChatsRootView: View {
                             .environmentObject(StoreService.shared)
                     }
                 }
+                .alert("Error", isPresented: Binding(
+                    get: { errorMessage != nil },
+                    set: { if !$0 { errorMessage = nil } }
+                )) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    if let errorMessage { Text(errorMessage) }
+                }
         }
     }
 
@@ -243,7 +274,8 @@ struct MobileChatsRootView: View {
         do {
             covens = try await CovenService.shared.loadCovens()
         } catch {
-            print("❌ Failed to load covens: \(error)")
+            AppErrorReporter.log(error: error, context: "MobileHomeView.loadCovens")
+            covens = []
         }
     }
 
@@ -253,7 +285,9 @@ struct MobileChatsRootView: View {
         do {
             threads = try await ThreadService.shared.loadThreads(covenId: selectedCovenId)
         } catch {
-            print("❌ Failed to load threads: \(error)")
+            AppErrorReporter.log(error: error, context: "MobileHomeView.loadThreads")
+            threads = []
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -265,7 +299,8 @@ struct MobileChatsRootView: View {
                     threads.remove(at: index)
                 }
             } catch {
-                print("❌ Failed to delete thread: \(error)")
+                AppErrorReporter.log(error: error, context: "MobileHomeView.deleteThread")
+                errorMessage = error.localizedDescription
             }
         }
     }
@@ -498,21 +533,6 @@ struct MobileProfileRootView: View {
                         NavigationLink(destination: EnhancedSettingsView()) {
                             Label("Settings", systemImage: "gearshape")
                         }
-                        NavigationLink(destination: ProviderKeysView()) {
-                            Label("Provider Keys", systemImage: "key.fill")
-                        }
-                        NavigationLink(destination: UsageSettingsView()) {
-                            Label("Budgets & Usage", systemImage: "chart.bar.xaxis")
-                        }
-                        NavigationLink(destination: StrixSettingsView()) {
-                            Label("Default Agent", systemImage: "sparkles")
-                        }
-                        NavigationLink(destination: ConnectedAppsView().environmentObject(StoreService.shared)) {
-                            Label("Connected Apps", systemImage: "app.connected.to.app.below.fill")
-                        }
-                        NavigationLink(destination: MCPServerManagementView()) {
-                            Label("MCP Servers", systemImage: "server.rack")
-                        }
                     }
 
                     Section("Premium") {
@@ -543,4 +563,95 @@ struct MobileProfileRootView: View {
     MobileRootView()
         .environmentObject(AppState.shared)
         .environmentObject(AuthService.shared)
+}
+
+// MARK: - Mobile Workspace Root
+
+struct MobileWorkspaceRootView: View {
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                NebulaBackground().ignoresSafeArea()
+                List {
+                    Section {
+                        NavigationLink(destination: ProviderKeysView()) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Label("Provider Keys", systemImage: "key.fill")
+                                    .font(.headline)
+                                Text("Connect and manage API keys")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 4)
+                        }
+
+                        NavigationLink(destination: UsageSettingsView()) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Label("Budgets & Usage", systemImage: "chart.bar.xaxis")
+                                    .font(.headline)
+                                Text("Set limits and monitor usage")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 4)
+                        }
+
+                        NavigationLink(destination: ConnectedAppsView().environmentObject(StoreService.shared)) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Label("Connected Apps", systemImage: "app.connected.to.app.below.fill")
+                                    .font(.headline)
+                                Text("Manage external integrations")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 4)
+                        }
+
+                        NavigationLink(destination: MCPServerManagementView()) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Label("MCP Servers", systemImage: "server.rack")
+                                    .font(.headline)
+                                Text("Manage connected MCP servers")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+                .scrollContentBackground(.hidden)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .navigationTitle("Workspace")
+        }
+    }
+}
+
+// MARK: - Mobile Activity Root
+
+struct MobileActivityRootView: View {
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                NebulaBackground().ignoresSafeArea()
+
+                VStack(spacing: Spacing.lg) {
+                    Image(systemName: "bell.slash")
+                        .font(.system(size: 60))
+                        .foregroundColor(.aicovenTextSecondary)
+
+                    Text("No Activity Yet")
+                        .font(.aicovenH2)
+
+                    Text("Local-first notifications and activity logs will appear here.")
+                        .font(.aicovenBody)
+                        .foregroundColor(.aicovenTextSecondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .navigationTitle("Activity")
+        }
+    }
 }
