@@ -74,11 +74,12 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
         let defaults = UserDefaults.standard
 
         // Base URL is optional (defaults to Together AI)
-        let baseURL: URL? = if let urlString = defaults.string(forKey: UserScope.scopedKey("hermes_base_url")), !urlString.isEmpty,
-                               let url = URL(string: urlString) {
+        let baseURL: URL? = if let urlString = defaults.string(forKey: UserScope.scopedKey("hermes_base_url")),
+            !urlString.isEmpty,
+            let url = URL(string: urlString) {
             url
         } else if let envURL = ProcessInfo.processInfo.environment["HERMES_BASE_URL"],
-                  let url = URL(string: envURL) {
+            let url = URL(string: envURL) {
             url
         } else {
             nil
@@ -219,7 +220,7 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
         let isSelfHosted = baseURL != HermesLLMClient.defaultBaseURL
         let resolvedModel = resolveModelID(model, isSelfHosted: isSelfHosted)
 
-        let url = baseURL.appendingPathComponent("/v1/chat/completions")
+        let url = baseURL.appendingPathComponent("v1/chat/completions")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         if let apiKey {
@@ -277,7 +278,6 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
         }
 
         let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
         let decoded = try decoder.decode(ResponseBody.self, from: data)
         guard let first = decoded.choices.first else {
             throw NSError(domain: "HermesLLMClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No choices in response"])
@@ -327,7 +327,7 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
             let data: [Item]
         }
 
-        let url = baseURL.appendingPathComponent("/v1/embeddings")
+        let url = baseURL.appendingPathComponent("v1/embeddings")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         if let apiKey {
@@ -360,7 +360,6 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
         }
 
         let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
         let decoded = try decoder.decode(EmbeddingResponse.self, from: data)
         return decoded.data.map(\.embedding)
     }

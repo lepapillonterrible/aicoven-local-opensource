@@ -46,17 +46,22 @@ enum LLMConfiguration {
 
         // OpenClaw: Self-hosted OpenAI-compatible proxy/gateway
         // Base URL required; API key is optional (many local deployments don't require auth)
-        if let openClawURL = defaults.string(forKey: UserScope.scopedKey("openclaw_base_url")), !openClawURL.isEmpty {
-            result["openclaw"] = OpenClawLLMClient(baseURL: URL(string: openClawURL))
+        if let openClawURL = defaults.string(forKey: UserScope.scopedKey("openclaw_base_url")),
+           !openClawURL.isEmpty,
+           let openClawBaseURL = URL(string: openClawURL) {
+            result["openclaw"] = OpenClawLLMClient(baseURL: openClawBaseURL)
         }
 
         // Hermes: Nous Research Hermes models via Together AI or self-hosted
         let hermesKey = defaults.string(forKey: UserScope.scopedKey("hermes_api_key"))
             ?? defaults.string(forKey: UserScope.scopedKey("together_api_key"))
+            ?? ProcessInfo.processInfo.environment["HERMES_API_KEY"]
+            ?? ProcessInfo.processInfo.environment["TOGETHER_API_KEY"]
         let hermesBaseURL = defaults.string(forKey: UserScope.scopedKey("hermes_base_url"))
+            ?? ProcessInfo.processInfo.environment["HERMES_BASE_URL"]
 
-        let hasKey = hermesKey != nil && !hermesKey!.isEmpty
-        let hasBaseURL = hermesBaseURL != nil && !hermesBaseURL!.isEmpty
+        let hasKey = !(hermesKey?.isEmpty ?? true)
+        let hasBaseURL = !(hermesBaseURL?.isEmpty ?? true)
 
         if hasKey || hasBaseURL {
             result["hermes"] = HermesLLMClient(
