@@ -461,7 +461,7 @@ struct PersonalThreadRow: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            // Rename / pin are server-backed features; expose only when implemented.
+            // Rename / pin: omit until wired to persistence APIs (avoid no-op menu items).
             Button("Delete", role: .destructive) {
                 onDelete()
             }
