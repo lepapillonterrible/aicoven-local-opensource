@@ -498,7 +498,21 @@ struct MobileProfileRootView: View {
                         NavigationLink(destination: EnhancedSettingsView()) {
                             Label("Settings", systemImage: "gearshape")
                         }
-                        // Duplicated preferences removed, users can access these via Settings.
+                        NavigationLink(destination: ProviderKeysView()) {
+                            Label("Provider Keys", systemImage: "key.fill")
+                        }
+                        NavigationLink(destination: UsageSettingsView()) {
+                            Label("Budgets & Usage", systemImage: "chart.bar.xaxis")
+                        }
+                        NavigationLink(destination: StrixSettingsView()) {
+                            Label("Default Agent", systemImage: "sparkles")
+                        }
+                        NavigationLink(destination: ConnectedAppsView().environmentObject(StoreService.shared)) {
+                            Label("Connected Apps", systemImage: "app.connected.to.app.below.fill")
+                        }
+                        NavigationLink(destination: MCPServerManagementView()) {
+                            Label("MCP Servers", systemImage: "server.rack")
+                        }
                     }
 
                     Section("Premium") {
