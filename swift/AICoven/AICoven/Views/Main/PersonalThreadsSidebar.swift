@@ -461,9 +461,7 @@ struct PersonalThreadRow: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button("Rename") { /* TODO: */ }
-            Button("Pin") { /* TODO: */ }
-            Divider()
+            // Rename / pin are server-backed features; expose only when implemented.
             Button("Delete", role: .destructive) {
                 onDelete()
             }
