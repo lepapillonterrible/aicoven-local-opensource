@@ -2,28 +2,73 @@ import SwiftUI
 
 // MARK: - Brand Colors
 
-/// AICoven brand color palette
+/// AICoven brand color palette.
+///
+/// These names are kept as computed aliases over the currently active
+/// `AicovenTheme` so the 40+ existing sites that reference
+/// `Color.aicovenTeal`, `Color.aicovenDark`, etc. continue to compile
+/// while automatically picking up whichever theme the user has chosen
+/// in Settings.
 extension Color {
-    // Primary brand colors
-    static let aicovenTeal = Color(hex: "#30FFC4") // Primary accent - cyan/teal
-    static let aicovenPurple = Color(hex: "#9C5FFF") // Secondary accent - purple
-    static let aicovenPink = Color(hex: "#BE5AF8") // Tertiary accent - pink
-    static let aicovenDark = Color(hex: "#0D0C0E") // Dark background
+    /// Primary brand colors
+    static var aicovenTeal: Color {
+        ThemeManager.shared.theme.accentPrimary
+    }
 
-    // UI colors
-    static let aicovenGlass = Color.white.opacity(0.08) // Glassmorphism
-    static let aicovenBorder = Color.white.opacity(0.12) // Borders
-    static let aicovenOverlay = Color.black.opacity(0.4) // Overlays
+    static var aicovenPurple: Color {
+        ThemeManager.shared.theme.accentSecondary
+    }
 
-    // Text colors
-    static let aicovenTextPrimary = Color.white
-    static let aicovenTextSecondary = Color.white.opacity(0.7)
-    static let aicovenTextTertiary = Color.white.opacity(0.5)
+    static var aicovenPink: Color {
+        ThemeManager.shared.theme.accentTertiary
+    }
 
-    // Semantic colors
-    static let aicovenSuccess = Color(hex: "#30FFC4")
-    static let aicovenWarning = Color(hex: "#FFB930")
-    static let aicovenError = Color(hex: "#FF3030")
+    static var aicovenDark: Color {
+        ThemeManager.shared.theme.surface
+    }
+
+    /// UI colors
+    static var aicovenGlass: Color {
+        ThemeManager.shared.theme.glass
+    }
+
+    static var aicovenBorder: Color {
+        ThemeManager.shared.theme.border
+    }
+
+    static var aicovenOverlay: Color {
+        ThemeManager.shared.theme.overlay
+    }
+
+    static var aicovenSurfaceElevated: Color {
+        ThemeManager.shared.theme.surfaceElevated
+    }
+
+    /// Text colors
+    static var aicovenTextPrimary: Color {
+        ThemeManager.shared.theme.textPrimary
+    }
+
+    static var aicovenTextSecondary: Color {
+        ThemeManager.shared.theme.textSecondary
+    }
+
+    static var aicovenTextTertiary: Color {
+        ThemeManager.shared.theme.textTertiary
+    }
+
+    /// Semantic colors
+    static var aicovenSuccess: Color {
+        ThemeManager.shared.theme.success
+    }
+
+    static var aicovenWarning: Color {
+        ThemeManager.shared.theme.warning
+    }
+
+    static var aicovenError: Color {
+        ThemeManager.shared.theme.error
+    }
 
     /// Initialize Color from hex string
     init(hex: String) {
@@ -53,26 +98,117 @@ extension Color {
 
 // MARK: - Typography
 
-/// AICoven typography styles
+/// AICoven typography styles.
+///
+/// All `aicoven*` fonts route through `TypographyManager.shared.variant`
+/// so a user-picked typography voice (Settings › Appearance › Typography)
+/// applies everywhere at once. The default voice is `.system`, which keeps
+/// the original behaviour: display-size type follows the active theme's
+/// `displayFontDesign` (`.serif` on Apothecary / Grimoire, `.rounded` on
+/// Nebula / Observatory / Orchard) and body / heading type stays on SF Pro
+/// Text. Picking any other voice (Rounded / Bookish / Geometric / Classic
+/// Sans / Reading Serif) overrides both display and body globally.
+///
+/// `aicovenMono` is intentionally not user-pickable: SF Mono is reserved
+/// for model IDs, token counts, and code blocks, and substituting it would
+/// break the No-Monospace-Cosplay Rule's intent (the monospace face is
+/// identity, not preference).
 extension Font {
-    // Display styles
-    static let aicovenDisplayLarge = Font.system(size: 34, weight: .bold, design: .rounded)
-    static let aicovenDisplayMedium = Font.system(size: 28, weight: .semibold, design: .rounded)
-    static let aicovenDisplaySmall = Font.system(size: 24, weight: .medium, design: .rounded)
+    /// Every aicoven* font multiplies its base point size by
+    /// `TypographyManager.shared.sizeScale.multiplier` so the user's
+    /// Settings › Appearance › Typography › Size choice (Small / Default
+    /// / Large / Extra Large) flows through the entire UI. Caption and
+    /// mono are scaled too so chat metadata + code blocks stay in step
+    /// with body copy at any size.
+    private static var typographyScale: CGFloat {
+        TypographyManager.shared.sizeScale.multiplier
+    }
 
-    // Heading styles
-    static let aicovenH1 = Font.system(size: 20, weight: .semibold, design: .default)
-    static let aicovenH2 = Font.system(size: 17, weight: .semibold, design: .default)
-    static let aicovenH3 = Font.system(size: 15, weight: .medium, design: .default)
+    /// Display styles — routed through the user's typography voice and
+    /// (only when voice == .system) the active theme's display design.
+    /// The `.custom` voice resolves through `TypographyManager.customFontFamily`.
+    static var aicovenDisplayLarge: Font {
+        TypographyManager.shared.variant.displayFont(
+            size: 34 * typographyScale, weight: .bold,
+            themeDesign: ThemeManager.shared.theme.displayFontDesign,
+            customFontFamily: TypographyManager.shared.customFontFamily
+        )
+    }
 
-    // Body styles
-    static let aicovenBody = Font.system(size: 15, weight: .regular, design: .default)
-    static let aicovenBodyMedium = Font.system(size: 15, weight: .medium, design: .default)
-    static let aicovenBodySmall = Font.system(size: 13, weight: .regular, design: .default)
+    static var aicovenDisplayMedium: Font {
+        TypographyManager.shared.variant.displayFont(
+            size: 28 * typographyScale, weight: .semibold,
+            themeDesign: ThemeManager.shared.theme.displayFontDesign,
+            customFontFamily: TypographyManager.shared.customFontFamily
+        )
+    }
 
-    // Utility styles
-    static let aicovenCaption = Font.system(size: 12, weight: .regular, design: .default)
-    static let aicovenMono = Font.system(size: 13, weight: .regular, design: .monospaced)
+    static var aicovenDisplaySmall: Font {
+        TypographyManager.shared.variant.displayFont(
+            size: 24 * typographyScale, weight: .medium,
+            themeDesign: ThemeManager.shared.theme.displayFontDesign,
+            customFontFamily: TypographyManager.shared.customFontFamily
+        )
+    }
+
+    /// Heading styles — user-pickable; `.system` resolves to SF Pro Text.
+    static var aicovenH1: Font {
+        TypographyManager.shared.variant.bodyFont(
+            size: 20 * typographyScale, weight: .semibold,
+            customFontFamily: TypographyManager.shared.customFontFamily
+        )
+    }
+
+    static var aicovenH2: Font {
+        TypographyManager.shared.variant.bodyFont(
+            size: 17 * typographyScale, weight: .semibold,
+            customFontFamily: TypographyManager.shared.customFontFamily
+        )
+    }
+
+    static var aicovenH3: Font {
+        TypographyManager.shared.variant.bodyFont(
+            size: 15 * typographyScale, weight: .medium,
+            customFontFamily: TypographyManager.shared.customFontFamily
+        )
+    }
+
+    /// Body styles — user-pickable; `.system` resolves to SF Pro Text.
+    static var aicovenBody: Font {
+        TypographyManager.shared.variant.bodyFont(
+            size: 15 * typographyScale, weight: .regular,
+            customFontFamily: TypographyManager.shared.customFontFamily
+        )
+    }
+
+    static var aicovenBodyMedium: Font {
+        TypographyManager.shared.variant.bodyFont(
+            size: 15 * typographyScale, weight: .medium,
+            customFontFamily: TypographyManager.shared.customFontFamily
+        )
+    }
+
+    static var aicovenBodySmall: Font {
+        TypographyManager.shared.variant.bodyFont(
+            size: 13 * typographyScale, weight: .regular,
+            customFontFamily: TypographyManager.shared.customFontFamily
+        )
+    }
+
+    /// Caption — user-pickable.
+    static var aicovenCaption: Font {
+        TypographyManager.shared.variant.bodyFont(
+            size: 12 * typographyScale, weight: .regular,
+            customFontFamily: TypographyManager.shared.customFontFamily
+        )
+    }
+
+    /// Mono — face is fixed (SF Mono is identity, not preference) but the
+    /// size still tracks the user's overall scale so code blocks stay in
+    /// step with body copy.
+    static var aicovenMono: Font {
+        .system(size: 13 * typographyScale, weight: .regular, design: .monospaced)
+    }
 }
 
 // MARK: - Spacing
@@ -105,8 +241,15 @@ enum BorderRadius {
 
 // MARK: - Reusable Components
 
-/// Glassmorphism card with subtle backdrop blur
+/// Glassmorphism card with subtle translucent backdrop.
+///
+/// Reserve `GlassCard` for moments where translucency is *meaningful* (over
+/// the Nebula backdrop, over an image, over rich media). For settings rows,
+/// sidebar sections, and onboarding info cards, prefer the flat `Panel`
+/// below. Too many glass cards on a single screen reads as decorative
+/// glassmorphism, which is a shared-design-laws anti-pattern.
 struct GlassCard<Content: View>: View {
+    @ObservedObject private var themeManager = ThemeManager.shared
     let content: Content
     let padding: CGFloat
     let cornerRadius: CGFloat
@@ -135,8 +278,50 @@ struct GlassCard<Content: View>: View {
     }
 }
 
-/// Gradient button with brand colors
+/// Flat panel: the default container for settings rows, sidebar sections,
+/// onboarding info cards, and any other grouping that does not need
+/// translucency. Renders a solid `surfaceElevated` fill with a 1px hairline
+/// `border` stroke. Theme-aware: Night Slab / Vellum Cream / Tallow /
+/// Nautical Navy depending on the active theme.
+struct Panel<Content: View>: View {
+    @ObservedObject private var themeManager = ThemeManager.shared
+    let content: Content
+    let padding: CGFloat
+    let cornerRadius: CGFloat
+
+    init(
+        padding: CGFloat = Spacing.md,
+        cornerRadius: CGFloat = BorderRadius.lg,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.content = content()
+        self.padding = padding
+        self.cornerRadius = cornerRadius
+    }
+
+    var body: some View {
+        content
+            .padding(padding)
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(Color.aicovenSurfaceElevated)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius)
+                            .strokeBorder(Color.aicovenBorder, lineWidth: 1)
+                    )
+            )
+    }
+}
+
+/// Primary action button that adapts to the active theme.
+///
+/// The original AICoven palette ("Nebula") keeps its teal→purple gradient so
+/// existing screens look unchanged. Every other theme uses a flat accent —
+/// gradients on buttons are one of the biggest "AI slop" tells, and the
+/// other themes are intentionally designed to avoid them.
 struct GradientButton: View {
+    @ObservedObject private var themeManager = ThemeManager.shared
+
     let title: String
     let icon: String?
     let action: () -> Void
@@ -167,25 +352,54 @@ struct GradientButton: View {
                 }
                 Text(title)
                     .font(.aicovenBodyMedium)
+                    // Keep the label on a single line. Without this, in
+                    // tight HStacks (e.g. the Memory Proposals card's
+                    // Approve / Reject / Edit / Delete row on iPhone) the
+                    // available width per button shrinks enough that
+                    // SwiftUI wraps the label character-by-character —
+                    // you end up with "A / p / p / r / o / v / e" stacked
+                    // vertically. lineLimit(1) + fixedSize on the outer
+                    // button forces the button to claim its intrinsic
+                    // horizontal size and lets the parent layout scroll
+                    // / overflow instead of squashing the text.
+                    .lineLimit(1)
             }
-            .foregroundColor(.white)
+            .foregroundColor(primaryForegroundColor)
             .padding(.horizontal, Spacing.md)
             .padding(.vertical, Spacing.sm)
             .background(backgroundView)
             .cornerRadius(BorderRadius.md)
         }
         .buttonStyle(.plain)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    /// Text color for the label. White works on the dark Nebula gradient
+    /// and the dark-theme flat accents, but on the light Apothecary theme
+    /// we need a near-white readable on oxblood.
+    private var primaryForegroundColor: Color {
+        switch style {
+        case .primary:
+            // Oxblood / ember / brass are all dark enough that white reads well.
+            .white
+        case .secondary, .ghost:
+            Color.aicovenTextPrimary
+        }
     }
 
     @ViewBuilder
     private var backgroundView: some View {
         switch style {
         case .primary:
-            LinearGradient(
-                colors: [Color.aicovenTeal, Color.aicovenPurple],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
+            if themeManager.theme.usesGradientPrimaryButton {
+                LinearGradient(
+                    colors: [Color.aicovenTeal, Color.aicovenPurple],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            } else {
+                Color.aicovenTeal
+            }
         case .secondary:
             Color.aicovenGlass
                 .overlay(
@@ -198,8 +412,13 @@ struct GradientButton: View {
     }
 }
 
-/// Icon badge with glow effect
+/// Icon badge with an optional glow effect.
+///
+/// Glow is reserved for brand moments (splash, plan badges, upsell). For
+/// settings rows, empty states, and anything on the main browsing surface,
+/// pass `glowIntensity: 0` so the icon reads as chrome, not decoration.
 struct IconBadge: View {
+    @ObservedObject private var themeManager = ThemeManager.shared
     let icon: String
     let size: CGFloat
     let color: Color
@@ -231,146 +450,139 @@ struct IconBadge: View {
     }
 }
 
-/// Nebula background gradient
+/// Themed backdrop.
 ///
-/// Uses the view's geometry to scale radial gradients so they fully cover
-/// any screen size (iPhone, iPad, macOS window) without hard‑coded radii.
+/// The name is retained so existing screens keep compiling. Rendering now
+/// branches on the active theme's `backgroundStyle`:
+///
+/// - `.staticWash(...)`: a single soft radial wash over the surface (used by
+///   Nebula, Grimoire, and Observatory so dark themes feel warm/cool/cosmic
+///   without the trademark "AI" gradient‑orb glow).
+/// - `.flat`: surface color only (used by the light Apothecary theme).
+/// - `.nebula`: retained in the enum for backward compatibility but no
+///   theme uses it after the distillation. Treated as `.flat` at render.
+///
+/// Respects the OS `AccessibilityReduceMotion` setting: when on, even the
+/// low-effort radial wash is rendered at the same static position without
+/// any transition animation on theme switches.
 struct NebulaBackground: View {
-    @AppStorage("aicoven_animated_backgrounds") private var animatedBackgrounds = false
-    @State private var animateGradient = false
+    @ObservedObject private var themeManager = ThemeManager.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        ZStack {
+            // Base surface color, provided by the active theme.
+            Color.aicovenDark
+                .ignoresSafeArea()
+
+            themedBackdrop
+        }
+        .ignoresSafeArea()
+        // A soft cross-fade when the user switches themes, skipped when the
+        // OS Reduce Motion setting is on.
+        .animation(
+            reduceMotion ? nil : .easeOut(duration: 0.25),
+            value: themeManager.theme.variant
+        )
+    }
+
+    @ViewBuilder
+    private var themedBackdrop: some View {
+        switch themeManager.theme.backgroundStyle {
+        case let .staticWash(tint, opacity):
+            staticWashBackdrop(tint: tint, opacity: opacity)
+        case let .paper(wash, washOpacity, vignetteOpacity):
+            paperBackdrop(wash: wash, washOpacity: washOpacity, vignetteOpacity: vignetteOpacity)
+        case .flat, .nebula:
+            // `.nebula` is retained for backward compat but no theme uses it
+            // after the Nebula distillation; render as flat so no orbits run.
+            EmptyView()
+        }
+    }
+
+    // MARK: Static wash (used by Nebula / Grimoire / Observatory)
+
+    private func staticWashBackdrop(tint: Color, opacity: Double) -> some View {
         GeometryReader { proxy in
+            #if os(iOS)
+            let maxDimension = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height)
+            #else
             let maxDimension = max(proxy.size.width, proxy.size.height)
-            let primaryRadius = maxDimension * 1.2
-            let secondaryRadius = maxDimension * 1.0
-            let accentRadius = maxDimension * 0.8
+            #endif
 
-            ZStack {
-                // Base dark background
-                Color.aicovenDark
-                    .ignoresSafeArea()
-
-                if animatedBackgrounds {
-                    animatedLayers(
-                        primaryRadius: primaryRadius,
-                        secondaryRadius: secondaryRadius,
-                        accentRadius: accentRadius
-                    )
-                } else {
-                    staticLayers(
-                        primaryRadius: primaryRadius,
-                        secondaryRadius: secondaryRadius,
-                        accentRadius: accentRadius
-                    )
-                }
-            }
-            .onAppear {
-                // Start or stop the gradient animation based on the current
-                // preference. This ensures that when the view first appears it
-                // respects the stored value.
-                animateGradient = animatedBackgrounds
-            }
-            .onChange(of: animatedBackgrounds) { _, newValue in
-                // If the user toggles the nebula animation setting while this
-                // background is already on screen, react immediately by
-                // starting/stopping the animation so there are no stale states
-                // on specific screens like Covens.
-                animateGradient = newValue
-            }
+            RadialGradient(
+                colors: [tint.opacity(opacity), Color.clear],
+                center: .top,
+                startRadius: 0,
+                endRadius: maxDimension
+            )
+            .blur(radius: 40)
+            .ignoresSafeArea()
         }
         .ignoresSafeArea()
     }
 
-    /// Animated gradient layers for the nebula background
-    @ViewBuilder
-    private func animatedLayers(
-        primaryRadius: CGFloat,
-        secondaryRadius: CGFloat,
-        accentRadius: CGFloat
+    // MARK: Paper / watercolor (used by Apothecary)
+
+    /// A paper-and-pigment backdrop for the light Apothecary theme: a
+    /// diagonal warm wash (top-left → bottom-right) in the given tint, plus
+    /// a subtle dark vignette at the edges. The combination suggests an
+    /// aged page with uneven pigment settle rather than a flat cream fill.
+    /// All layers are decorative and non-interactive.
+    private func paperBackdrop(
+        wash: Color,
+        washOpacity: Double,
+        vignetteOpacity: Double
     ) -> some View {
-        // Animated nebula gradients
-        RadialGradient(
-            colors: [
-                Color.aicovenTeal.opacity(0.3),
-                Color.clear
-            ],
-            center: animateGradient ? .topLeading : .bottomTrailing,
-            startRadius: 0,
-            endRadius: primaryRadius
-        )
-        .ignoresSafeArea()
-        .animation(.easeInOut(duration: 8).repeatForever(autoreverses: true), value: animateGradient)
+        GeometryReader { proxy in
+            #if os(iOS)
+            let maxDimension = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height)
+            #else
+            let maxDimension = max(proxy.size.width, proxy.size.height)
+            #endif
 
-        RadialGradient(
-            colors: [
-                Color.aicovenPurple.opacity(0.3),
-                Color.clear
-            ],
-            center: animateGradient ? .topTrailing : .bottomLeading,
-            startRadius: 0,
-            endRadius: secondaryRadius
-        )
-        .ignoresSafeArea()
-        .animation(.easeInOut(duration: 10).repeatForever(autoreverses: true), value: animateGradient)
+            ZStack {
+                // Diagonal warm pigment wash — heavier at the top-left,
+                // fading out through the centre, returning faintly at the
+                // bottom-right. Mimics the uneven drying of a watercolor
+                // wash across a page rather than a uniform fill.
+                LinearGradient(
+                    colors: [
+                        wash.opacity(washOpacity),
+                        Color.clear,
+                        Color.clear,
+                        wash.opacity(washOpacity * 0.55)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .blur(radius: 60)
+                .ignoresSafeArea()
 
-        RadialGradient(
-            colors: [
-                Color.aicovenPink.opacity(0.2),
-                Color.clear
-            ],
-            center: .center,
-            startRadius: 0,
-            endRadius: accentRadius
-        )
-        .ignoresSafeArea()
-        .animation(.easeInOut(duration: 12).repeatForever(autoreverses: true), value: animateGradient)
-    }
-
-    /// Static (non-animating) gradient layers for the nebula background
-    @ViewBuilder
-    private func staticLayers(
-        primaryRadius: CGFloat,
-        secondaryRadius: CGFloat,
-        accentRadius: CGFloat
-    ) -> some View {
-        RadialGradient(
-            colors: [
-                Color.aicovenTeal.opacity(0.3),
-                Color.clear
-            ],
-            center: .topLeading,
-            startRadius: 0,
-            endRadius: primaryRadius
-        )
-        .ignoresSafeArea()
-
-        RadialGradient(
-            colors: [
-                Color.aicovenPurple.opacity(0.3),
-                Color.clear
-            ],
-            center: .topTrailing,
-            startRadius: 0,
-            endRadius: secondaryRadius
-        )
-        .ignoresSafeArea()
-
-        RadialGradient(
-            colors: [
-                Color.aicovenPink.opacity(0.2),
-                Color.clear
-            ],
-            center: .center,
-            startRadius: 0,
-            endRadius: accentRadius
-        )
+                // Soft dark vignette: the corners fall off toward a
+                // near-black warm tint (multiplied for gentle darkening),
+                // suggesting an aged page with worn edges rather than a
+                // uniformly-lit screen.
+                RadialGradient(
+                    colors: [
+                        Color.clear,
+                        Color.black.opacity(vignetteOpacity)
+                    ],
+                    center: .center,
+                    startRadius: maxDimension * 0.25,
+                    endRadius: maxDimension * 0.85
+                )
+                .ignoresSafeArea()
+            }
+            .allowsHitTesting(false)
+        }
         .ignoresSafeArea()
     }
 }
 
-/// Role chip with brand styling
+/// Role chip with brand styling.
 struct RoleChip: View {
+    @ObservedObject private var themeManager = ThemeManager.shared
     let name: String
     let icon: String?
     let color: Color
@@ -391,7 +603,12 @@ struct RoleChip: View {
                 .font(.aicovenCaption)
                 .fontWeight(.medium)
         }
-        .foregroundColor(.white)
+        // The chip background is `color.opacity(0.3)` over the active
+        // surface, which becomes a light tint on the parchment Apothecary
+        // theme. White text vanishes there, so route the label through the
+        // theme's primary text color instead — it stays white on the dark
+        // themes and becomes warm ink on the light theme.
+        .foregroundColor(.aicovenTextPrimary)
         .padding(.horizontal, Spacing.xs)
         .padding(.vertical, Spacing.xxs)
         .background(
@@ -405,35 +622,57 @@ struct RoleChip: View {
     }
 }
 
-/// Divider with gradient
+/// Flat 1px divider. The name is retained so callers keep compiling, but
+/// the implementation no longer uses a gradient: a hairline rule reads
+/// cleaner in every theme and avoids the "decorative gradient" slop tell.
+///
+/// Default horizontal inset matches `Spacing.lg` so the rule breathes
+/// away from the container edges; pass `inset: 0` for edge-to-edge rules.
 struct GradientDivider: View {
+    @ObservedObject private var themeManager = ThemeManager.shared
+    let inset: CGFloat
+
+    init(inset: CGFloat = Spacing.lg) {
+        self.inset = inset
+    }
+
     var body: some View {
         Rectangle()
-            .fill(
-                LinearGradient(
-                    colors: [
-                        Color.clear,
-                        Color.aicovenBorder,
-                        Color.clear
-                    ],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            )
+            .fill(Color.aicovenBorder)
             .frame(height: 1)
+            .padding(.horizontal, inset)
     }
 }
 
 // MARK: - View Extensions
 
 extension View {
-    /// Apply glass morphism effect
+    /// Apply glass morphism effect (translucent + hairline border).
+    /// Reserve for moments where translucency is actually doing work; for
+    /// everything else, prefer `.panel(...)` below.
     func glassMorphism(cornerRadius: CGFloat = BorderRadius.lg, padding: CGFloat = Spacing.md) -> some View {
         self
             .padding(padding)
             .background(
                 RoundedRectangle(cornerRadius: cornerRadius)
                     .fill(Color.aicovenGlass)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius)
+                            .strokeBorder(Color.aicovenBorder, lineWidth: 1)
+                    )
+            )
+    }
+
+    /// Flat panel treatment: solid `surfaceElevated` fill + 1px hairline
+    /// border. Use this for settings rows, sidebar sections, onboarding
+    /// info cards, and any grouping that does not need translucency. This
+    /// is the default for non-chat surfaces.
+    func panel(cornerRadius: CGFloat = BorderRadius.lg, padding: CGFloat = Spacing.md) -> some View {
+        self
+            .padding(padding)
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(Color.aicovenSurfaceElevated)
                     .overlay(
                         RoundedRectangle(cornerRadius: cornerRadius)
                             .strokeBorder(Color.aicovenBorder, lineWidth: 1)

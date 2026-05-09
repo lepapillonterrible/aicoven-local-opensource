@@ -18,6 +18,9 @@ struct HomeView: View {
     @State private var activeTabId: String?
     @State private var openTabs: [WorkspaceTab] = []
 
+    @State private var pendingCovenSelection: Coven?
+    @State private var pendingThreadSelection: Thread?
+
     /// Workspace state - always start in home
     @State private var currentWorkspace: WorkspaceType = .home
 
@@ -45,17 +48,29 @@ struct HomeView: View {
                         } else {
                             showCreateCoven = true
                         }
+                    },
+                    onSelectCoven: { _ in
+                        // Handle selecting a specific coven directly from the dropdown
+                        // Needs state changes to pass to WorkspaceView
+                        currentWorkspace = .covens
+                        analytics.trackTabSwitch(fromTab: "home", toTab: "covens")
                     }
                 )
             } else {
                 // Coven workspace
-                WorkspaceView(onSwitchToHome: {
-                    currentWorkspace = .home
-                    analytics.trackTabSwitch(fromTab: "covens", toTab: "home")
-                    // Clear any selected coven state
-                    openTabs = []
-                    activeTabId = nil
-                })
+                WorkspaceView(
+                    initialCoven: pendingCovenSelection,
+                    initialThread: pendingThreadSelection,
+                    onSwitchToHome: {
+                        currentWorkspace = .home
+                        analytics.trackTabSwitch(fromTab: "covens", toTab: "home")
+                        // Clear any selected coven state
+                        openTabs = []
+                        activeTabId = nil
+                        pendingCovenSelection = nil
+                        pendingThreadSelection = nil
+                    }
+                )
             }
         }
         .task {
@@ -176,6 +191,7 @@ struct PersonalWorkspaceView: View {
     let onCreateCoven: () -> Void
     let onRefreshThreads: () async -> Void
     let onSwitchToCovens: () -> Void
+    let onSelectCoven: (Coven) -> Void
 
     var body: some View {
         ZStack {
@@ -185,14 +201,21 @@ struct PersonalWorkspaceView: View {
                 // Personal threads sidebar
                 PersonalThreadsSidebar(
                     threads: $personalThreads,
+                    covens: covens,
                     selectedThread: $selectedThread,
                     isExpanded: $isSidebarExpanded,
                     onNewThread: handleNewThread,
+                    onCreateCoven: onCreateCoven,
                     onSelectThread: handleOpenThread,
                     onDeleteThread: handleDeleteThread,
+                    onRefresh: onRefreshThreads,
                     onSwitchToCovens: onSwitchToCovens,
-                    onOpenConnectedApps: { openTab(.connectedApps) },
-                    onOpenMCPServers: { openTab(.mcpServers) }
+                    onSelectCoven: { coven in
+                        onSelectCoven(coven)
+                    },
+                    onOpenWorkspaceTab: { tab in
+                        openTab(tab)
+                    }
                 )
 
                 Rectangle()
@@ -275,6 +298,22 @@ struct PersonalWorkspaceView: View {
             tab = .connectedApps
         case .mcpServers:
             tab = .mcpServers
+        case let .memoryList(covenId):
+            tab = WorkspaceTab.memoryList(covenId: covenId)
+        case let .memoryProposals(covenId):
+            tab = WorkspaceTab.memoryProposals(covenId: covenId)
+        case .personalStrixSettings:
+            tab = WorkspaceTab.personalStrix
+        case .settings:
+            tab = .settings
+        case .profile:
+            tab = .profile
+        case .usage:
+            tab = .usage
+        case .budget:
+            tab = .budget
+        case .providerKeys:
+            tab = .providerKeys
         default:
             return
         }

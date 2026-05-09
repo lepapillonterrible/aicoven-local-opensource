@@ -10,3 +10,9 @@ build_mobile.log
 build_mobile_final.log
 build_output.log
 update_pbxproj.rb
+build_output.log
+build_mobile.log
+build_mobile_final.log
+rewrite_mobile.py
+update_pbxproj.rb
+swift/AICoven/AICoven Local.xcodeproj/project.pbxproj

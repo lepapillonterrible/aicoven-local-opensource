@@ -23,46 +23,11 @@ struct ProfileMenuView: View {
                 Label("Settings", systemImage: "gear")
             }
 
-            // Provider Keys
-            Button {
-                onOpenTab?(.providerKeys)
-            } label: {
-                Label("Provider Keys", systemImage: "key")
-            }
-
-            // Connected Apps
-            Button {
-                onOpenTab?(.connectedApps)
-            } label: {
-                Label("Connected Apps", systemImage: "app.connected.to.app.below.fill")
-            }
-
-            // MCP Servers
-            Button {
-                onOpenTab?(.mcpServers)
-            } label: {
-                Label("MCP Servers", systemImage: "server.rack")
-            }
-
-            // Budgets & Usage
-            Button {
-                onOpenTab?(.usage)
-            } label: {
-                Label("Budgets & Usage", systemImage: "chart.bar")
-            }
-
             // Personal memories (local-only, no coven)
             Button {
                 onOpenTab?(.memoryList(covenId: nil))
             } label: {
                 Label("Personal Memory", systemImage: "brain")
-            }
-
-            // Memory Proposals (personal workspace)
-            Button {
-                onOpenTab?(.memoryProposals(covenId: nil))
-            } label: {
-                Label("Memory Proposals", systemImage: "doc.text.magnifyingglass")
             }
 
             Divider()

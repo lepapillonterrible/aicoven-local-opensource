@@ -131,6 +131,19 @@ final class MLXModelManager: ObservableObject {
             recommendedFor: ["MCP Tools", "iOS", "On-Device"],
             isRecommended: true
         ),
+        MLXModelInfo(
+            id: "aicoven/Qwen3-1.7B-MCP",
+            displayName: "AICoven MCP 1.7B 🆕",
+            summary: "Qwen3-based model fine-tuned for MCP tool routing. 87.9% accuracy, ultra-compact.",
+            downloadSizeBytes: 968_000_000,
+            minRAMGB: 2,
+            parameterCount: "1.7B",
+            quantization: "4-bit",
+            category: .mobile,
+            tier: .core,
+            recommendedFor: ["MCP Tools", "iOS", "On-Device", "Tool Calling"],
+            isRecommended: true
+        ),
         // ── Core: General ────────────────────────────────────────────
         MLXModelInfo(
             id: "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
@@ -147,17 +160,18 @@ final class MLXModelManager: ObservableObject {
         ),
         MLXModelInfo(
             id: "mlx-community/Qwen3-4B-4bit",
-            displayName: "Qwen 3 4B",
-            summary: "Great all-rounder with strong reasoning and instruction following.",
+            displayName: "Qwen 3 4B ⚡ Best Small",
+            summary: "Best 4B model. Hybrid reasoning, native tool calling, 128K context.",
             downloadSizeBytes: 2_400_000_000,
             minRAMGB: 4,
             parameterCount: "4B",
             quantization: "4-bit",
             category: .general,
             tier: .core,
-            recommendedFor: ["MCP Tools", "Chat", "Reasoning"],
+            recommendedFor: ["MCP Tools", "Chat", "Reasoning", "Agents"],
             isRecommended: true
         ),
+
         MLXModelInfo(
             id: "mlx-community/Llama-3.2-3B-Instruct-4bit",
             displayName: "Llama 3.2 3B",
@@ -197,7 +211,74 @@ final class MLXModelManager: ObservableObject {
             recommendedFor: ["Multilingual", "Chat"],
             isRecommended: false
         ),
+        // ── Core: Mid-Size ───────────────────────────────────────────
+        MLXModelInfo(
+            id: "mlx-community/Qwen3-8B-4bit",
+            displayName: "Qwen 3 8B 🎯 Sweet Spot",
+            summary: "Best quality-to-speed ratio. Strong reasoning, coding, and tool calling. Ideal for 16GB Macs.",
+            downloadSizeBytes: 4_900_000_000,
+            minRAMGB: 8,
+            parameterCount: "8B",
+            quantization: "4-bit",
+            category: .general,
+            tier: .core,
+            recommendedFor: ["MCP Tools", "Reasoning", "Coding", "Agents"],
+            isRecommended: true
+        ),
+        // ── Specialized: Large ──────────────────────────────────────
+        MLXModelInfo(
+            id: "mlx-community/Qwen3-30B-A3B-4bit",
+            displayName: "Qwen 3 30B MoE ⚡ Speed King",
+            summary: "30B knowledge at 3B speed — only 3B params active per token. Blazing fast inference with frontier quality. Best for 16GB+.",
+            downloadSizeBytes: 10_500_000_000,
+            minRAMGB: 16,
+            parameterCount: "30B (3B active)",
+            quantization: "4-bit",
+            category: .general,
+            tier: .specialized,
+            recommendedFor: ["Fast Inference", "Tool Calling", "Agents", "Coding"],
+            isRecommended: true
+        ),
+        MLXModelInfo(
+            id: "mlx-community/Qwen3-32B-4bit",
+            displayName: "Qwen 3 32B ⚠️",
+            summary: "Frontier-class dense model. Strong reasoning and tool calling. Requires 24GB+ RAM.",
+            downloadSizeBytes: 17_000_000_000,
+            minRAMGB: 24,
+            parameterCount: "32B",
+            quantization: "4-bit",
+            category: .general,
+            tier: .specialized,
+            recommendedFor: ["Tool Calling", "Coding", "Reasoning", "Agents"],
+            isRecommended: false
+        ),
+        MLXModelInfo(
+            id: "mlx-community/Qwen2.5-14B-Instruct-4bit",
+            displayName: "Qwen 2.5 14B — Proven Workhorse",
+            summary: "Battle-tested 14B with 128K context. Strong across all tasks, 29 languages. Needs 12GB+ RAM.",
+            downloadSizeBytes: 8_310_000_000,
+            minRAMGB: 12,
+            parameterCount: "14B",
+            quantization: "4-bit",
+            category: .general,
+            tier: .specialized,
+            recommendedFor: ["Chat", "Reasoning", "Multilingual", "Long Context"],
+            isRecommended: false
+        ),
         // ── Specialized: Coding ─────────────────────────────────────
+        MLXModelInfo(
+            id: "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit",
+            displayName: "Qwen 2.5 Coder 14B 💻 Best Coder",
+            summary: "Best coding model in the catalog. 128K context for large codebases. Needs 12GB+ RAM.",
+            downloadSizeBytes: 8_330_000_000,
+            minRAMGB: 12,
+            parameterCount: "14B",
+            quantization: "4-bit",
+            category: .coding,
+            tier: .specialized,
+            recommendedFor: ["GitHub", "Code", "Debugging", "Architecture"],
+            isRecommended: true
+        ),
         MLXModelInfo(
             id: "mlx-community/Qwen2.5-Coder-7B-Instruct-4bit",
             displayName: "Qwen 2.5 Coder 7B",
@@ -238,6 +319,19 @@ final class MLXModelManager: ObservableObject {
             isRecommended: false
         ),
         // ── Specialized: Mobile ─────────────────────────────────────
+        MLXModelInfo(
+            id: "mlx-community/Qwen3-1.7B-4bit",
+            displayName: "Qwen 3 1.7B 📱 Best Mobile",
+            summary: "Best small model for iPhones. Modern Qwen3 hybrid reasoning in a tiny package.",
+            downloadSizeBytes: 1_030_000_000,
+            minRAMGB: 3,
+            parameterCount: "1.7B",
+            quantization: "4-bit",
+            category: .mobile,
+            tier: .core,
+            recommendedFor: ["iOS", "On-Device", "Low RAM"],
+            isRecommended: true
+        ),
         MLXModelInfo(
             id: "mlx-community/gemma-2-2b-it-4bit",
             displayName: "Gemma 2 2B",
@@ -316,6 +410,25 @@ final class MLXModelManager: ObservableObject {
 
         #if canImport(MLXLLM)
         do {
+            // Pre-create the HuggingFace Hub model directory so that the
+            // swift-transformers library can atomically move the downloaded
+            // `.incomplete` temp file into place. Without this, the move fails
+            // with "couldn't be moved … because the folder containing the latter
+            // doesn't exist" when the cache directory hasn't been created yet.
+            let cacheBase = FileManager.default.urls(
+                for: .cachesDirectory,
+                in: .userDomainMask
+            ).first
+            if let cacheBase {
+                let modelDir = cacheBase.appendingPathComponent(
+                    "huggingface/hub/models--" + modelID.replacingOccurrences(of: "/", with: "--")
+                )
+                try? FileManager.default.createDirectory(
+                    at: modelDir,
+                    withIntermediateDirectories: true
+                )
+            }
+
             // MLX's loadModel downloads from HF Hub and caches locally.
             // Progress is not directly observable in the current API,
             // so we show indeterminate and then mark complete.

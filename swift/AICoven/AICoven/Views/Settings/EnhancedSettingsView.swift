@@ -11,6 +11,9 @@ struct EnhancedSettingsView: View {
     @AppStorage("aicoven_animated_backgrounds") private var storedAnimatedBackgrounds = false
     @State private var showConnectedApps = false
 
+    @ObservedObject private var themeManager = ThemeManager.shared
+    @ObservedObject private var typographyManager = TypographyManager.shared
+
     // Analytics consent preferences (enabled by default)
     @AppStorage("analytics_product_enabled") private var productAnalyticsEnabled = true
     @AppStorage("analytics_performance_enabled") private var performanceAnalyticsEnabled = true
@@ -98,6 +101,38 @@ struct EnhancedSettingsView: View {
                         GlassCard {
                             VStack(spacing: Spacing.md) {
                                 HStack {
+                                    Image(systemName: "paintpalette.fill")
+                                        .font(.aicovenH3)
+                                        .foregroundColor(.aicovenPurple)
+                                        .frame(width: 32)
+
+                                    VStack(alignment: .leading, spacing: Spacing.xxs) {
+                                        Text("Theme")
+                                            .font(.aicovenBody)
+                                            .foregroundColor(.aicovenTextPrimary)
+                                        Text(themeManager.theme.tagline)
+                                            .font(.aicovenCaption)
+                                            .foregroundColor(.aicovenTextSecondary)
+                                    }
+
+                                    Spacer()
+
+                                    Picker("", selection: Binding(
+                                        get: { themeManager.variant },
+                                        set: { themeManager.setVariant($0) }
+                                    )) {
+                                        ForEach(ThemeVariant.allCases) { variant in
+                                            Text(variant.displayName).tag(variant)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .tint(.aicovenTeal)
+                                }
+
+                                Divider()
+                                    .background(Color.aicovenBorder)
+
+                                HStack {
                                     Image(systemName: "moon.fill")
                                         .font(.aicovenH3)
                                         .foregroundColor(.aicovenPink)
@@ -138,6 +173,79 @@ struct EnhancedSettingsView: View {
                                     Task {
                                         await saveSettings()
                                     }
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, Spacing.lg)
+
+                    // Typography section
+                    VStack(spacing: Spacing.md) {
+                        HStack {
+                            Text("Typography")
+                                .font(.aicovenH3)
+                                .foregroundColor(.aicovenTextPrimary)
+                            Spacer()
+                        }
+
+                        GlassCard {
+                            VStack(spacing: Spacing.md) {
+                                HStack {
+                                    Image(systemName: "textformat")
+                                        .font(.aicovenH3)
+                                        .foregroundColor(.aicovenTeal)
+                                        .frame(width: 32)
+
+                                    VStack(alignment: .leading, spacing: Spacing.xxs) {
+                                        Text("Font Style")
+                                            .font(.aicovenBody)
+                                            .foregroundColor(.aicovenTextPrimary)
+                                        Text(typographyManager.variant.tagline)
+                                            .font(.aicovenCaption)
+                                            .foregroundColor(.aicovenTextSecondary)
+                                    }
+
+                                    Spacer()
+
+                                    Picker("", selection: Binding(
+                                        get: { typographyManager.variant },
+                                        set: { typographyManager.setVariant($0) }
+                                    )) {
+                                        ForEach(TypographyVariant.allCases) { variant in
+                                            Text(variant.displayName).tag(variant)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .tint(.aicovenTeal)
+                                }
+
+                                Divider()
+                                    .background(Color.aicovenBorder)
+
+                                HStack {
+                                    Image(systemName: "textformat.size")
+                                        .font(.aicovenH3)
+                                        .foregroundColor(.aicovenPurple)
+                                        .frame(width: 32)
+
+                                    VStack(alignment: .leading, spacing: Spacing.xxs) {
+                                        Text("Font Size")
+                                            .font(.aicovenBody)
+                                            .foregroundColor(.aicovenTextPrimary)
+                                    }
+
+                                    Spacer()
+
+                                    Picker("", selection: Binding(
+                                        get: { typographyManager.sizeScale },
+                                        set: { typographyManager.setSizeScale($0) }
+                                    )) {
+                                        ForEach(TypographySizeScale.allCases) { scale in
+                                            Text(scale.displayName).tag(scale)
+                                        }
+                                    }
+                                    .pickerStyle(.segmented)
+                                    .frame(maxWidth: 200)
                                 }
                             }
                         }

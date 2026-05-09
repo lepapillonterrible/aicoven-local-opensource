@@ -62,11 +62,15 @@ jobs:
       - name: Install SwiftFormat
         run: brew install swiftformat
 
+      - name: SwiftFormat version
+        run: swiftformat --version
+
       - name: Run SwiftFormat (check mode)
         run: |
-          # Run swiftformat in lint mode to check for formatting issues
-          swiftformat swift/AICoven --lint || {
-            echo "::error::SwiftFormat found formatting issues. Run 'swiftformat swift/AICoven' locally to fix."
+          # Lint without the default disk cache so CI matches a fresh checkout (local
+          # caches can otherwise hide docComments / rule updates until --cache ignore).
+          swiftformat swift/AICoven --lint --cache ignore || {
+            echo "::error::SwiftFormat found formatting issues. Run 'swiftformat swift/AICoven --cache ignore' locally, then verify with 'swiftformat swift/AICoven --lint --cache ignore'."
             exit 1
           }
 

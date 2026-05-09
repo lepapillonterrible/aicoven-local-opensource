@@ -197,7 +197,7 @@ final class EmbeddingService {
         guard !tools.isEmpty else { return nil }
 
         // Get or compute tool embeddings from the cache.
-        guard let toolEmbeddings = await MCPToolEmbeddingCache.shared.getEmbeddings(for: tools) else {
+        guard let toolEmbeddings = await ToolEmbeddingCache.shared.getEmbeddings(for: tools) else {
             // No embedding provider configured — caller should fall back to
             // keyword matching.
             return nil
