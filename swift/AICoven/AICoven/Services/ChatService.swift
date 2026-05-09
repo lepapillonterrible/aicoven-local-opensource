@@ -2319,8 +2319,15 @@ extension ChatService {
             }
         }
 
-        return String(query[query.startIndex ..< earliest])
-            .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        var trimmed = String(query[query.startIndex ..< earliest])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        while trimmed.last == "," || trimmed.last == "." {
+            trimmed.removeLast()
+            trimmed = trimmed.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return trimmed
     }
 
     /// Extract a URL from a user message. Uses `NSDataDetector` for robust

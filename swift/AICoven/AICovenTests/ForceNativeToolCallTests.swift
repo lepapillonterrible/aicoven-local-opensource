@@ -36,7 +36,7 @@ final class ForceNativeToolCallTests: XCTestCase {
         XCTAssertNotNil(result)
         XCTAssertEqual(result?.tool, "web_search")
         let query = (result?.input?.value as? [String: AnyJSONValue])?["query"]?.value as? String
-        XCTAssertEqual(query, "What's the weather in Tokyo")
+        XCTAssertEqual(query, "What's the weather in Tokyo?")
     }
 
     // MARK: - File read patterns (new)
