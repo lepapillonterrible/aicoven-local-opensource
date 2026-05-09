@@ -362,12 +362,7 @@ struct ThreadRowView: View {
         let now = Date()
         let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date, to: now)
 
-        if let years = components.year, years > 0 { return "\(years)y" }
-        else if let months = components.month, months > 0 { return "\(months)mo" }
-        else if let days = components.day, days > 0 { return "\(days)d" }
-        else if let hours = components.hour, hours > 0 { return "\(hours)h" }
-        else if let minutes = components.minute, minutes > 0 { return "\(minutes)m" }
-        else { return "now" }
+        if let years = components.year, years > 0 { return "\(years)y" } else if let months = components.month, months > 0 { return "\(months)mo" } else if let days = components.day, days > 0 { return "\(days)d" } else if let hours = components.hour, hours > 0 { return "\(hours)h" } else if let minutes = components.minute, minutes > 0 { return "\(minutes)m" } else { return "now" }
     }
 }
 
