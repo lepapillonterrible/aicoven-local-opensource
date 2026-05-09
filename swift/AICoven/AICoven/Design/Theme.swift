@@ -451,8 +451,8 @@ final class ThemeManager: ObservableObject {
 }
 
 extension EnvironmentValues {
-    // Active theme, injected at the app root so deep views can read tokens
-    // without reaching into `ThemeManager.shared` directly.
+    /// Active theme, injected at the app root so deep views can read tokens
+    /// without reaching into `ThemeManager.shared` directly.
     @Entry var aicovenTheme: AicovenTheme = .nebula
 }
 
