@@ -1275,6 +1275,8 @@ private extension LocalChatError {
         switch self {
         case .missingOpenAIAPIKey:
             "missing_openai_api_key"
+        case .missingBaseURL:
+            "missing_base_url"
         case .invalidResponse:
             "invalid_response"
         }

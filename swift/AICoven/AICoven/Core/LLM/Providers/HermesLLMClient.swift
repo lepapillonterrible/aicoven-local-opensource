@@ -84,7 +84,7 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
             defaults.string(forKey: UserScope.scopedKey("together_api_key")),
             ProcessInfo.processInfo.environment["HERMES_API_KEY"],
             ProcessInfo.processInfo.environment["TOGETHER_API_KEY"]
-        ].compactMap { $0 }.first { !$0.isEmpty }
+        ].compactMap(\.self).first(where: { !$0.isEmpty })
 
         // If no API key and no custom base URL, we can't do anything (Together AI requires an API key)
         if apiKey == nil, baseURL == nil {
@@ -98,7 +98,7 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
 
     /// Maps friendly model aliases to Together AI model IDs.
     /// For self-hosted instances, returns the alias as-is (assuming user provided full ID).
-    private func resolveModelID(_ alias: String, isSelfHosted: Bool) -> String {
+    func resolveModelID(_ alias: String, isSelfHosted: Bool) -> String {
         guard !isSelfHosted else {
             return alias // Self-hosted: user provides the full model identifier
         }
