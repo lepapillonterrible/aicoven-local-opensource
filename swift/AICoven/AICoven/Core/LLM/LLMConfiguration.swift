@@ -10,7 +10,7 @@ import Foundation
 /// global cache keys (openai_api_key, anthropic_api_key, gemini_api_key).
 /// Configuration for building LLM clients from user-provided API keys.
 /// All methods are nonisolated since they only read from thread-safe UserDefaults.
-struct LLMConfiguration: Sendable {
+enum LLMConfiguration {
     /// Note: ModelDescriptors are now built dynamically per-account using the
     /// provider's ListModels APIs via ProviderAccountService. This struct only
     /// knows how to build clients; it no longer hardcodes any model IDs.

@@ -667,7 +667,7 @@ enum PromptTemplates {
 /// A concrete input example for a tool, showing a specific use case with
 /// exact parameter values. Used by cloud models (Anthropic `input_examples`,
 /// OpenAI/Gemini description injection) to improve parameter accuracy.
-struct ToolInputExample: Sendable {
+struct ToolInputExample {
     /// Human-readable description of what this example demonstrates.
     let description: String
     /// The exact input dictionary the model should produce for this case.
@@ -676,7 +676,7 @@ struct ToolInputExample: Sendable {
 
 /// Definition of a tool including its parameters and usage example.
 /// Conforms to Sendable since all properties are value types.
-struct ToolDefinition: Sendable {
+struct ToolDefinition {
     let name: String
     let description: String
     let parameters: [ToolParameter]
@@ -702,7 +702,7 @@ struct ToolDefinition: Sendable {
 
 /// Parameter definition for a tool.
 /// Conforms to Sendable since all properties are value types.
-struct ToolParameter: Sendable {
+struct ToolParameter {
     let name: String
     let type: String
     let description: String

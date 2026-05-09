@@ -1844,7 +1844,7 @@ extension ChatService {
 
         // Common English stop words plus meta-words that match ALL MCP
         // tools equally ("mcp", "zapier", "server", "tool", etc.).
-        let stopWords: Set<String> = [
+        let stopWords: Set = [
             "the", "and", "for", "from", "with", "that", "this",
             "you", "your", "have", "has", "had", "are", "was",
             "been", "will", "can", "not", "but", "they", "them",

@@ -3,7 +3,7 @@ import Foundation
 /// Represents a configured MCP server connection.
 /// Stored locally in UserDefaults with authentication tokens in Keychain.
 /// Conforms to Sendable since all properties are value types.
-struct MCPServerAccount: Identifiable, Codable, Equatable, Sendable {
+struct MCPServerAccount: Identifiable, Codable, Equatable {
     /// Unique identifier for this connection
     let id: String
 
@@ -51,13 +51,13 @@ struct MCPServerAccount: Identifiable, Codable, Equatable, Sendable {
 }
 
 /// Supported MCP transport types
-enum MCPTransportType: String, Codable, Sendable {
+enum MCPTransportType: String, Codable {
     case sse
     case streamableHttp = "streamable_http"
 }
 
 /// Supported MCP authentication types
-enum MCPAuthType: String, Codable, Sendable {
+enum MCPAuthType: String, Codable {
     case none
     case bearer
     case apiKey = "api_key"

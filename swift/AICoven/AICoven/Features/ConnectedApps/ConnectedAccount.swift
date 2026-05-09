@@ -3,7 +3,7 @@ import Foundation
 /// Represents a connected third-party app account (GitHub, Google Drive, etc.)
 /// Stored locally in the database with tokens in Keychain.
 /// Conforms to Sendable since all properties are value types.
-struct ConnectedAccount: Identifiable, Codable, Equatable, Sendable {
+struct ConnectedAccount: Identifiable, Codable, Equatable {
     /// Unique identifier for this connection
     let id: String
 
@@ -48,7 +48,7 @@ struct ConnectedAccount: Identifiable, Codable, Equatable, Sendable {
 
 /// Supported connected app providers
 /// Conforms to Sendable since it's a simple enum.
-enum ConnectedAppProvider: String, Codable, CaseIterable, Sendable {
+enum ConnectedAppProvider: String, Codable, CaseIterable {
     case github
     case googleDrive = "google_drive"
 
@@ -85,7 +85,7 @@ enum ConnectedAppProvider: String, Codable, CaseIterable, Sendable {
 
 /// Connection status for a connected account
 /// Conforms to Sendable since it's a simple enum.
-enum ConnectionStatus: String, Codable, Sendable {
+enum ConnectionStatus: String, Codable {
     case connected
     case pending
     case error
@@ -95,7 +95,7 @@ enum ConnectionStatus: String, Codable, Sendable {
 
 /// OAuth token bundle stored in Keychain.
 /// Conforms to Sendable since all properties are value types.
-struct OAuthTokenBundle: Codable, Sendable {
+struct OAuthTokenBundle: Codable {
     /// The access token for API calls
     var accessToken: String
 

@@ -2,7 +2,7 @@ import SwiftUI
 import WebKit
 
 /// Represents a file selected via the Google Picker
-struct GooglePickerFile: Identifiable, Codable, Sendable {
+struct GooglePickerFile: Identifiable, Codable {
     let id: String
     let name: String
     let mimeType: String
