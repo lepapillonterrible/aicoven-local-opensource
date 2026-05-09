@@ -5,14 +5,17 @@ import Foundation
 /// Errors specific to local chat orchestration
 enum LocalChatError: Error, LocalizedError {
     case missingOpenAIAPIKey
+    case missingBaseURL
     case invalidResponse
 
     var errorDescription: String? {
         switch self {
         case .missingOpenAIAPIKey:
-            "No OpenAI API key configured. Set the OPENAI_API_KEY environment variable or store an \"openai_api_key\" string in UserDefaults."
+            "No API key configured. Set the appropriate environment variable or store the key in UserDefaults."
+        case .missingBaseURL:
+            "No base URL configured. Set the appropriate base URL in UserDefaults."
         case .invalidResponse:
-            "Received an invalid response from the OpenAI API."
+            "Received an invalid response from the API."
         }
     }
 }
@@ -310,5 +313,348 @@ private actor GeminiClient {
             nil
         }
         return (text, usage)
+    }
+}
+
+// MARK: - OpenClaw Client
+
+/// OpenClaw client for self-hosted OpenAI-compatible LLM endpoints.
+///
+/// OpenClaw is a local LLM proxy/gateway that presents an OpenAI-compatible API.
+/// This client connects to user-configurable base URLs for local or private deployments.
+private actor OpenClawClient {
+    
+    /// Resolve the base URL from UserDefaults ("openclaw_base_url") or
+    /// OPENCLAW_BASE_URL environment variable.
+    /// Default: http://localhost:3000
+    private func baseURL() throws -> String {
+        if let url = UserDefaults.standard.string(forKey: UserScope.scopedKey("openclaw_base_url")), !url.isEmpty {
+            return url
+        }
+        if let env = ProcessInfo.processInfo.environment["OPENCLAW_BASE_URL"], !env.isEmpty {
+            return env
+        }
+        return "http://localhost:3000"
+    }
+    
+    /// Resolve API key from UserDefaults ("openclaw_api_key") or
+    /// OPENCLAW_API_KEY environment variable.
+    /// Many local deployments don't require auth, so this is optional.
+    private func apiKey() -> String? {
+        if let key = UserDefaults.standard.string(forKey: UserScope.scopedKey("openclaw_api_key")), !key.isEmpty {
+            return key
+        }
+        if let env = ProcessInfo.processInfo.environment["OPENCLAW_API_KEY"], !env.isEmpty {
+            return env
+        }
+        return nil
+    }
+
+    /// Non-streaming chat completion call compatible with OpenAI API format.
+    func sendChat(
+        messages: [WireLLMMessage],
+        model: String
+    ) async throws -> (content: String, usage: TokenUsage?) {
+        struct RequestBody: Encodable {
+            let model: String
+            let messages: [WireLLMMessage]
+            let temperature: Double?
+            let maxTokens: Int?
+            
+            enum CodingKeys: String, CodingKey {
+                case model
+                case messages
+                case temperature
+                case maxTokens = "max_tokens"
+            }
+        }
+        
+        struct ResponseBody: Decodable {
+            struct Choice: Decodable {
+                struct Message: Decodable {
+                    let role: String?
+                    let content: String?
+                }
+                let index: Int?
+                let message: Message
+                let finishReason: String?
+                
+                enum CodingKeys: String, CodingKey {
+                    case index
+                    case message
+                    case finishReason = "finish_reason"
+                }
+            }
+
+            struct Usage: Decodable {
+                let promptTokens: Int?
+                let completionTokens: Int?
+                let totalTokens: Int?
+
+                enum CodingKeys: String, CodingKey {
+                    case promptTokens = "prompt_tokens"
+                    case completionTokens = "completion_tokens"
+                    case totalTokens = "total_tokens"
+                }
+            }
+
+            let id: String?
+            let object: String?
+            let created: Int?
+            let model: String?
+            let choices: [Choice]
+            let usage: Usage?
+        }
+
+        let baseURLString = try baseURL()
+        guard let apiURL = URL(string: baseURLString)?.appendingPathComponent("/v1/chat/completions") else {
+            throw LocalChatError.missingBaseURL
+        }
+
+        let body = RequestBody(
+            model: model,
+            messages: messages,
+            temperature: 0.7,
+            maxTokens: nil // Let the endpoint decide
+        )
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(body)
+
+        var request = URLRequest(url: apiURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        // Optional API key (many local deployments don't require auth)
+        if let key = apiKey() {
+            request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = data
+
+        let (responseData, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
+            let bodyText = String(data: responseData, encoding: .utf8) ?? "<non-utf8>"
+            AppErrorReporter.log(message: "OpenClaw error: status=\((response as? HTTPURLResponse)?.statusCode ?? -1) body=\(bodyText)", context: "LLMClients.OpenClawClient.sendChat")
+            throw LocalChatError.invalidResponse
+        }
+
+        let decoder = JSONDecoder()
+        let res = try decoder.decode(ResponseBody.self, from: responseData)
+        guard let first = res.choices.first else {
+            throw LocalChatError.invalidResponse
+        }
+        let content = first.message.content ?? ""
+        let usage: TokenUsage? = if let usageData = res.usage {
+            TokenUsage(
+                promptTokens: usageData.promptTokens,
+                completionTokens: usageData.completionTokens,
+                totalTokens: usageData.totalTokens
+            )
+        } else {
+            nil
+        }
+        return (content, usage)
+    }
+}
+
+// MARK: - Hermes Client
+
+/// Hermes client for Nous Research Hermes models via OpenAI-compatible API.
+///
+/// Hermes (especially Hermes 3) is a family of advanced LLMs fine-tuned for
+/// agentic and tool use capabilities. This client supports:
+/// - Together AI API (cloud)
+/// - Self-hosted/local instances (via configurable base URL)
+/// - Any OpenAI-compatible endpoint hosting Hermes models
+private actor HermesClient {
+    
+    /// Default Together AI base URL for Hermes
+    private let togetherAIBaseURL = "https://api.together.xyz"
+    
+    /// Resolve the base URL from:
+    /// 1. UserDefaults ("hermes_base_url") - for local/self-hosted
+    /// 2. HERMES_BASE_URL environment variable
+    /// 3. Default to Together AI
+    private func baseURL() -> String {
+        if let url = UserDefaults.standard.string(forKey: UserScope.scopedKey("hermes_base_url")), !url.isEmpty {
+            return url
+        }
+        if let env = ProcessInfo.processInfo.environment["HERMES_BASE_URL"], !env.isEmpty {
+            return env
+        }
+        return togetherAIBaseURL
+    }
+    
+    /// Resolve API key from:
+    /// 1. UserDefaults ("hermes_api_key")
+    /// 2. HERMES_API_KEY or TOGETHER_API_KEY environment variable
+    private func apiKey() throws -> String {
+        if let key = UserDefaults.standard.string(forKey: UserScope.scopedKey("hermes_api_key")), !key.isEmpty {
+            return key
+        }
+        if let env = ProcessInfo.processInfo.environment["HERMES_API_KEY"], !env.isEmpty {
+            return env
+        }
+        if let env = ProcessInfo.processInfo.environment["TOGETHER_API_KEY"], !env.isEmpty {
+            return env
+        }
+        throw LocalChatError.missingOpenAIAPIKey
+    }
+
+    /// Non-streaming chat completion call compatible with OpenAI API format.
+    func sendChat(
+        messages: [WireLLMMessage],
+        model: String
+    ) async throws -> (content: String, usage: TokenUsage?) {
+        struct RequestBody: Encodable {
+            let model: String
+            let messages: [WireLLMMessage]
+            let temperature: Double?
+            let maxTokens: Int?
+            
+            enum CodingKeys: String, CodingKey {
+                case model
+                case messages
+                case temperature
+                case maxTokens = "max_tokens"
+            }
+        }
+        
+        struct ResponseBody: Decodable {
+            struct Choice: Decodable {
+                struct Message: Decodable {
+                    let role: String?
+                    let content: String?
+                    // Some Hermes deployments may return tool_calls
+                    let toolCalls: [ToolCall]?
+                    
+                    enum CodingKeys: String, CodingKey {
+                        case role
+                        case content
+                        case toolCalls = "tool_calls"
+                    }
+                }
+                
+                struct ToolCall: Decodable {
+                    let id: String?
+                    let type: String?
+                    let function: FunctionCall?
+                }
+                
+                struct FunctionCall: Decodable {
+                    let name: String?
+                    let arguments: String?
+                }
+                
+                let index: Int?
+                let message: Message
+                let finishReason: String?
+                
+                enum CodingKeys: String, CodingKey {
+                    case index
+                    case message
+                    case finishReason = "finish_reason"
+                }
+            }
+
+            struct Usage: Decodable {
+                let promptTokens: Int?
+                let completionTokens: Int?
+                let totalTokens: Int?
+
+                enum CodingKeys: String, CodingKey {
+                    case promptTokens = "prompt_tokens"
+                    case completionTokens = "completion_tokens"
+                    case totalTokens = "total_tokens"
+                }
+            }
+
+            let id: String?
+            let object: String?
+            let created: Int?
+            let model: String?
+            let choices: [Choice]
+            let usage: Usage?
+        }
+
+        let baseURLString = baseURL()
+        guard let apiURL = URL(string: baseURLString)?.appendingPathComponent("/v1/chat/completions") else {
+            throw LocalChatError.missingBaseURL
+        }
+
+        let body = RequestBody(
+            model: mapModelName(model),
+            messages: messages,
+            temperature: 0.7,
+            maxTokens: nil
+        )
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(body)
+
+        var request = URLRequest(url: apiURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let key = try apiKey()
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        request.httpBody = data
+
+        let (responseData, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
+            let bodyText = String(data: responseData, encoding: .utf8) ?? "<non-utf8>"
+            AppErrorReporter.log(message: "Hermes error: status=\((response as? HTTPURLResponse)?.statusCode ?? -1) body=\(bodyText)", context: "LLMClients.HermesClient.sendChat")
+            throw LocalChatError.invalidResponse
+        }
+
+        let decoder = JSONDecoder()
+        let res = try decoder.decode(ResponseBody.self, from: responseData)
+        guard let first = res.choices.first else {
+            throw LocalChatError.invalidResponse
+        }
+        
+        // Handle potential tool calls (Hermes is strong at function calling)
+        let content = first.message.content ?? ""
+        
+        // If there are tool calls, append them to content for visibility
+        let toolCallContent: String
+        if let toolCalls = first.message.toolCalls, !toolCalls.isEmpty {
+            let toolCallDescriptions = toolCalls.compactMap { tc -> String? in
+                guard let name = tc.function?.name else { return nil }
+                let args = tc.function?.arguments ?? "{}"
+                return "[Tool Call: \(name)(\(args))]"
+            }
+            toolCallContent = toolCallDescriptions.joined(separator: "\n")
+        } else {
+            toolCallContent = ""
+        }
+        
+        let finalContent = toolCallContent.isEmpty ? content : content + "\n" + toolCallContent
+        
+        let usage: TokenUsage? = if let usageData = res.usage {
+            TokenUsage(
+                promptTokens: usageData.promptTokens,
+                completionTokens: usageData.completionTokens,
+                totalTokens: usageData.totalTokens
+            )
+        } else {
+            nil
+        }
+        return (finalContent, usage)
+    }
+    
+    /// Maps friendly model names to Together AI model IDs.
+    /// Users can also pass the full model ID directly.
+    private func mapModelName(_ model: String) -> String {
+        let modelMap: [String: String] = [
+            "hermes-3": "NousResearch/Hermes-3-Llama-3.1-405B-Turbo",
+            "hermes-3-405b": "NousResearch/Hermes-3-Llama-3.1-405B-Turbo",
+            "hermes-3-70b": "NousResearch/Hermes-3-Llama-3.1-70B",
+            "hermes-3-8b": "NousResearch/Hermes-3-Llama-3.1-8B",
+            "hermes-2": "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO",
+            "hermes-2-mistral": "NousResearch/Nous-Hermes-2-Mistral-7B-DPO",
+            "hermes-2-vision": "NousResearch/Nous-Hermes-2-Vision-Alpha",
+        ]
+        
+        // Return the mapped ID or the original if not found
+        // This allows users to pass full model IDs directly
+        return modelMap[model.lowercased()] ?? model
     }
 }
