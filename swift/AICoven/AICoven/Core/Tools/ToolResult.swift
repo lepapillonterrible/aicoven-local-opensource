@@ -6,7 +6,7 @@ import Foundation
 /// Can represent success, errors, or in-progress states.
 /// Named ToolExecutionResult to avoid conflict with ToolResult in ChatMessageModels.
 /// Conforms to Sendable since all properties are value types or Sendable enums.
-struct ToolExecutionResult: Codable, Sendable {
+struct ToolExecutionResult: Codable {
     /// The tool that was executed
     let tool: String
     /// Status of the execution: "ok", "error", "denied", "timeout"
@@ -146,7 +146,7 @@ struct ToolExecutionResult: Codable, Sendable {
 
 /// Error types for tool execution, matching backend categorization.
 /// Conforms to Sendable since it's a simple enum with Sendable raw values.
-enum ToolErrorType: String, Codable, Sendable {
+enum ToolErrorType: String, Codable {
     /// Invalid or malformed parameters - agent can retry with different args
     case invalidParameters = "invalid_parameters"
     /// Tool not enabled or not allowed for this role
@@ -165,7 +165,7 @@ enum ToolErrorType: String, Codable, Sendable {
 
 /// Error thrown during tool execution with structured information.
 /// Conforms to Sendable since all properties are Sendable value types.
-struct ToolExecutionError: Error, LocalizedError, Sendable {
+struct ToolExecutionError: Error, LocalizedError {
     let type: ToolErrorType
     let message: String
     let tool: String?
@@ -225,7 +225,7 @@ struct ToolExecutionError: Error, LocalizedError, Sendable {
 
 /// Risk level for shell commands, used for approval UI.
 /// Conforms to Sendable since it's a simple enum with Sendable raw values.
-enum ShellCommandRiskLevel: String, Codable, Sendable {
+enum ShellCommandRiskLevel: String, Codable {
     /// Read-only operations (ls, cat, git status)
     case low
     /// Write operations (npm install, git commit)

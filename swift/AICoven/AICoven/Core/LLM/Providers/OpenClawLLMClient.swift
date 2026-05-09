@@ -84,13 +84,12 @@ final class OpenClawLLMClient: LLMClient, @unchecked Sendable {
         }
 
         // API key is optional
-        let apiKey: String?
-        if let key = defaults.string(forKey: UserScope.scopedKey("openclaw_api_key")), !key.isEmpty {
-            apiKey = key
+        let apiKey: String? = if let key = defaults.string(forKey: UserScope.scopedKey("openclaw_api_key")), !key.isEmpty {
+            key
         } else if let envKey = ProcessInfo.processInfo.environment["OPENCLAW_API_KEY"], !envKey.isEmpty {
-            apiKey = envKey
+            envKey
         } else {
-            apiKey = nil
+            nil
         }
 
         self.init(baseURL: baseURL, apiKey: apiKey)
@@ -137,10 +136,12 @@ final class OpenClawLLMClient: LLMClient, @unchecked Sendable {
                 let name: String
                 let arguments: String // JSON string
             }
+
             let id: String?
             let type: String?
             let function: FunctionCall
         }
+
         struct ResponseBody: Decodable {
             struct Choice: Decodable {
                 struct Message: Decodable {
@@ -148,20 +149,23 @@ final class OpenClawLLMClient: LLMClient, @unchecked Sendable {
                     let content: String?
                     let tool_calls: [ToolCallResponse]?
                 }
+
                 let message: Message
                 let finish_reason: String?
             }
+
             struct UsageBody: Decodable {
                 let prompt_tokens: Int?
                 let completion_tokens: Int?
                 let total_tokens: Int?
             }
+
             let choices: [Choice]
             let usage: UsageBody?
             let model: String?
         }
 
-        let url = baseURL.appendingPathComponent("/v1/chat/completions")
+        let url = baseURL.appendingPathComponent("v1/chat/completions")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -219,21 +223,19 @@ final class OpenClawLLMClient: LLMClient, @unchecked Sendable {
         }
 
         let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
         let decoded = try decoder.decode(ResponseBody.self, from: data)
         guard let first = decoded.choices.first else {
             throw NSError(domain: "OpenClawLLMClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No choices in response"])
         }
 
         let msg = LLMMessage(role: .assistant, content: first.message.content ?? "")
-        let usage: LLMTokenUsage?
-        if let u = decoded.usage {
-            usage = LLMTokenUsage(
+        let usage: LLMTokenUsage? = if let u = decoded.usage {
+            LLMTokenUsage(
                 promptTokens: u.prompt_tokens ?? 0,
                 completionTokens: u.completion_tokens ?? 0
             )
         } else {
-            usage = nil
+            nil
         }
 
         // Parse tool calls
@@ -262,14 +264,16 @@ final class OpenClawLLMClient: LLMClient, @unchecked Sendable {
             let model: String
             let input: [String]
         }
+
         struct EmbeddingResponse: Decodable {
             struct Item: Decodable {
                 let embedding: [Float]
             }
+
             let data: [Item]
         }
 
-        let url = baseURL.appendingPathComponent("/v1/embeddings")
+        let url = baseURL.appendingPathComponent("v1/embeddings")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -299,7 +303,6 @@ final class OpenClawLLMClient: LLMClient, @unchecked Sendable {
         }
 
         let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
         let decoded = try decoder.decode(EmbeddingResponse.self, from: data)
         return decoded.data.map(\.embedding)
     }
