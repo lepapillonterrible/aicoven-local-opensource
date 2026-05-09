@@ -726,100 +726,93 @@ struct PersonalChatView: View {
                 message: fullTextForLLM,
                 roleId: thread.agentId,
                 attachments: attachments.isEmpty ? nil : attachments,
-                onPlanningDelta: { delta in
+                onStateChange: { state in
                     Task { @MainActor in
-                        let trimmed = delta.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !trimmed.isEmpty else { return }
-
-                        // Update the visible reasoning message with a step-aware prefix
-                        if streamingUsedTools {
-                            reasoningLoadingMessage = "Using tools and memory: \(trimmed)"
-                        } else {
-                            reasoningLoadingMessage = "Planning: \(trimmed)"
-                        }
-
-                        // Append to streamingThoughts if it's new (avoid noisy duplicates)
-                        if streamingThoughts.last != trimmed {
-                            streamingThoughts.append(trimmed)
-                        }
-                    }
-                },
-                onToolEvent: { toolName in
-                    Task { @MainActor in
-                        streamingUsedTools = true
-                        reasoningLoadingMessage = toolActivityMessage(for: toolName)
-                    }
-                },
-                onAnswerDelta: { delta in
-                    Task { @MainActor in
-                        streamingAnswerBuffer += delta
-                        // Strip <think>...</think> blocks that reasoning models
-                        // (e.g. Qwen3) emit so they don't flash in the live UI.
-                        // Handles both closed and unclosed (in-progress) tags.
-                        streamingAnswerBuffer = Self.stripThinkTags(from: streamingAnswerBuffer)
-                        // Heuristic: if we start seeing "web." or "github." snippets
-                        // in the answer text, assume tools are being referenced.
-                        if delta.contains("web.") || delta.contains("github.") {
+                        switch state.phase {
+                        case .starting, .planning, .modelAttempt:
+                            let trimmed = state.scratchpad.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !trimmed.isEmpty {
+                                if streamingUsedTools {
+                                    reasoningLoadingMessage = "Using tools and memory: \(trimmed)"
+                                } else {
+                                    reasoningLoadingMessage = "Planning: \(trimmed)"
+                                }
+                                if streamingThoughts.last != trimmed {
+                                    streamingThoughts.append(trimmed)
+                                }
+                            }
+                        case .tooling:
                             streamingUsedTools = true
+                            if let lastTool = state.toolsInProgress.values.first ?? state.toolsCompleted.last {
+                                reasoningLoadingMessage = toolActivityMessage(for: lastTool.name)
+                            }
+                        case .answering:
+                            streamingAnswerBuffer = state.answer
+                            streamingAnswerBuffer = Self.stripThinkTags(from: streamingAnswerBuffer)
+                            if streamingAnswerBuffer.contains("web.") || streamingAnswerBuffer.contains("github.") {
+                                streamingUsedTools = true
+                            }
+                        case .finalizing:
+                            if state.status == .failed {
+                                // Handled in catch block naturally if thrown, but if emitted as failed state:
+                                isSending = false
+                                streamingAnswerBuffer = ""
+                                streamingThoughts = []
+                                streamingUsedTools = false
+                                reasoningLoadingMessage = "Something went wrong while contacting the assistant. Please try again."
+
+                                let errorMessage = ChatMessage(
+                                    id: UUID().uuidString,
+                                    threadId: thread.id,
+                                    role: "assistant",
+                                    content: state.answer,
+                                    metadata: nil,
+                                    tokenUsage: nil,
+                                    createdAt: Date(),
+                                    isEncrypted: false,
+                                    keyFingerprint: nil
+                                )
+                                messages.append(errorMessage)
+                                Task { await ChatService.shared.addLocalMessage(errorMessage) }
+                                return
+                            }
+
+                            isSending = false
+                            let collapsedThoughts: [String]
+                            if streamingThoughts.isEmpty {
+                                collapsedThoughts = []
+                            } else {
+                                let joined = streamingThoughts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+                                collapsedThoughts = joined.isEmpty ? [] : [joined]
+                            }
+                            var meta: [String: AnyJSONValue] = [:]
+                            if !collapsedThoughts.isEmpty {
+                                meta["thoughts"] = AnyJSONValue(collapsedThoughts)
+                            }
+                            if let agentName = thread.agentName {
+                                meta["role_name"] = AnyJSONValue(agentName)
+                            }
+
+                            let cleanedContent = MessageAdapter.sanitizeContentForDisplay(state.answer)
+                            let aiMessage = ChatMessage(
+                                id: UUID().uuidString,
+                                threadId: thread.id,
+                                role: "assistant",
+                                content: cleanedContent,
+                                metadata: meta,
+                                tokenUsage: nil,
+                                createdAt: Date(),
+                                isEncrypted: false,
+                                keyFingerprint: nil
+                            )
+                            messages.append(aiMessage)
+                            await ChatService.shared.addLocalMessage(aiMessage)
+
+                            lastResponse = nil
+                            lastResponseId = aiMessage.id
+                            streamingAnswerBuffer = ""
+                            streamingThoughts = []
                         }
-                    }
-                },
-                onDone: { [threadId = thread.id] provider, model, tokenUsage in
-                    Task { @MainActor in
-                        isSending = false
-                        // Collapse streamingThoughts into a single paragraph
-                        let collapsedThoughts: [String]
-                        if streamingThoughts.isEmpty {
-                            collapsedThoughts = []
-                        } else {
-                            let joined = streamingThoughts.joined(separator: " ")
-                                .trimmingCharacters(in: .whitespacesAndNewlines)
-                            collapsedThoughts = joined.isEmpty ? [] : [joined]
-                        }
-                        var meta: [String: AnyJSONValue] = [:]
-                        if !collapsedThoughts.isEmpty {
-                            meta["thoughts"] = AnyJSONValue(collapsedThoughts)
-                        }
-                        if let provider {
-                            meta["provider_used"] = AnyJSONValue(provider)
-                        }
-                        if let model {
-                            meta["model"] = AnyJSONValue(model)
-                        }
-                        // Persist the agent name so history loads show the correct role
-                        if let agentName = thread.agentName {
-                            meta["role_name"] = AnyJSONValue(agentName)
-                        }
-                        if let usage = tokenUsage {
-                            var usageDict: [String: Any] = [:]
-                            if let p = usage.promptTokens { usageDict["prompt_tokens"] = p }
-                            if let c = usage.completionTokens { usageDict["completion_tokens"] = c }
-                            if let t = usage.totalTokens { usageDict["total_tokens"] = t }
-                            meta["token_usage"] = AnyJSONValue(usageDict)
-                        }
-                        let cleanedContent = MessageAdapter.sanitizeContentForDisplay(streamingAnswerBuffer)
-                        let aiMessage = ChatMessage(
-                            id: UUID().uuidString,
-                            threadId: threadId,
-                            role: "assistant",
-                            content: cleanedContent,
-                            metadata: meta,
-                            tokenUsage: tokenUsage,
-                            createdAt: Date(),
-                            isEncrypted: false,
-                            keyFingerprint: nil
-                        )
-                        messages.append(aiMessage)
-                        await ChatService.shared.addLocalMessage(aiMessage)
-                        // Kick off a background summary update so future turns
-                        // can use a compact thread summary (Layer 5).
-                        Task {
-                            await ChatService.shared.updateThreadSummary(threadId: threadId)
-                        }
-                        lastResponse = nil
-                        lastResponseId = aiMessage.id
-                        streamingAnswerBuffer = ""
-                        streamingThoughts = []
                     }
                 }
             )

@@ -34,12 +34,11 @@ struct RichMessageBubble: View {
                 .padding(16)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
-                        .fill(isUser ? Color.aicovenPurple : Color.aicovenSurfaceElevated)
-                        .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
+                        .fill(isUser ? Color.aicovenTeal.opacity(0.15) : Color.aicovenSurfaceElevated.opacity(0.6))
+                        .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
                 )
-                .foregroundStyle(isUser ? Color.white : Color.aicovenTextPrimary)
+                .foregroundStyle(Color.aicovenTextPrimary)
                 // Ensure links and other tappable elements have sufficient contrast
-                // against the purple assistant bubble.
                 .tint(Color.aicovenTeal)
 
                 // Attachments

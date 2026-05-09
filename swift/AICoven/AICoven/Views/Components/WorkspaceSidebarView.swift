@@ -54,34 +54,33 @@ struct WorkspaceSidebarView: View {
                             onSwitchToHome: onSwitchToHome
                         )
 
-                        if let coven = selectedCoven {
-                            Button {
-                                openMemoryTab(covenId: coven.id)
-                            } label: {
-                                HStack(spacing: Spacing.xs) {
-                                    Image(systemName: "brain")
-                                        .font(.system(size: 14, weight: .semibold))
-                                    Text("Memory")
-                                        .font(.aicovenBodyMedium)
-                                    Spacer()
-                                    Text(coven.name)
-                                        .font(.aicovenCaption)
-                                        .foregroundColor(.aicovenTextTertiary)
-                                        .lineLimit(1)
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, Spacing.sm)
-                                .padding(.horizontal, Spacing.sm)
-                                .background(Color.aicovenGlass)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: BorderRadius.md)
-                                        .strokeBorder(Color.aicovenBorder, lineWidth: 1)
-                                )
-                                .cornerRadius(BorderRadius.md)
+                        // Show Memory CTA for both Covens and Strix
+                        Button {
+                            openMemoryTab(covenId: selectedCoven?.id)
+                        } label: {
+                            HStack(spacing: Spacing.xs) {
+                                Image(systemName: "brain")
+                                    .font(.system(size: 14, weight: .semibold))
+                                Text("Memory")
+                                    .font(.aicovenBodyMedium)
+                                Spacer()
+                                Text(selectedCoven?.name ?? "Strix")
+                                    .font(.aicovenCaption)
+                                    .foregroundColor(.aicovenTextTertiary)
+                                    .lineLimit(1)
                             }
-                            .buttonStyle(.plain)
-                            .foregroundColor(.aicovenTextPrimary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, Spacing.sm)
+                            .padding(.horizontal, Spacing.sm)
+                            .background(Color.aicovenGlass)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: BorderRadius.md)
+                                    .strokeBorder(Color.aicovenBorder, lineWidth: 1)
+                            )
+                            .cornerRadius(BorderRadius.md)
                         }
+                        .buttonStyle(.plain)
+                        .foregroundColor(.aicovenTextPrimary)
 
                         ThreadManagementView(
                             selectedCoven: $selectedCoven,
@@ -105,12 +104,7 @@ struct WorkspaceSidebarView: View {
                             )
                         }
 
-                        #if os(macOS)
-                        WorkspaceToolsSection(
-                            onOpenTab: openSidebarTab,
-                            isCollapsible: true
-                        )
-                        #endif
+                        // WorkspaceToolsSection removed to avoid menu duplication
                     }
                     .padding(.horizontal, Spacing.md)
                     .padding(.top, Spacing.md)

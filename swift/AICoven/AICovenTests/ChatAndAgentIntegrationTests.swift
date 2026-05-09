@@ -172,10 +172,19 @@ final class ChatAndAgentIntegrationTests: XCTestCase {
             roleId: nil,
             providerAccountId: nil,
             attachments: nil,
-            onPlanningDelta: onPlanningDelta,
-            onToolEvent: onToolEvent,
-            onAnswerDelta: onAnswerDelta,
-            onDone: onDone
+            onStateChange: { state in
+                if state.phase == .planning {
+                    planningMessages.append(state.scratchpad)
+                } else if state.phase == .tooling {
+                    if let last = state.toolsInProgress.values.first {
+                        toolEvents.append(last.name)
+                    }
+                } else if state.phase == .answering || state.phase == .finalizing {
+                    if !state.answer.isEmpty {
+                        answerText = state.answer
+                    }
+                }
+            }
         )
 
         XCTAssertFalse(toolEvents.isEmpty, "Expected at least one tool event from web_search")

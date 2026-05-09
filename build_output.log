@@ -1,0 +1,970 @@
+Command line invocation:
+    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -project "swift/AICoven/AICoven Local.xcodeproj" -scheme AICoven -configuration Debug -destination platform=macOS build
+
+Resolve Package Graph
+
+
+Resolved source packages:
+  swift-numerics: https://github.com/apple/swift-numerics @ 1.1.1
+  mlx-swift-lm: https://github.com/ml-explore/mlx-swift-lm @ 2.30.6
+  GoogleUtilities: https://github.com/google/GoogleUtilities.git @ 8.1.0
+  GTMSessionFetcher: https://github.com/google/gtm-session-fetcher.git @ 5.0.0
+  swift-collections: https://github.com/apple/swift-collections.git @ 1.3.0
+  leveldb: https://github.com/firebase/leveldb.git @ 1.22.5
+  mlx-swift: https://github.com/ml-explore/mlx-swift @ 0.30.6
+  InteropForGoogle: https://github.com/google/interop-ios-for-google-sdks.git @ 101.0.0
+  Firebase: https://github.com/firebase/firebase-ios-sdk @ 12.8.0
+  gRPC: https://github.com/google/grpc-binary.git @ 1.69.1
+  GoogleAppMeasurement: https://github.com/google/GoogleAppMeasurement.git @ 12.8.0
+  AppCheck: https://github.com/google/app-check.git @ 11.2.0
+  GoogleDataTransport: https://github.com/google/GoogleDataTransport.git @ 10.1.0
+  GoogleAdsOnDeviceConversion: https://github.com/googleads/google-ads-on-device-conversion-ios-sdk @ 3.2.0
+  GRDB: https://github.com/groue/GRDB.swift.git @ 7.8.0
+  swift-transformers: https://github.com/huggingface/swift-transformers @ 1.1.6
+  nanopb: https://github.com/firebase/nanopb.git @ 2.30910.0
+  abseil: https://github.com/google/abseil-cpp-binary.git @ 1.2024072200.0
+  Jinja: https://github.com/huggingface/swift-jinja.git @ 2.3.1
+  Promises: https://github.com/google/promises.git @ 2.4.0
+
+ComputePackagePrebuildTargetDependencyGraph
+
+Prepare packages
+
+CreateBuildRequest
+
+SendProjectDescription
+
+CreateBuildOperation
+
+ComputeTargetDependencyGraph
+note: Building targets in dependency order
+note: Target dependency graph (132 targets)
+    Target 'AICovenTests' in project 'AICoven Local'
+        ➜ Explicit dependency on target 'AICoven' in project 'AICoven Local'
+    Target 'AICoven' in project 'AICoven Local'
+        ➜ Explicit dependency on target 'FirebaseAnalytics' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAnalyticsIdentitySupport' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseMessaging' in project 'Firebase'
+        ➜ Explicit dependency on target 'MLXLMCommon' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'FirebaseCrashlytics' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseRemoteConfig' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAnalyticsCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAuthCombine-Community' in project 'Firebase'
+        ➜ Explicit dependency on target 'MLXEmbedders' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'MLXLLM' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'MLXVLM' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'FirebaseAuth' in project 'Firebase'
+        ➜ Explicit dependency on target 'GRDB' in project 'GRDB'
+    Target 'GRDB' in project 'GRDB'
+        ➜ Explicit dependency on target 'GRDB' in project 'GRDB'
+        ➜ Explicit dependency on target 'GRDB_GRDB' in project 'GRDB'
+    Target 'GRDB' in project 'GRDB'
+        ➜ Explicit dependency on target 'GRDB_GRDB' in project 'GRDB'
+        ➜ Explicit dependency on target 'GRDBSQLite' in project 'GRDB'
+    Target 'GRDBSQLite' in project 'GRDB' (no dependencies)
+    Target 'GRDB_GRDB' in project 'GRDB' (no dependencies)
+    Target 'FirebaseAuth' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAuth' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase_FirebaseAuth' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAppCheckInterop' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAuthInterop' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAuthInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreExtension' in project 'Firebase'
+        ➜ Explicit dependency on target 'RecaptchaInterop' in project 'InteropForGoogle'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GTMSessionFetcherCore' in project 'GTMSessionFetcher'
+    Target 'MLXVLM' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'MLXVLM' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'MLXLMCommon' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'MLX' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLXNN' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLXOptimizers' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'Transformers' in project 'swift-transformers'
+    Target 'MLXVLM' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'MLXLMCommon' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'MLX' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLXNN' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLXOptimizers' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'Transformers' in project 'swift-transformers'
+    Target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase_FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+    Target 'MLXLLM' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'MLXLLM' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'MLXLMCommon' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'MLX' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLXNN' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLXOptimizers' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'Transformers' in project 'swift-transformers'
+    Target 'MLXLLM' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'MLXLMCommon' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'MLX' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLXNN' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLXOptimizers' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'Transformers' in project 'swift-transformers'
+    Target 'MLXEmbedders' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'MLXEmbedders' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'MLXLMCommon' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'MLX' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLXNN' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLXOptimizers' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'Transformers' in project 'swift-transformers'
+    Target 'MLXEmbedders' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'MLXLMCommon' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'MLX' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLXNN' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLXOptimizers' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'Transformers' in project 'swift-transformers'
+    Target 'FirebaseAuthCombine-Community' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAuthCombineSwift' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAppCheckInterop' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAuthInterop' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAuthInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreExtension' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAuth' in project 'Firebase'
+        ➜ Explicit dependency on target 'RecaptchaInterop' in project 'InteropForGoogle'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GTMSessionFetcherCore' in project 'GTMSessionFetcher'
+    Target 'FirebaseAuthCombineSwift' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAppCheckInterop' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAuthInterop' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAuthInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreExtension' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAuth' in project 'Firebase'
+        ➜ Explicit dependency on target 'RecaptchaInterop' in project 'InteropForGoogle'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GTMSessionFetcherCore' in project 'GTMSessionFetcher'
+    Target 'FirebaseAuth' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase_FirebaseAuth' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAppCheckInterop' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAuthInterop' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAuthInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreExtension' in project 'Firebase'
+        ➜ Explicit dependency on target 'RecaptchaInterop' in project 'InteropForGoogle'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GTMSessionFetcherCore' in project 'GTMSessionFetcher'
+    Target 'GTMSessionFetcherCore' in project 'GTMSessionFetcher'
+        ➜ Explicit dependency on target 'GTMSessionFetcherCore' in project 'GTMSessionFetcher'
+        ➜ Explicit dependency on target 'GTMSessionFetcher_GTMSessionFetcherCore' in project 'GTMSessionFetcher'
+    Target 'GTMSessionFetcherCore' in project 'GTMSessionFetcher'
+        ➜ Explicit dependency on target 'GTMSessionFetcher_GTMSessionFetcherCore' in project 'GTMSessionFetcher'
+    Target 'GTMSessionFetcher_GTMSessionFetcherCore' in project 'GTMSessionFetcher' (no dependencies)
+    Target 'Firebase_FirebaseAuth' in project 'Firebase' (no dependencies)
+    Target 'FirebaseAuthInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'RecaptchaInterop' in project 'InteropForGoogle'
+    Target 'RecaptchaInterop' in project 'InteropForGoogle'
+        ➜ Explicit dependency on target 'RecaptchaInterop' in project 'InteropForGoogle'
+    Target 'RecaptchaInterop' in project 'InteropForGoogle' (no dependencies)
+    Target 'FirebaseAuthInterop' in project 'Firebase' (no dependencies)
+    Target 'FirebaseAppCheckInterop' in project 'Firebase' (no dependencies)
+    Target 'FirebaseAnalyticsCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAnalyticsCoreTarget' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseInstallations' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAnalyticsCoreWrapper' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+        ➜ Explicit dependency on target 'GULUserDefaults' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleAppMeasurementCore' in project 'GoogleAppMeasurement'
+        ➜ Explicit dependency on target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULMethodSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNetwork' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+    Target 'FirebaseAnalyticsCoreTarget' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseInstallations' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAnalyticsCoreWrapper' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+        ➜ Explicit dependency on target 'GULUserDefaults' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleAppMeasurementCore' in project 'GoogleAppMeasurement'
+        ➜ Explicit dependency on target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULMethodSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNetwork' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+    Target 'FirebaseAnalyticsCoreWrapper' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseInstallations' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+        ➜ Explicit dependency on target 'GULUserDefaults' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleAppMeasurementCore' in project 'GoogleAppMeasurement'
+        ➜ Explicit dependency on target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULMethodSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNetwork' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+    Target 'GoogleAppMeasurementCore' in project 'GoogleAppMeasurement'
+        ➜ Explicit dependency on target 'GoogleAppMeasurementCoreTarget' in project 'GoogleAppMeasurement'
+        ➜ Explicit dependency on target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULMethodSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNetwork' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+    Target 'GoogleAppMeasurementCoreTarget' in project 'GoogleAppMeasurement'
+        ➜ Explicit dependency on target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULMethodSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNetwork' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+    Target 'FirebaseRemoteConfig' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseRemoteConfig' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase_FirebaseRemoteConfig' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseABTesting' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseInstallations' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseRemoteConfigInterop' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseRemoteConfigInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseSharedSwift' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+        ➜ Explicit dependency on target 'GULUserDefaults' in project 'GoogleUtilities'
+    Target 'FirebaseRemoteConfig' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase_FirebaseRemoteConfig' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseABTesting' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseInstallations' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseRemoteConfigInterop' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseRemoteConfigInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseSharedSwift' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+        ➜ Explicit dependency on target 'GULUserDefaults' in project 'GoogleUtilities'
+    Target 'FirebaseSharedSwift' in project 'Firebase' (no dependencies)
+    Target 'FirebaseRemoteConfigInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseABTesting' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseInstallations' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseRemoteConfigInterop' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+        ➜ Explicit dependency on target 'GULUserDefaults' in project 'GoogleUtilities'
+    Target 'FirebaseABTesting' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase_FirebaseABTesting' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+    Target 'Firebase_FirebaseABTesting' in project 'Firebase' (no dependencies)
+    Target 'Firebase_FirebaseRemoteConfig' in project 'Firebase' (no dependencies)
+    Target 'FirebaseCrashlytics' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCrashlytics' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase_FirebaseCrashlytics' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseInstallations' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreExtension' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseSessionsObjC' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseSessions' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseRemoteConfigInterop' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCrashlyticsSwift' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+        ➜ Explicit dependency on target 'GULUserDefaults' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+        ➜ Explicit dependency on target 'Promises' in project 'Promises'
+        ➜ Explicit dependency on target 'GoogleDataTransport' in project 'GoogleDataTransport'
+    Target 'FirebaseCrashlytics' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase_FirebaseCrashlytics' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseInstallations' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreExtension' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseSessionsObjC' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseSessions' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseRemoteConfigInterop' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCrashlyticsSwift' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+        ➜ Explicit dependency on target 'GULUserDefaults' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+        ➜ Explicit dependency on target 'Promises' in project 'Promises'
+        ➜ Explicit dependency on target 'GoogleDataTransport' in project 'GoogleDataTransport'
+    Target 'FirebaseCrashlyticsSwift' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase_FirebaseCrashlyticsSwift' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseRemoteConfigInterop' in project 'Firebase'
+    Target 'Firebase_FirebaseCrashlyticsSwift' in project 'Firebase' (no dependencies)
+    Target 'FirebaseRemoteConfigInterop' in project 'Firebase' (no dependencies)
+    Target 'FirebaseSessions' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseInstallations' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreExtension' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseSessionsObjC' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+        ➜ Explicit dependency on target 'GULUserDefaults' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+        ➜ Explicit dependency on target 'Promises' in project 'Promises'
+        ➜ Explicit dependency on target 'GoogleDataTransport' in project 'GoogleDataTransport'
+    Target 'Promises' in project 'Promises'
+        ➜ Explicit dependency on target 'Promises' in project 'Promises'
+        ➜ Explicit dependency on target 'Promises_Promises' in project 'Promises'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+    Target 'Promises' in project 'Promises'
+        ➜ Explicit dependency on target 'Promises_Promises' in project 'Promises'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+    Target 'Promises_Promises' in project 'Promises' (no dependencies)
+    Target 'FirebaseSessionsObjC' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreExtension' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+    Target 'FirebaseCoreExtension' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase_FirebaseCoreExtension' in project 'Firebase'
+    Target 'Firebase_FirebaseCoreExtension' in project 'Firebase' (no dependencies)
+    Target 'Firebase_FirebaseCrashlytics' in project 'Firebase' (no dependencies)
+    Target 'MLXLMCommon' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'MLXLMCommon' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'MLX' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLXNN' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLXOptimizers' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'Transformers' in project 'swift-transformers'
+    Target 'MLXLMCommon' in project 'mlx-swift-lm'
+        ➜ Explicit dependency on target 'MLX' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLXNN' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLXOptimizers' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'Transformers' in project 'swift-transformers'
+    Target 'Transformers' in project 'swift-transformers'
+        ➜ Explicit dependency on target 'Tokenizers' in project 'swift-transformers'
+        ➜ Explicit dependency on target 'Generation' in project 'swift-transformers'
+        ➜ Explicit dependency on target 'Models' in project 'swift-transformers'
+        ➜ Explicit dependency on target 'Hub' in project 'swift-transformers'
+        ➜ Explicit dependency on target 'Jinja' in project 'Jinja'
+        ➜ Explicit dependency on target 'OrderedCollections' in project 'swift-collections'
+    Target 'Models' in project 'swift-transformers'
+        ➜ Explicit dependency on target 'Hub' in project 'swift-transformers'
+        ➜ Explicit dependency on target 'Tokenizers' in project 'swift-transformers'
+        ➜ Explicit dependency on target 'Generation' in project 'swift-transformers'
+        ➜ Explicit dependency on target 'Jinja' in project 'Jinja'
+        ➜ Explicit dependency on target 'OrderedCollections' in project 'swift-collections'
+    Target 'Generation' in project 'swift-transformers'
+        ➜ Explicit dependency on target 'Hub' in project 'swift-transformers'
+        ➜ Explicit dependency on target 'Tokenizers' in project 'swift-transformers'
+        ➜ Explicit dependency on target 'Jinja' in project 'Jinja'
+        ➜ Explicit dependency on target 'OrderedCollections' in project 'swift-collections'
+    Target 'Tokenizers' in project 'swift-transformers'
+        ➜ Explicit dependency on target 'Hub' in project 'swift-transformers'
+        ➜ Explicit dependency on target 'Jinja' in project 'Jinja'
+        ➜ Explicit dependency on target 'OrderedCollections' in project 'swift-collections'
+    Target 'Hub' in project 'swift-transformers'
+        ➜ Explicit dependency on target 'swift-transformers_Hub' in project 'swift-transformers'
+        ➜ Explicit dependency on target 'Jinja' in project 'Jinja'
+        ➜ Explicit dependency on target 'OrderedCollections' in project 'swift-collections'
+    Target 'Jinja' in project 'Jinja'
+        ➜ Explicit dependency on target 'Jinja' in project 'Jinja'
+        ➜ Explicit dependency on target 'OrderedCollections' in project 'swift-collections'
+    Target 'Jinja' in project 'Jinja'
+        ➜ Explicit dependency on target 'OrderedCollections' in project 'swift-collections'
+    Target 'OrderedCollections' in project 'swift-collections'
+        ➜ Explicit dependency on target 'OrderedCollections' in project 'swift-collections'
+        ➜ Explicit dependency on target 'InternalCollectionsUtilities' in project 'swift-collections'
+    Target 'OrderedCollections' in project 'swift-collections'
+        ➜ Explicit dependency on target 'InternalCollectionsUtilities' in project 'swift-collections'
+    Target 'InternalCollectionsUtilities' in project 'swift-collections' (no dependencies)
+    Target 'swift-transformers_Hub' in project 'swift-transformers' (no dependencies)
+    Target 'MLXOptimizers' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLXOptimizers' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'Cmlx' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLX' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLXNN' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'Numerics' in project 'swift-numerics'
+    Target 'MLXOptimizers' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'Cmlx' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLX' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLXNN' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'Numerics' in project 'swift-numerics'
+    Target 'MLXNN' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLXNN' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'Cmlx' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLX' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'Numerics' in project 'swift-numerics'
+    Target 'MLXNN' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'Cmlx' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLX' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'Numerics' in project 'swift-numerics'
+    Target 'MLX' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'MLX' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'Cmlx' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'Numerics' in project 'swift-numerics'
+    Target 'MLX' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'Cmlx' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'Numerics' in project 'swift-numerics'
+    Target 'Numerics' in project 'swift-numerics'
+        ➜ Explicit dependency on target 'Numerics' in project 'swift-numerics'
+        ➜ Explicit dependency on target '_NumericsShims' in project 'swift-numerics'
+        ➜ Explicit dependency on target 'RealModule' in project 'swift-numerics'
+        ➜ Explicit dependency on target 'ComplexModule' in project 'swift-numerics'
+    Target 'Numerics' in project 'swift-numerics'
+        ➜ Explicit dependency on target '_NumericsShims' in project 'swift-numerics'
+        ➜ Explicit dependency on target 'RealModule' in project 'swift-numerics'
+        ➜ Explicit dependency on target 'ComplexModule' in project 'swift-numerics'
+    Target 'ComplexModule' in project 'swift-numerics'
+        ➜ Explicit dependency on target '_NumericsShims' in project 'swift-numerics'
+        ➜ Explicit dependency on target 'RealModule' in project 'swift-numerics'
+    Target 'RealModule' in project 'swift-numerics'
+        ➜ Explicit dependency on target '_NumericsShims' in project 'swift-numerics'
+    Target '_NumericsShims' in project 'swift-numerics' (no dependencies)
+    Target 'Cmlx' in project 'mlx-swift'
+        ➜ Explicit dependency on target 'mlx-swift_Cmlx' in project 'mlx-swift'
+    Target 'mlx-swift_Cmlx' in project 'mlx-swift' (no dependencies)
+    Target 'FirebaseMessaging' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseMessaging' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase_FirebaseMessaging' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseInstallations' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+        ➜ Explicit dependency on target 'GULUserDefaults' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULReachability' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleDataTransport' in project 'GoogleDataTransport'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+    Target 'FirebaseMessaging' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase_FirebaseMessaging' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseInstallations' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+        ➜ Explicit dependency on target 'GULUserDefaults' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULReachability' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleDataTransport' in project 'GoogleDataTransport'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+    Target 'GoogleDataTransport' in project 'GoogleDataTransport'
+        ➜ Explicit dependency on target 'GoogleDataTransport' in project 'GoogleDataTransport'
+        ➜ Explicit dependency on target 'GoogleDataTransport_GoogleDataTransport' in project 'GoogleDataTransport'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+    Target 'GoogleDataTransport' in project 'GoogleDataTransport'
+        ➜ Explicit dependency on target 'GoogleDataTransport_GoogleDataTransport' in project 'GoogleDataTransport'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+    Target 'GoogleDataTransport_GoogleDataTransport' in project 'GoogleDataTransport' (no dependencies)
+    Target 'GULReachability' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Reachability' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities_GoogleUtilities-Reachability' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'third-party-IsAppEncrypted' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Environment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Logger' in project 'GoogleUtilities'
+    Target 'Firebase_FirebaseMessaging' in project 'Firebase' (no dependencies)
+    Target 'FirebaseAnalyticsIdentitySupport' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAnalyticsIdentitySupportTarget' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseInstallations' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+        ➜ Explicit dependency on target 'GULUserDefaults' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleAppMeasurementIdentitySupport' in project 'GoogleAppMeasurement'
+        ➜ Explicit dependency on target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULMethodSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNetwork' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+    Target 'FirebaseAnalyticsIdentitySupportTarget' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseInstallations' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+        ➜ Explicit dependency on target 'GULUserDefaults' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleAppMeasurementIdentitySupport' in project 'GoogleAppMeasurement'
+        ➜ Explicit dependency on target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULMethodSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNetwork' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+    Target 'GoogleAppMeasurementIdentitySupport' in project 'GoogleAppMeasurement'
+        ➜ Explicit dependency on target 'GoogleAppMeasurementIdentitySupportTarget' in project 'GoogleAppMeasurement'
+        ➜ Explicit dependency on target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULMethodSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNetwork' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+    Target 'GoogleAppMeasurementIdentitySupportTarget' in project 'GoogleAppMeasurement'
+        ➜ Explicit dependency on target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULMethodSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNetwork' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+    Target 'FirebaseAnalytics' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAnalyticsTarget' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseInstallations' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAnalyticsWrapper' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+        ➜ Explicit dependency on target 'GULUserDefaults' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleAppMeasurement' in project 'GoogleAppMeasurement'
+        ➜ Explicit dependency on target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULMethodSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNetwork' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+    Target 'FirebaseAnalyticsTarget' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseInstallations' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseAnalyticsWrapper' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+        ➜ Explicit dependency on target 'GULUserDefaults' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleAppMeasurement' in project 'GoogleAppMeasurement'
+        ➜ Explicit dependency on target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULMethodSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNetwork' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+    Target 'FirebaseAnalyticsWrapper' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseInstallations' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+        ➜ Explicit dependency on target 'GULUserDefaults' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleAppMeasurement' in project 'GoogleAppMeasurement'
+        ➜ Explicit dependency on target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULMethodSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNetwork' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+    Target 'GoogleAppMeasurement' in project 'GoogleAppMeasurement'
+        ➜ Explicit dependency on target 'GoogleAppMeasurementTarget' in project 'GoogleAppMeasurement'
+        ➜ Explicit dependency on target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULMethodSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNetwork' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+        ➜ Explicit dependency on target 'GoogleAdsOnDeviceConversion' in project 'GoogleAdsOnDeviceConversion'
+    Target 'GoogleAppMeasurementTarget' in project 'GoogleAppMeasurement'
+        ➜ Explicit dependency on target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULMethodSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNetwork' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+        ➜ Explicit dependency on target 'GoogleAdsOnDeviceConversion' in project 'GoogleAdsOnDeviceConversion'
+    Target 'GoogleAdsOnDeviceConversion' in project 'GoogleAdsOnDeviceConversion'
+        ➜ Explicit dependency on target 'GoogleAdsOnDeviceConversionTarget' in project 'GoogleAdsOnDeviceConversion'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNetwork' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+    Target 'GoogleAdsOnDeviceConversionTarget' in project 'GoogleAdsOnDeviceConversion'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULNetwork' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+    Target 'nanopb' in project 'nanopb'
+        ➜ Explicit dependency on target 'nanopb' in project 'nanopb'
+        ➜ Explicit dependency on target 'nanopb_nanopb' in project 'nanopb'
+    Target 'nanopb' in project 'nanopb'
+        ➜ Explicit dependency on target 'nanopb_nanopb' in project 'nanopb'
+    Target 'nanopb_nanopb' in project 'nanopb' (no dependencies)
+    Target 'GULNetwork' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Network' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities_GoogleUtilities-Network' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'third-party-IsAppEncrypted' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Environment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Logger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-NSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Reachability' in project 'GoogleUtilities'
+    Target 'GULMethodSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-MethodSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities_GoogleUtilities-MethodSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'third-party-IsAppEncrypted' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Environment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Logger' in project 'GoogleUtilities'
+    Target 'GoogleUtilities-MethodSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities_GoogleUtilities-MethodSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'third-party-IsAppEncrypted' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Environment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Logger' in project 'GoogleUtilities'
+    Target 'GoogleUtilities_GoogleUtilities-MethodSwizzler' in project 'GoogleUtilities' (no dependencies)
+    Target 'GULAppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-AppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities_GoogleUtilities-AppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'third-party-IsAppEncrypted' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Environment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Logger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-NSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Reachability' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Network' in project 'GoogleUtilities'
+    Target 'GoogleUtilities-AppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities_GoogleUtilities-AppDelegateSwizzler' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'third-party-IsAppEncrypted' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Environment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Logger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-NSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Reachability' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Network' in project 'GoogleUtilities'
+    Target 'GoogleUtilities-Network' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities_GoogleUtilities-Network' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'third-party-IsAppEncrypted' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Environment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Logger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-NSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Reachability' in project 'GoogleUtilities'
+    Target 'GoogleUtilities_GoogleUtilities-Network' in project 'GoogleUtilities' (no dependencies)
+    Target 'GoogleUtilities-Reachability' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities_GoogleUtilities-Reachability' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'third-party-IsAppEncrypted' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Environment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Logger' in project 'GoogleUtilities'
+    Target 'GoogleUtilities_GoogleUtilities-Reachability' in project 'GoogleUtilities' (no dependencies)
+    Target 'GoogleUtilities_GoogleUtilities-AppDelegateSwizzler' in project 'GoogleUtilities' (no dependencies)
+    Target 'FirebaseInstallations' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase_FirebaseInstallations' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+        ➜ Explicit dependency on target 'GULUserDefaults' in project 'GoogleUtilities'
+    Target 'GULUserDefaults' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-UserDefaults' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities_GoogleUtilities-UserDefaults' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'third-party-IsAppEncrypted' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Environment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Logger' in project 'GoogleUtilities'
+    Target 'GoogleUtilities-UserDefaults' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities_GoogleUtilities-UserDefaults' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'third-party-IsAppEncrypted' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Environment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Logger' in project 'GoogleUtilities'
+    Target 'GoogleUtilities_GoogleUtilities-UserDefaults' in project 'GoogleUtilities' (no dependencies)
+    Target 'FBLPromises' in project 'Promises'
+        ➜ Explicit dependency on target 'FBLPromises' in project 'Promises'
+        ➜ Explicit dependency on target 'Promises_FBLPromises' in project 'Promises'
+    Target 'FBLPromises' in project 'Promises'
+        ➜ Explicit dependency on target 'Promises_FBLPromises' in project 'Promises'
+    Target 'Promises_FBLPromises' in project 'Promises' (no dependencies)
+    Target 'Firebase_FirebaseInstallations' in project 'Firebase' (no dependencies)
+    Target 'FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase_FirebaseCore' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase' in project 'Firebase'
+        ➜ Explicit dependency on target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GULLogger' in project 'GoogleUtilities'
+    Target 'GULLogger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Logger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities_GoogleUtilities-Logger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'third-party-IsAppEncrypted' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Environment' in project 'GoogleUtilities'
+    Target 'GoogleUtilities-Logger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities_GoogleUtilities-Logger' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'third-party-IsAppEncrypted' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Environment' in project 'GoogleUtilities'
+    Target 'GoogleUtilities_GoogleUtilities-Logger' in project 'GoogleUtilities' (no dependencies)
+    Target 'GULEnvironment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-Environment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities_GoogleUtilities-Environment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'third-party-IsAppEncrypted' in project 'GoogleUtilities'
+    Target 'GoogleUtilities-Environment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities_GoogleUtilities-Environment' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'third-party-IsAppEncrypted' in project 'GoogleUtilities'
+    Target 'third-party-IsAppEncrypted' in project 'GoogleUtilities' (no dependencies)
+    Target 'GoogleUtilities_GoogleUtilities-Environment' in project 'GoogleUtilities' (no dependencies)
+    Target 'Firebase_FirebaseCore' in project 'Firebase' (no dependencies)
+    Target 'FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'Firebase_FirebaseCoreInternal' in project 'Firebase'
+        ➜ Explicit dependency on target 'GULNSData' in project 'GoogleUtilities'
+    Target 'GULNSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities-NSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities_GoogleUtilities-NSData' in project 'GoogleUtilities'
+    Target 'GoogleUtilities-NSData' in project 'GoogleUtilities'
+        ➜ Explicit dependency on target 'GoogleUtilities_GoogleUtilities-NSData' in project 'GoogleUtilities'
+    Target 'GoogleUtilities_GoogleUtilities-NSData' in project 'GoogleUtilities' (no dependencies)
+    Target 'Firebase_FirebaseCoreInternal' in project 'Firebase' (no dependencies)
+    Target 'Firebase' in project 'Firebase' (no dependencies)
+
+GatherProvisioningInputs
+
+CreateBuildDescription
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -v -E -dM -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk -x objective-c -c /dev/null
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc --version
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -v -E -dM -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk -x c -c /dev/null
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -v -E -dM -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk -x c -c /dev/null
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld -version_details
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -v -E -dM -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk -x c++ -c /dev/null
+
+ReadFileContents /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/share/docc/features.json
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -v -E -dM -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk -x objective-c++ -c /dev/null
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/usr/bin/actool --version --output-format xml1
+
+Build description signature: 9d55c41c203f85f40384ac060ef07de8
+Build description path: /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/XCBuildData/9d55c41c203f85f40384ac060ef07de8.xcbuilddata
+ClangStatCache /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-stat-cache /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/macosx26.4-25E236-688ef53f1462e2c8f657fdc38a81448f30f9ca8789b706f8bd3fc906a70d770f.sdkstatcache
+    cd /Users/andreeapapillon/Documents/GitHub/aicoven-local-opensource/swift/AICoven/AICoven\ Local.xcodeproj
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-stat-cache /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/SDKStatCaches.noindex/macosx26.4-25E236-688ef53f1462e2c8f657fdc38a81448f30f9ca8789b706f8bd3fc906a70d770f.sdkstatcache
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Promises_FBLPromises.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Promises.build/Debug/Promises_FBLPromises.build/empty-Promises_FBLPromises.plist (in target 'Promises_FBLPromises' from project 'Promises')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/promises
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Promises.build/Debug/Promises_FBLPromises.build/empty-Promises_FBLPromises.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Promises_FBLPromises.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/swift-transformers_Hub.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/swift-transformers.build/Debug/swift-transformers_Hub.build/empty-swift-transformers_Hub.plist (in target 'swift-transformers_Hub' from project 'swift-transformers')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/swift-transformers
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/swift-transformers.build/Debug/swift-transformers_Hub.build/empty-swift-transformers_Hub.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/swift-transformers_Hub.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/nanopb_nanopb.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/nanopb.build/Debug/nanopb_nanopb.build/empty-nanopb_nanopb.plist (in target 'nanopb_nanopb' from project 'nanopb')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/nanopb
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/nanopb.build/Debug/nanopb_nanopb.build/empty-nanopb_nanopb.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/nanopb_nanopb.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Promises_Promises.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Promises.build/Debug/Promises_Promises.build/empty-Promises_Promises.plist (in target 'Promises_Promises' from project 'Promises')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/promises
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Promises.build/Debug/Promises_Promises.build/empty-Promises_Promises.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Promises_Promises.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GoogleUtilities_GoogleUtilities-UserDefaults.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GoogleUtilities.build/Debug/GoogleUtilities_GoogleUtilities-UserDefaults.build/empty-GoogleUtilities_GoogleUtilities-UserDefaults.plist (in target 'GoogleUtilities_GoogleUtilities-UserDefaults' from project 'GoogleUtilities')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/GoogleUtilities
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GoogleUtilities.build/Debug/GoogleUtilities_GoogleUtilities-UserDefaults.build/empty-GoogleUtilities_GoogleUtilities-UserDefaults.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GoogleUtilities_GoogleUtilities-UserDefaults.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GoogleUtilities_GoogleUtilities-Reachability.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GoogleUtilities.build/Debug/GoogleUtilities_GoogleUtilities-Reachability.build/empty-GoogleUtilities_GoogleUtilities-Reachability.plist (in target 'GoogleUtilities_GoogleUtilities-Reachability' from project 'GoogleUtilities')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/GoogleUtilities
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GoogleUtilities.build/Debug/GoogleUtilities_GoogleUtilities-Reachability.build/empty-GoogleUtilities_GoogleUtilities-Reachability.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GoogleUtilities_GoogleUtilities-Reachability.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GoogleUtilities_GoogleUtilities-Network.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GoogleUtilities.build/Debug/GoogleUtilities_GoogleUtilities-Network.build/empty-GoogleUtilities_GoogleUtilities-Network.plist (in target 'GoogleUtilities_GoogleUtilities-Network' from project 'GoogleUtilities')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/GoogleUtilities
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GoogleUtilities.build/Debug/GoogleUtilities_GoogleUtilities-Network.build/empty-GoogleUtilities_GoogleUtilities-Network.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GoogleUtilities_GoogleUtilities-Network.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GoogleUtilities_GoogleUtilities-NSData.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GoogleUtilities.build/Debug/GoogleUtilities_GoogleUtilities-NSData.build/empty-GoogleUtilities_GoogleUtilities-NSData.plist (in target 'GoogleUtilities_GoogleUtilities-NSData' from project 'GoogleUtilities')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/GoogleUtilities
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GoogleUtilities.build/Debug/GoogleUtilities_GoogleUtilities-NSData.build/empty-GoogleUtilities_GoogleUtilities-NSData.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GoogleUtilities_GoogleUtilities-NSData.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GoogleUtilities_GoogleUtilities-MethodSwizzler.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GoogleUtilities.build/Debug/GoogleUtilities_GoogleUtilities-MethodSwizzler.build/empty-GoogleUtilities_GoogleUtilities-MethodSwizzler.plist (in target 'GoogleUtilities_GoogleUtilities-MethodSwizzler' from project 'GoogleUtilities')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/GoogleUtilities
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GoogleUtilities.build/Debug/GoogleUtilities_GoogleUtilities-MethodSwizzler.build/empty-GoogleUtilities_GoogleUtilities-MethodSwizzler.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GoogleUtilities_GoogleUtilities-MethodSwizzler.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GoogleUtilities_GoogleUtilities-Logger.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GoogleUtilities.build/Debug/GoogleUtilities_GoogleUtilities-Logger.build/empty-GoogleUtilities_GoogleUtilities-Logger.plist (in target 'GoogleUtilities_GoogleUtilities-Logger' from project 'GoogleUtilities')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/GoogleUtilities
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GoogleUtilities.build/Debug/GoogleUtilities_GoogleUtilities-Logger.build/empty-GoogleUtilities_GoogleUtilities-Logger.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GoogleUtilities_GoogleUtilities-Logger.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GoogleUtilities_GoogleUtilities-Environment.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GoogleUtilities.build/Debug/GoogleUtilities_GoogleUtilities-Environment.build/empty-GoogleUtilities_GoogleUtilities-Environment.plist (in target 'GoogleUtilities_GoogleUtilities-Environment' from project 'GoogleUtilities')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/GoogleUtilities
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GoogleUtilities.build/Debug/GoogleUtilities_GoogleUtilities-Environment.build/empty-GoogleUtilities_GoogleUtilities-Environment.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GoogleUtilities_GoogleUtilities-Environment.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GoogleUtilities_GoogleUtilities-AppDelegateSwizzler.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GoogleUtilities.build/Debug/GoogleUtilities_GoogleUtilities-AppDelegateSwizzler.build/empty-GoogleUtilities_GoogleUtilities-AppDelegateSwizzler.plist (in target 'GoogleUtilities_GoogleUtilities-AppDelegateSwizzler' from project 'GoogleUtilities')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/GoogleUtilities
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GoogleUtilities.build/Debug/GoogleUtilities_GoogleUtilities-AppDelegateSwizzler.build/empty-GoogleUtilities_GoogleUtilities-AppDelegateSwizzler.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GoogleUtilities_GoogleUtilities-AppDelegateSwizzler.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GoogleDataTransport_GoogleDataTransport.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GoogleDataTransport.build/Debug/GoogleDataTransport_GoogleDataTransport.build/empty-GoogleDataTransport_GoogleDataTransport.plist (in target 'GoogleDataTransport_GoogleDataTransport' from project 'GoogleDataTransport')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/GoogleDataTransport
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GoogleDataTransport.build/Debug/GoogleDataTransport_GoogleDataTransport.build/empty-GoogleDataTransport_GoogleDataTransport.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GoogleDataTransport_GoogleDataTransport.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GTMSessionFetcher_GTMSessionFetcherCore.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GTMSessionFetcher.build/Debug/GTMSessionFetcher_GTMSessionFetcherCore.build/empty-GTMSessionFetcher_GTMSessionFetcherCore.plist (in target 'GTMSessionFetcher_GTMSessionFetcherCore' from project 'GTMSessionFetcher')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/gtm-session-fetcher
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GTMSessionFetcher.build/Debug/GTMSessionFetcher_GTMSessionFetcherCore.build/empty-GTMSessionFetcher_GTMSessionFetcherCore.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GTMSessionFetcher_GTMSessionFetcherCore.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GRDB_GRDB.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GRDB.build/Debug/GRDB_GRDB.build/empty-GRDB_GRDB.plist (in target 'GRDB_GRDB' from project 'GRDB')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/GRDB.swift
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/GRDB.build/Debug/GRDB_GRDB.build/empty-GRDB_GRDB.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/GRDB_GRDB.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Firebase_FirebaseRemoteConfig.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Firebase.build/Debug/Firebase_FirebaseRemoteConfig.build/empty-Firebase_FirebaseRemoteConfig.plist (in target 'Firebase_FirebaseRemoteConfig' from project 'Firebase')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/firebase-ios-sdk
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Firebase.build/Debug/Firebase_FirebaseRemoteConfig.build/empty-Firebase_FirebaseRemoteConfig.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Firebase_FirebaseRemoteConfig.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Firebase_FirebaseMessaging.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Firebase.build/Debug/Firebase_FirebaseMessaging.build/empty-Firebase_FirebaseMessaging.plist (in target 'Firebase_FirebaseMessaging' from project 'Firebase')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/firebase-ios-sdk
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Firebase.build/Debug/Firebase_FirebaseMessaging.build/empty-Firebase_FirebaseMessaging.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Firebase_FirebaseMessaging.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Firebase_FirebaseCrashlytics.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Firebase.build/Debug/Firebase_FirebaseCrashlytics.build/empty-Firebase_FirebaseCrashlytics.plist (in target 'Firebase_FirebaseCrashlytics' from project 'Firebase')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/firebase-ios-sdk
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Firebase.build/Debug/Firebase_FirebaseCrashlytics.build/empty-Firebase_FirebaseCrashlytics.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Firebase_FirebaseCrashlytics.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Firebase_FirebaseCore.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Firebase.build/Debug/Firebase_FirebaseCore.build/empty-Firebase_FirebaseCore.plist (in target 'Firebase_FirebaseCore' from project 'Firebase')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/firebase-ios-sdk
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Firebase.build/Debug/Firebase_FirebaseCore.build/empty-Firebase_FirebaseCore.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Firebase_FirebaseCore.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Firebase_FirebaseAuth.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Firebase.build/Debug/Firebase_FirebaseAuth.build/empty-Firebase_FirebaseAuth.plist (in target 'Firebase_FirebaseAuth' from project 'Firebase')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/firebase-ios-sdk
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Firebase.build/Debug/Firebase_FirebaseAuth.build/empty-Firebase_FirebaseAuth.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Firebase_FirebaseAuth.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/mlx-swift_Cmlx.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/mlx-swift.build/Debug/mlx-swift_Cmlx.build/empty-mlx-swift_Cmlx.plist (in target 'mlx-swift_Cmlx' from project 'mlx-swift')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/mlx-swift
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/mlx-swift.build/Debug/mlx-swift_Cmlx.build/empty-mlx-swift_Cmlx.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/mlx-swift_Cmlx.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Firebase_FirebaseCrashlyticsSwift.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Firebase.build/Debug/Firebase_FirebaseCrashlyticsSwift.build/empty-Firebase_FirebaseCrashlyticsSwift.plist (in target 'Firebase_FirebaseCrashlyticsSwift' from project 'Firebase')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/firebase-ios-sdk
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Firebase.build/Debug/Firebase_FirebaseCrashlyticsSwift.build/empty-Firebase_FirebaseCrashlyticsSwift.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Firebase_FirebaseCrashlyticsSwift.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Firebase_FirebaseCoreExtension.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Firebase.build/Debug/Firebase_FirebaseCoreExtension.build/empty-Firebase_FirebaseCoreExtension.plist (in target 'Firebase_FirebaseCoreExtension' from project 'Firebase')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/firebase-ios-sdk
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Firebase.build/Debug/Firebase_FirebaseCoreExtension.build/empty-Firebase_FirebaseCoreExtension.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Firebase_FirebaseCoreExtension.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Firebase_FirebaseCoreInternal.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Firebase.build/Debug/Firebase_FirebaseCoreInternal.build/empty-Firebase_FirebaseCoreInternal.plist (in target 'Firebase_FirebaseCoreInternal' from project 'Firebase')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/firebase-ios-sdk
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Firebase.build/Debug/Firebase_FirebaseCoreInternal.build/empty-Firebase_FirebaseCoreInternal.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Firebase_FirebaseCoreInternal.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Firebase_FirebaseInstallations.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Firebase.build/Debug/Firebase_FirebaseInstallations.build/empty-Firebase_FirebaseInstallations.plist (in target 'Firebase_FirebaseInstallations' from project 'Firebase')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/firebase-ios-sdk
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Firebase.build/Debug/Firebase_FirebaseInstallations.build/empty-Firebase_FirebaseInstallations.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Firebase_FirebaseInstallations.bundle/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Firebase_FirebaseABTesting.bundle/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Firebase.build/Debug/Firebase_FirebaseABTesting.build/empty-Firebase_FirebaseABTesting.plist (in target 'Firebase_FirebaseABTesting' from project 'Firebase')
+    cd /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/SourcePackages/checkouts/firebase-ios-sdk
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/Firebase.build/Debug/Firebase_FirebaseABTesting.build/empty-Firebase_FirebaseABTesting.plist -producttype com.apple.product-type.bundle -expandbuildsettings -platform macosx -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/Firebase_FirebaseABTesting.bundle/Contents/Info.plist
+
+CopySwiftLibs /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app (in target 'AICoven' from project 'AICoven Local')
+    cd /Users/andreeapapillon/Documents/GitHub/aicoven-local-opensource/swift/AICoven
+    builtin-swiftStdLibTool --copy --verbose --sign 8D3E7DD1A3031D156E089FB0131D93A2D38A82C6 --scan-executable /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/MacOS/AICoven\ Dev.debug.dylib --scan-folder /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Frameworks --scan-folder /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns --scan-folder /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Library/SystemExtensions --scan-folder /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Extensions --platform macosx --toolchain /var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.5.188.0.PT4TWM/Metal.xctoolchain --toolchain /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --destination /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Frameworks --strip-bitcode --strip-bitcode-tool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/bitcode_strip --emit-dependency-info /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/AICoven\ Local.build/Debug/AICoven.build/SwiftStdLibToolInputDependencies.dep --filter-for-swift-os --back-deploy-swift-span
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Info.plist /Users/andreeapapillon/Documents/GitHub/aicoven-local-opensource/swift/AICoven/Resources/Info-macOS.plist (in target 'AICoven' from project 'AICoven Local')
+    cd /Users/andreeapapillon/Documents/GitHub/aicoven-local-opensource/swift/AICoven
+    builtin-infoPlistUtility /Users/andreeapapillon/Documents/GitHub/aicoven-local-opensource/swift/AICoven/Resources/Info-macOS.plist -producttype com.apple.product-type.application -genpkginfo /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PkgInfo -expandbuildsettings -platform macosx -additionalcontentfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/AICoven\ Local.build/Debug/AICoven.build/assetcatalog_generated_info.plist -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Frameworks/FirebaseAnalytics.framework -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Frameworks/GoogleAppMeasurement.framework -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Frameworks/GoogleAppMeasurementIdentitySupport.framework -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/Firebase_FirebaseABTesting.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/Firebase_FirebaseAuth.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/Firebase_FirebaseCore.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/Firebase_FirebaseCoreExtension.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/Firebase_FirebaseCoreInternal.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/Firebase_FirebaseCrashlytics.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/Firebase_FirebaseCrashlyticsSwift.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/Firebase_FirebaseInstallations.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/Firebase_FirebaseMessaging.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/Firebase_FirebaseRemoteConfig.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/GRDB_GRDB.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/GTMSessionFetcher_GTMSessionFetcherCore.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/GoogleDataTransport_GoogleDataTransport.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/GoogleUtilities_GoogleUtilities-AppDelegateSwizzler.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/GoogleUtilities_GoogleUtilities-Environment.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/GoogleUtilities_GoogleUtilities-Logger.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/GoogleUtilities_GoogleUtilities-MethodSwizzler.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/GoogleUtilities_GoogleUtilities-NSData.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/GoogleUtilities_GoogleUtilities-Network.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/GoogleUtilities_GoogleUtilities-Reachability.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/GoogleUtilities_GoogleUtilities-UserDefaults.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/Promises_FBLPromises.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/Promises_Promises.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/mlx-swift_Cmlx.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/nanopb_nanopb.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Resources/swift-transformers_Hub.bundle -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/Info.plist
+
+ProcessInfoPlistFile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Info.plist /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/AICoven\ Local.build/Debug/AICovenTests.build/empty-AICovenTests.plist (in target 'AICovenTests' from project 'AICoven Local')
+    cd /Users/andreeapapillon/Documents/GitHub/aicoven-local-opensource/swift/AICoven
+    builtin-infoPlistUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/AICoven\ Local.build/Debug/AICovenTests.build/empty-AICovenTests.plist -producttype com.apple.product-type.bundle.unit-test -expandbuildsettings -platform macosx -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/Firebase_FirebaseABTesting.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/Firebase_FirebaseAuth.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/Firebase_FirebaseCore.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/Firebase_FirebaseCoreExtension.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/Firebase_FirebaseCoreInternal.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/Firebase_FirebaseCrashlytics.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/Firebase_FirebaseCrashlyticsSwift.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/Firebase_FirebaseInstallations.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/Firebase_FirebaseMessaging.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/Firebase_FirebaseRemoteConfig.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/GRDB_GRDB.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/GTMSessionFetcher_GTMSessionFetcherCore.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/GoogleDataTransport_GoogleDataTransport.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/GoogleUtilities_GoogleUtilities-AppDelegateSwizzler.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/GoogleUtilities_GoogleUtilities-Environment.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/GoogleUtilities_GoogleUtilities-Logger.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/GoogleUtilities_GoogleUtilities-MethodSwizzler.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/GoogleUtilities_GoogleUtilities-NSData.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/GoogleUtilities_GoogleUtilities-Network.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/GoogleUtilities_GoogleUtilities-Reachability.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/GoogleUtilities_GoogleUtilities-UserDefaults.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/Promises_FBLPromises.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/Promises_Promises.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/mlx-swift_Cmlx.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/nanopb_nanopb.bundle -scanforprivacyfile /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Resources/swift-transformers_Hub.bundle -o /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Info.plist
+
+CopySwiftLibs /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest (in target 'AICovenTests' from project 'AICoven Local')
+    cd /Users/andreeapapillon/Documents/GitHub/aicoven-local-opensource/swift/AICoven
+    builtin-swiftStdLibTool --copy --verbose --sign 8D3E7DD1A3031D156E089FB0131D93A2D38A82C6 --scan-executable /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/MacOS/AICovenTests --scan-folder /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Frameworks --scan-folder /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/PlugIns --scan-folder /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Library/SystemExtensions --scan-folder /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Extensions --platform macosx --toolchain /var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.5.188.0.PT4TWM/Metal.xctoolchain --toolchain /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --destination /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/PlugIns/AICovenTests.xctest/Contents/Frameworks --strip-bitcode --scan-executable /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib/libXCTestSwiftSupport.dylib --strip-bitcode-tool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/bitcode_strip --emit-dependency-info /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/AICoven\ Local.build/Debug/AICovenTests.build/SwiftStdLibToolInputDependencies.dep --filter-for-swift-os --back-deploy-swift-span
+
+CodeSign /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/MacOS/AICoven\ Dev.debug.dylib (in target 'AICoven' from project 'AICoven Local')
+    cd /Users/andreeapapillon/Documents/GitHub/aicoven-local-opensource/swift/AICoven
+    
+    Signing Identity:     "Apple Development: Andreea Papillon (FX87CHTD3G)"
+    Provisioning Profile: "Mac Team Provisioning Profile: *"
+                          (1f2c24c8-5015-411b-8c4e-7b86ea541c64)
+    
+    /usr/bin/codesign --force --sign 8D3E7DD1A3031D156E089FB0131D93A2D38A82C6 -o runtime --timestamp\=none --generate-entitlement-der /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/MacOS/AICoven\ Dev.debug.dylib
+/Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven Dev.app/Contents/MacOS/AICoven Dev.debug.dylib: replacing existing signature
+
+CodeSign /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/MacOS/__preview.dylib (in target 'AICoven' from project 'AICoven Local')
+    cd /Users/andreeapapillon/Documents/GitHub/aicoven-local-opensource/swift/AICoven
+    
+    Signing Identity:     "Apple Development: Andreea Papillon (FX87CHTD3G)"
+    Provisioning Profile: "Mac Team Provisioning Profile: *"
+                          (1f2c24c8-5015-411b-8c4e-7b86ea541c64)
+    
+    /usr/bin/codesign --force --sign 8D3E7DD1A3031D156E089FB0131D93A2D38A82C6 -o runtime --timestamp\=none --generate-entitlement-der /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app/Contents/MacOS/__preview.dylib
+/Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven Dev.app/Contents/MacOS/__preview.dylib: replacing existing signature
+
+CodeSign /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app (in target 'AICoven' from project 'AICoven Local')
+    cd /Users/andreeapapillon/Documents/GitHub/aicoven-local-opensource/swift/AICoven
+    
+    Signing Identity:     "Apple Development: Andreea Papillon (FX87CHTD3G)"
+    Provisioning Profile: "Mac Team Provisioning Profile: *"
+                          (1f2c24c8-5015-411b-8c4e-7b86ea541c64)
+    
+    /usr/bin/codesign --force --sign 8D3E7DD1A3031D156E089FB0131D93A2D38A82C6 -o runtime --entitlements /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Intermediates.noindex/AICoven\ Local.build/Debug/AICoven.build/AICoven\ Dev.app.xcent --timestamp\=none --generate-entitlement-der /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app
+/Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven Dev.app: replacing existing signature
+
+Validate /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app (in target 'AICoven' from project 'AICoven Local')
+    cd /Users/andreeapapillon/Documents/GitHub/aicoven-local-opensource/swift/AICoven
+    builtin-validationUtility /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app -no-validate-extension -infoplist-subpath Contents/Info.plist
+
+RegisterWithLaunchServices /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app (in target 'AICoven' from project 'AICoven Local')
+    cd /Users/andreeapapillon/Documents/GitHub/aicoven-local-opensource/swift/AICoven
+    /System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister -f -R -trusted /Users/andreeapapillon/Library/Developer/Xcode/DerivedData/AICoven_Local-gvtpajtveckudhherqngqlizoxtt/Build/Products/Debug/AICoven\ Dev.app
+
+** BUILD SUCCEEDED **
+

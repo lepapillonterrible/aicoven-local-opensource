@@ -362,11 +362,11 @@ actor ChatService {
         roleId: String? = nil,
         providerAccountId: String? = nil,
         attachments: [FileAttachmentDetail]? = nil,
-        onPlanningDelta: @escaping (String) -> Void,
-        onToolEvent: @escaping (String) -> Void,
-        onAnswerDelta: @escaping (String) -> Void,
-        onDone: @escaping (_ provider: String?, _ model: String?, _ tokenUsage: TokenUsage?) -> Void
+        onStateChange: @escaping (TurnState) -> Void
     ) async throws {
+        var state = TurnState(threadId: threadId)
+        state.phase = .starting
+        onStateChange(state)
         // Ensure we see any provider keys and live model lists that may have
         // been added or changed after ChatService was first initialized.
         await ensureEnvironment()
@@ -413,9 +413,11 @@ actor ChatService {
             guard let fallbackDescriptor = modelRouter.route(for: routingContext),
                   let fallbackClient = llmClients[fallbackDescriptor.providerID] else {
                 let msg = "No configured providers/models available for chat. Add provider keys in Settings."
-                onPlanningDelta("")
-                onAnswerDelta(msg)
-                onDone(nil, nil, nil)
+                state.phase = .finalizing
+                state.status = .failed
+                state.answer = msg
+                state.bumpVersion()
+                onStateChange(state)
                 return
             }
             descriptor = fallbackDescriptor
@@ -423,7 +425,10 @@ actor ChatService {
         }
 
         // Give the UI an immediate hint that we're contacting the provider.
-        onPlanningDelta("Thinking about your question…")
+        state.phase = .planning
+        state.scratchpad = "Thinking about your question…"
+        state.bumpVersion()
+        onStateChange(state)
 
         // Intent gate: decide whether this message needs tools at all.
         // This prevents unnecessary tool loops for conversational requests
@@ -582,9 +587,24 @@ actor ChatService {
                     // Execute each tool in the chain sequentially, accumulating
                     // results into toolContextLog. Respect the user's tool budget.
                     for invocation in chain.prefix(remainingToolSteps) {
-                        onToolEvent(Self.friendlyToolSummary(for: invocation.tool))
+                        let toolID = UUID().uuidString
+                        state.phase = .tooling
+                        state.toolsInProgress[toolID] = TurnToolCall(id: toolID, name: invocation.tool, arguments: [:], result: nil, status: "running")
+                        state.bumpVersion()
+                        onStateChange(state)
+
                         AnalyticsService.shared.trackToolUsed(toolName: invocation.tool, threadId: threadId)
                         let (_, contextBlock) = try await executeChatToolCall(invocation)
+
+                        state.toolsInProgress[toolID]?.status = "completed"
+                        state.toolsInProgress[toolID]?.result = contextBlock
+                        if let completed = state.toolsInProgress[toolID] {
+                            state.toolsCompleted.append(completed)
+                            state.toolsInProgress.removeValue(forKey: toolID)
+                        }
+                        state.bumpVersion()
+                        onStateChange(state)
+
                         if let block = contextBlock {
                             if toolContextLog.isEmpty {
                                 toolContextLog = block
@@ -613,9 +633,24 @@ actor ChatService {
                     #if DEBUG
                     AppErrorReporter.log(message: "Pre-executing native tool for local model: \(forcedNative.tool)", context: "ChatService.streamMessage.preExecute")
                     #endif
-                    onToolEvent(Self.friendlyToolSummary(for: forcedNative.tool))
+                    let toolID = UUID().uuidString
+                    state.phase = .tooling
+                    state.toolsInProgress[toolID] = TurnToolCall(id: toolID, name: forcedNative.tool, arguments: [:], result: nil, status: "running")
+                    state.bumpVersion()
+                    onStateChange(state)
+
                     AnalyticsService.shared.trackToolUsed(toolName: forcedNative.tool, threadId: threadId)
                     let (_, contextBlock) = try await executeChatToolCall(forcedNative)
+
+                    state.toolsInProgress[toolID]?.status = "completed"
+                    state.toolsInProgress[toolID]?.result = contextBlock
+                    if let completed = state.toolsInProgress[toolID] {
+                        state.toolsCompleted.append(completed)
+                        state.toolsInProgress.removeValue(forKey: toolID)
+                    }
+                    state.bumpVersion()
+                    onStateChange(state)
+
                     if let block = contextBlock {
                         toolContextLog = block
                     }
@@ -628,9 +663,24 @@ actor ChatService {
                     #if DEBUG
                     AppErrorReporter.log(message: "Pre-executing MCP tool for local model: \(forcedMCP.tool)", context: "ChatService.streamMessage.preExecute")
                     #endif
-                    onToolEvent(Self.friendlyToolSummary(for: forcedMCP.tool))
+                    let toolID = UUID().uuidString
+                    state.phase = .tooling
+                    state.toolsInProgress[toolID] = TurnToolCall(id: toolID, name: forcedMCP.tool, arguments: [:], result: nil, status: "running")
+                    state.bumpVersion()
+                    onStateChange(state)
+
                     AnalyticsService.shared.trackToolUsed(toolName: forcedMCP.tool, threadId: threadId)
                     let (_, contextBlock) = try await executeChatToolCall(forcedMCP)
+
+                    state.toolsInProgress[toolID]?.status = "completed"
+                    state.toolsInProgress[toolID]?.result = contextBlock
+                    if let completed = state.toolsInProgress[toolID] {
+                        state.toolsCompleted.append(completed)
+                        state.toolsInProgress.removeValue(forKey: toolID)
+                    }
+                    state.bumpVersion()
+                    onStateChange(state)
+
                     if let block = contextBlock {
                         toolContextLog = block
                     }
@@ -807,8 +857,22 @@ actor ChatService {
                     // Track tool usage
                     AnalyticsService.shared.trackToolUsed(toolName: toolCall.tool, threadId: threadId)
 
+                    let toolID = UUID().uuidString
+                    state.phase = .tooling
+                    state.toolsInProgress[toolID] = TurnToolCall(id: toolID, name: toolCall.tool, arguments: [:], result: nil, status: "running")
+                    state.bumpVersion()
+                    onStateChange(state)
+
                     let (summary, contextBlock) = try await executeChatToolCall(toolCall)
-                    onToolEvent(summary)
+
+                    state.toolsInProgress[toolID]?.status = "completed"
+                    state.toolsInProgress[toolID]?.result = contextBlock
+                    if let completed = state.toolsInProgress[toolID] {
+                        state.toolsCompleted.append(completed)
+                        state.toolsInProgress.removeValue(forKey: toolID)
+                    }
+                    state.bumpVersion()
+                    onStateChange(state)
                     if let block = contextBlock {
                         if toolContextLog.isEmpty {
                             toolContextLog = block
@@ -851,8 +915,22 @@ actor ChatService {
                         // Track tool usage
                         AnalyticsService.shared.trackToolUsed(toolName: "web_search", threadId: threadId)
 
+                        let toolID = UUID().uuidString
+                        state.phase = .tooling
+                        state.toolsInProgress[toolID] = TurnToolCall(id: toolID, name: forcedCall.tool, arguments: [:], result: nil, status: "running")
+                        state.bumpVersion()
+                        onStateChange(state)
+
                         let (summary, contextBlock) = try await executeChatToolCall(forcedCall)
-                        onToolEvent(summary)
+
+                        state.toolsInProgress[toolID]?.status = "completed"
+                        state.toolsInProgress[toolID]?.result = contextBlock
+                        if let completed = state.toolsInProgress[toolID] {
+                            state.toolsCompleted.append(completed)
+                            state.toolsInProgress.removeValue(forKey: toolID)
+                        }
+                        state.bumpVersion()
+                        onStateChange(state)
                         if let block = contextBlock {
                             if toolContextLog.isEmpty {
                                 toolContextLog = block
@@ -920,8 +998,22 @@ actor ChatService {
                             // Track tool usage
                             AnalyticsService.shared.trackToolUsed(toolName: forcedCall.tool, threadId: threadId)
 
+                            let toolID = UUID().uuidString
+                            state.phase = .tooling
+                            state.toolsInProgress[toolID] = TurnToolCall(id: toolID, name: forcedCall.tool, arguments: [:], result: nil, status: "running")
+                            state.bumpVersion()
+                            onStateChange(state)
+
                             let (summary, contextBlock) = try await executeChatToolCall(forcedCall)
-                            onToolEvent(summary)
+
+                            state.toolsInProgress[toolID]?.status = "completed"
+                            state.toolsInProgress[toolID]?.result = contextBlock
+                            if let completed = state.toolsInProgress[toolID] {
+                                state.toolsCompleted.append(completed)
+                                state.toolsInProgress.removeValue(forKey: toolID)
+                            }
+                            state.bumpVersion()
+                            onStateChange(state)
                             if let block = contextBlock {
                                 // Replace context with fresh MCP results.
                                 toolContextLog = block
@@ -959,9 +1051,11 @@ actor ChatService {
                 // user-visible error text into analytics.
                 AnalyticsService.shared.trackMessageError(threadId: threadId, errorType: errorCode)
 
-                onPlanningDelta("")
-                onAnswerDelta("Error: \(msg)")
-                onDone(nil, nil, nil)
+                state.phase = .finalizing
+                state.status = .failed
+                state.answer = "Error: \(msg)"
+                state.bumpVersion()
+                onStateChange(state)
                 return
             }
         }
@@ -1035,7 +1129,9 @@ actor ChatService {
                 // for the final answer so the user sees text appear in real time.
                 if let streamingClient = client as? StreamingLLMClient {
                     let options = ChatOptions(temperature: 0.7, maxTokens: nil, stream: true)
-                    onPlanningDelta("")
+                    state.phase = .answering
+                    state.bumpVersion()
+                    onStateChange(state)
                     var accumulated = ""
                     let stream = streamingClient.streamChat(
                         messages: contextMessages,
@@ -1045,7 +1141,9 @@ actor ChatService {
                     for try await delta in stream {
                         if !delta.text.isEmpty {
                             accumulated += delta.text
-                            onAnswerDelta(delta.text)
+                            state.answer = accumulated
+                            state.bumpVersion()
+                            onStateChange(state)
                         }
                         if let usage = delta.usage {
                             finalUsage = TokenUsage(
@@ -1094,9 +1192,11 @@ actor ChatService {
                 // user-visible error text into analytics.
                 AnalyticsService.shared.trackMessageError(threadId: threadId, errorType: errorCode)
 
-                onPlanningDelta("")
-                onAnswerDelta("Error: \(msg)")
-                onDone(nil, nil, nil)
+                state.phase = .finalizing
+                state.status = .failed
+                state.answer = "Error: \(msg)"
+                state.bumpVersion()
+                onStateChange(state)
                 return
             }
         }
@@ -1135,12 +1235,13 @@ actor ChatService {
         }
 
         AppErrorReporter.log(message: "streamMessage completed with answer length=\(answer.count) provider=\(descriptor.providerID) model=\(descriptor.modelID) usedTools=\(maxToolSteps - remainingToolSteps)", context: "ChatService.streamMessage")
-        onPlanningDelta("")
-        // Only emit the full answer if we haven't already streamed it
-        // token-by-token via StreamingLLMClient.
+        state.phase = .finalizing
         if !streamedAnswer {
-            onAnswerDelta(answer)
+            state.answer = answer
         }
+        state.status = .completed
+        state.bumpVersion()
+        onStateChange(state)
 
         // Persist a lightweight usage entry so the local Budgets & Usage
         // dashboard can approximate spend per provider.
@@ -1150,8 +1251,6 @@ actor ChatService {
             usage: finalUsage,
             threadId: threadId
         )
-
-        onDone(descriptor.providerID, descriptor.modelID, finalUsage)
 
         // Track message received. We don't currently measure precise
         // end-to-end latency here, so omit response time instead of

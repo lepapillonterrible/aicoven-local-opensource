@@ -194,14 +194,7 @@ struct PersonalThreadsSidebar: View {
                             .padding(Spacing.sm)
                         }
 
-                        #if os(macOS)
-                        WorkspaceToolsSection(
-                            onOpenTab: onOpenWorkspaceTab,
-                            isCollapsible: true
-                        )
-                        .padding(.horizontal, Spacing.sm)
-                        .padding(.bottom, Spacing.lg)
-                        #endif
+                        // WorkspaceToolsSection removed to avoid menu duplication
 
                         if !threads.isEmpty {
                             Spacer(minLength: Spacing.md)

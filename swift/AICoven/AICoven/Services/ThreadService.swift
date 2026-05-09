@@ -225,7 +225,7 @@ actor ThreadService {
             )
             personalThreads.append(thread)
             persistPersonalThreads()
-            AnalyticsService.shared.trackThreadCreated(covenId: covenId, agentId: agentId)
+            await AnalyticsService.shared.trackThreadCreated(covenId: covenId, agentId: agentId)
             await MainActor.run {
                 NotificationCenter.default.post(name: .didCreateThread, object: nil, userInfo: ["thread": thread])
             }
@@ -252,7 +252,7 @@ actor ThreadService {
             persistPersonalThreads()
 
             // Track analytics
-            AnalyticsService.shared.trackThreadCreated(covenId: nil, agentId: agentId)
+            await AnalyticsService.shared.trackThreadCreated(covenId: nil, agentId: agentId)
 
             // Notify listeners
             await MainActor.run {
@@ -316,7 +316,7 @@ actor ThreadService {
             let newAgentId = agentId ?? thread.agentId
             let newPinned = isPinned ?? thread.isPinned
             let newArchived = isArchived ?? thread.isArchived
-            let updated = Thread(
+            let updated = await Thread(
                 id: thread.id,
                 userId: thread.userId,
                 covenId: thread.covenId,
@@ -351,7 +351,7 @@ actor ThreadService {
             print("🗑️ Deleted personal thread \(threadId) from local store")
 
             // Track analytics
-            AnalyticsService.shared.trackThreadDeleted(threadId: threadId)
+            await AnalyticsService.shared.trackThreadDeleted(threadId: threadId)
         } else {
             print("🗑️ deleteThread(\(threadId)) called for unknown thread in local-only build – ignoring.")
         }
