@@ -60,8 +60,8 @@ enum LLMConfiguration {
         let hermesBaseURL = defaults.string(forKey: UserScope.scopedKey("hermes_base_url"))
             ?? ProcessInfo.processInfo.environment["HERMES_BASE_URL"]
 
-        let hasKey = hermesKey != nil && !hermesKey!.isEmpty
-        let hasBaseURL = hermesBaseURL != nil && !hermesBaseURL!.isEmpty
+        let hasKey = !(hermesKey?.isEmpty ?? true)
+        let hasBaseURL = !(hermesBaseURL?.isEmpty ?? true)
 
         if hasKey || hasBaseURL {
             result["hermes"] = HermesLLMClient(
