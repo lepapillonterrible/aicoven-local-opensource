@@ -10,7 +10,7 @@ import Foundation
 /// global cache keys (openai_api_key, anthropic_api_key, gemini_api_key).
 /// Configuration for building LLM clients from user-provided API keys.
 /// All methods are nonisolated since they only read from thread-safe UserDefaults.
-struct LLMConfiguration: Sendable {
+enum LLMConfiguration {
     /// Note: ModelDescriptors are now built dynamically per-account using the
     /// provider's ListModels APIs via ProviderAccountService. This struct only
     /// knows how to build clients; it no longer hardcodes any model IDs.
@@ -43,21 +43,24 @@ struct LLMConfiguration: Sendable {
            let mlxModelID = defaults.string(forKey: "MLXModelManager.activeModelID"), !mlxModelID.isEmpty {
             result["mlx"] = MLXLLMClient(modelID: mlxModelID)
         }
-        
+
         // OpenClaw: Self-hosted OpenAI-compatible proxy/gateway
         // Base URL required; API key is optional (many local deployments don't require auth)
         if let openClawURL = defaults.string(forKey: UserScope.scopedKey("openclaw_base_url")), !openClawURL.isEmpty {
             result["openclaw"] = OpenClawLLMClient(baseURL: URL(string: openClawURL))
         }
-        
+
         // Hermes: Nous Research Hermes models via Together AI or self-hosted
-        // To enable: set either hermes_api_key (preferred) or together_api_key
         let hermesKey = defaults.string(forKey: UserScope.scopedKey("hermes_api_key"))
             ?? defaults.string(forKey: UserScope.scopedKey("together_api_key"))
-        if let hermesKey = hermesKey, !hermesKey.isEmpty {
-            let hermesBaseURL = defaults.string(forKey: UserScope.scopedKey("hermes_base_url"))
+        let hermesBaseURL = defaults.string(forKey: UserScope.scopedKey("hermes_base_url"))
+
+        let hasKey = hermesKey != nil && !hermesKey!.isEmpty
+        let hasBaseURL = hermesBaseURL != nil && !hermesBaseURL!.isEmpty
+
+        if hasKey || hasBaseURL {
             result["hermes"] = HermesLLMClient(
-                apiKey: hermesKey,
+                apiKey: hasKey ? hermesKey : nil,
                 baseURL: hermesBaseURL.flatMap { URL(string: $0) }
             )
         }
@@ -89,7 +92,7 @@ struct LLMConfiguration: Sendable {
                 costClass: .free
             ))
         }
-        
+
         // Register OpenClaw models/descriptors if configured.
         // OpenClaw can host any OpenAI-compatible model, so we provide
         // a flexible mechanism that supports user-defined model IDs.
@@ -97,73 +100,65 @@ struct LLMConfiguration: Sendable {
             // Check if user has specified a custom model in settings
             let openClawModel = UserDefaults.standard.string(forKey: UserScope.scopedKey("openclaw_model"))
                 ?? "openai/gpt-3.5-turbo" // Sensible default
-            
+
             // Context size varies by model - use a conservative 4K default
             // User can override via openclaw_context_tokens if needed
             let contextTokens = UserDefaults.standard.integer(forKey: UserScope.scopedKey("openclaw_context_tokens"))
             let effectiveContext = contextTokens > 0 ? contextTokens : 4_096
-            
+
             models.append(ModelDescriptor(
                 providerID: "openclaw",
                 modelID: openClawModel,
                 maxContextTokens: effectiveContext,
-                supportsTools: true,  // OpenClaw can support tools depending on backend
+                supportsTools: true, // OpenClaw can support tools depending on backend
                 supportsEmbeddings: false,
-                costClass: .free      // Self-hosted = no cost
+                costClass: .free // Self-hosted = no cost
             ))
         }
-        
+
         // Register Hermes models if configured
         if clients["hermes"] != nil {
             // Check for custom Hermes base URL (self-hosted) vs Together AI (cloud)
             let hermesBaseURL = UserDefaults.standard.string(forKey: UserScope.scopedKey("hermes_base_url"))
             let isSelfHosted = hermesBaseURL != nil && !hermesBaseURL!.isEmpty
-            
+
             // Get preferred model alias or full model ID
             let modelAlias = UserDefaults.standard.string(forKey: UserScope.scopedKey("hermes_model")) ?? "hermes-3"
-            
+
             // Map alias to full Together AI model ID if using cloud
-            let modelID: String
-            if isSelfHosted {
+            let modelID: String = if isSelfHosted {
                 // For self-hosted, use the raw model identifier
-                modelID = modelAlias
+                modelAlias
             } else {
                 // Together AI hosted - map aliases to full names
                 switch modelAlias.lowercased() {
                 case "hermes-3", "hermes-3-405b":
-                    modelID = "NousResearch/Hermes-3-Llama-3.1-405B-Turbo"
+                    "NousResearch/Hermes-3-Llama-3.1-405B-Turbo"
                 case "hermes-3-70b":
-                    modelID = "NousResearch/Hermes-3-Llama-3.1-70B"
+                    "NousResearch/Hermes-3-Llama-3.1-70B"
                 case "hermes-3-8b":
-                    modelID = "NousResearch/Hermes-3-Llama-3.1-8B"
+                    "NousResearch/Hermes-3-Llama-3.1-8B"
                 case "hermes-2":
-                    modelID = "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO"
+                    "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO"
                 case "hermes-2-mistral":
-                    modelID = "NousResearch/Nous-Hermes-2-Mistral-7B-DPO"
+                    "NousResearch/Nous-Hermes-2-Mistral-7B-DPO"
                 case "hermes-2-vision":
-                    modelID = "NousResearch/Nous-Hermes-2-Vision-Alpha"
+                    "NousResearch/Nous-Hermes-2-Vision-Alpha"
                 default:
-                    modelID = modelAlias // Assume user provided full model ID
+                    modelAlias // Assume user provided full model ID
                 }
             }
-            
+
             // Context window varies by model size
-            let contextTokens: Int
-            if modelID.contains("405") {
-                contextTokens = 128_000  // 405B has full 128K context
-            } else if modelID.contains("70") {
-                contextTokens = 128_000
-            } else {
-                contextTokens = 32_768   // Smaller models typically 32K
-            }
-            
+            let contextTokens = HermesLLMClient.contextWindow(for: modelID)
+
             models.append(ModelDescriptor(
                 providerID: "hermes",
                 modelID: modelID,
                 maxContextTokens: contextTokens,
-                supportsTools: true,   // Hermes excels at function calling
+                supportsTools: true, // Hermes excels at function calling
                 supportsEmbeddings: false,
-                costClass: isSelfHosted ? .free : .standard
+                costClass: isSelfHosted ? .free : .medium
             ))
         }
 

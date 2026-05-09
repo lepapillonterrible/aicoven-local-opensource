@@ -26,7 +26,7 @@ import Foundation
 /// Marked @unchecked Sendable because all stored properties are immutable
 /// after init and URLSession is thread-safe.
 final class HermesLLMClient: LLMClient, @unchecked Sendable {
-    private let apiKey: String
+    private let apiKey: String?
     private let baseURL: URL
     private let urlSession: URLSession
 
@@ -37,11 +37,11 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
     static let defaultModelAlias = "hermes-3"
 
     /// - Parameters:
-    ///   - apiKey: API key for Together AI or self-hosted instance.
+    ///   - apiKey: API key for Together AI or self-hosted instance (optional for some self-hosted).
     ///   - baseURL: Optional base URL override for self-hosted instances (uses Together AI if nil).
     ///   - urlSession: Optional custom URLSession used primarily for tests.
     init(
-        apiKey: String,
+        apiKey: String? = nil,
         baseURL: URL? = nil,
         urlSession: URLSession? = nil
     ) {
@@ -73,30 +73,33 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
     convenience init?() {
         let defaults = UserDefaults.standard
 
-        // Resolve API key (hermes_api_key preferred, fallback to together_api_key)
-        let apiKey: String
-        if let key = defaults.string(forKey: UserScope.scopedKey("hermes_api_key")), !key.isEmpty {
-            apiKey = key
-        } else if let key = defaults.string(forKey: UserScope.scopedKey("together_api_key")), !key.isEmpty {
-            apiKey = key
-        } else if let envKey = ProcessInfo.processInfo.environment["HERMES_API_KEY"], !envKey.isEmpty {
-            apiKey = envKey
-        } else if let envKey = ProcessInfo.processInfo.environment["TOGETHER_API_KEY"], !envKey.isEmpty {
-            apiKey = envKey
-        } else {
-            return nil // No API key configured
-        }
-
         // Base URL is optional (defaults to Together AI)
-        let baseURL: URL?
-        if let urlString = defaults.string(forKey: UserScope.scopedKey("hermes_base_url")), !urlString.isEmpty,
-           let url = URL(string: urlString) {
-            baseURL = url
+        let baseURL: URL? = if let urlString = defaults.string(forKey: UserScope.scopedKey("hermes_base_url")), !urlString.isEmpty,
+                               let url = URL(string: urlString) {
+            url
         } else if let envURL = ProcessInfo.processInfo.environment["HERMES_BASE_URL"],
                   let url = URL(string: envURL) {
-            baseURL = url
+            url
         } else {
-            baseURL = nil
+            nil
+        }
+
+        // Resolve API key (hermes_api_key preferred, fallback to together_api_key)
+        let apiKey: String? = if let key = defaults.string(forKey: UserScope.scopedKey("hermes_api_key")), !key.isEmpty {
+            key
+        } else if let key = defaults.string(forKey: UserScope.scopedKey("together_api_key")), !key.isEmpty {
+            key
+        } else if let envKey = ProcessInfo.processInfo.environment["HERMES_API_KEY"], !envKey.isEmpty {
+            envKey
+        } else if let envKey = ProcessInfo.processInfo.environment["TOGETHER_API_KEY"], !envKey.isEmpty {
+            envKey
+        } else {
+            nil
+        }
+
+        // If no API key and no custom base URL, we can't do anything (Together AI requires an API key)
+        if apiKey == nil, baseURL == nil {
+            return nil
         }
 
         self.init(apiKey: apiKey, baseURL: baseURL)
@@ -129,13 +132,13 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
     /// Returns the effective context window for a model.
     static func contextWindow(for modelID: String) -> Int {
         if modelID.contains("405") {
-            return 128_000
+            128_000
         } else if modelID.contains("70") {
-            return 128_000
+            128_000
         } else if modelID.contains("mixtral") {
-            return 32_768
+            32_768
         } else {
-            return 32_768
+            32_768
         }
     }
 
@@ -185,6 +188,7 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
                 let name: String
                 let arguments: String // JSON string
             }
+
             let id: String?
             let type: String?
             let function: FunctionCall
@@ -196,14 +200,17 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
                     let content: String?
                     let tool_calls: [ToolCallResponse]?
                 }
+
                 let message: Message
                 let finish_reason: String?
             }
+
             struct UsageBody: Decodable {
                 let prompt_tokens: Int?
                 let completion_tokens: Int?
                 let total_tokens: Int?
             }
+
             let choices: [Choice]
             let usage: UsageBody?
             let model: String?
@@ -215,7 +222,9 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
         let url = baseURL.appendingPathComponent("/v1/chat/completions")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        if let apiKey {
+            request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
 
         let reqMessages = messages.map { msg in
@@ -275,14 +284,13 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
         }
 
         let msg = LLMMessage(role: .assistant, content: first.message.content ?? "")
-        let usage: LLMTokenUsage?
-        if let u = decoded.usage {
-            usage = LLMTokenUsage(
+        let usage: LLMTokenUsage? = if let u = decoded.usage {
+            LLMTokenUsage(
                 promptTokens: u.prompt_tokens ?? 0,
                 completionTokens: u.completion_tokens ?? 0
             )
         } else {
-            usage = nil
+            nil
         }
 
         // Parse tool calls (Hermes excels at function calling)
@@ -315,13 +323,16 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
             struct Item: Decodable {
                 let embedding: [Float]
             }
+
             let data: [Item]
         }
 
         let url = baseURL.appendingPathComponent("/v1/embeddings")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        if let apiKey {
+            request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
 
         // Together AI uses model aliases for embeddings; Hermes doesn't have a native embedding model
