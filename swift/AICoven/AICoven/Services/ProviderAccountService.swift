@@ -149,7 +149,7 @@ actor ProviderAccountService {
         // Store the API key in the Keychain, and mirror to UserDefaults so the
         // existing ChatService clients (OpenAI/Anthropic/Gemini) can read it.
         try KeychainHelper.save(key: keychainKey(for: id), value: apiKey)
-        updateGlobalAPIKeyCache(provider: provider, apiKey: apiKey)
+        updateGlobalAPIKeyCache(provider: provider, apiKey: apiKey, baseURL: nil)
 
         await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
 
@@ -181,7 +181,7 @@ actor ProviderAccountService {
         try saveLocalAccounts(locals)
 
         // Cache base URL so LLMConfiguration can build the OllamaLLMClient.
-        updateGlobalAPIKeyCache(provider: "ollama", apiKey: baseURL)
+        updateGlobalAPIKeyCache(provider: "ollama", apiKey: nil, baseURL: baseURL)
 
         await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
 
@@ -221,6 +221,76 @@ actor ProviderAccountService {
         return ProviderAccount(from: local)
     }
 
+    /// Create a local OpenClaw provider account.
+    @discardableResult
+    func createOpenClawAccount(
+        displayName: String,
+        baseURL: String,
+        apiKey: String?,
+        defaultModel: String?
+    ) async throws -> ProviderAccount {
+        var locals = try loadLocalAccounts()
+        let now = Date()
+        let id = UUID().uuidString
+        let local = LocalProviderAccount(
+            id: id,
+            provider: "openclaw",
+            displayName: displayName,
+            scopes: ["chat"],
+            defaultModel: defaultModel,
+            baseURL: baseURL,
+            status: "healthy",
+            createdAt: now
+        )
+        locals.append(local)
+        try saveLocalAccounts(locals)
+
+        if let apiKey, !apiKey.isEmpty {
+            try KeychainHelper.save(key: keychainKey(for: id), value: apiKey)
+        }
+
+        updateGlobalAPIKeyCache(provider: "openclaw", apiKey: apiKey, baseURL: baseURL)
+
+        await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
+
+        return ProviderAccount(from: local)
+    }
+
+    /// Create a local Hermes provider account.
+    @discardableResult
+    func createHermesAccount(
+        displayName: String,
+        apiKey: String?,
+        baseURL: String?,
+        defaultModel: String?
+    ) async throws -> ProviderAccount {
+        var locals = try loadLocalAccounts()
+        let now = Date()
+        let id = UUID().uuidString
+        let local = LocalProviderAccount(
+            id: id,
+            provider: "hermes",
+            displayName: displayName,
+            scopes: ["chat"],
+            defaultModel: defaultModel,
+            baseURL: baseURL,
+            status: "healthy",
+            createdAt: now
+        )
+        locals.append(local)
+        try saveLocalAccounts(locals)
+
+        if let apiKey, !apiKey.isEmpty {
+            try KeychainHelper.save(key: keychainKey(for: id), value: apiKey)
+        }
+
+        updateGlobalAPIKeyCache(provider: "hermes", apiKey: apiKey, baseURL: baseURL)
+
+        await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
+
+        return ProviderAccount(from: local)
+    }
+
     /// Update an existing provider account's display name and/or API key.
     func updateProviderAccount(
         id: String,
@@ -250,12 +320,12 @@ actor ProviderAccountService {
         // Update Keychain if API key changed
         if let apiKey, !apiKey.isEmpty {
             try KeychainHelper.save(key: keychainKey(for: id), value: apiKey)
-            updateGlobalAPIKeyCache(provider: old.provider, apiKey: apiKey)
+            updateGlobalAPIKeyCache(provider: old.provider, apiKey: apiKey, baseURL: nil)
         }
 
-        // Update Ollama base URL cache if changed
-        if let baseURL, old.provider.lowercased() == "ollama" {
-            updateGlobalAPIKeyCache(provider: "ollama", apiKey: baseURL)
+        // Update base URL cache if changed
+        if let baseURL {
+            updateGlobalAPIKeyCache(provider: old.provider, apiKey: nil, baseURL: baseURL)
         }
 
         await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
@@ -461,18 +531,23 @@ extension ProviderAccountService {
         "provider-account-\(accountId)"
     }
 
-    private func updateGlobalAPIKeyCache(provider: String, apiKey: String) {
+    private func updateGlobalAPIKeyCache(provider: String, apiKey: String?, baseURL: String? = nil) {
         let defaults = UserDefaults.standard
         switch provider.lowercased() {
         case "openai":
-            defaults.set(apiKey, forKey: UserScope.scopedKey("openai_api_key"))
+            if let apiKey { defaults.set(apiKey, forKey: UserScope.scopedKey("openai_api_key")) }
         case "anthropic":
-            defaults.set(apiKey, forKey: UserScope.scopedKey("anthropic_api_key"))
+            if let apiKey { defaults.set(apiKey, forKey: UserScope.scopedKey("anthropic_api_key")) }
         case "google", "gemini":
-            defaults.set(apiKey, forKey: UserScope.scopedKey("gemini_api_key"))
+            if let apiKey { defaults.set(apiKey, forKey: UserScope.scopedKey("gemini_api_key")) }
         case "ollama":
-            // For Ollama we cache the base URL rather than an API key.
-            defaults.set(apiKey, forKey: UserScope.scopedKey("ollama_base_url"))
+            if let baseURL { defaults.set(baseURL, forKey: UserScope.scopedKey("ollama_base_url")) }
+        case "openclaw":
+            if let apiKey { defaults.set(apiKey, forKey: UserScope.scopedKey("openclaw_api_key")) }
+            if let baseURL { defaults.set(baseURL, forKey: UserScope.scopedKey("openclaw_base_url")) }
+        case "hermes":
+            if let apiKey { defaults.set(apiKey, forKey: UserScope.scopedKey("hermes_api_key")) }
+            if let baseURL { defaults.set(baseURL, forKey: UserScope.scopedKey("hermes_base_url")) }
         default:
             break
         }
@@ -492,6 +567,12 @@ extension ProviderAccountService {
         case "mlx":
             defaults.removeObject(forKey: "MLXModelManager.activeModelID")
             defaults.removeObject(forKey: "MLXModelManager.downloadedModelIDs")
+        case "openclaw":
+            defaults.removeObject(forKey: UserScope.scopedKey("openclaw_api_key"))
+            defaults.removeObject(forKey: UserScope.scopedKey("openclaw_base_url"))
+        case "hermes":
+            defaults.removeObject(forKey: UserScope.scopedKey("hermes_api_key"))
+            defaults.removeObject(forKey: UserScope.scopedKey("hermes_base_url"))
         default:
             break
         }
@@ -620,6 +701,43 @@ extension ProviderAccountService {
                     name: info.displayName,
                     provider: "mlx",
                     contextLength: 128_000
+                )
+            }
+        case "openclaw", "hermes":
+            let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) ?? ""
+            let baseURLStr = account.baseURL ?? (provider == "openclaw" ? "http://localhost:3000" : "https://api.together.xyz")
+            guard let url = URL(string: baseURLStr)?.appendingPathComponent("v1/models") else {
+                throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid base URL for \(provider)"])
+            }
+            struct OpenAIListResponse: Decodable { struct Item: Decodable { let id: String }
+                let data: [Item]
+            }
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            if !apiKey.isEmpty {
+                request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
+                let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
+                throw NSError(
+                    domain: "ProviderAccountService",
+                    code: http.statusCode,
+                    userInfo: [NSLocalizedDescriptionKey: "\(provider) models HTTP \(http.statusCode): \(body)"]
+                )
+            }
+            let decoded = try JSONDecoder().decode(OpenAIListResponse.self, from: data)
+            let chatOnly = decoded.data
+                .map(\.id)
+                .filter { isChatModel(provider: provider, id: $0) }
+            let models = chatOnly.isEmpty ? decoded.data.map(\.id) : chatOnly
+            return models.map { id in
+                ProviderInitializationStatus.ModelMetadata(
+                    id: id,
+                    name: id,
+                    provider: provider,
+                    contextLength: nil
                 )
             }
         case "anthropic":

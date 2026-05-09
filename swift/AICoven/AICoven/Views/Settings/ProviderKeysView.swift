@@ -150,6 +150,8 @@ struct ProviderAccountCard: View {
         case "mistral": ("🌬️", "Mistral AI", .cyan)
         case "ollama": ("🦙", "Ollama (Local)", .orange)
         case "mlx": ("🧠", "MLX (On-Device)", .purple)
+        case "openclaw": ("🦅", "OpenClaw", .orange)
+        case "hermes": ("🪽", "Hermes", .aicovenPurple)
         default: ("🔑", account.provider, .aicovenTeal)
         }
     }
@@ -354,7 +356,9 @@ struct AddProviderKeySheet: View {
         ("openai", "OpenAI", "🤖"),
         ("anthropic", "Anthropic Claude", "🟣"),
         ("google", "Google Gemini", "🔵"),
+        ("hermes", "Hermes", "🪽"),
         ("ollama", "Ollama (Local)", "🦙"),
+        ("openclaw", "OpenClaw (Local)", "🦅"),
         ("mlx", "MLX (On-Device)", "🧠")
     ]
 
@@ -449,8 +453,20 @@ private struct AddProviderKeyStep2View: View {
         selectedProvider == "mlx"
     }
 
+    private var isOpenClaw: Bool {
+        selectedProvider == "openclaw"
+    }
+
+    private var isHermes: Bool {
+        selectedProvider == "hermes"
+    }
+
     private var isLocal: Bool {
         isOllama || isMLX
+    }
+
+    private var isSelfHosted: Bool {
+        isOpenClaw || isHermes
     }
 
     var body: some View {
@@ -521,6 +537,31 @@ private struct AddProviderKeyStep2View: View {
                         .stroke(Color.green.opacity(0.3), lineWidth: 1)
                 )
 
+            } else if isSelfHosted {
+                HStack(alignment: .top, spacing: Spacing.sm) {
+                    Image(systemName: "server.rack")
+                        .foregroundColor(.orange)
+                        .font(.system(size: 20))
+                        .padding(.top, 2)
+
+                    VStack(alignment: .leading, spacing: Spacing.xs) {
+                        Text("Self-Hosted / Private Server")
+                            .font(.aicovenBodySmall)
+                            .foregroundColor(.aicovenTextPrimary)
+                            .fontWeight(.semibold)
+                        Text("Data is sent to the custom URL you provide. Make sure you trust the destination server. If left blank, it may default to a cloud service (e.g., Together AI).")
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextSecondary)
+                    }
+                }
+                .padding(Spacing.md)
+                .background(Color.orange.opacity(0.12))
+                .cornerRadius(BorderRadius.md)
+                .overlay(
+                    RoundedRectangle(cornerRadius: BorderRadius.md)
+                        .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+                )
+
             } else {
                 VStack(alignment: .leading, spacing: Spacing.md) {
                     VStack(alignment: .leading, spacing: Spacing.sm) {
@@ -576,6 +617,10 @@ private struct AddProviderKeyStep2View: View {
             ollamaConfigSection
         } else if isMLX {
             mlxConfigSection
+        } else if isOpenClaw {
+            openClawConfigSection
+        } else if isHermes {
+            hermesConfigSection
         } else {
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 Text("API Key")
@@ -614,7 +659,69 @@ private struct AddProviderKeyStep2View: View {
         if displayName.isEmpty { return true }
         if isOllama { return baseURL.isEmpty || selectedOllamaModel.isEmpty }
         if isMLX { return selectedMLXModelID.isEmpty }
+        if isOpenClaw { return baseURL.isEmpty || !acceptedPrivacy }
+        if isHermes { return (apiKey.isEmpty && baseURL.isEmpty) || !acceptedPrivacy }
         return apiKey.isEmpty || !acceptedPrivacy
+    }
+
+    // MARK: - OpenClaw & Hermes config sections
+
+    private var openClawConfigSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                Text("Server URL (Required)")
+                    .font(.aicovenH3)
+                    .foregroundColor(.aicovenTextPrimary)
+
+                TextField("http://localhost:3000", text: $baseURL)
+                    .font(.aicovenBody)
+                    .foregroundColor(.aicovenTextPrimary)
+                    .padding(Spacing.md)
+                    .background(Color.aicovenGlass)
+                    .cornerRadius(BorderRadius.md)
+                    .autocorrectionDisabled()
+
+                Text("API Key (Optional)")
+                    .font(.aicovenH3)
+                    .foregroundColor(.aicovenTextPrimary)
+
+                SecureField("sk-...", text: $apiKey)
+                    .font(.aicovenBody)
+                    .foregroundColor(.aicovenTextPrimary)
+                    .padding(Spacing.md)
+                    .background(Color.aicovenGlass)
+                    .cornerRadius(BorderRadius.md)
+            }
+        }
+    }
+
+    private var hermesConfigSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                Text("API Key")
+                    .font(.aicovenH3)
+                    .foregroundColor(.aicovenTextPrimary)
+
+                SecureField("Required for Together AI", text: $apiKey)
+                    .font(.aicovenBody)
+                    .foregroundColor(.aicovenTextPrimary)
+                    .padding(Spacing.md)
+                    .background(Color.aicovenGlass)
+                    .cornerRadius(BorderRadius.md)
+
+                Text("Server URL (Optional)")
+                    .font(.aicovenH3)
+                    .foregroundColor(.aicovenTextPrimary)
+
+                TextField("Custom self-hosted base URL", text: $baseURL)
+                    .font(.aicovenBody)
+                    .foregroundColor(.aicovenTextPrimary)
+                    .padding(Spacing.md)
+                    .background(Color.aicovenGlass)
+                    .cornerRadius(BorderRadius.md)
+                    .autocorrectionDisabled()
+            }
+        }
     }
 
     // MARK: - Ollama config section
@@ -795,6 +902,8 @@ private struct AddProviderKeyStep2View: View {
         case "google": "Google Gemini"
         case "ollama": "Ollama (Local)"
         case "mlx": "MLX (On-Device)"
+        case "openclaw": "OpenClaw"
+        case "hermes": "Hermes"
         default: selectedProvider.capitalized
         }
     }
@@ -838,6 +947,22 @@ private struct AddProviderKeyStep2View: View {
                     displayName: name,
                     modelID: selectedMLXModelID
                 )
+            } else if isOpenClaw {
+                let name = displayName.isEmpty ? "OpenClaw Server" : displayName
+                _ = try await ProviderAccountService.shared.createOpenClawAccount(
+                    displayName: name,
+                    baseURL: baseURL,
+                    apiKey: apiKey.isEmpty ? nil : apiKey,
+                    defaultModel: nil
+                )
+            } else if isHermes {
+                let name = displayName.isEmpty ? "Hermes Server" : displayName
+                _ = try await ProviderAccountService.shared.createHermesAccount(
+                    displayName: name,
+                    apiKey: apiKey.isEmpty ? nil : apiKey,
+                    baseURL: baseURL.isEmpty ? nil : baseURL,
+                    defaultModel: nil
+                )
             } else {
                 _ = try await ProviderAccountService.shared.createProviderAccount(
                     provider: selectedProvider,
@@ -877,6 +1002,14 @@ struct EditProviderKeySheet: View {
         account.provider.lowercased() == "mlx"
     }
 
+    private var isOpenClaw: Bool {
+        account.provider.lowercased() == "openclaw"
+    }
+
+    private var isHermes: Bool {
+        account.provider.lowercased() == "hermes"
+    }
+
     private var isLocal: Bool {
         isOllama || isMLX
     }
@@ -907,6 +1040,35 @@ struct EditProviderKeySheet: View {
                                 .foregroundColor(.aicovenTextPrimary)
 
                             TextField("http://localhost:11434", text: $baseURL)
+                                .font(.aicovenBody)
+                                .foregroundColor(.aicovenTextPrimary)
+                                .padding(Spacing.md)
+                                .background(Color.aicovenGlass)
+                                .cornerRadius(BorderRadius.md)
+                                .autocorrectionDisabled()
+                        }
+                    } else if isOpenClaw || isHermes {
+                        VStack(alignment: .leading, spacing: Spacing.sm) {
+                            Text("API Key")
+                                .font(.aicovenH3)
+                                .foregroundColor(.aicovenTextPrimary)
+
+                            SecureField("Leave blank to keep current key", text: $apiKey)
+                                .font(.aicovenBody)
+                                .foregroundColor(.aicovenTextPrimary)
+                                .padding(Spacing.md)
+                                .background(Color.aicovenGlass)
+                                .cornerRadius(BorderRadius.md)
+
+                            Text("🔒 Leave blank to keep your existing key")
+                                .font(.aicovenCaption)
+                                .foregroundColor(.aicovenTextSecondary)
+
+                            Text("Server URL")
+                                .font(.aicovenH3)
+                                .foregroundColor(.aicovenTextPrimary)
+
+                            TextField(isOpenClaw ? "http://localhost:3000" : "Custom self-hosted base URL", text: $baseURL)
                                 .font(.aicovenBody)
                                 .foregroundColor(.aicovenTextPrimary)
                                 .padding(Spacing.md)
@@ -961,7 +1123,7 @@ struct EditProviderKeySheet: View {
         }
         .onAppear {
             displayName = account.displayName
-            baseURL = account.baseURL ?? "http://localhost:11434"
+            baseURL = account.baseURL ?? (isOpenClaw ? "http://localhost:3000" : "")
         }
     }
 
@@ -971,12 +1133,11 @@ struct EditProviderKeySheet: View {
         defer { saving = false }
 
         do {
-            // displayName is guaranteed to be non-empty due to button validation
             try await ProviderAccountService.shared.updateProviderAccount(
                 id: account.id,
                 displayName: displayName,
                 apiKey: apiKey.isEmpty ? nil : apiKey,
-                baseURL: isOllama ? baseURL : nil
+                baseURL: (isOllama || isOpenClaw || isHermes) ? baseURL : nil
             )
             onComplete()
             dismiss()
