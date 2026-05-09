@@ -143,10 +143,24 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
             }
         }
 
+        // Strip <think>…</think> blocks that Qwen3 / Qwen2.5-Coder "thinking"
+        // models emit before their actual reply. Without stripping, the full
+        // output may consist solely of a thinking block and no visible text,
+        // causing MLXLMCommon's validator to throw "model output must contain
+        // either output text or tool calls".
+        let visibleOutput = Self.stripThinkingTokens(result.output)
+        let finalOutput = visibleOutput.isEmpty ? "…" : visibleOutput
+
+        #if DEBUG
+        if visibleOutput.isEmpty {
+            print("⚠️ [MLXLLMClient] Model returned only thinking tokens; using fallback placeholder.")
+        }
+        #endif
+
         // Extract token counts from result.
         // GenerateResult provides promptTokenCount but not completion count directly.
         // Estimate completion tokens from output length (roughly 4 chars per token).
-        let estimatedCompletionTokens = max(1, result.output.count / 4)
+        let estimatedCompletionTokens = max(1, finalOutput.count / 4)
         let usage = LLMTokenUsage(
             promptTokens: result.promptTokenCount,
             completionTokens: estimatedCompletionTokens
@@ -160,7 +174,7 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
         #endif
 
         return LLMChatResponse(
-            message: LLMMessage(role: .assistant, content: result.output),
+            message: LLMMessage(role: .assistant, content: finalOutput),
             providerID: "mlx",
             modelID: effectiveModel,
             usage: usage
@@ -380,6 +394,21 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
             }
         }
         return result
+    }
+
+    /// Strips `<think>…</think>` blocks (and surrounding whitespace) from raw
+    /// model output. Thinking-capable models (Qwen3, Qwen2.5-Coder) emit these
+    /// blocks before their actual reply; downstream code only wants the reply.
+    ///
+    /// Handles both complete blocks and pathological cases where the model
+    /// outputs only a thinking block with no trailing content.
+    static func stripThinkingTokens(_ text: String) -> String {
+        // Use NSRegularExpression so we can match across newlines (.dotMatchesLineSeparators).
+        let pattern = "<think>[\\s\\S]*?</think>"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        let range = NSRange(text.startIndex..., in: text)
+        let stripped = regex.stringByReplacingMatches(in: text, range: range, withTemplate: "")
+        return stripped.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     #else
     private static func toChatMessages(from messages: [LLMMessage]) -> [[String: String]] {

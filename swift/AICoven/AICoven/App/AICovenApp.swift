@@ -15,6 +15,10 @@ struct AICovenApp: App {
     /// AuthService.shared accesses Auth.auth() which requires Firebase first.
     @ObservedObject private var authService: AuthService
 
+    // Design System Managers
+    @StateObject private var themeManager = ThemeManager.shared
+    @StateObject private var typographyManager = TypographyManager.shared
+
     init() {
         // Initialize Firebase only if a valid configuration is available and not
         // already configured, to avoid fatal errors in local/CI builds without
@@ -34,6 +38,9 @@ struct AICovenApp: App {
         Self.configureAppearance()
         // Initialize local SQLite database and run migrations.
         DatabaseManager.shared.configureIfNeeded()
+
+        // Register accessibility fonts at process boot
+        FontRegistration.register()
     }
 
     var body: some Scene {
@@ -45,13 +52,11 @@ struct AICovenApp: App {
                 } else if !isEncryptionUnlocked {
                     // First check auth, then unlock encryption with user-scoped keys.
                     if !authService.isAuthenticated, !authService.isLoading {
-                        NavigationStack {
-                            LoginView()
-                                .environmentObject(authService)
-                                .environmentObject(AppState.shared)
-                                .environmentObject(StoreService.shared)
-                        }
-                        .transition(.opacity)
+                        PreAuthOnboardingView()
+                            .environmentObject(authService)
+                            .environmentObject(AppState.shared)
+                            .environmentObject(StoreService.shared)
+                            .transition(.opacity)
                     } else if authService.isLoading {
                         LoadingView(message: "Loading...")
                     } else {
@@ -84,8 +89,28 @@ struct AICovenApp: App {
                     isEncryptionUnlocked = false
                 }
             }
+            // Expose the active theme + typography to every view. We re-
+            // apply `.id()` on a composite of both: without it, `Text` views
+            // that read static `Color.aicoven*` and `Font.aicoven*` computed
+            // vars get the OLD value captured at render time and never
+            // refresh on a switch (because most views don't observe
+            // `ThemeManager` / `TypographyManager`).
+            .environmentObject(themeManager)
+            .environmentObject(typographyManager)
+            .environment(\.aicovenTheme, themeManager.theme)
+            .preferredColorScheme(themeManager.theme.preferredColorScheme)
+            .animation(.easeOut(duration: 0.25), value: themeManager.theme.variant)
+            // Composite identity: theme variant, typography variant,
+            // (for `.custom`) the chosen font family, and the global text
+            // size scale. The latter components are what force a tree
+            // rebuild when the user picks a new family or size from
+            // Settings without changing variant — without them the
+            // captured `Font.aicoven*` values stick to the previous
+            // configuration until something else triggers a redraw.
+            .id("\(themeManager.theme.variant.rawValue)|\(typographyManager.variant.rawValue)|\(typographyManager.customFontFamily ?? "")|\(typographyManager.sizeScale.rawValue)")
         }
         #if os(macOS)
+        .defaultSize(width: 820, height: 620)
         .commands {
             // macOS-specific menu commands can be re-added later if needed.
         }
@@ -96,7 +121,10 @@ struct AICovenApp: App {
     private static func configureAppearance() {
         #if os(iOS)
         UINavigationBar.appearance().largeTitleTextAttributes = [
-            .foregroundColor: UIColor.white
+            .foregroundColor: UIColor.label
+        ]
+        UINavigationBar.appearance().titleTextAttributes = [
+            .foregroundColor: UIColor.label
         ]
         #endif
     }

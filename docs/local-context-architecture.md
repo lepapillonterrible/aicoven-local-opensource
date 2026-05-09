@@ -57,9 +57,10 @@ There is no mandatory backend: users bring their own LLM provider API keys or lo
 - `MLXLLMClient` runs inference directly on-device using Apple's MLX framework:
   - Supported on Mac (Apple Silicon), iPad (M-series, 8 GB+ RAM), and iPhone (6 GB+ RAM).
   - On iOS, the client manages aggressive memory constraints: sets a 512 MB GPU cache limit, unloads models after each inference, evicts other cached models before loading, and wraps generation in `autoreleasepool` to free intermediate buffers.
+  - **iOS Concurrency & UI Freezing**: Because MLX generation tightly bounds the device and operates asynchronously, all downstream streaming state mutations (e.g., inside `ChatService` or `PersonalContentView`) must be rigorously isolated to the `@MainActor`. Failing to do so during a background MLX token stream will hard-lock the SwiftUI thread.
   - System messages are folded into the first user message to support strict chat templates (Gemma 2, Phi, etc.) that don't allow a `system` role.
   - Consecutive same-role messages are merged to satisfy templates requiring strict user/assistant alternation.
-- `MLXModelManager` maintains a curated catalog of 11 models with metadata (category, tier, recommended-for tags, min RAM) and device-aware filtering (iPhones only see models ≤ 3 GB RAM or `.mobile` category).
+- `MLXModelManager` maintains a curated catalog of models with metadata (category, tier, recommended-for tags, min RAM) and device-aware filtering (iPhones only see models ≤ 3 GB RAM or `.mobile` category).
 
 ### Model Routing
 

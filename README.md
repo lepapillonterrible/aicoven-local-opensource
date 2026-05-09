@@ -202,6 +202,7 @@ AICoven can run models **directly on your device's GPU** using Apple's [MLX fram
 |-------|------|----------|----------------|
 | AICoven MCP 3B ⚡ | 3B, 4-bit | General (Core) | MCP Tools, Tool Calling, Agents |
 | AICoven MCP 2B iOS 📱 | 2B, 4-bit | General (Core) | MCP Tools, iOS, On-Device |
+| AICoven MCP 1.7B 🆕 | 1.7B, 4-bit | Mobile (Core) | MCP Tools, iOS, Tool Calling |
 | Qwen 2.5 1.5B | 1.5B, 4-bit | Mobile (Core) | iOS, Low RAM |
 | Qwen 3 4B | 4B, 4-bit | General (Core) | MCP Tools, Chat, Reasoning |
 | Llama 3.2 3B | 3B, 4-bit | General (Core) | MCP Tools, Chat |
@@ -214,7 +215,7 @@ AICoven can run models **directly on your device's GPU** using Apple's [MLX fram
 
 You can test any downloaded model's MCP tool-calling accuracy using the built-in benchmark (tap **Test** on a downloaded model card).
 
-> **Note:** MLX models run on Apple Silicon only. On iPhone, models are automatically unloaded after each inference to prevent memory pressure, and context/tool output is capped more aggressively. Tool use with MLX models is functional but less reliable than with API providers; see the [tool calling table](#tool-calling-by-provider) above.
+> **Note:** MLX models run on Apple Silicon only. On iPhone, local inference is highly resource-intensive. To prevent jetsam (out-of-memory crashes), models are automatically unloaded after each inference, GPU cache is hard-capped at 512MB, and context/tool output is capped more aggressively. Additionally, due to background MLX streaming, developers must ensure all UI streaming and state mutations are strictly isolated to the `@MainActor` to prevent complete UI freezing during response generation. Tool use with MLX models is functional but less reliable than with API providers; see the [tool calling table](#tool-calling-by-provider) above.
 
 ### Using Ollama (Local LLMs)
 

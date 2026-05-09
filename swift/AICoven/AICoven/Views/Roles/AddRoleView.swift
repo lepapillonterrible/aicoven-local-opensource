@@ -13,8 +13,8 @@ struct AddRoleView: View {
     @State private var emoji = "🤖"
     @State private var description = ""
     @State private var systemPrompt = ""
-    @State private var model = "gpt-4o"
-    @State private var provider = "openai"
+    @State private var model = ""
+    @State private var provider = ""
     @State private var providerAccountId: String? = nil
     @State private var temperature: Double = 0.7
     @State private var maxTokens = "2000"
@@ -652,8 +652,8 @@ struct AddRoleView: View {
                 emoji: emoji,
                 description: description.isEmpty ? nil : description,
                 systemPrompt: systemPrompt.isEmpty ? nil : systemPrompt,
-                model: model,
-                provider: provider,
+                model: model.isEmpty ? nil : model,
+                provider: provider.isEmpty ? nil : provider,
                 providerAccountId: providerAccountId,
                 temperature: temperature,
                 maxTokens: maxTokensInt,

@@ -99,3 +99,45 @@ public enum AnyJSONValue: Codable, Hashable, Sendable {
         }
     }
 }
+
+// MARK: - Literal Conformances
+
+extension AnyJSONValue: ExpressibleByStringLiteral {
+    public init(stringLiteral value: String) {
+        self = .string(value)
+    }
+}
+
+extension AnyJSONValue: ExpressibleByIntegerLiteral {
+    public init(integerLiteral value: Int) {
+        self = .int(value)
+    }
+}
+
+extension AnyJSONValue: ExpressibleByFloatLiteral {
+    public init(floatLiteral value: Double) {
+        self = .double(value)
+    }
+}
+
+extension AnyJSONValue: ExpressibleByBooleanLiteral {
+    public init(booleanLiteral value: Bool) {
+        self = .bool(value)
+    }
+}
+
+extension AnyJSONValue: ExpressibleByArrayLiteral {
+    public init(arrayLiteral elements: AnyJSONValue...) {
+        self = .array(elements)
+    }
+}
+
+extension AnyJSONValue: ExpressibleByDictionaryLiteral {
+    public init(dictionaryLiteral elements: (String, AnyJSONValue)...) {
+        var dict: [String: AnyJSONValue] = [:]
+        for (k, v) in elements {
+            dict[k] = v
+        }
+        self = .dictionary(dict)
+    }
+}

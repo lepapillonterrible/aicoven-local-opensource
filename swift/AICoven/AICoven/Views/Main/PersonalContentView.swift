@@ -402,7 +402,7 @@ struct PersonalChatView: View {
                                         .padding(16)
                                         .background(
                                             RoundedRectangle(cornerRadius: 12)
-                                                .fill(Color(hex: "#1E1E1E"))
+                                                .fill(Color.aicovenSurfaceElevated)
                                                 .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
                                         )
                                 }
@@ -466,7 +466,7 @@ struct PersonalChatView: View {
             EnhancedMessageComposer(
                 messageText: $messageText,
                 onSend: { attachments in
-                    Task {
+                    Task { @MainActor in
                         await sendMessage(attachments: attachments)
                     }
                 },
@@ -685,6 +685,7 @@ struct PersonalChatView: View {
 
     /// Send a message with optional file attachments to the LLM.
     /// Attachments are read from disk and their contents are injected into the context.
+    @MainActor
     private func sendMessage(attachments: [FileAttachmentDetail]) async {
         let raw = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return }
@@ -823,30 +824,28 @@ struct PersonalChatView: View {
                 }
             )
         } catch {
-            Task { @MainActor in
-                AppErrorReporter.log(error: error, context: "PersonalContentView.sendMessage")
-                isSending = false
-                streamingAnswerBuffer = ""
-                streamingThoughts = []
-                streamingUsedTools = false
-                reasoningLoadingMessage = "Something went wrong while contacting the assistant. Please try again."
+            AppErrorReporter.log(error: error, context: "PersonalContentView.sendMessage")
+            isSending = false
+            streamingAnswerBuffer = ""
+            streamingThoughts = []
+            streamingUsedTools = false
+            reasoningLoadingMessage = "Something went wrong while contacting the assistant. Please try again."
 
-                let errorText = "I ran into an error while contacting your provider: \(error.localizedDescription)"
-                let errorMessage = ChatMessage(
-                    id: UUID().uuidString,
-                    threadId: thread.id,
-                    role: "assistant",
-                    content: errorText,
-                    metadata: nil,
-                    tokenUsage: nil,
-                    createdAt: Date(),
-                    isEncrypted: false,
-                    keyFingerprint: nil
-                )
-                messages.append(errorMessage)
-                Task {
-                    await ChatService.shared.addLocalMessage(errorMessage)
-                }
+            let errorText = "I ran into an error while contacting your provider: \(error.localizedDescription)"
+            let errorMessage = ChatMessage(
+                id: UUID().uuidString,
+                threadId: thread.id,
+                role: "assistant",
+                content: errorText,
+                metadata: nil,
+                tokenUsage: nil,
+                createdAt: Date(),
+                isEncrypted: false,
+                keyFingerprint: nil
+            )
+            messages.append(errorMessage)
+            Task {
+                await ChatService.shared.addLocalMessage(errorMessage)
             }
         }
     }

@@ -565,12 +565,51 @@ actor ChatService {
         // and leave the user with zero output.
         if isLocalModel, toolsAllowed, remainingToolSteps > 0 {
             do {
-                // Try native tools first (current_time, web_search) — these
-                // are cheap, local, and have high-confidence keyword matching.
-                // MCP tools are checked second because their fuzzy scoring can
-                // produce false positives (e.g. "time" matching "timestamp"
-                // in a Slack tool name).
-                if let forcedNative = Self.forceNativeToolCall(userMessage: message) {
+                // Try multi-step tool chains first. ToolChainResolver detects
+                // composite intents ("search X and summarize", "read file and
+                // explain", "time in X and Y") and returns an ordered chain.
+                if let chain = ToolChainResolver.resolve(
+                    userMessage: message,
+                    enabledTools: toolConfig.enabledTools,
+                    mcpServers: toolConfig.mcpServers
+                ) {
+                    #if DEBUG
+                    AppErrorReporter.log(
+                        message: "ToolChainResolver matched \(chain.count)-step chain: \(chain.map(\.tool).joined(separator: " → "))",
+                        context: "ChatService.streamMessage.toolChain"
+                    )
+                    #endif
+                    // Execute each tool in the chain sequentially, accumulating
+                    // results into toolContextLog. Respect the user's tool budget.
+                    for invocation in chain.prefix(remainingToolSteps) {
+                        onToolEvent(Self.friendlyToolSummary(for: invocation.tool))
+                        AnalyticsService.shared.trackToolUsed(toolName: invocation.tool, threadId: threadId)
+                        let (_, contextBlock) = try await executeChatToolCall(invocation)
+                        if let block = contextBlock {
+                            if toolContextLog.isEmpty {
+                                toolContextLog = block
+                            } else {
+                                toolContextLog += "\n\n" + block
+                            }
+                        }
+                    }
+                    // Eagerly cap on mobile.
+                    let chainCap = isMobileDevice ? 4000 : 8000
+                    if toolContextLog.count > chainCap {
+                        toolContextLog = String(toolContextLog.prefix(chainCap))
+                            + "\n... [truncated for device memory]"
+                    }
+                    remainingToolSteps = 0
+                }
+                // Try native tools (current_time, web_search, file.read,
+                // file.list, shell.execute) — keyword matching with semantic
+                // scoring fallback via ToolRelevanceService.
+                // MCP tools are checked last because their fuzzy scoring can
+                // produce false positives.
+                else if let forcedNative = await Self.forceNativeToolCallWithSemantic(
+                    userMessage: message,
+                    enabledTools: toolConfig.enabledTools
+                ) {
                     #if DEBUG
                     AppErrorReporter.log(message: "Pre-executing native tool for local model: \(forcedNative.tool)", context: "ChatService.streamMessage.preExecute")
                     #endif
@@ -617,6 +656,23 @@ actor ChatService {
                 toolContextLog = "[Tool Error] Pre-execution failed: \(error.localizedDescription)"
                 remainingToolSteps = 0
             }
+        }
+
+        // ── Hallucination guard for local models ──────────────────────────────
+        // When a user asks about personal data (email, calendar, etc.)
+        // but no tool was pre-executed, small models will confidently
+        // fabricate an answer. Inject a guard message so the model
+        // knows it must refuse honestly instead of hallucinating.
+        if isLocalModel, toolContextLog.isEmpty,
+           Self.detectPersonalDataQuery(message) {
+            toolContextLog = """
+            [System Notice] The user is asking about personal data (email, calendar, messages, etc.) \
+            that you do NOT have access to. You have no connected tool that can retrieve this data. \
+            Do NOT make up or fabricate any content. Instead, tell the user honestly that you cannot \
+            access their personal data and suggest they connect an appropriate tool (e.g. an MCP \
+            server for email or calendar) in Settings → Connected Apps.
+            """
+            remainingToolSteps = 0
         }
 
         // First phase: while we still have tool budget, let the model decide
@@ -1148,13 +1204,8 @@ actor ChatService {
                 content: "Please provide the concise 3-6 bullet point summary of our conversation now."
             ))
 
-            let routingContext = RoutingContext(
-                task: .chat,
-                requireLocalOnly: false,
-                requireLongContext: false,
-                preferHighQuality: true
-            )
-            guard let descriptor = modelRouter.route(for: routingContext),
+            let (prefProvider, prefModel) = resolveProviderAndModel()
+            guard let descriptor = modelRouter.findExact(providerID: prefProvider, modelID: prefModel),
                   let client = llmClients[descriptor.providerID] else {
                 return
             }
@@ -1178,6 +1229,18 @@ actor ChatService {
             guard !summary.isEmpty else { return }
 
             try await threadStore.updateSummary(forThreadID: threadId, summary: summary)
+
+            _ = try? await MemoryProposalRepository.shared.insertProposal(
+                eventId: nil,
+                covenId: nil,
+                proposedContent: "Thread Summary:\n" + summary,
+                proposedTags: ["summary"],
+                scope: "user",
+                reason: "Automatic summary representing the key facts of a recent thread.",
+                sourceMessageId: nil,
+                proposedBy: "system",
+                title: "Thread Summary"
+            )
         } catch {
             // Thread summaries are an optional optimization. In the local-only
             // client we treat *all* failures as non-fatal and skip logging to
@@ -1199,7 +1262,20 @@ actor ChatService {
     ///  - llm_provider: "openai" | "anthropic" | "google"
     ///  - openai_model / anthropic_model / gemini_model
     private func resolveProviderAndModel() -> (String, String) {
-        let provider = UserDefaults.standard.string(forKey: UserScope.scopedKey("llm_provider"))?.lowercased() ?? "openai"
+        let savedProvider = UserDefaults.standard.string(forKey: UserScope.scopedKey("llm_provider"))?.lowercased()
+
+        // If the saved provider isn't actually configured (e.g. no API key),
+        // or if no provider was ever saved, fall back intelligently to what's available.
+        let provider: String = if let p = savedProvider, llmClients.keys.contains(p) {
+            p
+        } else if llmClients.keys.contains("mlx") {
+            "mlx"
+        } else if let first = llmClients.keys.first {
+            first
+        } else {
+            "openai" // Last resort
+        }
+
         switch provider {
         case "anthropic":
             let fallback = modelRouter.fallbackModel(for: "anthropic") ?? "claude-3-5-sonnet-latest"
@@ -1210,16 +1286,17 @@ actor ChatService {
             let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("gemini_model")) ?? fallback
             return ("google", model)
         case "mlx":
-            let model = UserDefaults.standard.string(forKey: "MLXModelManager.activeModelID") ?? "mlx-community/Qwen3-4B-4bit"
+            let fallback = modelRouter.fallbackModel(for: "mlx") ?? "mlx-community/Qwen3-4B-4bit"
+            let model = UserDefaults.standard.string(forKey: "MLXModelManager.activeModelID") ?? fallback
             return ("mlx", model)
         case "ollama":
             let fallback = modelRouter.fallbackModel(for: "ollama") ?? "llama3.2"
             let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model")) ?? fallback
             return ("ollama", model)
         default:
-            let fallback = modelRouter.fallbackModel(for: "openai") ?? "gpt-4o"
-            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("openai_model")) ?? fallback
-            return ("openai", model)
+            let fallback = modelRouter.fallbackModel(for: provider) ?? "gpt-4o"
+            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("\(provider)_model")) ?? fallback
+            return (provider, model)
         }
     }
 
@@ -1901,8 +1978,11 @@ extension ChatService {
     // MARK: - Forced Native Tool Call
 
     /// For local models, attempt to match the user's message to a native
-    /// tool (current_time, web_search) and construct a forced call.
-    /// Returns `nil` if no native tool is a clear match.
+    /// tool and construct a forced call. Returns `nil` if no native tool
+    /// is a clear match.
+    ///
+    /// Keyword matching covers: current_time, web_search, file.read,
+    /// file.list, and shell.execute.
     nonisolated static func forceNativeToolCall(
         userMessage: String
     ) -> ChatToolInvocation? {
@@ -1914,9 +1994,10 @@ extension ChatService {
             "what day", "today's date", "right now", "time is it",
         ]
         if timePatterns.contains(where: { lower.contains($0) }) {
+            let tz = extractTimezoneFromMessage(lower)
             return ChatToolInvocation(
                 tool: "current_time",
-                input: AnyJSONValue(["timezone": AnyJSONValue("UTC")]),
+                input: AnyJSONValue(["timezone": AnyJSONValue(tz)]),
                 reason: "User asked about time/date"
             )
         }
@@ -1934,7 +2015,359 @@ extension ChatService {
             )
         }
 
+        // File read queries → file.read
+        let fileReadPatterns = [
+            "read the file", "read file", "show the file", "show file",
+            "cat ", "contents of", "what's in the file", "open the file",
+            "display the file", "print the file", "read this file",
+        ]
+        if fileReadPatterns.contains(where: { lower.contains($0) }),
+           let path = extractFilePath(from: userMessage) {
+            return ChatToolInvocation(
+                tool: "file.read",
+                input: AnyJSONValue(["path": AnyJSONValue(path)]),
+                reason: "User asked to read a file"
+            )
+        }
+
+        // Shell command queries → shell.execute
+        // Checked BEFORE file.list because "run `ls -la /tmp`" should
+        // match shell, not file.list (which also matches "ls ").
+        let shellPatterns = [
+            "run ", "execute ", "run the command", "run this command",
+            "run a command", "run the script", "run this script",
+            "in the terminal", "in terminal",
+        ]
+        if shellPatterns.contains(where: { lower.contains($0) }) {
+            let command = extractShellCommand(from: userMessage) ?? userMessage
+            return ChatToolInvocation(
+                tool: "shell.execute",
+                input: AnyJSONValue(["command": AnyJSONValue(command)]),
+                reason: "User asked to run a command"
+            )
+        }
+
+        // File list queries → file.list
+        let fileListPatterns = [
+            "list files", "list the files", "show directory", "show the directory",
+            "what files", "what's in the directory", "what's in the folder",
+            "list directory", "ls ", "list the directory", "show folder",
+        ]
+        if fileListPatterns.contains(where: { lower.contains($0) }) {
+            let path = extractFilePath(from: userMessage) ?? "."
+            return ChatToolInvocation(
+                tool: "file.list",
+                input: AnyJSONValue(["path": AnyJSONValue(path)]),
+                reason: "User asked to list files in a directory"
+            )
+        }
+
         return nil
+    }
+
+    /// Async wrapper around `forceNativeToolCall` that adds a semantic
+    /// scoring fallback via `ToolRelevanceService`. When keyword matching
+    /// finds nothing, this scores all native tools against the user message
+    /// and picks the highest-scoring tool if it exceeds a confidence
+    /// threshold.
+    @MainActor
+    static func forceNativeToolCallWithSemantic(
+        userMessage: String,
+        enabledTools: Set<String>
+    ) async -> ChatToolInvocation? {
+        // Fast path: keyword matching.
+        if let keywordMatch = forceNativeToolCall(userMessage: userMessage) {
+            return keywordMatch
+        }
+
+        // Slow path: semantic scoring via ToolRelevanceService.
+        // Exclude always-loaded tools (current_time, web_search, shell.execute)
+        // because the keyword fast-path above already handles them. Passing them
+        // to selectRelevantNativeTools with a small limit would cause them to
+        // dominate the results and the non-always-loaded candidate would be lost.
+        let candidates = PromptTemplates.toolDefinitions
+            .filter { enabledTools.contains($0.name)
+                && !ToolRelevanceService.alwaysLoadedTools.contains($0.name)
+            }
+        guard !candidates.isEmpty else { return nil }
+
+        let relevanceService = ToolRelevanceService.shared
+        let selected = await relevanceService.selectRelevantNativeTools(
+            userMessage: userMessage,
+            allTools: candidates,
+            limit: 1
+        )
+
+        guard let topTool = selected.first else { return nil }
+
+        let score = await relevanceService.scoreNativeTool(
+            toolName: topTool.name,
+            userMessage: userMessage,
+            allTools: candidates
+        )
+
+        // Require a meaningful score — 0.3 is conservative enough to avoid
+        // false positives while still catching intent the keywords missed.
+        guard score >= 0.3 else { return nil }
+
+        #if DEBUG
+        AppErrorReporter.log(
+            message: "Semantic fallback matched '\(topTool.name)' (score=\(score)) for: \(userMessage.prefix(80))",
+            context: "ChatService.forceNativeToolCallWithSemantic"
+        )
+        #endif
+
+        // Build tool-specific input using the correct parameter keys.
+        // Tools that require complex multi-parameter inputs we can't
+        // reliably extract from a plain message are skipped (return nil).
+        let toolInput: [String: AnyJSONValue]
+        switch topTool.name {
+        case "web_search":
+            toolInput = ["query": AnyJSONValue(userMessage)]
+        case "web_browse":
+            // Try to extract a URL; if none found, skip.
+            guard let url = extractURL(from: userMessage) else { return nil }
+            toolInput = ["url": AnyJSONValue(url)]
+        case "file.read":
+            guard let path = extractFilePath(from: userMessage) else { return nil }
+            toolInput = ["path": AnyJSONValue(path)]
+        case "file.write":
+            // file.write needs both path and content — too complex to extract
+            // from a plain message reliably.
+            return nil
+        case "file.list":
+            let path = extractFilePath(from: userMessage) ?? "."
+            toolInput = ["path": AnyJSONValue(path)]
+        case "shell.execute":
+            let command = extractShellCommand(from: userMessage) ?? userMessage
+            toolInput = ["command": AnyJSONValue(command)]
+        case "current_time":
+            let tz = extractTimezoneFromMessage(userMessage.lowercased())
+            toolInput = ["timezone": AnyJSONValue(tz)]
+        default:
+            // GitHub, Google Drive/Sheets, and other multi-parameter tools
+            // can't be reliably invoked from a plain user message.
+            return nil
+        }
+
+        return ChatToolInvocation(
+            tool: topTool.name,
+            input: AnyJSONValue(toolInput),
+            reason: "Semantic match (score=\(String(format: "%.2f", score)))"
+        )
+    }
+
+    // MARK: - Input Extraction Helpers
+
+    /// Extract a URL from a user message. Uses `NSDataDetector` for robust
+    /// link detection, with fallback to backtick/quoted strings.
+    nonisolated static func extractURL(from message: String) -> String? {
+        // NSDataDetector-based detection.
+        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+            let range = NSRange(message.startIndex..., in: message)
+            if let match = detector.firstMatch(in: message, range: range),
+               let url = match.url {
+                return url.absoluteString
+            }
+        }
+
+        // Backtick-fenced URL
+        if let start = message.range(of: "`"),
+           let end = message[start.upperBound...].range(of: "`") {
+            let candidate = String(message[start.upperBound ..< end.lowerBound])
+            if candidate.hasPrefix("http://") || candidate.hasPrefix("https://") {
+                return candidate
+            }
+        }
+
+        // Quoted URL
+        if let start = message.range(of: "\""),
+           let end = message[start.upperBound...].range(of: "\"") {
+            let candidate = String(message[start.upperBound ..< end.lowerBound])
+            if candidate.hasPrefix("http://") || candidate.hasPrefix("https://") {
+                return candidate
+            }
+        }
+
+        return nil
+    }
+
+    /// Extract a file path from a user message. Looks for absolute paths
+    /// (`/...` or `~/...`), quoted strings, and backtick-fenced spans.
+    nonisolated static func extractFilePath(from message: String) -> String? {
+        // Try absolute paths first (e.g. /Users/me/file.txt, ~/Documents)
+        let pathRegex = try? NSRegularExpression(
+            pattern: "(?:~|/)[\\w/.\\-]+",
+            options: []
+        )
+        if let match = pathRegex?.firstMatch(
+            in: message,
+            range: NSRange(message.startIndex..., in: message)
+        ) {
+            let range = Range(match.range, in: message)!
+            return String(message[range])
+        }
+
+        // Try backtick-fenced paths
+        if let start = message.range(of: "`"),
+           let end = message[start.upperBound...].range(of: "`") {
+            let path = String(message[start.upperBound ..< end.lowerBound])
+            if !path.isEmpty { return path }
+        }
+
+        // Try quoted paths
+        if let start = message.range(of: "\""),
+           let end = message[start.upperBound...].range(of: "\"") {
+            let path = String(message[start.upperBound ..< end.lowerBound])
+            if !path.isEmpty { return path }
+        }
+
+        return nil
+    }
+
+    /// Extract a shell command from a user message. Tries backtick fences
+    /// and quoted strings before falling back to nil.
+    nonisolated static func extractShellCommand(from message: String) -> String? {
+        // Backtick-fenced command
+        if let start = message.range(of: "`"),
+           let end = message[start.upperBound...].range(of: "`") {
+            let cmd = String(message[start.upperBound ..< end.lowerBound])
+            if !cmd.isEmpty { return cmd }
+        }
+
+        // Quoted command
+        if let start = message.range(of: "\""),
+           let end = message[start.upperBound...].range(of: "\"") {
+            let cmd = String(message[start.upperBound ..< end.lowerBound])
+            if !cmd.isEmpty { return cmd }
+        }
+
+        return nil
+    }
+
+    // MARK: - Personal Data Query Detection
+
+    /// Returns `true` if the user is asking about personal data that requires
+    /// external access (email, calendar, messages, bank statements, etc.).
+    /// Used to inject a hallucination guard for local models that would
+    /// otherwise confidently fabricate answers about user-specific content.
+    nonisolated static func detectPersonalDataQuery(_ userMessage: String) -> Bool {
+        let lower = userMessage.lowercased()
+        let personalPatterns = [
+            // Email
+            "my email", "my mail", "my inbox", "my gmail",
+            "latest email", "last email", "recent email",
+            "unread email", "unread mail",
+            "email from", "mail from",
+            // Calendar / schedule
+            "my calendar", "my schedule", "my meeting",
+            "my appointment", "my event",
+            "next meeting", "upcoming meeting",
+            // Messages
+            "my messages", "my texts", "my sms",
+            "my slack", "my discord",
+            "my whatsapp", "my telegram",
+            // Notifications
+            "my notification", "my alert",
+            // Finance
+            "my bank", "my balance", "my transaction",
+            "my account balance",
+            // Social
+            "my tweet", "my post", "my feed",
+            "my instagram", "my facebook"
+        ]
+        return personalPatterns.contains(where: { lower.contains($0) })
+    }
+
+    // MARK: - Timezone Extraction
+
+    /// Map common city and region names mentioned in a user's message to
+    /// IANA timezone identifiers. Returns the device's local timezone
+    /// identifier when no city is recognised.
+    nonisolated static func extractTimezoneFromMessage(_ lowerMessage: String) -> String {
+        // Lightweight lookup — covers the most commonly asked cities.
+        // Keys are lowercase substrings to match against the message.
+        let cityToTimezone: [(keyword: String, tz: String)] = [
+            // Asia
+            ("bangkok", "Asia/Bangkok"),
+            ("tokyo", "Asia/Tokyo"),
+            ("japan", "Asia/Tokyo"),
+            ("seoul", "Asia/Seoul"),
+            ("korea", "Asia/Seoul"),
+            ("shanghai", "Asia/Shanghai"),
+            ("beijing", "Asia/Shanghai"),
+            ("china", "Asia/Shanghai"),
+            ("hong kong", "Asia/Hong_Kong"),
+            ("singapore", "Asia/Singapore"),
+            ("mumbai", "Asia/Kolkata"),
+            ("delhi", "Asia/Kolkata"),
+            ("india", "Asia/Kolkata"),
+            ("dubai", "Asia/Dubai"),
+            ("taipei", "Asia/Taipei"),
+            ("taiwan", "Asia/Taipei"),
+            ("jakarta", "Asia/Jakarta"),
+            ("kuala lumpur", "Asia/Kuala_Lumpur"),
+            // Europe
+            ("london", "Europe/London"),
+            ("paris", "Europe/Paris"),
+            ("berlin", "Europe/Berlin"),
+            ("germany", "Europe/Berlin"),
+            ("amsterdam", "Europe/Amsterdam"),
+            ("rome", "Europe/Rome"),
+            ("madrid", "Europe/Madrid"),
+            ("moscow", "Europe/Moscow"),
+            ("istanbul", "Europe/Istanbul"),
+            ("zurich", "Europe/Zurich"),
+            ("stockholm", "Europe/Stockholm"),
+            ("lisbon", "Europe/Lisbon"),
+            ("warsaw", "Europe/Warsaw"),
+            ("vienna", "Europe/Vienna"),
+            ("bucharest", "Europe/Bucharest"),
+            // Americas
+            ("new york", "America/New_York"),
+            ("los angeles", "America/Los_Angeles"),
+            ("chicago", "America/Chicago"),
+            ("denver", "America/Denver"),
+            ("san francisco", "America/Los_Angeles"),
+            ("toronto", "America/Toronto"),
+            ("vancouver", "America/Vancouver"),
+            ("mexico city", "America/Mexico_City"),
+            ("são paulo", "America/Sao_Paulo"),
+            ("sao paulo", "America/Sao_Paulo"),
+            ("buenos aires", "America/Argentina/Buenos_Aires"),
+            ("bogota", "America/Bogota"),
+            ("lima", "America/Lima"),
+            // Oceania
+            ("sydney", "Australia/Sydney"),
+            ("melbourne", "Australia/Melbourne"),
+            ("auckland", "Pacific/Auckland"),
+            ("new zealand", "Pacific/Auckland"),
+            // Africa
+            ("cairo", "Africa/Cairo"),
+            ("johannesburg", "Africa/Johannesburg"),
+            ("lagos", "Africa/Lagos"),
+            ("nairobi", "Africa/Nairobi"),
+            // Named zones
+            ("utc", "UTC"),
+            ("gmt", "GMT"),
+            ("est", "America/New_York"),
+            ("pst", "America/Los_Angeles"),
+            ("cst", "America/Chicago"),
+            ("mst", "America/Denver"),
+            ("cet", "Europe/Paris"),
+            ("jst", "Asia/Tokyo"),
+            ("ist", "Asia/Kolkata"),
+            ("aest", "Australia/Sydney"),
+        ]
+
+        for entry in cityToTimezone {
+            if lowerMessage.contains(entry.keyword) {
+                return entry.tz
+            }
+        }
+
+        // No city recognised — use the device's local timezone.
+        return TimeZone.current.identifier
     }
 
     // MARK: - Response Text Deduplication (ported from backend _dedupe_response_text)

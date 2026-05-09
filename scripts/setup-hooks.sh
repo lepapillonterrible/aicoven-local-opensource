@@ -37,7 +37,7 @@ if command -v swiftformat >/dev/null 2>&1; then
   echo "🎨 Running SwiftFormat..."
   echo "$STAGED_SWIFT" | while read -r file; do
     if [[ -f "$REPO_ROOT/$file" ]]; then
-      swiftformat "$REPO_ROOT/$file"
+      swiftformat --cache ignore "$REPO_ROOT/$file"
       git add "$REPO_ROOT/$file"
     fi
   done

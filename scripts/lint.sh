@@ -10,7 +10,8 @@ cd "$REPO_ROOT"
 # 1) SwiftFormat (if available) - auto-format code
 if command -v swiftformat >/dev/null 2>&1; then
   echo "Running swiftformat..."
-  swiftformat swift/AICoven
+  # Ignore disk cache so results match CI (`swiftformat … --lint --cache ignore`).
+  swiftformat swift/AICoven --cache ignore
 else
   echo "swiftformat not found; skipping formatting. Install via Homebrew (brew install swiftformat) to enable."
 fi

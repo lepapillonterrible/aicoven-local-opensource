@@ -5,7 +5,6 @@ struct WorkspaceSidebarView: View {
     @Binding var selectedCoven: Coven?
     @Binding var openTabs: [WorkspaceTab]
     @Binding var activeTabId: String?
-    @Binding var threadRefreshTrigger: Bool
     /// Shared binding for showing the new thread sheet (controlled by parent WorkspaceView)
     @Binding var showNewThreadSheet: Bool
     let roles: [Role]
@@ -19,32 +18,16 @@ struct WorkspaceSidebarView: View {
     @State private var searchText = ""
     @State private var showNewCovenSheet = false
     @State private var isExpanded = true // Expanded by default so users can select covens
+    @State private var threadsSectionExpanded = true
+    @State private var rolesSectionExpanded = true
 
     var body: some View {
         VStack(spacing: 0) {
-            // Workspace switcher at top
-            WorkspaceSwitcher(
-                currentWorkspace: .covens,
-                onSwitch: onSwitchToHome,
-                isExpanded: isExpanded
-            )
-            .padding(.horizontal, Spacing.sm)
-            .padding(.vertical, Spacing.sm)
-
-            GradientDivider()
-
-            // Collapse button
             HStack {
-                if isExpanded, let coven = selectedCoven {
-                    IconBadge(
-                        icon: "sparkles",
-                        size: 20,
-                        color: .aicovenTeal
-                    )
-                    Text(coven.name)
-                        .font(.aicovenH3)
+                if isExpanded {
+                    Image(systemName: "person.3.fill")
+                        .font(.system(size: 18, weight: .semibold))
                         .foregroundColor(.aicovenTextPrimary)
-                        .lineLimit(1)
                 }
 
                 Spacer()
@@ -57,114 +40,106 @@ struct WorkspaceSidebarView: View {
                 }
                 .buttonStyle(.plain)
             }
-            .padding(Spacing.md)
-
-            GradientDivider()
+            .padding(.horizontal, Spacing.md)
+            .padding(.vertical, Spacing.sm)
+            .background(Color.aicovenSurfaceElevated.opacity(0.45))
 
             if isExpanded {
-                // Coven selector
-                CovenSelectorView(
-                    selectedCoven: $selectedCoven,
-                    covens: $covens,
-                    showNewCovenSheet: $showNewCovenSheet
-                )
-                .padding(Spacing.md)
+                ScrollView {
+                    VStack(spacing: Spacing.lg) {
+                        CovenSelectorView(
+                            selectedCoven: $selectedCoven,
+                            covens: $covens,
+                            showNewCovenSheet: $showNewCovenSheet,
+                            onSwitchToHome: onSwitchToHome
+                        )
 
-                GradientDivider()
-
-                // Thread management section
-                ThreadManagementView(
-                    selectedCoven: $selectedCoven,
-                    openTabs: $openTabs,
-                    activeTabId: $activeTabId,
-                    threads: $threads,
-                    searchText: $searchText,
-                    showNewThreadSheet: $showNewThreadSheet
-                )
-
-                GradientDivider()
-
-                // Roles section (if coven selected)
-                if selectedCoven != nil {
-                    RoleManagementView(
-                        selectedCoven: $selectedCoven,
-                        roles: roles,
-                        onAddRole: onAddRole,
-                        onEditRole: onEditRole,
-                        onDeleteRole: onDeleteRole,
-                        onTapRole: onTapRole
-                    )
-                }
-
-                GradientDivider()
-
-                // Integrations section
-                VStack(spacing: Spacing.xs) {
-                    HStack {
-                        Text("Integrations")
-                            .font(.aicovenH3)
+                        if let coven = selectedCoven {
+                            Button {
+                                openMemoryTab(covenId: coven.id)
+                            } label: {
+                                HStack(spacing: Spacing.xs) {
+                                    Image(systemName: "brain")
+                                        .font(.system(size: 14, weight: .semibold))
+                                    Text("Memory")
+                                        .font(.aicovenBodyMedium)
+                                    Spacer()
+                                    Text(coven.name)
+                                        .font(.aicovenCaption)
+                                        .foregroundColor(.aicovenTextTertiary)
+                                        .lineLimit(1)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, Spacing.sm)
+                                .padding(.horizontal, Spacing.sm)
+                                .background(Color.aicovenGlass)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: BorderRadius.md)
+                                        .strokeBorder(Color.aicovenBorder, lineWidth: 1)
+                                )
+                                .cornerRadius(BorderRadius.md)
+                            }
+                            .buttonStyle(.plain)
                             .foregroundColor(.aicovenTextPrimary)
-                        Spacer()
+                        }
+
+                        ThreadManagementView(
+                            selectedCoven: $selectedCoven,
+                            openTabs: $openTabs,
+                            activeTabId: $activeTabId,
+                            threads: $threads,
+                            searchText: $searchText,
+                            showNewThreadSheet: $showNewThreadSheet,
+                            isSectionExpanded: $threadsSectionExpanded
+                        )
+
+                        if selectedCoven != nil {
+                            RoleManagementView(
+                                selectedCoven: $selectedCoven,
+                                roles: roles,
+                                onAddRole: onAddRole,
+                                onEditRole: onEditRole,
+                                onDeleteRole: onDeleteRole,
+                                onTapRole: onTapRole,
+                                isSectionExpanded: $rolesSectionExpanded
+                            )
+                        }
+
+                        #if os(macOS)
+                        WorkspaceToolsSection(
+                            onOpenTab: openSidebarTab,
+                            isCollapsible: true
+                        )
+                        #endif
                     }
                     .padding(.horizontal, Spacing.md)
-                    .padding(.vertical, Spacing.sm)
-
-                    Button(action: { openTab(.connectedApps) }) {
-                        HStack(spacing: Spacing.xs) {
-                            Image(systemName: "app.connected.to.app.below.fill")
-                                .font(.system(size: 14))
-                            Text("Connected Apps")
-                                .font(.aicovenBodySmall)
-                            Spacer()
-                        }
-                        .padding(.horizontal, Spacing.md)
-                        .padding(.vertical, Spacing.sm)
-                        .background(Color.aicovenGlass)
-                        .foregroundColor(.aicovenTextPrimary)
-                        .cornerRadius(BorderRadius.sm)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, Spacing.sm)
-
-                    Button(action: { openTab(.mcpServers) }) {
-                        HStack(spacing: Spacing.xs) {
-                            Image(systemName: "server.rack")
-                                .font(.system(size: 14))
-                            Text("MCP Servers")
-                                .font(.aicovenBodySmall)
-                            Spacer()
-                        }
-                        .padding(.horizontal, Spacing.md)
-                        .padding(.vertical, Spacing.sm)
-                        .background(Color.aicovenGlass)
-                        .foregroundColor(.aicovenTextPrimary)
-                        .cornerRadius(BorderRadius.sm)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, Spacing.sm)
-                    .padding(.bottom, Spacing.md)
+                    .padding(.top, Spacing.md)
+                    .padding(.bottom, Spacing.lg)
                 }
             }
         }
-        .frame(width: isExpanded ? 280 : 60)
-        .background(Color.aicovenGlass)
+        .frame(width: isExpanded ? 300 : 64)
+        .background(Color.aicovenSurfaceElevated.opacity(0.62))
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(Color.aicovenBorder)
+                .frame(width: 1)
+        }
         .animation(.easeInOut(duration: 0.2), value: isExpanded)
         .task {
             await loadCovens()
         }
-        .onChange(of: selectedCoven) { _, newValue in
-            Task {
-                if let covenId = newValue?.id {
-                    await loadThreads(covenId: covenId)
-                }
+        // Load threads for whatever coven is selected — including the first
+        // paint when ``WorkspaceView`` was constructed with
+        // ``initialCoven``/``initialThread`` from the home "Recent" list.
+        // ``onChange(of: selectedCoven)`` alone misses that case because there
+        // is no transition (nil → coven) for the binding to observe.
+        .task(id: selectedCoven?.id) {
+            guard let covenId = selectedCoven?.id else {
+                threads = []
+                return
             }
-        }
-        .onChange(of: threadRefreshTrigger) { _, _ in
-            Task {
-                if let covenId = selectedCoven?.id {
-                    await loadThreads(covenId: covenId)
-                }
-            }
+            await loadThreads(covenId: covenId)
         }
         .onReceive(NotificationCenter.default.publisher(for: .didCreateThread)) { _ in
             Task {
@@ -174,13 +149,13 @@ struct WorkspaceSidebarView: View {
             }
         }
         .sheet(isPresented: $showNewCovenSheet) {
-            // Use CreateCovenSheet which checks Creator entitlement
-            CreateCovenSheet(onCreated: { _ in
-                Task {
-                    await loadCovens()
+            NavigationStack {
+                NewCovenView {
+                    Task {
+                        await loadCovens()
+                    }
                 }
-            })
-            .environmentObject(StoreService.shared)
+            }
         }
         .sheet(isPresented: $showNewThreadSheet) {
             NavigationStack {
@@ -203,12 +178,31 @@ struct WorkspaceSidebarView: View {
         }
     }
 
-    /// Load covens from local database
+    /// Load covens from API
     private func loadCovens() async {
         do {
-            covens = try await CovenService.shared.loadCovens()
+            let loadedCovens = try await CovenService.shared.loadCovens()
+            await MainActor.run {
+                covens = loadedCovens
+                if let selected = selectedCoven,
+                   !loadedCovens.contains(where: { $0.id == selected.id }) {
+                    selectedCoven = loadedCovens.first
+                } else if selectedCoven == nil {
+                    selectedCoven = loadedCovens.first
+                }
+            }
+            if loadedCovens.isEmpty {
+                await MainActor.run {
+                    onSwitchToHome()
+                }
+            }
         } catch {
             print("❌ Failed to load covens: \(error.localizedDescription)")
+            await MainActor.run {
+                covens = []
+                selectedCoven = nil
+                onSwitchToHome()
+            }
         }
     }
 
@@ -221,7 +215,7 @@ struct WorkspaceSidebarView: View {
         }
     }
 
-    private func openTab(_ type: WorkspaceTabType) {
+    private func openSidebarTab(_ type: WorkspaceTabType) {
         if let existingTab = openTabs.first(where: { $0.type == type }) {
             activeTabId = existingTab.id
             return
@@ -229,14 +223,38 @@ struct WorkspaceSidebarView: View {
 
         let tab: WorkspaceTab
         switch type {
+        case .profile:
+            tab = .profile
+        case .settings:
+            tab = .settings
+        case .providerKeys:
+            tab = .providerKeys
+        case .budget:
+            tab = .budget
+        case .usage:
+            tab = .usage
         case .connectedApps:
             tab = .connectedApps
-        case .mcpServers:
-            tab = .mcpServers
+        case .terms:
+            tab = .terms
+        case .privacy:
+            tab = .privacy
         default:
             return
         }
 
+        openTabs.append(tab)
+        activeTabId = tab.id
+    }
+
+    private func openMemoryTab(covenId: String?) {
+        let type = WorkspaceTabType.memoryList(covenId: covenId)
+        if let existingTab = openTabs.first(where: { $0.type == type }) {
+            activeTabId = existingTab.id
+            return
+        }
+
+        let tab = WorkspaceTab.memoryList(covenId: covenId)
         openTabs.append(tab)
         activeTabId = tab.id
     }
@@ -249,6 +267,7 @@ struct CovenSelectorView: View {
     @Binding var selectedCoven: Coven?
     @Binding var covens: [Coven]
     @Binding var showNewCovenSheet: Bool
+    let onSwitchToHome: () -> Void
     @State private var showCovenMenu = false
 
     var body: some View {
@@ -270,9 +289,9 @@ struct CovenSelectorView: View {
                                 .font(.aicovenH3)
                                 .foregroundColor(.aicovenTextPrimary)
 
-                            Text("\(covens.count) covens")
+                            Text("\(covens.count) available")
                                 .font(.aicovenCaption)
-                                .foregroundColor(Color(hex: "#9CA3AF"))
+                                .foregroundColor(.aicovenTextTertiary)
                         }
 
                         Spacer()
@@ -281,6 +300,8 @@ struct CovenSelectorView: View {
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextSecondary)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .glassMorphism(cornerRadius: BorderRadius.md, padding: Spacing.sm)
@@ -293,47 +314,14 @@ struct CovenSelectorView: View {
                     selectedCoven = coven
                 })
             }
-
-            // Quick actions
-            HStack(spacing: Spacing.xs) {
-                // New coven button
-                Button {
-                    showNewCovenSheet = true
-                } label: {
-                    HStack(spacing: Spacing.xxs) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 10))
-                        Text("New")
-                            .font(.aicovenCaption)
-                    }
-                    .foregroundColor(.aicovenTeal)
-                }
-                .buttonStyle(.plain)
-
-                Spacer()
-
-                // Edit coven button
-                if selectedCoven != nil {
-                    Button {
-                        // TODO: Edit coven
-                    } label: {
-                        HStack(spacing: Spacing.xxs) {
-                            Image(systemName: "gear")
-                                .font(.system(size: 10))
-                            Text("Edit")
-                                .font(.aicovenCaption)
-                        }
-                        .foregroundColor(.aicovenTextSecondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
         }
         .popover(isPresented: $showCovenMenu) {
             CovenListPopover(
                 covens: covens,
                 selectedCoven: $selectedCoven,
-                showCovenMenu: $showCovenMenu
+                showCovenMenu: $showCovenMenu,
+                onSwitchToHome: onSwitchToHome,
+                onCreateCoven: { showNewCovenSheet = true }
             )
         }
     }
@@ -344,9 +332,57 @@ struct CovenListPopover: View {
     let covens: [Coven]
     @Binding var selectedCoven: Coven?
     @Binding var showCovenMenu: Bool
+    let onSwitchToHome: () -> Void
+    let onCreateCoven: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
+            Text("Covens")
+                .font(.aicovenCaption)
+                .foregroundColor(.aicovenTextTertiary)
+                .padding(.horizontal, Spacing.sm)
+                .padding(.top, Spacing.xs)
+
+            Button {
+                showCovenMenu = false
+                onSwitchToHome()
+            } label: {
+                HStack(spacing: Spacing.sm) {
+                    Image(systemName: "sparkles")
+                        .font(.aicovenBodySmall)
+                        .foregroundColor(.aicovenTeal)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Strix")
+                            .font(.aicovenBody)
+                            .foregroundColor(.aicovenTextPrimary)
+                        Text("Default coven")
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextTertiary)
+                    }
+                    .font(.aicovenBody)
+                    Spacer()
+                }
+                .padding(.horizontal, Spacing.sm)
+                .padding(.vertical, Spacing.xs)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: BorderRadius.sm)
+                        .fill(Color.clear)
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Rectangle()
+                .fill(Color.aicovenBorder)
+                .frame(height: 1)
+                .padding(.vertical, Spacing.xs)
+
+            Text("Covens Pro")
+                .font(.aicovenCaption)
+                .foregroundColor(.aicovenTextTertiary)
+                .padding(.horizontal, Spacing.sm)
+
             ForEach(covens) { coven in
                 CovenMenuItem(
                     coven: coven,
@@ -357,6 +393,26 @@ struct CovenListPopover: View {
                     }
                 )
             }
+
+            Button {
+                showCovenMenu = false
+                onCreateCoven()
+            } label: {
+                HStack(spacing: Spacing.sm) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.aicovenBodySmall)
+                        .foregroundColor(.aicovenTeal)
+                    Text("New Coven")
+                        .font(.aicovenBody)
+                        .foregroundColor(.aicovenTextPrimary)
+                    Spacer()
+                }
+                .padding(.horizontal, Spacing.sm)
+                .padding(.vertical, Spacing.xs)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
         .padding(Spacing.xs)
         .frame(width: 240)
@@ -393,6 +449,8 @@ struct CovenMenuItem: View {
             }
             .padding(.horizontal, Spacing.sm)
             .padding(.vertical, Spacing.xs)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
             .background(
                 RoundedRectangle(cornerRadius: BorderRadius.sm)
                     .fill(isHovering ? Color.aicovenGlass.opacity(0.5) : Color.clear)
@@ -488,6 +546,7 @@ struct ThreadManagementView: View {
     @Binding var threads: [Thread]
     @Binding var searchText: String
     @Binding var showNewThreadSheet: Bool
+    @Binding var isSectionExpanded: Bool
 
     var filteredThreads: [Thread] {
         if searchText.isEmpty {
@@ -497,71 +556,89 @@ struct ThreadManagementView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Header
+        VStack(spacing: Spacing.sm) {
             HStack {
                 Text("Threads")
                     .font(.aicovenH3)
                     .foregroundColor(.aicovenTextPrimary)
+                Text("\(filteredThreads.count)")
+                    .font(.aicovenCaption)
+                    .foregroundColor(.aicovenTextTertiary)
 
                 Spacer()
 
                 Button {
                     showNewThreadSheet = true
                 } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 12))
-                        .foregroundColor(.aicovenTeal)
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundColor(selectedCoven == nil ? .aicovenTextTertiary : .aicovenTeal)
                 }
                 .buttonStyle(.plain)
                 .disabled(selectedCoven == nil)
+
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        isSectionExpanded.toggle()
+                    }
+                } label: {
+                    Image(systemName: isSectionExpanded ? "chevron.down" : "chevron.right")
+                        .font(.aicovenCaption)
+                        .foregroundColor(.aicovenTextTertiary)
+                }
+                .buttonStyle(.plain)
             }
-            .padding(.horizontal, Spacing.md)
-            .padding(.vertical, Spacing.sm)
+            .padding(.horizontal, Spacing.sm)
 
-            // Search bar
-            HStack(spacing: Spacing.xs) {
-                Image(systemName: "magnifyingglass")
-                    .font(.aicovenCaption)
-                    .foregroundColor(.aicovenTextTertiary)
+            if isSectionExpanded {
+                HStack(spacing: Spacing.xs) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.aicovenCaption)
+                        .foregroundColor(.aicovenTextTertiary)
 
-                TextField("Search threads", text: $searchText)
-                    .font(.aicovenBodySmall)
-                    .textFieldStyle(.plain)
-            }
-            .padding(Spacing.sm)
-            .background(Color.aicovenGlass)
-            .cornerRadius(BorderRadius.sm)
-            .padding(.horizontal, Spacing.md)
-            .padding(.bottom, Spacing.sm)
+                    TextField("Search threads", text: $searchText)
+                        .font(.aicovenBodySmall)
+                        .textFieldStyle(.plain)
+                }
+                .padding(Spacing.sm)
+                .background(Color.aicovenSurfaceElevated)
+                .overlay(
+                    RoundedRectangle(cornerRadius: BorderRadius.sm)
+                        .stroke(Color.aicovenBorder, lineWidth: 1)
+                )
+                .cornerRadius(BorderRadius.sm)
+                .padding(.horizontal, Spacing.sm)
 
-            // Thread list
-            ScrollView {
-                LazyVStack(spacing: Spacing.xxs) {
-                    ForEach(filteredThreads) { thread in
-                        ThreadListItem(
-                            thread: thread,
-                            isSelected: activeTabId == thread.id,
-                            onDelete: {
-                                deleteThread(thread)
+                ScrollView {
+                    LazyVStack(spacing: Spacing.xxs) {
+                        if selectedCoven == nil {
+                            EmptyThreadsView(message: "Select a coven to browse threads")
+                        } else if filteredThreads.isEmpty {
+                            EmptyThreadsView(message: "No threads yet, create one to begin")
+                        } else {
+                            ForEach(filteredThreads) { thread in
+                                ThreadListItem(
+                                    thread: thread,
+                                    isSelected: activeTabId == thread.id,
+                                    onDelete: {
+                                        deleteThread(thread)
+                                    }
+                                )
+                                .onTapGesture {
+                                    let tab = WorkspaceTab.thread(thread)
+                                    if !openTabs.contains(where: { $0.id == thread.id }) {
+                                        openTabs.append(tab)
+                                    }
+                                    activeTabId = thread.id
+                                }
                             }
-                        )
-                        .onTapGesture {
-                            // Create a tab for this thread
-                            let tab = WorkspaceTab.thread(thread)
-                            // Open thread in new tab if not already open
-                            if !openTabs.contains(where: { $0.id == thread.id }) {
-                                openTabs.append(tab)
-                            }
-                            // Set as active tab
-                            activeTabId = thread.id
                         }
                     }
+                    .padding(.horizontal, Spacing.xs)
                 }
-                .padding(.horizontal, Spacing.sm)
             }
         }
-        .frame(maxHeight: .infinity)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     private func deleteThread(_ thread: Thread) {
@@ -598,12 +675,11 @@ struct ThreadListItem: View {
     @State private var isHovering = false
 
     var body: some View {
-        HStack(spacing: Spacing.xs) {
-            IconBadge(
-                icon: "message",
-                size: 24,
-                color: isSelected ? .aicovenTeal : .aicovenPurple
-            )
+        HStack(spacing: Spacing.sm) {
+            Image(systemName: "bubble.left.and.bubble.right.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(isSelected ? .aicovenTeal : .aicovenTextTertiary)
+                .frame(width: 16, alignment: .center)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(thread.title ?? "Untitled")
@@ -636,7 +712,7 @@ struct ThreadListItem: View {
                     if let updatedAt = thread.updatedAt {
                         Text(relativeTime(from: updatedAt))
                             .font(.aicovenCaption)
-                            .foregroundColor(Color(hex: "#9CA3AF"))
+                            .foregroundColor(.aicovenTextTertiary)
                     }
                 }
                 .lineLimit(1)
@@ -644,10 +720,19 @@ struct ThreadListItem: View {
 
             Spacer()
         }
-        .padding(Spacing.xs)
+        .padding(.horizontal, Spacing.sm)
+        .padding(.vertical, Spacing.xs)
         .background(
             RoundedRectangle(cornerRadius: BorderRadius.sm)
-                .fill(isSelected ? Color.aicovenGlass : (isHovering ? Color.aicovenGlass.opacity(0.5) : Color.clear))
+                .fill(
+                    isSelected
+                        ? Color.aicovenSurfaceElevated
+                        : (isHovering ? Color.aicovenGlass.opacity(0.4) : Color.clear)
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: BorderRadius.sm)
+                .stroke(isSelected ? Color.aicovenBorder : Color.clear, lineWidth: 1)
         )
         .contentShape(Rectangle())
         .contextMenu {
@@ -696,14 +781,17 @@ struct RoleManagementView: View {
     let onEditRole: (Role) -> Void
     let onDeleteRole: (Role) -> Void
     let onTapRole: (Role) -> Void
+    @Binding var isSectionExpanded: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Header
+        VStack(spacing: Spacing.sm) {
             HStack {
-                Text("Agent Roles")
+                Text("Agents")
                     .font(.aicovenH3)
                     .foregroundColor(.aicovenTextPrimary)
+                Text("\(roles.count)")
+                    .font(.aicovenCaption)
+                    .foregroundColor(.aicovenTextTertiary)
 
                 Spacer()
 
@@ -712,36 +800,47 @@ struct RoleManagementView: View {
                         onAddRole(coven.id)
                     }
                 } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 12))
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 14))
                         .foregroundColor(.aicovenTeal)
                 }
                 .buttonStyle(.plain)
                 .disabled(selectedCoven == nil)
-            }
-            .padding(.horizontal, Spacing.md)
-            .padding(.vertical, Spacing.sm)
 
-            // Role list
-            ScrollView {
-                LazyVStack(spacing: Spacing.xxs) {
-                    if roles.isEmpty {
-                        EmptyRolesView()
-                    } else {
-                        ForEach(roles) { role in
-                            RoleListItemWithMenu(
-                                role: role,
-                                onTap: { onTapRole(role) },
-                                onEdit: { onEditRole(role) },
-                                onDelete: { onDeleteRole(role) }
-                            )
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        isSectionExpanded.toggle()
+                    }
+                } label: {
+                    Image(systemName: isSectionExpanded ? "chevron.down" : "chevron.right")
+                        .font(.aicovenCaption)
+                        .foregroundColor(.aicovenTextTertiary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, Spacing.sm)
+
+            if isSectionExpanded {
+                ScrollView {
+                    LazyVStack(spacing: Spacing.xxs) {
+                        if roles.isEmpty {
+                            EmptyRolesView()
+                        } else {
+                            ForEach(roles) { role in
+                                RoleListItemWithMenu(
+                                    role: role,
+                                    onTap: { onTapRole(role) },
+                                    onEdit: { onEditRole(role) },
+                                    onDelete: { onDeleteRole(role) }
+                                )
+                            }
                         }
                     }
+                    .padding(.horizontal, Spacing.xs)
                 }
-                .padding(.horizontal, Spacing.sm)
             }
         }
-        .frame(maxHeight: 200)
+        .frame(maxHeight: 220, alignment: .top)
     }
 }
 
@@ -755,9 +854,13 @@ struct RoleListItemWithMenu: View {
 
     var body: some View {
         HStack(spacing: Spacing.xs) {
-            // Emoji or default icon
-            Text(role.emoji ?? "🤖")
-                .font(.system(size: 24))
+            ZStack {
+                Circle()
+                    .fill(Color.aicovenGlass)
+                    .frame(width: 28, height: 28)
+                Text(role.emoji ?? "🤖")
+                    .font(.system(size: 16))
+            }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(role.name)
@@ -767,16 +870,17 @@ struct RoleListItemWithMenu: View {
                 if let model = role.model {
                     Text(model)
                         .font(.aicovenCaption)
-                        .foregroundColor(Color(hex: "#9CA3AF"))
+                        .foregroundColor(.aicovenTextTertiary)
                 }
             }
 
             Spacer()
         }
-        .padding(Spacing.xs)
+        .padding(.horizontal, Spacing.sm)
+        .padding(.vertical, Spacing.xs)
         .background(
             RoundedRectangle(cornerRadius: BorderRadius.sm)
-                .fill(isHovering ? Color.aicovenGlass.opacity(0.5) : Color.clear)
+                .fill(isHovering ? Color.aicovenGlass.opacity(0.4) : Color.clear)
         )
         .contentShape(Rectangle())
         .onTapGesture {
@@ -811,10 +915,115 @@ struct EmptyRolesView: View {
                 .font(.system(size: 32))
                 .foregroundColor(.aicovenTextTertiary)
 
-            Text("No agent roles yet")
+            Text("No agents yet")
                 .font(.aicovenCaption)
                 .foregroundColor(.aicovenTextSecondary)
         }
         .padding(Spacing.lg)
+    }
+}
+
+struct WorkspaceToolsSection: View {
+    let onOpenTab: (WorkspaceTabType) -> Void
+    var isCollapsible: Bool = false
+    @State private var expanded: Bool = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            Button {
+                if isCollapsible {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        expanded.toggle()
+                    }
+                }
+            } label: {
+                HStack(spacing: Spacing.xs) {
+                    Text("Workspace")
+                        .font(.aicovenH3)
+                        .foregroundColor(.aicovenTextPrimary)
+                    Spacer()
+                    if isCollapsible {
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextTertiary)
+                    }
+                }
+                .padding(.horizontal, Spacing.sm)
+            }
+            .buttonStyle(.plain)
+            .disabled(!isCollapsible)
+
+            if expanded {
+                WorkspaceToolRow(icon: "key", title: "Provider Keys") { onOpenTab(.providerKeys) }
+                WorkspaceToolRow(icon: "chart.bar", title: "Budgets & Usage") { onOpenTab(.usage) }
+                WorkspaceToolRow(
+                    icon: "app.connected.to.app.below.fill",
+                    title: "Connected Apps"
+                ) { onOpenTab(.connectedApps) }
+            }
+        }
+        .padding(Spacing.sm)
+        .background(Color.aicovenSurfaceElevated.opacity(0.55))
+        .overlay(
+            RoundedRectangle(cornerRadius: BorderRadius.md)
+                .stroke(Color.aicovenBorder, lineWidth: 1)
+        )
+        .cornerRadius(BorderRadius.md)
+        .onAppear {
+            if isCollapsible {
+                expanded = false
+            }
+        }
+    }
+}
+
+struct WorkspaceToolRow: View {
+    let icon: String
+    let title: String
+    var isDestructive: Bool = false
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Spacing.sm) {
+                Image(systemName: icon)
+                    .font(.aicovenBodySmall)
+                    .frame(width: 16)
+                Text(title)
+                    .font(.aicovenBodySmall)
+                Spacer()
+            }
+            .foregroundColor(isDestructive ? .aicovenError : .aicovenTextSecondary)
+            .padding(.horizontal, Spacing.sm)
+            .padding(.vertical, Spacing.xs)
+            .background(
+                RoundedRectangle(cornerRadius: BorderRadius.sm)
+                    .fill(isHovering ? Color.aicovenGlass.opacity(0.35) : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovering = hovering
+        }
+    }
+}
+
+struct EmptyThreadsView: View {
+    let message: String
+
+    var body: some View {
+        VStack(spacing: Spacing.xs) {
+            Image(systemName: "bubble.left.and.exclamationmark.bubble.right")
+                .font(.system(size: 20))
+                .foregroundColor(.aicovenTextTertiary)
+            Text(message)
+                .font(.aicovenCaption)
+                .foregroundColor(.aicovenTextSecondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, Spacing.lg)
     }
 }

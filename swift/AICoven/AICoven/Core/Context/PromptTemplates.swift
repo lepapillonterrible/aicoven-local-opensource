@@ -18,7 +18,12 @@ enum PromptTemplates {
             parameters: [
                 ToolParameter(name: "query", type: "string", description: "Search query", required: true)
             ],
-            example: #"{"tool": "web_search", "input": {"query": "latest Swift concurrency features"}, "reason": "Need to find current documentation"}"#
+            example: #"{"tool": "web_search", "input": {"query": "latest Swift concurrency features"}, "reason": "Need to find current documentation"}"#,
+            inputExamples: [
+                ToolInputExample(description: "Simple factual search", input: ["query": "Swift 6 release date"]),
+                ToolInputExample(description: "Technical search with specifics", input: ["query": "MLX framework iOS memory optimization KV cache"]),
+                ToolInputExample(description: "Current events search", input: ["query": "WWDC 2026 announcements"]),
+            ]
         ),
         ToolDefinition(
             name: "web_browse",
@@ -26,7 +31,11 @@ enum PromptTemplates {
             parameters: [
                 ToolParameter(name: "url", type: "string", description: "The URL to visit", required: true)
             ],
-            example: #"{"tool": "web_browse", "input": {"url": "https://example.com"}, "reason": "Read page content"}"#
+            example: #"{"tool": "web_browse", "input": {"url": "https://example.com"}, "reason": "Read page content"}"#,
+            inputExamples: [
+                ToolInputExample(description: "Read a documentation page", input: ["url": "https://developer.apple.com/documentation/swiftui"]),
+                ToolInputExample(description: "Read a GitHub repository", input: ["url": "https://github.com/ml-explore/mlx-swift"]),
+            ]
         ),
         ToolDefinition(
             name: "current_time",
@@ -34,7 +43,12 @@ enum PromptTemplates {
             parameters: [
                 ToolParameter(name: "timezone", type: "string", description: "IANA timezone identifier, e.g. 'Europe/London'. Defaults to the user's local timezone if omitted.", required: false)
             ],
-            example: #"{"tool": "current_time", "input": {"timezone": "Europe/London"}, "reason": "Need to know current time in London"}"#
+            example: #"{"tool": "current_time", "input": {"timezone": "Europe/London"}, "reason": "Need to know current time in London"}"#,
+            inputExamples: [
+                ToolInputExample(description: "Local time (no timezone)", input: [:]),
+                ToolInputExample(description: "Specific city timezone", input: ["timezone": "Asia/Tokyo"]),
+                ToolInputExample(description: "Named timezone abbreviation", input: ["timezone": "America/New_York"]),
+            ]
         ),
 
         // File tools
@@ -44,7 +58,11 @@ enum PromptTemplates {
             parameters: [
                 ToolParameter(name: "path", type: "string", description: "Absolute path to the file", required: true)
             ],
-            example: #"{"tool": "file.read", "input": {"path": "/Users/me/document.txt"}, "reason": "Need to read file contents"}"#
+            example: #"{"tool": "file.read", "input": {"path": "/Users/me/document.txt"}, "reason": "Need to read file contents"}"#,
+            inputExamples: [
+                ToolInputExample(description: "Read a text file", input: ["path": "/Users/me/notes.txt"]),
+                ToolInputExample(description: "Read a config file", input: ["path": "/Users/me/project/.env"]),
+            ]
         ),
         ToolDefinition(
             name: "file.write",
@@ -53,7 +71,11 @@ enum PromptTemplates {
                 ToolParameter(name: "path", type: "string", description: "Absolute path for the file", required: true),
                 ToolParameter(name: "content", type: "string", description: "Content to write", required: true)
             ],
-            example: #"{"tool": "file.write", "input": {"path": "/Users/me/output.txt", "content": "Hello World"}, "reason": "Save results to file"}"#
+            example: #"{"tool": "file.write", "input": {"path": "/Users/me/output.txt", "content": "Hello World"}, "reason": "Save results to file"}"#,
+            inputExamples: [
+                ToolInputExample(description: "Write a simple file", input: ["path": "/Users/me/output.txt", "content": "Hello World"]),
+                ToolInputExample(description: "Write a script", input: ["path": "/tmp/test.py", "content": "print('hello')"]),
+            ]
         ),
         ToolDefinition(
             name: "file.list",
@@ -62,7 +84,11 @@ enum PromptTemplates {
                 ToolParameter(name: "path", type: "string", description: "Directory path to list", required: true),
                 ToolParameter(name: "recursive", type: "boolean", description: "Whether to list recursively", required: false)
             ],
-            example: #"{"tool": "file.list", "input": {"path": "/Users/me/Documents", "recursive": false}, "reason": "Explore directory"}"#
+            example: #"{"tool": "file.list", "input": {"path": "/Users/me/Documents", "recursive": false}, "reason": "Explore directory"}"#,
+            inputExamples: [
+                ToolInputExample(description: "List a directory", input: ["path": "/Users/me/Documents"]),
+                ToolInputExample(description: "Recursive listing", input: ["path": "/Users/me/project/src", "recursive": true]),
+            ]
         ),
 
         // Shell tools
@@ -72,7 +98,12 @@ enum PromptTemplates {
             parameters: [
                 ToolParameter(name: "command", type: "string", description: "Shell command to execute", required: true)
             ],
-            example: #"{"tool": "shell.execute", "input": {"command": "ls -la"}, "reason": "List directory with details"}"#
+            example: #"{"tool": "shell.execute", "input": {"command": "ls -la"}, "reason": "List directory with details"}"#,
+            inputExamples: [
+                ToolInputExample(description: "Run a shell command", input: ["command": "ls -la /Users/me"]),
+                ToolInputExample(description: "Run a Python one-liner", input: ["command": "python3 -c 'print(2+2)'"]),
+                ToolInputExample(description: "Check git status", input: ["command": "git -C /Users/me/project status"]),
+            ]
         ),
 
         // GitHub tools
@@ -91,7 +122,11 @@ enum PromptTemplates {
                 ToolParameter(name: "path", type: "string", description: "File path in repository", required: true),
                 ToolParameter(name: "ref", type: "string", description: "Branch or commit SHA", required: false)
             ],
-            example: #"{"tool": "github.readFile", "input": {"owner": "user", "repo": "project", "path": "README.md"}, "reason": "Read documentation"}"#
+            example: #"{"tool": "github.readFile", "input": {"owner": "user", "repo": "project", "path": "README.md"}, "reason": "Read documentation"}"#,
+            inputExamples: [
+                ToolInputExample(description: "Read a file from main", input: ["owner": "apple", "repo": "swift", "path": "README.md"]),
+                ToolInputExample(description: "Read from a specific branch", input: ["owner": "user", "repo": "project", "path": "src/main.swift", "ref": "feature/new"]),
+            ]
         ),
         ToolDefinition(
             name: "github.writeFile",
@@ -315,9 +350,26 @@ enum PromptTemplates {
         // Brief role description
         sections.append("You are a helpful AI assistant running locally. You have tools to help you answer questions that need real-time or external data.")
 
-        // Native tool documentation (always included in full — these are a
-        // small fixed set like web_search, file.read, shell.execute).
-        let nativeDefs = toolDefinitions.filter { enabledTools.contains($0.name) }
+        // Native tools: use ToolRelevanceService to select the most relevant
+        // subset when many native tools are enabled (GitHub + Google Drive
+        // can push the count above 15). Always-loaded tools (current_time,
+        // web_search, shell.execute) bypass scoring.
+        let allNativeDefs = toolDefinitions.filter { enabledTools.contains($0.name) }
+        let nativeDefs: [ToolDefinition]
+        if allNativeDefs.count > 8, !userMessage.isEmpty {
+            nativeDefs = await ToolRelevanceService.shared.selectRelevantNativeTools(
+                userMessage: userMessage,
+                allTools: allNativeDefs,
+                limit: 8
+            )
+            // Add compressed catalog for excluded native tools.
+            let excluded = allNativeDefs.filter { def in !nativeDefs.contains(where: { $0.name == def.name }) }
+            if let catalog = ToolRelevanceService.generateCompressedNativeCatalog(excluded: excluded) {
+                sections.append(catalog)
+            }
+        } else {
+            nativeDefs = allNativeDefs
+        }
 
         // MCP tools: use tiered approach for local models.
         // 1) Compressed catalog of ALL MCP tools (~200 tokens).
@@ -346,7 +398,7 @@ enum PromptTemplates {
         let allDefs = nativeDefs + enabledMCPDefs
 
         if !allDefs.isEmpty {
-            sections.append(generateToolDocumentation(for: allDefs))
+            sections.append(generateToolDocumentation(for: allDefs, compact: true))
         }
 
         // MLX-optimized protocol
@@ -487,7 +539,7 @@ enum PromptTemplates {
             let allDefs = nativeDefs + mcpDefs
 
             if !allDefs.isEmpty {
-                sections.append(generateToolDocumentation(for: allDefs))
+                sections.append(generateToolDocumentation(for: allDefs, compact: false))
             }
             sections.append(toolProtocolInstructions)
         }
@@ -509,8 +561,30 @@ enum PromptTemplates {
         return sections.joined(separator: "\n\n")
     }
 
+    /// Encodes tool-example inputs as JSON for documentation strings. Avoids
+    /// string-interpolating `AnyJSONValue` (which would print enum descriptions
+    /// like `string("…")` instead of valid JSON).
+    private static func jsonString(forToolExampleInput input: [String: AnyJSONValue]) -> String {
+        guard !input.isEmpty else { return "{}" }
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let data = try encoder.encode(input)
+            return String(data: data, encoding: .utf8) ?? "{}"
+        } catch {
+            return "{}"
+        }
+    }
+
     /// Generate tool documentation section for enabled tools.
-    private static func generateToolDocumentation(for tools: [ToolDefinition]) -> String {
+    ///
+    /// - Parameter compact: When `true` (used by `generateMLXAgentPrompt`),
+    ///   omits `inputExamples` to save context tokens. The few-shot examples
+    ///   in `mlxToolProtocolInstructions` serve local models instead.
+    private static func generateToolDocumentation(
+        for tools: [ToolDefinition],
+        compact: Bool = false
+    ) -> String {
         var lines = ["AVAILABLE TOOLS:"]
 
         for tool in tools {
@@ -527,6 +601,17 @@ enum PromptTemplates {
             }
 
             lines.append("Example: \(tool.example)")
+
+            // Append structured input examples for cloud models.
+            // Local models skip these (compact=true) — LoRA training
+            // data and few-shot examples handle parameter accuracy.
+            if !compact, !tool.inputExamples.isEmpty {
+                lines.append("Input examples:")
+                for ex in tool.inputExamples {
+                    let inputStr = jsonString(forToolExampleInput: ex.input)
+                    lines.append("  \(ex.description): \(inputStr)")
+                }
+            }
         }
 
         return lines.joined(separator: "\n")
@@ -589,6 +674,16 @@ enum PromptTemplates {
 
 // MARK: - Supporting Types
 
+/// A concrete input example for a tool, showing a specific use case with
+/// exact parameter values. Used by cloud models (Anthropic `input_examples`,
+/// OpenAI/Gemini description injection) to improve parameter accuracy.
+struct ToolInputExample {
+    /// Human-readable description of what this example demonstrates.
+    let description: String
+    /// The exact input dictionary the model should produce for this case.
+    let input: [String: AnyJSONValue]
+}
+
 /// Definition of a tool including its parameters and usage example.
 /// Conforms to Sendable since all properties are value types.
 struct ToolDefinition {
@@ -596,6 +691,23 @@ struct ToolDefinition {
     let description: String
     let parameters: [ToolParameter]
     let example: String
+    /// Structured input examples for native function-calling providers.
+    /// 2-3 per tool covering minimal, typical, and edge-case usage.
+    let inputExamples: [ToolInputExample]
+
+    init(
+        name: String,
+        description: String,
+        parameters: [ToolParameter],
+        example: String,
+        inputExamples: [ToolInputExample] = []
+    ) {
+        self.name = name
+        self.description = description
+        self.parameters = parameters
+        self.example = example
+        self.inputExamples = inputExamples
+    }
 }
 
 /// Parameter definition for a tool.
@@ -865,6 +977,12 @@ extension PromptTemplates {
                             type: param.type,
                             description: param.description,
                             required: param.required
+                        )
+                    },
+                    inputExamples: def.inputExamples.map { ex in
+                        LLMToolInputExample(
+                            description: ex.description,
+                            input: ex.input
                         )
                     }
                 )
