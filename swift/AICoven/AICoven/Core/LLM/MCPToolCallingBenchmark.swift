@@ -11,7 +11,7 @@ final class MCPToolCallingBenchmark {
 
     // MARK: - Result Model
 
-    struct BenchmarkResult: Codable, Sendable {
+    struct BenchmarkResult: Codable {
         let modelID: String
         let date: Date
         let totalPrompts: Int
@@ -36,7 +36,7 @@ final class MCPToolCallingBenchmark {
     // MARK: - Test Cases
 
     /// A single test case: a user prompt and the expected tool name.
-    struct TestCase: Sendable {
+    struct TestCase {
         let prompt: String
         let expectedTool: String
         /// Optional expected parameter name to check.

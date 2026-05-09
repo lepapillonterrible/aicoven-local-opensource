@@ -1948,7 +1948,7 @@ extension ChatService {
 
         // Common English stop words plus meta-words that match ALL MCP
         // tools equally ("mcp", "zapier", "server", "tool", etc.).
-        let stopWords: Set<String> = [
+        let stopWords: Set = [
             "the", "and", "for", "from", "with", "that", "this",
             "you", "your", "have", "has", "had", "are", "was",
             "been", "will", "can", "not", "but", "they", "them",
@@ -2080,7 +2080,7 @@ extension ChatService {
     /// during this feature work: lower values let loosely-related tools win
     /// too often, while higher values started dropping obvious
     /// "read this file"/"list files" matches.
-    private static let semanticToolMatchThreshold = 0.3
+    private static let semanticToolMatchThreshold: Float = 0.3
 
     /// For local models, attempt to match the user's message to a native
     /// tool and construct a forced call. Returns `nil` if no native tool

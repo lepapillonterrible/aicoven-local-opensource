@@ -190,7 +190,7 @@ actor MCPClient {
 
 // MARK: - JSON-RPC Models
 
-private struct JsonRpcError: Decodable, Sendable {
+private struct JsonRpcError: Decodable {
     let code: Int
     let message: String
 
@@ -207,7 +207,7 @@ private struct JsonRpcError: Decodable, Sendable {
 
 // MARK: - MCP Models
 
-struct MCPToolDefinition: Codable, Equatable, Identifiable, Sendable {
+struct MCPToolDefinition: Codable, Equatable, Identifiable {
     let name: String
     let description: String?
     let inputSchema: [String: AnyJSONValue]
@@ -235,7 +235,7 @@ struct MCPToolDefinition: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-struct MCPListToolsResponse: Decodable, Sendable {
+struct MCPListToolsResponse: Decodable {
     let tools: [MCPToolDefinition]
 
     nonisolated init(from decoder: Decoder) throws {
@@ -248,7 +248,7 @@ struct MCPListToolsResponse: Decodable, Sendable {
     }
 }
 
-struct CallToolParams: Encodable, Sendable {
+struct CallToolParams: Encodable {
     let name: String
     let arguments: [String: AnyJSONValue]
 
@@ -263,7 +263,7 @@ struct CallToolParams: Encodable, Sendable {
     }
 }
 
-struct MCPContentItem: Decodable, Sendable {
+struct MCPContentItem: Decodable {
     let type: String
     let text: String?
     // other data like 'data' for base64 resources can be added here
@@ -279,7 +279,7 @@ struct MCPContentItem: Decodable, Sendable {
     }
 }
 
-struct MCPCallToolResponse: Decodable, Sendable {
+struct MCPCallToolResponse: Decodable {
     let content: [MCPContentItem]
     let isError: Bool?
 

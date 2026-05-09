@@ -17,7 +17,6 @@ struct WorkspaceView: View {
     @State private var openTabs: [WorkspaceTab] = []
     @State private var activeTabId: String?
     @State private var roles: [Role] = []
-    @State private var threadRefreshTrigger = false
     /// Controls the new thread sheet presentation (shared between sidebar and content)
     @State private var showNewThreadSheet = false
 
@@ -75,7 +74,7 @@ struct WorkspaceView: View {
                 )
             }
         }
-        .preferredColorScheme(.dark)
+        .themedColorScheme()
         .onAppear {
             analytics.trackScreenView(screenName: "WorkspaceView", screenClass: "WorkspaceView")
         }
@@ -187,7 +186,6 @@ struct WorkspaceView: View {
                 let tab = WorkspaceTab.thread(thread)
                 openTabs.append(tab)
                 activeTabId = tab.id
-                threadRefreshTrigger.toggle()
             } catch {
                 AppErrorReporter.log(error: error, context: "WorkspaceView.handleTapRole")
                 analytics.trackError(errorType: "thread_create", errorMessage: error.localizedDescription, context: "WorkspaceView")

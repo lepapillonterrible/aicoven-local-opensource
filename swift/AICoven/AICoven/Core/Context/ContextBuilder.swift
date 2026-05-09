@@ -20,7 +20,7 @@ struct ContextBuilder {
 
     /// Parameters that affect how much history/memory is included.
     /// Conforms to Sendable since all properties are value types.
-    struct Limits: Sendable {
+    struct Limits {
         let maxRecentMessages: Int
         let maxRecentMemories: Int
 
@@ -32,7 +32,7 @@ struct ContextBuilder {
 
     /// Configuration for tool-enabled prompts.
     /// Conforms to Sendable since all properties are value types.
-    struct ToolConfig: Sendable {
+    struct ToolConfig {
         /// Set of tool names that are enabled for this context.
         let enabledTools: Set<String>
         /// Whether to include thought block instructions.

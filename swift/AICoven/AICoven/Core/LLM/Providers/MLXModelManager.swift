@@ -13,7 +13,7 @@ import MLXLMCommon
 // MARK: - MLX Model Catalog
 
 /// Use-case category for a model.
-enum MLXModelCategory: String, Codable, CaseIterable, Sendable {
+enum MLXModelCategory: String, Codable, CaseIterable {
     /// General-purpose chat and tool calling.
     case general
     /// Optimised for code generation and developer tools.
@@ -23,7 +23,7 @@ enum MLXModelCategory: String, Codable, CaseIterable, Sendable {
 }
 
 /// Download priority tier.
-enum MLXModelTier: String, Codable, Sendable {
+enum MLXModelTier: String, Codable {
     /// Recommended for all users.
     case core
     /// Optional download for specialised use-cases.
@@ -31,7 +31,7 @@ enum MLXModelTier: String, Codable, Sendable {
 }
 
 /// Metadata for a model available in the MLX curated catalog.
-struct MLXModelInfo: Identifiable, Codable, Sendable {
+struct MLXModelInfo: Identifiable, Codable {
     /// Hugging Face model ID (e.g. "mlx-community/Qwen3-4B-4bit").
     let id: String
     /// Human-readable display name.

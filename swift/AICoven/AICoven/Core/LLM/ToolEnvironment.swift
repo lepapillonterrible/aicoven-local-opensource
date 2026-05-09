@@ -4,7 +4,7 @@ import Foundation
 /// provider key. This is derived from the model catalog plus any
 /// provider-specific knowledge (e.g. which models support images).
 /// Conforms to Sendable since all properties are value types.
-struct ProviderCapabilities: Sendable {
+struct ProviderCapabilities {
     let providerID: String // e.g. "openai", "anthropic", "google"
     let chatModel: String? // default chat model for this provider
     let visionModel: String? // model that can accept images/files as input
@@ -17,7 +17,7 @@ struct ProviderCapabilities: Sendable {
 /// level LLMConfiguration environment and adds a provider capability matrix
 /// that higher-level services (tools, agents) can consult.
 /// Conforms to Sendable since all properties are Sendable.
-struct ToolEnvironment: Sendable {
+struct ToolEnvironment {
     let clients: [String: LLMClient] // keyed by providerID
     let models: [ModelDescriptor]
     let capabilities: [ProviderCapabilities]
