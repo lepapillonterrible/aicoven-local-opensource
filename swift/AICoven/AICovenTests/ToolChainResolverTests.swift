@@ -32,7 +32,7 @@ final class ToolChainResolverTests: XCTestCase {
     }
 
     func testSearchAndSummarize_nilWhenWebSearchDisabled() {
-        let limited: Set<String> = ["current_time", "file.read"]
+        let limited = Set(["current_time", "file.read"])
         let chain = ToolChainResolver.resolve(
             userMessage: "Search for Swift concurrency and summarize",
             enabledTools: limited
@@ -116,7 +116,7 @@ final class ToolChainResolverTests: XCTestCase {
     }
 
     func testMultiTimezone_nilWhenCurrentTimeDisabled() {
-        let limited: Set<String> = ["web_search", "file.read"]
+        let limited = Set(["web_search", "file.read"])
         let chain = ToolChainResolver.resolve(
             userMessage: "What time is it in Tokyo and London?",
             enabledTools: limited
@@ -146,7 +146,7 @@ final class ToolChainResolverTests: XCTestCase {
     }
 
     func testListAndRead_nilWhenFileReadDisabled() {
-        let limited: Set<String> = ["file.list", "web_search"]
+        let limited = Set(["file.list", "web_search"])
         let chain = ToolChainResolver.resolve(
             userMessage: "List files in /project and read the README",
             enabledTools: limited
@@ -170,7 +170,7 @@ final class ToolChainResolverTests: XCTestCase {
     }
 
     func testSearchGitHubAndRead_nilWhenGitHubDisabled() {
-        let limited: Set<String> = ["web_search", "file.read"]
+        let limited = Set(["web_search", "file.read"])
         let chain = ToolChainResolver.resolve(
             userMessage: "Search GitHub for SwiftUI navigation and read it",
             enabledTools: limited
