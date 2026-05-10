@@ -460,7 +460,9 @@ actor ChatService {
         var streamedAnswer = false
 
         // Local models (MLX, Ollama) get a shorter, more assertive prompt.
-        let isLocalModel = ["mlx", "ollama"].contains(descriptor.providerID)
+        // OpenClaw and Hermes are treated as local when pointing at a
+        // localhost / private-network endpoint.
+        let isLocalModel = isLocalDeployment(providerID: descriptor.providerID)
         let toolConfig: ContextBuilder.ToolConfig = isLocalModel
             ? await .mlxTools()
             : await .connected()
@@ -1175,7 +1177,7 @@ actor ChatService {
         // available. Loading a second MLX model (~1.5 GB) for an optional
         // summary will push past the jetsam memory limit and crash the app.
         #if os(iOS)
-        let hasCloudProvider = llmClients.keys.contains(where: { $0 != "mlx" && $0 != "ollama" })
+        let hasCloudProvider = llmClients.keys.contains(where: { !isLocalDeployment(providerID: $0) })
         if !hasCloudProvider { return }
         #endif
 
@@ -1293,6 +1295,14 @@ actor ChatService {
             let fallback = modelRouter.fallbackModel(for: "ollama") ?? "llama3.2"
             let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model")) ?? fallback
             return ("ollama", model)
+        case "openclaw":
+            let fallback = modelRouter.fallbackModel(for: "openclaw") ?? "openai/gpt-3.5-turbo"
+            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("openclaw_model")) ?? fallback
+            return ("openclaw", model)
+        case "hermes":
+            let fallback = modelRouter.fallbackModel(for: "hermes") ?? HermesLLMClient.defaultModelAlias
+            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("hermes_model")) ?? fallback
+            return ("hermes", model)
         default:
             let fallback = modelRouter.fallbackModel(for: provider) ?? "gpt-4o"
             let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("\(provider)_model")) ?? fallback
@@ -1318,6 +1328,33 @@ actor ChatService {
         } catch {
             AppErrorReporter.log(error: error, context: "ChatService.currentSystemPrompt.loadPersonalStrix")
             return nil
+        }
+    }
+
+    // MARK: - Deployment helpers
+
+    /// Returns `true` when the given provider is running locally \u2014 either
+    /// because it\u2019s inherently local (MLX, Ollama) or because the user has
+    /// configured a localhost/private-network base URL for a hybrid provider
+    /// (OpenClaw, Hermes). This is used throughout ChatService to decide
+    /// prompt length, tool pre-execution strategy, and background summary
+    /// eligibility.
+    private func isLocalDeployment(providerID: String) -> Bool {
+        switch providerID {
+        case "mlx", "ollama":
+            return true
+        case "openclaw":
+            if let client = llmClients[providerID] as? OpenClawLLMClient {
+                return client.isLocalEndpoint
+            }
+            return true // Default assumption: OpenClaw is typically local
+        case "hermes":
+            if let client = llmClients[providerID] as? HermesLLMClient {
+                return client.isLocalEndpoint
+            }
+            return false // Default assumption: Hermes defaults to Together AI cloud
+        default:
+            return false
         }
     }
 

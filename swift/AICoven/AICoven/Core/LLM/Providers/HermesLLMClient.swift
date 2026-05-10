@@ -27,7 +27,7 @@ import Foundation
 /// after init and URLSession is thread-safe.
 final class HermesLLMClient: LLMClient, @unchecked Sendable {
     private let apiKey: String?
-    private let baseURL: URL
+    let baseURL: URL
     private let urlSession: URLSession
 
     /// Default Together AI base URL for Hermes models.
@@ -35,6 +35,19 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
 
     /// Default model alias.
     static let defaultModelAlias = "hermes-3"
+
+    /// Whether the base URL differs from the default Together AI endpoint,
+    /// indicating a self-hosted deployment.
+    var isSelfHosted: Bool {
+        baseURL != HermesLLMClient.defaultBaseURL
+    }
+
+    /// Whether the configured base URL points to a local network address
+    /// (localhost, 127.0.0.1, or private IP ranges). Used by ChatService to
+    /// apply local-model optimizations.
+    var isLocalEndpoint: Bool {
+        OpenClawLLMClient.isLocalAddress(baseURL)
+    }
 
     /// - Parameters:
     ///   - apiKey: API key for Together AI or self-hosted instance (optional for some self-hosted).
@@ -57,13 +70,15 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
             self.baseURL = HermesLLMClient.defaultBaseURL
         }
 
-        // Configure URLSession
+        // Configure URLSession – local self-hosted models need generous
+        // timeouts; Together AI cloud uses tighter limits.
         if let urlSession {
             self.urlSession = urlSession
         } else {
             let config = URLSessionConfiguration.default
-            config.timeoutIntervalForRequest = 60
-            config.timeoutIntervalForResource = 120
+            let local = OpenClawLLMClient.isLocalAddress(self.baseURL)
+            config.timeoutIntervalForRequest = local ? 300 : 60
+            config.timeoutIntervalForResource = local ? 600 : 120
             self.urlSession = URLSession(configuration: config)
         }
     }

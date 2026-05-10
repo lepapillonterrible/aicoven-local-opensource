@@ -46,13 +46,27 @@ struct StrixSettingsView: View {
         ("anthropic", "Anthropic"),
         ("google", "Google AI"),
         ("mistral", "Mistral AI"),
+        ("openclaw", "OpenClaw (Self-Hosted)"),
+        ("hermes", "Hermes (Together AI / Self-Hosted)"),
         ("ollama", "Ollama (Local)"),
         ("mlx", "MLX (On-Device)"),
     ]
 
     /// Whether the selected provider is local (no API key needed).
+    /// OpenClaw is always treated as local since it requires a self-hosted
+    /// endpoint. Hermes is local only when configured with a local base URL.
     private var isLocalProvider: Bool {
-        provider == "mlx" || provider == "ollama"
+        if provider == "mlx" || provider == "ollama" || provider == "openclaw" {
+            return true
+        }
+        if provider == "hermes" {
+            // Hermes is local only when pointing at a local endpoint
+            let baseURL = UserDefaults.standard.string(forKey: UserScope.scopedKey("hermes_base_url")) ?? ""
+            if let url = URL(string: baseURL), OpenClawLLMClient.isLocalAddress(url) {
+                return true
+            }
+        }
+        return false
     }
 
     /// Available models for the currently selected provider account. We use
@@ -68,6 +82,29 @@ struct StrixSettingsView: View {
             }
             let ollamaModel = UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model")) ?? "llama3.2"
             return [(ollamaModel, ollamaModel)]
+        }
+        if provider == "openclaw" {
+            // OpenClaw uses user-specified model IDs; show the current one
+            let currentModel = UserDefaults.standard.string(forKey: UserScope.scopedKey("openclaw_model")) ?? "openai/gpt-3.5-turbo"
+            return [(currentModel, currentModel)]
+        }
+        if provider == "hermes" {
+            // Hermes has known aliases for Together AI, or user-specified for self-hosted
+            let baseURL = UserDefaults.standard.string(forKey: UserScope.scopedKey("hermes_base_url")) ?? ""
+            if baseURL.isEmpty || baseURL.contains("together") {
+                // Together AI: show known model aliases
+                return [
+                    ("hermes-3", "Hermes 3 (405B Turbo)"),
+                    ("hermes-3-70b", "Hermes 3 (70B)"),
+                    ("hermes-3-8b", "Hermes 3 (8B)"),
+                    ("hermes-2", "Hermes 2 Mixtral"),
+                    ("hermes-2-mistral", "Hermes 2 Mistral"),
+                ]
+            } else {
+                // Self-hosted: show current model ID
+                let currentModel = UserDefaults.standard.string(forKey: UserScope.scopedKey("hermes_model")) ?? "hermes-3"
+                return [(currentModel, currentModel)]
+            }
         }
         if let accountId = providerAccountId,
            let dynamic = accountModelOptions[accountId],
@@ -229,9 +266,10 @@ struct StrixSettingsView: View {
                                 ForEach(providerOptions, id: \.0) { option in
                                     let accountsForProvider = accountsByProvider[option.0] ?? []
                                     let isLocal = option.0 == "mlx" || option.0 == "ollama"
+                                        || option.0 == "openclaw" || option.0 == "hermes"
 
                                     if isLocal {
-                                        // Local provider – one tap selects provider and model
+                                        // Local/self-hosted provider – one tap selects provider and model
                                         let isSelected = provider == option.0
                                         Button {
                                             provider = option.0
@@ -239,10 +277,16 @@ struct StrixSettingsView: View {
                                             if option.0 == "mlx" {
                                                 model = MLXModelManager.shared.activeModelID
                                                     ?? MLXModelManager.shared.deviceFilteredCatalog.first?.id ?? ""
-                                            } else {
+                                            } else if option.0 == "ollama" {
                                                 model = ollamaModels.first?.0
                                                     ?? UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model"))
                                                     ?? "llama3.2"
+                                            } else if option.0 == "openclaw" {
+                                                model = UserDefaults.standard.string(forKey: UserScope.scopedKey("openclaw_model"))
+                                                    ?? "openai/gpt-3.5-turbo"
+                                            } else if option.0 == "hermes" {
+                                                model = UserDefaults.standard.string(forKey: UserScope.scopedKey("hermes_model"))
+                                                    ?? HermesLLMClient.defaultModelAlias
                                             }
                                         } label: {
                                             HStack {
@@ -258,7 +302,13 @@ struct StrixSettingsView: View {
                                                             .font(.aicovenCaption)
                                                             .foregroundColor(.aicovenTextSecondary)
                                                     } else {
-                                                        Text(option.0 == "mlx" ? "On-device via Apple Silicon" : "Running locally")
+                                                        let subtitle = switch option.0 {
+                                                        case "mlx": "On-device via Apple Silicon"
+                                                        case "openclaw": "OpenAI-compatible self-hosted proxy"
+                                                        case "hermes": "Nous Research - Together AI or self-hosted"
+                                                        default: "Running locally"
+                                                        }
+                                                        Text(subtitle)
                                                             .font(.aicovenCaption)
                                                             .foregroundColor(.aicovenTextSecondary)
                                                     }

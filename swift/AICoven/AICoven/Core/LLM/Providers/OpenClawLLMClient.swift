@@ -19,11 +19,37 @@ import Foundation
 /// after init and URLSession is thread-safe.
 final class OpenClawLLMClient: LLMClient, @unchecked Sendable {
     private let apiKey: String?
-    private let baseURL: URL
+    let baseURL: URL
     private let urlSession: URLSession
 
     /// Default base URL for local OpenClaw instances.
     static let defaultBaseURL = URL(string: "http://localhost:3000")!
+
+    /// Whether the configured base URL points to a local network address
+    /// (localhost, 127.0.0.1, or private IP ranges). Used by ChatService to
+    /// apply local-model optimizations (shorter prompts, tool pre-execution,
+    /// skip background summaries on iOS).
+    var isLocalEndpoint: Bool {
+        Self.isLocalAddress(baseURL)
+    }
+
+    /// Returns `true` when the given URL's host is localhost, loopback, or
+    /// a private-network address (10.x, 172.16–31.x, 192.168.x).
+    static func isLocalAddress(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        if host == "localhost" || host == "127.0.0.1" || host == "::1" { return true }
+        // Private IPv4 ranges
+        if host.hasPrefix("10.") { return true }
+        if host.hasPrefix("192.168.") { return true }
+        // 172.16.0.0 – 172.31.255.255
+        if host.hasPrefix("172.") {
+            let parts = host.split(separator: ".")
+            if parts.count >= 2, let second = Int(parts[1]), (16 ... 31).contains(second) {
+                return true
+            }
+        }
+        return false
+    }
 
     /// - Parameters:
     ///   - baseURL: Base URL for OpenClaw API (overridable for self-hosted).
@@ -53,13 +79,15 @@ final class OpenClawLLMClient: LLMClient, @unchecked Sendable {
             self.apiKey = nil
         }
 
-        // Configure URLSession
+        // Configure URLSession – local models need generous timeouts;
+        // cloud proxies can use tighter limits.
         if let urlSession {
             self.urlSession = urlSession
         } else {
             let config = URLSessionConfiguration.default
-            config.timeoutIntervalForRequest = 120 // Longer timeout for local models
-            config.timeoutIntervalForResource = 300
+            let local = Self.isLocalAddress(self.baseURL)
+            config.timeoutIntervalForRequest = local ? 300 : 60
+            config.timeoutIntervalForResource = local ? 600 : 120
             self.urlSession = URLSession(configuration: config)
         }
     }
