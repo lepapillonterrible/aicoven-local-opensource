@@ -83,28 +83,10 @@ struct StrixSettingsView: View {
             let ollamaModel = UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model")) ?? "llama3.2"
             return [(ollamaModel, ollamaModel)]
         }
-        if provider == "openclaw" {
-            // OpenClaw uses user-specified model IDs; show the current one
-            let currentModel = UserDefaults.standard.string(forKey: UserScope.scopedKey("openclaw_model")) ?? "openai/gpt-3.5-turbo"
-            return [(currentModel, currentModel)]
-        }
-        if provider == "hermes" {
-            // Hermes has known aliases for Together AI, or user-specified for self-hosted
-            let baseURL = UserDefaults.standard.string(forKey: UserScope.scopedKey("hermes_base_url")) ?? ""
-            if baseURL.isEmpty || baseURL.contains("together") {
-                // Together AI: show known model aliases
-                return [
-                    ("hermes-3", "Hermes 3 (405B Turbo)"),
-                    ("hermes-3-70b", "Hermes 3 (70B)"),
-                    ("hermes-3-8b", "Hermes 3 (8B)"),
-                    ("hermes-2", "Hermes 2 Mixtral"),
-                    ("hermes-2-mistral", "Hermes 2 Mistral"),
-                ]
-            } else {
-                // Self-hosted: show current model ID
-                let currentModel = UserDefaults.standard.string(forKey: UserScope.scopedKey("hermes_model")) ?? "hermes-3"
-                return [(currentModel, currentModel)]
-            }
+        // OpenClaw and Hermes don't need model pickers — the model is
+        // determined by whatever is running on the server endpoint.
+        if provider == "openclaw" || provider == "hermes" {
+            return []
         }
         if let accountId = providerAccountId,
            let dynamic = accountModelOptions[accountId],
@@ -393,8 +375,10 @@ struct StrixSettingsView: View {
                                 }
                             }
 
-                            // Model picker – only for cloud providers
-                            if !isLocalProvider {
+                            // Model picker – only for cloud providers that support
+                            // model selection. OpenClaw and Hermes use whatever
+                            // model is running on the server endpoint.
+                            if !isLocalProvider, provider != "openclaw", provider != "hermes" {
                                 if !availableModels.isEmpty {
                                     VStack(alignment: .leading, spacing: Spacing.xs) {
                                         Text("Model")
