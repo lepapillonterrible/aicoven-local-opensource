@@ -48,4 +48,33 @@ final class ThreadServiceTests: XCTestCase {
         let afterDelete = try await service.loadThreads(covenId: nil)
         XCTAssertFalse(afterDelete.contains(where: { $0.id == original.id }))
     }
+
+    func testThreadTitlesAreNormalizedOnCreateAndUpdate() async throws {
+        let service = ThreadService.shared
+        let longTitle = "  First line\n\nSecond line   " + String(repeating: "x", count: 200)
+
+        let created = try await service.createThread(title: longTitle, covenId: nil, agentId: nil)
+
+        XCTAssertFalse(created.title?.contains("\n") ?? true)
+        XCTAssertLessThanOrEqual(created.title?.count ?? 0, ThreadInputValidator.maxTitleLength)
+        XCTAssertTrue(created.title?.hasPrefix("First line Second line") == true)
+
+        let unchanged = try await service.updateThread(threadId: created.id, title: "   \n  ")
+        XCTAssertEqual(unchanged.title, created.title)
+
+        try await service.deleteThread(threadId: created.id)
+    }
+
+    func testMissingThreadErrorDoesNotExposeOpaqueThreadID() async {
+        let service = ThreadService.shared
+        let missingID = "thread-1234567890abcdef"
+
+        do {
+            _ = try await service.getThread(threadId: missingID)
+            XCTFail("Expected missing thread lookup to throw")
+        } catch {
+            XCTAssertFalse(error.localizedDescription.contains(missingID))
+            XCTAssertEqual(error.localizedDescription, "Thread not found")
+        }
+    }
 }

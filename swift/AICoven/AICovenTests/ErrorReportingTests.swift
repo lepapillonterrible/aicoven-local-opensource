@@ -150,4 +150,30 @@ final class ErrorReportingTests: XCTestCase {
         // No assertion here because the test is verifying code structure, not
         // runtime behavior.
     }
+
+    func testLogRedactorRedactsSecretsAndPersonalIdentifiers() {
+        let input = "email person@example.com api_key=sk-test_abcdefghijklmnopqrstuvwxyz userId: firebase-user-1234567890abcdef"
+
+        let redacted = AppLogRedactor.redact(input)
+
+        XCTAssertFalse(redacted.contains("person@example.com"))
+        XCTAssertFalse(redacted.contains("sk-test_abcdefghijklmnopqrstuvwxyz"))
+        XCTAssertFalse(redacted.contains("firebase-user-1234567890abcdef"))
+        XCTAssertTrue(redacted.contains("<redacted>"))
+    }
+
+    func testAppErrorReporterPassesRedactedMessagesToReporter() {
+        let reporter = CapturingErrorReporter()
+        AppErrorReporter.use(reporter)
+
+        AppErrorReporter.log(
+            message: "Failed for userId=abc123456789abcdef and token=secret-token-value",
+            context: "Auth.email.person@example.com"
+        )
+
+        XCTAssertEqual(reporter.messages.count, 1)
+        XCTAssertFalse(reporter.messages[0].message.contains("abc123456789abcdef"))
+        XCTAssertFalse(reporter.messages[0].message.contains("secret-token-value"))
+        XCTAssertFalse(reporter.messages[0].context.contains("person@example.com"))
+    }
 }

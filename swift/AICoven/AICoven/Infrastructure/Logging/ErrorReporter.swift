@@ -17,11 +17,15 @@ struct ConsoleErrorReporter: ErrorReporter {
     private let logger = Logger(subsystem: "dev.aicoven.app", category: "errors")
 
     nonisolated func log(error: Error, context: String) {
-        logger.error("⚠️ [\(context, privacy: .public)] \(error.localizedDescription, privacy: .public)")
+        let safeContext = AppLogRedactor.redact(context)
+        let safeMessage = AppLogRedactor.redact(error.localizedDescription)
+        logger.error("⚠️ [\(safeContext, privacy: .public)] \(safeMessage, privacy: .public)")
     }
 
     nonisolated func log(message: String, context: String) {
-        logger.info("ℹ️ [\(context, privacy: .public)] \(message, privacy: .public)")
+        let safeContext = AppLogRedactor.redact(context)
+        let safeMessage = AppLogRedactor.redact(message)
+        logger.info("ℹ️ [\(safeContext, privacy: .public)] \(safeMessage, privacy: .public)")
     }
 }
 
@@ -45,11 +49,12 @@ enum AppErrorReporter {
 
     /// Log an error. Safe to call from any actor or thread.
     nonisolated static func log(error: Error, context: String) {
-        reporter.log(error: error, context: context)
+        let redactedError = RedactedLoggedError(redactedDescription: AppLogRedactor.redact(error.localizedDescription))
+        reporter.log(error: redactedError, context: AppLogRedactor.redact(context))
     }
 
     /// Log an informational message. Safe to call from any actor or thread.
     nonisolated static func log(message: String, context: String) {
-        reporter.log(message: message, context: context)
+        reporter.log(message: AppLogRedactor.redact(message), context: AppLogRedactor.redact(context))
     }
 }

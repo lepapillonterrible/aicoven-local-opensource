@@ -28,15 +28,10 @@ actor ThreadService {
 
     /// Reload threads for the current user. Call after user switch.
     func reloadForCurrentUser() {
-        let currentUID = UserScope.currentUserID
         persistenceURL = ThreadService.makePersistenceURL()
-        print("🔄 ThreadService.reloadForCurrentUser: currentUID=\(currentUID), file=\(persistenceURL.lastPathComponent)")
+        AppErrorReporter.log(message: "Reloading scoped personal threads", context: "ThreadService.reloadForCurrentUser")
 
         personalThreads = ThreadService.loadThreadsFromDisk(persistenceURL: persistenceURL)
-
-        // Debug: Log user IDs of loaded threads
-        let userIDs = Set(personalThreads.map(\.userId))
-        print("📋 Loaded threads with userIDs: \(userIDs)")
 
         // Clean up any orphaned threads without a valid user ID.
         // These may exist from before authentication was required.
@@ -54,17 +49,11 @@ actor ThreadService {
         }
 
         if !testThreads.isEmpty {
-            print("🧹 Removing \(testThreads.count) test threads")
-            for thread in testThreads {
-                print("   - '\(thread.title ?? "Untitled")'")
-            }
+            AppErrorReporter.log(message: "Removing \(testThreads.count) automated test threads", context: "ThreadService.cleanupTestThreads")
             personalThreads.removeAll { thread in
                 thread.title?.hasPrefix("Test Thread") == true
             }
             persistPersonalThreads()
-            print("✅ Test threads removed. Remaining: \(personalThreads.count) threads")
-        } else {
-            print("ℹ️ No test threads found to clean up")
         }
     }
 
@@ -81,10 +70,6 @@ actor ThreadService {
         }
 
         if !orphanedThreads.isEmpty {
-            print("🧹 Removing \(orphanedThreads.count) orphaned threads (expected userId: \(currentUserID))")
-            for thread in orphanedThreads {
-                print("   - Thread '\(thread.title ?? "Untitled")' has userId: '\(thread.userId)'")
-            }
             AppErrorReporter.log(message: "Removing \(orphanedThreads.count) orphaned threads (invalid user ID)", context: "ThreadService.cleanupOrphanedThreads")
             personalThreads.removeAll { thread in
                 thread.userId.isEmpty ||
@@ -92,8 +77,6 @@ actor ThreadService {
                     !validUserIDs.contains(thread.userId)
             }
             persistPersonalThreads()
-        } else {
-            print("✅ All \(personalThreads.count) threads belong to current user")
         }
     }
 
@@ -190,11 +173,12 @@ actor ThreadService {
             // Coven threads are persisted locally just like personal threads.
             AppErrorReporter.log(message: "Creating coven thread (covenId: \(covenId)) in local store", context: "ThreadService.createThread")
             let now = Date()
+            let normalizedTitle = ThreadInputValidator.normalizedTitle(title, defaultTitle: "Coven Chat")
             let thread = await Thread(
                 id: UUID().uuidString,
                 userId: currentUserID,
                 covenId: covenId,
-                title: title ?? "Coven Chat",
+                title: normalizedTitle,
                 agentId: agentId,
                 agentName: agentName,
                 agentModel: nil,
@@ -215,11 +199,12 @@ actor ThreadService {
         } else {
             AppErrorReporter.log(message: "Creating personal thread in local store", context: "ThreadService.createThread")
             let now = Date()
+            let normalizedTitle = ThreadInputValidator.normalizedTitle(title, defaultTitle: "New Chat")
             let thread = await Thread(
                 id: UUID().uuidString,
                 userId: currentUserID,
                 covenId: nil,
-                title: title ?? "New Chat",
+                title: normalizedTitle,
                 agentId: agentId,
                 agentName: agentName,
                 agentModel: nil,
@@ -257,7 +242,7 @@ actor ThreadService {
         throw NSError(
             domain: "ThreadService",
             code: -1,
-            userInfo: [NSLocalizedDescriptionKey: "Thread not found: \(threadId)"]
+            userInfo: [NSLocalizedDescriptionKey: "Thread not found"]
         )
     }
 
@@ -294,7 +279,7 @@ actor ThreadService {
         // threads in the local-first client.
         if let index = personalThreads.firstIndex(where: { $0.id == threadId }) {
             let thread = personalThreads[index]
-            let newTitle = title ?? thread.title
+            let newTitle = title.map { ThreadInputValidator.normalizedTitle($0, defaultTitle: thread.title ?? "New Chat") } ?? thread.title
             let newAgentId = agentId ?? thread.agentId
             let newPinned = isPinned ?? thread.isPinned
             let newArchived = isArchived ?? thread.isArchived
@@ -318,9 +303,8 @@ actor ThreadService {
             return updated
         }
 
-        // If no local thread found, just return a synthesized placeholder so
-        // callers have something to work with.
-        print("📝 updateThread(\(threadId)) called for unknown thread in local-only build – returning placeholder.")
+        // If no local thread is found, throw the same sanitized not-found
+        // error as getThread(threadId:) rather than logging opaque IDs.
         return try await getThread(threadId: threadId)
     }
 
@@ -330,12 +314,12 @@ actor ThreadService {
         if let index = personalThreads.firstIndex(where: { $0.id == threadId }) {
             personalThreads.remove(at: index)
             persistPersonalThreads()
-            print("🗑️ Deleted personal thread \(threadId) from local store")
+            AppErrorReporter.log(message: "Deleted personal thread from local store", context: "ThreadService.deleteThread")
 
             // Track analytics
             await AnalyticsService.shared.trackThreadDeleted(threadId: threadId)
         } else {
-            print("🗑️ deleteThread(\(threadId)) called for unknown thread in local-only build – ignoring.")
+            AppErrorReporter.log(message: "Ignoring delete for unknown thread", context: "ThreadService.deleteThread")
         }
     }
 }
