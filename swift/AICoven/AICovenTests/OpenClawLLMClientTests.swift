@@ -120,7 +120,9 @@ final class OpenClawLLMClientTests: XCTestCase {
         } catch {
             let nsError = error as NSError
             XCTAssertEqual(nsError.code, 400)
-            XCTAssertTrue(nsError.localizedDescription.contains("Invalid request"))
+            XCTAssertTrue(nsError.localizedDescription.contains("OpenClaw HTTP 400"))
+            XCTAssertFalse(nsError.localizedDescription.contains("Invalid request"))
+            XCTAssertTrue(nsError.localizedDescription.contains("Response body omitted"))
         }
     }
 }

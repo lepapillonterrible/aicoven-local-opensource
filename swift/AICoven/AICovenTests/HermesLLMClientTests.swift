@@ -121,7 +121,9 @@ final class HermesLLMClientTests: XCTestCase {
         } catch {
             let nsError = error as NSError
             XCTAssertEqual(nsError.code, 401)
-            XCTAssertTrue(nsError.localizedDescription.contains("Invalid API key"))
+            XCTAssertTrue(nsError.localizedDescription.contains("Hermes HTTP 401"))
+            XCTAssertFalse(nsError.localizedDescription.contains("Invalid API key"))
+            XCTAssertTrue(nsError.localizedDescription.contains("Response body omitted"))
         }
     }
 
