@@ -29,7 +29,6 @@ class AuthService: ObservableObject {
     private static func onboardingKey(for uid: String? = nil) -> String {
         let id = uid ?? UserScope.currentUserID
         let base = "hasCompletedOnboarding"
-        guard let id else { return base }
         return "\(id).\(base)"
     }
 
