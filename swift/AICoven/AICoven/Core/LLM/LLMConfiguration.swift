@@ -6,30 +6,29 @@ import Foundation
 /// - ModelDescriptors used by ModelRouter.
 /// - Concrete LLMClient implementations, keyed by provider ID.
 ///
-/// API keys are read from UserDefaults via ProviderAccountService's
-/// global cache keys (openai_api_key, anthropic_api_key, gemini_api_key).
-/// Configuration for building LLM clients from user-provided API keys.
-/// All methods are nonisolated since they only read from thread-safe UserDefaults.
+/// API keys are resolved from Keychain via ProviderAccountService account
+/// metadata. UserDefaults is only used for non-secret provider configuration
+/// such as base URLs and model preferences.
 enum LLMConfiguration {
     /// Note: ModelDescriptors are now built dynamically per-account using the
     /// provider's ListModels APIs via ProviderAccountService. This struct only
     /// knows how to build clients; it no longer hardcodes any model IDs.
     /// Builds LLMClient instances for providers that have API keys configured.
-    /// Keys are expected to be cached in UserDefaults by ProviderAccountService.
+    /// Secret keys are read from Keychain using provider account metadata.
     /// This method is implicitly MainActor since it accesses UserScope.
     static func makeDefaultClients() -> [String: LLMClient] {
         var result: [String: LLMClient] = [:]
         let defaults = UserDefaults.standard
 
-        if let openAIKey = defaults.string(forKey: UserScope.scopedKey("openai_api_key")), !openAIKey.isEmpty {
+        if let openAIKey = ProviderAccountService.apiKeyFromKeychain(forProvider: "openai"), !openAIKey.isEmpty {
             result["openai"] = OpenAILLMClient(apiKey: openAIKey)
         }
 
-        if let anthropicKey = defaults.string(forKey: UserScope.scopedKey("anthropic_api_key")), !anthropicKey.isEmpty {
+        if let anthropicKey = ProviderAccountService.apiKeyFromKeychain(forProvider: "anthropic"), !anthropicKey.isEmpty {
             result["anthropic"] = AnthropicLLMClient(apiKey: anthropicKey)
         }
 
-        if let geminiKey = defaults.string(forKey: UserScope.scopedKey("gemini_api_key")), !geminiKey.isEmpty {
+        if let geminiKey = ProviderAccountService.apiKeyFromKeychain(forProvider: "gemini"), !geminiKey.isEmpty {
             result["google"] = GeminiLLMClient(apiKey: geminiKey)
         }
 
@@ -49,12 +48,13 @@ enum LLMConfiguration {
         if let openClawURL = defaults.string(forKey: UserScope.scopedKey("openclaw_base_url")),
            !openClawURL.isEmpty,
            let openClawBaseURL = URL(string: openClawURL) {
-            result["openclaw"] = OpenClawLLMClient(baseURL: openClawBaseURL)
+            let openClawKey = ProviderAccountService.apiKeyFromKeychain(forProvider: "openclaw")
+                ?? ProcessInfo.processInfo.environment["OPENCLAW_API_KEY"]
+            result["openclaw"] = OpenClawLLMClient(baseURL: openClawBaseURL, apiKey: openClawKey)
         }
 
         // Hermes: Nous Research Hermes models via Together AI or self-hosted
-        let hermesKey = defaults.string(forKey: UserScope.scopedKey("hermes_api_key"))
-            ?? defaults.string(forKey: UserScope.scopedKey("together_api_key"))
+        let hermesKey = ProviderAccountService.apiKeyFromKeychain(forProvider: "hermes")
             ?? ProcessInfo.processInfo.environment["HERMES_API_KEY"]
             ?? ProcessInfo.processInfo.environment["TOGETHER_API_KEY"]
         let hermesBaseURL = defaults.string(forKey: UserScope.scopedKey("hermes_base_url"))

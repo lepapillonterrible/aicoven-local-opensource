@@ -1,4 +1,5 @@
 import Foundation
+import CommonCrypto
 import CryptoKit
 import LocalAuthentication
 import Security
@@ -21,6 +22,12 @@ actor DataEncryptionService {
     private struct Metadata: Codable {
         let salt: Data
         let wrappedKey: Data
+        let kdfVersion: Int?
+    }
+
+    private enum KDFVersion {
+        static let pbkdf2SHA256 = 2
+        static let pbkdf2Rounds = 210_000
     }
 
     /// User-scoped metadata key so each Firebase user has independent encryption.
@@ -46,14 +53,25 @@ actor DataEncryptionService {
     /// provided passphrase. Must be called before encrypt/decrypt.
     func unlock(withPassphrase passphrase: String) throws {
         if let metadata = try loadMetadata() {
-            let kWrap = try deriveWrappingKey(from: passphrase, salt: metadata.salt)
-            let sealedBox = try AES.GCM.SealedBox(combined: metadata.wrappedKey)
-            let kDataBytes = try AES.GCM.open(sealedBox, using: kWrap)
+            let kDataBytes: Data
+            if metadata.kdfVersion == KDFVersion.pbkdf2SHA256 {
+                let kWrap = try deriveWrappingKey(from: passphrase, salt: metadata.salt)
+                let sealedBox = try AES.GCM.SealedBox(combined: metadata.wrappedKey)
+                kDataBytes = try AES.GCM.open(sealedBox, using: kWrap)
+            } else {
+                // Legacy metadata used HKDF directly over the passphrase. Keep
+                // a read path so existing local installs can unlock, then
+                // immediately re-wrap under PBKDF2 metadata.
+                let legacyWrap = deriveLegacyHKDFWrappingKey(from: passphrase, salt: metadata.salt)
+                let sealedBox = try AES.GCM.SealedBox(combined: metadata.wrappedKey)
+                kDataBytes = try AES.GCM.open(sealedBox, using: legacyWrap)
+                try rewrapDataKey(kDataBytes, passphrase: passphrase)
+            }
             cachedDataKey = SymmetricKey(data: kDataBytes)
         } else {
             // First-time setup: generate K_data and metadata.
             let kData = SymmetricKey(size: .bits256)
-            let salt = Data((0 ..< 32).map { _ in UInt8.random(in: 0 ... 255) })
+            let salt = try secureRandomData(byteCount: 32)
             let kWrap = try deriveWrappingKey(from: passphrase, salt: salt)
 
             let kDataBytes = kData.withUnsafeBytes { Data($0) }
@@ -62,7 +80,7 @@ actor DataEncryptionService {
                 throw NSError(domain: "DataEncryptionService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to wrap data key"])
             }
 
-            let metadata = Metadata(salt: salt, wrappedKey: combined)
+            let metadata = Metadata(salt: salt, wrappedKey: combined, kdfVersion: KDFVersion.pbkdf2SHA256)
             try storeMetadata(metadata)
             cachedDataKey = kData
         }
@@ -108,8 +126,7 @@ actor DataEncryptionService {
         } else {
             // First-time setup: generate a random passphrase that never leaves
             // the device and is stored only in the Keychain.
-            let randomBytes = (0 ..< 32).map { _ in UInt8.random(in: 0 ... 255) }
-            let passphrase = Data(randomBytes).base64EncodedString()
+            let passphrase = try secureRandomData(byteCount: 32).base64EncodedString()
             try storeDevicePassphraseInKeychain(passphrase)
             try unlock(withPassphrase: passphrase)
         }
@@ -146,10 +163,42 @@ actor DataEncryptionService {
         return key
     }
 
-    /// Derives K_wrap from a passphrase and salt.
-    /// NOTE: This uses a simple HKDF-based derivation for now. For
-    /// production, consider a PBKDF2/Argon2-based KDF tuned per device.
+    /// Derives K_wrap from a passphrase and salt using PBKDF2-HMAC-SHA256.
+    /// The iteration count is intentionally stored in code as the current local
+    /// security baseline; future upgrades should bump `kdfVersion` and migrate
+    /// on successful unlock.
     private func deriveWrappingKey(from passphrase: String, salt: Data) throws -> SymmetricKey {
+        guard let passwordData = passphrase.data(using: .utf8) else {
+            throw NSError(domain: "DataEncryptionService", code: -20, userInfo: [NSLocalizedDescriptionKey: "Invalid passphrase encoding"])
+        }
+
+        var derivedKey = Data(repeating: 0, count: 32)
+        let derivedKeyLength = derivedKey.count
+        let status = derivedKey.withUnsafeMutableBytes { derivedBytes in
+            salt.withUnsafeBytes { saltBytes in
+                passwordData.withUnsafeBytes { passwordBytes in
+                    CCKeyDerivationPBKDF(
+                        CCPBKDFAlgorithm(kCCPBKDF2),
+                        passwordBytes.bindMemory(to: Int8.self).baseAddress,
+                        passwordData.count,
+                        saltBytes.bindMemory(to: UInt8.self).baseAddress,
+                        salt.count,
+                        CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256),
+                        UInt32(KDFVersion.pbkdf2Rounds),
+                        derivedBytes.bindMemory(to: UInt8.self).baseAddress,
+                        derivedKeyLength
+                    )
+                }
+            }
+        }
+
+        guard status == kCCSuccess else {
+            throw NSError(domain: "DataEncryptionService", code: Int(status), userInfo: [NSLocalizedDescriptionKey: "Failed to derive encryption key"])
+        }
+        return SymmetricKey(data: derivedKey)
+    }
+
+    private func deriveLegacyHKDFWrappingKey(from passphrase: String, salt: Data) -> SymmetricKey {
         let inputKey = SymmetricKey(data: Data(passphrase.utf8))
         return HKDF<SHA256>.deriveKey(
             inputKeyMaterial: inputKey,
@@ -157,6 +206,25 @@ actor DataEncryptionService {
             info: Data("aicoven-local-wrap".utf8),
             outputByteCount: 32
         )
+    }
+
+    private func rewrapDataKey(_ kDataBytes: Data, passphrase: String) throws {
+        let salt = try secureRandomData(byteCount: 32)
+        let kWrap = try deriveWrappingKey(from: passphrase, salt: salt)
+        let sealed = try AES.GCM.seal(kDataBytes, using: kWrap)
+        guard let combined = sealed.combined else {
+            throw NSError(domain: "DataEncryptionService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to wrap data key"])
+        }
+        try storeMetadata(Metadata(salt: salt, wrappedKey: combined, kdfVersion: KDFVersion.pbkdf2SHA256))
+    }
+
+    private func secureRandomData(byteCount: Int) throws -> Data {
+        var bytes = [UInt8](repeating: 0, count: byteCount)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        guard status == errSecSuccess else {
+            throw NSError(domain: "DataEncryptionService", code: Int(status), userInfo: [NSLocalizedDescriptionKey: "Failed to generate secure random data"])
+        }
+        return Data(bytes)
     }
 
     private func loadMetadata() throws -> Metadata? {

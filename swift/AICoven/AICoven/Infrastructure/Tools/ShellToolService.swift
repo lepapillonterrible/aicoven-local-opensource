@@ -65,6 +65,25 @@ actor ShellToolService {
     ) async -> ToolExecutionResult {
         let timeout = timeoutSeconds ?? defaultTimeoutSeconds
 
+        guard let normalizedWorkingDir = normalizeWorkingDirectory(workingDir), !normalizedWorkingDir.isEmpty else {
+            return await .permissionDenied(
+                tool: "shell.execute",
+                message: "Shell commands must include an explicit working directory.",
+                helpfulInstructions: "Choose a user-authorized project folder and retry with workingDir set."
+            )
+        }
+
+        let directoryAccessible = await MainActor.run {
+            FileAccessManager.shared.isPathAccessible(normalizedWorkingDir)
+        }
+        guard directoryAccessible else {
+            return await .permissionDenied(
+                tool: "shell.execute",
+                message: "Shell working directory '\(normalizedWorkingDir)' is not authorized.",
+                helpfulInstructions: "Grant access in Settings > File Access before running shell commands there."
+            )
+        }
+
         // Check if command is blocked
         if isCommandBlocked(command) {
             return await .permissionDenied(
@@ -97,7 +116,7 @@ actor ShellToolService {
         // Execute the command
         return await executeCommand(
             command: command,
-            workingDir: workingDir,
+            workingDir: normalizedWorkingDir,
             env: env,
             timeoutSeconds: timeout
         )
@@ -114,6 +133,15 @@ actor ShellToolService {
             }
         }
         return false
+    }
+
+    /// Normalize and resolve the shell working directory before authorization.
+    private func normalizeWorkingDirectory(_ workingDir: String?) -> String? {
+        guard let workingDir, !workingDir.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        let expanded = (workingDir as NSString).expandingTildeInPath
+        return URL(fileURLWithPath: expanded).standardizedFileURL.resolvingSymlinksInPath().path
     }
 
     /// Request user approval for a command.

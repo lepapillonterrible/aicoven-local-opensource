@@ -811,19 +811,12 @@ actor ToolExecutionService {
     }
 
     private func isToolAllowed(_ toolName: String, for agentType: String) -> Bool {
-        // If no whitelist exists for this agent, deny all (deny-by-default security)
-        // Or change to allow-all if that fits the policy. For now, let's assume if key missing, allow common tools?
-        // Better: require explicit configuration.
-
-        // For Coven agents, we might not have set whitelists yet.
-        // Let's implement a fallback allow-list for basic tools.
         if let allowed = toolWhitelist[agentType] {
             return allowed.contains(toolName)
         }
 
-        // Fallback: allow common tools if no specific profile set
-        // TODO: In production, switch to strict deny-by-default
-        return true
+        // Missing whitelist means no tool is allowed (deny by default).
+        return false
     }
 
     /// Helper to extract typed values from JSON args

@@ -71,10 +71,10 @@ actor GitHubToolService {
     /// Parse GitHub error response into actionable message
     private func parseError(statusCode: Int, data: Data, context: String) -> GitHubError {
         let message: String = if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                                 let msg = json["message"] as? String {
-            msg
+        let errorMessage = if let apiError = try? JSONDecoder().decode(GitHubAPIError.self, from: data) {
+            apiError.message
         } else {
-            String(data: data, encoding: .utf8) ?? "Unknown error"
+            "HTTP \(statusCode). Response body omitted to avoid leaking connected-account metadata."
         }
 
         switch statusCode {

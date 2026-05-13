@@ -132,8 +132,7 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
 
         let (data, response) = try await urlSession.data(for: request)
         if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-            let bodyText = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-            let message = "OpenAI HTTP \(http.statusCode): \(bodyText)"
+            let message = "OpenAI HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
             throw NSError(
                 domain: "OpenAILLMClient",
                 code: http.statusCode,
@@ -201,8 +200,7 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
 
         let (data, response) = try await urlSession.data(for: request)
         if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-            let bodyText = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-            let message = "OpenAI embeddings HTTP \(http.statusCode): \(bodyText)"
+            let message = "OpenAI embeddings HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
             throw NSError(
                 domain: "OpenAILLMClient",
                 code: http.statusCode,

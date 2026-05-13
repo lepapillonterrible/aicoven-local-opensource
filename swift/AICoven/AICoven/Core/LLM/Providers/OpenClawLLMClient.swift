@@ -5,11 +5,13 @@ import Foundation
 /// OpenClaw is a self-hosted LLM proxy/gateway that presents an OpenAI-compatible API.
 /// This client connects to user-configurable base URLs for local or private deployments.
 ///
-/// Configuration keys (via UserDefaults):
+/// Configuration keys:
 /// - openclaw_base_url: The base URL of your OpenClaw instance (default: http://localhost:3000)
-/// - openclaw_api_key: Optional API key (many local deployments don't require auth)
 /// - openclaw_model: Default model ID to use (optional)
 /// - openclaw_context_tokens: Context window size (default: 4096)
+///
+/// API keys are resolved from Keychain-backed provider accounts, with
+/// OPENCLAW_API_KEY as a development fallback.
 ///
 /// Environment variables:
 /// - OPENCLAW_BASE_URL
@@ -111,8 +113,8 @@ final class OpenClawLLMClient: LLMClient, @unchecked Sendable {
             return nil
         }
 
-        // API key is optional
-        let apiKey: String? = if let key = defaults.string(forKey: UserScope.scopedKey("openclaw_api_key")), !key.isEmpty {
+        // API key is optional and resolved from Keychain-backed provider accounts.
+        let apiKey: String? = if let key = ProviderAccountService.apiKeyFromKeychain(forProvider: "openclaw"), !key.isEmpty {
             key
         } else if let envKey = ProcessInfo.processInfo.environment["OPENCLAW_API_KEY"], !envKey.isEmpty {
             envKey
@@ -234,8 +236,7 @@ final class OpenClawLLMClient: LLMClient, @unchecked Sendable {
 
         let (data, response) = try await urlSession.data(for: request)
         if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-            let bodyText = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-            let message = "OpenClaw HTTP \(http.statusCode): \(bodyText)"
+            let message = "OpenClaw HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
             throw NSError(
                 domain: "OpenClawLLMClient",
                 code: http.statusCode,
@@ -314,8 +315,7 @@ final class OpenClawLLMClient: LLMClient, @unchecked Sendable {
 
         let (data, response) = try await urlSession.data(for: request)
         if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-            let bodyText = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-            let message = "OpenClaw embeddings HTTP \(http.statusCode): \(bodyText)"
+            let message = "OpenClaw embeddings HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
             throw NSError(
                 domain: "OpenClawLLMClient",
                 code: http.statusCode,

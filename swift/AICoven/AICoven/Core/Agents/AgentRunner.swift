@@ -62,10 +62,6 @@ final class AgentRunner {
     ) async {
         guard maxSteps > 0 else { return }
 
-        // Configure available tools validation for this agent type
-        // For now, we allow all tools, but this is where we'd set the whitelist
-        // await toolExecutionService.setWhitelist(for: profile.type, tools: ["web_search", "current_time", "file.read"])
-
         let agentGoal = userMessage
         let agentInstruction = """
         You are an autonomous local-first agent running entirely on the user's device.
@@ -91,6 +87,7 @@ final class AgentRunner {
         // Dynamically build the tool config so every connected tool and MCP
         // server is available to the agent by default.
         let toolConfig = await ContextBuilder.ToolConfig.connected()
+        await toolExecutionService.setWhitelist(for: profile.type, tools: toolConfig.enabledTools)
 
         do {
             let run = try await agentRunRepository.createRun(

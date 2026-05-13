@@ -29,30 +29,17 @@ class ShellApprovalManager: ObservableObject {
     private var pendingContinuations: [UUID: CheckedContinuation<ShellApprovalDecision, Never>] = [:]
 
     /// Built-in patterns that are always auto-approved (read-only operations).
+    /// These are intentionally narrow. Commands with paths, shell metacharacters,
+    /// redirection, pipes, substitutions, or user-added patterns still require
+    /// explicit review unless they pass the same safety guard below.
     /// These are not persisted — they are always present.
     private let builtInAutoApprovePatterns: [String] = [
-        "^ls\\b",
-        "^cat\\b",
-        "^head\\b",
-        "^tail\\b",
-        "^wc\\b",
-        "^grep\\b",
-        "^find\\b",
         "^pwd$",
         "^whoami$",
         "^date$",
-        "^echo\\b",
-        "^git status",
-        "^git log",
-        "^git diff",
-        "^git branch",
-        "^git remote -v",
-        "^which\\b",
-        "^type\\b",
-        "^file\\b",
-        "^stat\\b",
-        "^du\\b",
-        "^df\\b"
+        "^git status( --short)?$",
+        "^git branch( --show-current)?$",
+        "^git remote -v$"
     ]
 
     /// Persistence key for user-added "always allow" patterns.
@@ -140,6 +127,7 @@ class ShellApprovalManager: ObservableObject {
 
     private func isAutoApproved(_ command: String) -> Bool {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isSafeForAutoApproval(trimmed) else { return false }
         for pattern in allAutoApprovePatterns {
             if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
                regex.firstMatch(in: trimmed, options: [], range: NSRange(location: 0, length: trimmed.utf16.count)) != nil {
@@ -147,6 +135,17 @@ class ShellApprovalManager: ObservableObject {
             }
         }
         return false
+    }
+
+    private func isSafeForAutoApproval(_ command: String) -> Bool {
+        let disallowedFragments = [";", "&&", "||", "|", ">", "<", "`", "$(", "${", "\n", "\r"]
+        if disallowedFragments.contains(where: { command.contains($0) }) {
+            return false
+        }
+        let tokens = command.split(whereSeparator: { $0 == " " || $0 == "\t" })
+        return !tokens.contains { token in
+            token.hasPrefix("/") || token.hasPrefix("~") || token.contains("../")
+        }
     }
 
     private func addAutoApprovePattern(_ pattern: String) {

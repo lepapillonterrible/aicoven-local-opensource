@@ -130,8 +130,7 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
 
         let (data, response) = try await urlSession.data(for: request)
         if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-            let bodyText = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-            let message = "Anthropic HTTP \(http.statusCode): \(bodyText)"
+            let message = "Anthropic HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
             throw NSError(
                 domain: "AnthropicLLMClient",
                 code: http.statusCode,

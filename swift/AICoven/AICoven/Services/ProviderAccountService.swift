@@ -64,6 +64,7 @@ enum KeychainHelper {
         SecItemDelete(query as CFDictionary)
         var attributes = query
         attributes[kSecValueData as String] = data
+        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         let status = SecItemAdd(attributes as CFDictionary, nil)
         guard status == errSecSuccess else {
             throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
@@ -100,9 +101,9 @@ enum KeychainHelper {
 /// in the local-only client.
 ///
 /// Accounts are stored as JSON in UserDefaults (without secrets). Raw API
-/// keys are stored in the system Keychain, keyed by provider-account ID. For
-/// compatibility with the existing ChatService, we also mirror the most
-/// recent key per provider into UserDefaults (e.g. "openai_api_key").
+/// keys are stored in the system Keychain, keyed by provider-account ID.
+/// UserDefaults may hold non-secret provider configuration such as base URLs
+/// and model preferences, but it must never mirror raw API keys.
 actor ProviderAccountService {
     static let shared = ProviderAccountService()
 
@@ -146,10 +147,11 @@ actor ProviderAccountService {
         locals.append(local)
         try saveLocalAccounts(locals)
 
-        // Store the API key in the Keychain, and mirror to UserDefaults so the
-        // existing ChatService clients (OpenAI/Anthropic/Gemini) can read it.
+        // Store the API key in the Keychain only. Never mirror raw provider
+        // credentials into UserDefaults; LLMConfiguration resolves them from
+        // Keychain using the stored account metadata.
         try KeychainHelper.save(key: keychainKey(for: id), value: apiKey)
-        updateGlobalAPIKeyCache(provider: provider, apiKey: apiKey, baseURL: nil)
+        clearLegacyAPIKeyCache(provider: provider)
 
         await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
 
@@ -180,8 +182,8 @@ actor ProviderAccountService {
         locals.append(local)
         try saveLocalAccounts(locals)
 
-        // Cache base URL so LLMConfiguration can build the OllamaLLMClient.
-        updateGlobalAPIKeyCache(provider: "ollama", apiKey: nil, baseURL: baseURL)
+        // Cache non-secret base URL so LLMConfiguration can build the OllamaLLMClient.
+        updateProviderConfigCache(provider: "ollama", baseURL: baseURL)
 
         await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
 
@@ -249,7 +251,8 @@ actor ProviderAccountService {
             try KeychainHelper.save(key: keychainKey(for: id), value: apiKey)
         }
 
-        updateGlobalAPIKeyCache(provider: "openclaw", apiKey: apiKey, baseURL: baseURL)
+        updateProviderConfigCache(provider: "openclaw", baseURL: baseURL)
+        clearLegacyAPIKeyCache(provider: "openclaw")
 
         await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
 
@@ -284,7 +287,8 @@ actor ProviderAccountService {
             try KeychainHelper.save(key: keychainKey(for: id), value: apiKey)
         }
 
-        updateGlobalAPIKeyCache(provider: "hermes", apiKey: apiKey, baseURL: baseURL)
+        updateProviderConfigCache(provider: "hermes", baseURL: baseURL)
+        clearLegacyAPIKeyCache(provider: "hermes")
 
         await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
 
@@ -317,15 +321,15 @@ actor ProviderAccountService {
         locals[index] = updated
         try saveLocalAccounts(locals)
 
-        // Update Keychain if API key changed
+        // Update Keychain if API key changed. Do not mirror secrets into UserDefaults.
         if let apiKey, !apiKey.isEmpty {
             try KeychainHelper.save(key: keychainKey(for: id), value: apiKey)
-            updateGlobalAPIKeyCache(provider: old.provider, apiKey: apiKey, baseURL: nil)
+            clearLegacyAPIKeyCache(provider: old.provider)
         }
 
-        // Update base URL cache if changed
+        // Update non-secret base URL cache if changed.
         if let baseURL {
-            updateGlobalAPIKeyCache(provider: old.provider, apiKey: nil, baseURL: baseURL)
+            updateProviderConfigCache(provider: old.provider, baseURL: baseURL)
         }
 
         await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
@@ -347,7 +351,7 @@ actor ProviderAccountService {
         // UserDefaults API key hint so the UI can surface a proper error.
         let remainingForProvider = locals.contains { $0.provider == removed.provider }
         if !remainingForProvider {
-            clearGlobalAPIKeyCache(provider: removed.provider)
+            clearProviderConfigCache(provider: removed.provider)
         }
 
         await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
@@ -508,6 +512,76 @@ actor ProviderAccountService {
 // MARK: - ProviderAccountService Private Helpers
 
 extension ProviderAccountService {
+    /// Resolve the first configured API key for a provider from Keychain using
+    /// user-scoped account metadata. This intentionally bypasses UserDefaults
+    /// secret mirrors; UserDefaults may only contain non-secret metadata.
+    static func apiKeyFromKeychain(forProvider provider: String) -> String? {
+        let normalized = provider.lowercased()
+        let providerMatches: (String) -> Bool = { candidate in
+            let lower = candidate.lowercased()
+            if normalized == "google" || normalized == "gemini" {
+                return lower == "google" || lower == "gemini"
+            }
+            if normalized == "together" {
+                return lower == "hermes"
+            }
+            return lower == normalized
+        }
+
+        let accounts = loadLocalAccountsFromDefaults().filter { providerMatches($0.provider) }
+        guard let account = accounts.first else {
+            return nil
+        }
+        return KeychainHelper.load(key: keychainKey(forAccountId: account.id))
+    }
+
+    static func clearLegacyAPIKeyCache(provider: String) {
+        let defaults = UserDefaults.standard
+        let keys: [String]
+        switch provider.lowercased() {
+        case "openai":
+            keys = ["openai_api_key"]
+        case "anthropic":
+            keys = ["anthropic_api_key"]
+        case "google", "gemini":
+            keys = ["gemini_api_key"]
+        case "openclaw":
+            keys = ["openclaw_api_key"]
+        case "hermes", "together":
+            keys = ["hermes_api_key", "together_api_key"]
+        default:
+            keys = []
+        }
+        for key in keys {
+            defaults.removeObject(forKey: UserScope.scopedKey(key))
+        }
+    }
+
+    private static func loadLocalAccountsFromDefaults() -> [LocalProviderAccount] {
+        let storageKey = UserScope.scopedKey("provider_accounts.v1")
+        guard let data = UserDefaults.standard.data(forKey: storageKey) else {
+            return []
+        }
+        do {
+            return try JSONDecoder().decode([LocalProviderAccount].self, from: data)
+        } catch {
+            AppErrorReporter.log(error: error, context: "ProviderAccountService.loadLocalAccountsFromDefaults.decodeAccounts")
+            return []
+        }
+    }
+
+    private static func keychainKey(forAccountId accountId: String) -> String {
+        "provider-account-\(accountId)"
+    }
+
+    private static func sanitizedHTTPError(provider: String, statusCode: Int) -> NSError {
+        NSError(
+            domain: "ProviderAccountService",
+            code: statusCode,
+            userInfo: [NSLocalizedDescriptionKey: "\(provider) models HTTP \(statusCode). Response body omitted to avoid leaking provider/account metadata."]
+        )
+    }
+
     private func loadLocalAccounts() throws -> [LocalProviderAccount] {
         let defaults = UserDefaults.standard
         guard let data = defaults.data(forKey: storageKey) else {
@@ -531,51 +605,41 @@ extension ProviderAccountService {
         "provider-account-\(accountId)"
     }
 
-    private func updateGlobalAPIKeyCache(provider: String, apiKey: String?, baseURL: String? = nil) {
+    private func updateProviderConfigCache(provider: String, baseURL: String? = nil) {
         let defaults = UserDefaults.standard
+        clearLegacyAPIKeyCache(provider: provider)
         switch provider.lowercased() {
-        case "openai":
-            if let apiKey { defaults.set(apiKey, forKey: UserScope.scopedKey("openai_api_key")) }
-        case "anthropic":
-            if let apiKey { defaults.set(apiKey, forKey: UserScope.scopedKey("anthropic_api_key")) }
-        case "google", "gemini":
-            if let apiKey { defaults.set(apiKey, forKey: UserScope.scopedKey("gemini_api_key")) }
         case "ollama":
             if let baseURL { defaults.set(baseURL, forKey: UserScope.scopedKey("ollama_base_url")) }
         case "openclaw":
-            if let apiKey { defaults.set(apiKey, forKey: UserScope.scopedKey("openclaw_api_key")) }
             if let baseURL { defaults.set(baseURL, forKey: UserScope.scopedKey("openclaw_base_url")) }
         case "hermes":
-            if let apiKey { defaults.set(apiKey, forKey: UserScope.scopedKey("hermes_api_key")) }
             if let baseURL { defaults.set(baseURL, forKey: UserScope.scopedKey("hermes_base_url")) }
         default:
             break
         }
     }
 
-    private func clearGlobalAPIKeyCache(provider: String) {
+    private func clearProviderConfigCache(provider: String) {
         let defaults = UserDefaults.standard
+        clearLegacyAPIKeyCache(provider: provider)
         switch provider.lowercased() {
-        case "openai":
-            defaults.removeObject(forKey: UserScope.scopedKey("openai_api_key"))
-        case "anthropic":
-            defaults.removeObject(forKey: UserScope.scopedKey("anthropic_api_key"))
-        case "google", "gemini":
-            defaults.removeObject(forKey: UserScope.scopedKey("gemini_api_key"))
         case "ollama":
             defaults.removeObject(forKey: UserScope.scopedKey("ollama_base_url"))
         case "mlx":
             defaults.removeObject(forKey: "MLXModelManager.activeModelID")
             defaults.removeObject(forKey: "MLXModelManager.downloadedModelIDs")
         case "openclaw":
-            defaults.removeObject(forKey: UserScope.scopedKey("openclaw_api_key"))
             defaults.removeObject(forKey: UserScope.scopedKey("openclaw_base_url"))
         case "hermes":
-            defaults.removeObject(forKey: UserScope.scopedKey("hermes_api_key"))
             defaults.removeObject(forKey: UserScope.scopedKey("hermes_base_url"))
         default:
             break
         }
+    }
+
+    private func clearLegacyAPIKeyCache(provider: String) {
+        ProviderAccountService.clearLegacyAPIKeyCache(provider: provider)
     }
 
     /// Try to fetch live model metadata for a specific provider account using
@@ -600,12 +664,7 @@ extension ProviderAccountService {
             request.setValue("application/json", forHTTPHeaderField: "Accept")
             let (data, response) = try await URLSession.shared.data(for: request)
             if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-                let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-                throw NSError(
-                    domain: "ProviderAccountService",
-                    code: http.statusCode,
-                    userInfo: [NSLocalizedDescriptionKey: "OpenAI models HTTP \(http.statusCode): \(body)"]
-                )
+                throw Self.sanitizedHTTPError(provider: "OpenAI", statusCode: http.statusCode)
             }
             let decoded = try JSONDecoder().decode(OpenAIListResponse.self, from: data)
             let chatOnly = decoded.data
@@ -647,12 +706,7 @@ extension ProviderAccountService {
                 request.setValue("application/json", forHTTPHeaderField: "Accept")
                 let (data, response) = try await URLSession.shared.data(for: request)
                 if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-                    let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-                    throw NSError(
-                        domain: "ProviderAccountService",
-                        code: http.statusCode,
-                        userInfo: [NSLocalizedDescriptionKey: "Gemini models HTTP \(http.statusCode): \(body)"]
-                    )
+                    throw Self.sanitizedHTTPError(provider: "Gemini", statusCode: http.statusCode)
                 }
                 let decoded = try JSONDecoder().decode(GeminiListResponse.self, from: data)
                 allModelNames.append(contentsOf: (decoded.models ?? []).map(\.name))
@@ -720,12 +774,7 @@ extension ProviderAccountService {
             request.setValue("application/json", forHTTPHeaderField: "Accept")
             let (data, response) = try await URLSession.shared.data(for: request)
             if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-                let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-                throw NSError(
-                    domain: "ProviderAccountService",
-                    code: http.statusCode,
-                    userInfo: [NSLocalizedDescriptionKey: "\(provider) models HTTP \(http.statusCode): \(body)"]
-                )
+                throw Self.sanitizedHTTPError(provider: provider, statusCode: http.statusCode)
             }
             let decoded = try JSONDecoder().decode(OpenAIListResponse.self, from: data)
             let chatOnly = decoded.data
@@ -758,12 +807,7 @@ extension ProviderAccountService {
             request.setValue("application/json", forHTTPHeaderField: "Accept")
             let (data, response) = try await URLSession.shared.data(for: request)
             if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-                let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-                throw NSError(
-                    domain: "ProviderAccountService",
-                    code: http.statusCode,
-                    userInfo: [NSLocalizedDescriptionKey: "Anthropic models HTTP \(http.statusCode): \(body)"]
-                )
+                throw Self.sanitizedHTTPError(provider: "Anthropic", statusCode: http.statusCode)
             }
             let decoded = try JSONDecoder().decode(AnthropicListResponse.self, from: data)
             let modelsData = decoded.data ?? []

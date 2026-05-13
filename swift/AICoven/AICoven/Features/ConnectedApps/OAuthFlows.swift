@@ -71,8 +71,8 @@ final class GitHubDeviceFlow: OAuthFlow {
         let (data, response) = try await URLSession.shared.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            let errorText = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw ConnectedAccountError.oauthFailed(message: "Failed to get device code: \(errorText)")
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+            throw ConnectedAccountError.oauthFailed(message: "Failed to get device code: HTTP \(statusCode). Response body omitted to avoid leaking OAuth metadata.")
         }
 
         // Parse response
@@ -198,11 +198,11 @@ final class GoogleOAuthFlow: NSObject, OAuthFlow, ASWebAuthenticationPresentatio
     /// Start the Google OAuth flow with PKCE
     func authenticate() async throws -> OAuthTokenBundle {
         // Generate PKCE code verifier and challenge
-        codeVerifier = generateCodeVerifier()
+        codeVerifier = try generateCodeVerifier()
         codeChallenge = generateCodeChallenge(verifier: codeVerifier)
 
         // Generate state for CSRF protection
-        let state = UUID().uuidString
+        let state = try generateRandomURLSafeString(byteCount: 16)
 
         // Build authorization URL
         var components = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth")!
@@ -276,8 +276,8 @@ final class GoogleOAuthFlow: NSObject, OAuthFlow, ASWebAuthenticationPresentatio
         let (data, response) = try await URLSession.shared.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            let errorText = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw ConnectedAccountError.oauthFailed(message: "Token exchange failed: \(errorText)")
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+            throw ConnectedAccountError.oauthFailed(message: "Token exchange failed: HTTP \(statusCode). Response body omitted to avoid leaking OAuth metadata.")
         }
 
         // Parse response
@@ -303,9 +303,16 @@ final class GoogleOAuthFlow: NSObject, OAuthFlow, ASWebAuthenticationPresentatio
     // MARK: - PKCE Helpers
 
     /// Generate a random code verifier for PKCE
-    private func generateCodeVerifier() -> String {
-        var buffer = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, buffer.count, &buffer)
+    private func generateCodeVerifier() throws -> String {
+        try generateRandomURLSafeString(byteCount: 32)
+    }
+
+    private func generateRandomURLSafeString(byteCount: Int) throws -> String {
+        var buffer = [UInt8](repeating: 0, count: byteCount)
+        let status = SecRandomCopyBytes(kSecRandomDefault, buffer.count, &buffer)
+        guard status == errSecSuccess else {
+            throw ConnectedAccountError.oauthFailed(message: "Failed to generate secure OAuth randomness")
+        }
         return Data(buffer).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")

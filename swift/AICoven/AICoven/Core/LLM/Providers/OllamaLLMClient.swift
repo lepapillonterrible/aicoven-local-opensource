@@ -83,8 +83,7 @@ final class OllamaLLMClient: LLMClient, @unchecked Sendable {
 
         let (data, response) = try await urlSession.data(for: request)
         if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-            let bodyText = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-            let message = "Ollama HTTP \(http.statusCode): \(bodyText)"
+            let message = "Ollama HTTP \(http.statusCode). Response body omitted to avoid leaking local model metadata."
             throw NSError(
                 domain: "OllamaLLMClient",
                 code: http.statusCode,
@@ -177,11 +176,10 @@ final class OllamaLLMClient: LLMClient, @unchecked Sendable {
 
         let (data, response) = try await urlSession.data(for: request)
         if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-            let bodyText = String(data: data, encoding: .utf8) ?? ""
             throw NSError(
                 domain: "OllamaLLMClient",
                 code: http.statusCode,
-                userInfo: [NSLocalizedDescriptionKey: "Ollama /api/tags HTTP \(http.statusCode): \(bodyText)"]
+                userInfo: [NSLocalizedDescriptionKey: "Ollama embeddings HTTP \(http.statusCode). Response body omitted to avoid leaking local model metadata."]
             )
         }
         let decoded = try JSONDecoder().decode(TagsResponse.self, from: data)

@@ -471,6 +471,7 @@ actor ChatService {
         let toolConfig: ContextBuilder.ToolConfig = isLocalModel
             ? await .mlxTools()
             : await .connected()
+        await ToolExecutionService.shared.setWhitelist(for: "chat", tools: toolConfig.enabledTools)
 
         // ── Context-aware repeat detection (ported from backend) ──────────
         // Tracks tool-call signatures across loop iterations so we can

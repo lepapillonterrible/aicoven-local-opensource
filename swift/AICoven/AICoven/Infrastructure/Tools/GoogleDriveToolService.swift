@@ -71,7 +71,7 @@ actor GoogleDriveToolService {
            let message = error["message"] as? String {
             return .apiError(statusCode: statusCode, message: message)
         }
-        return .apiError(statusCode: statusCode, message: String(data: data, encoding: .utf8) ?? "Unknown error")
+        return .apiError(statusCode: statusCode, message: "HTTP \(statusCode). Response body omitted to avoid leaking connected-account metadata.")
     }
 
     // MARK: - Drive Operations

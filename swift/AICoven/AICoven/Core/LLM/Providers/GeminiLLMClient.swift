@@ -162,8 +162,7 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
         // ── Execute request ────────────────────────────────────────────────
         let (data, response) = try await urlSession.data(for: request)
         if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-            let bodyText = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-            let message = "Gemini HTTP \(http.statusCode): \(bodyText)"
+            let message = "Gemini HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
             throw NSError(
                 domain: "GeminiLLMClient",
                 code: http.statusCode,
@@ -183,8 +182,7 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
             decoded = try JSONDecoder().decode(ResponseBody.self, from: data)
         } catch {
             #if DEBUG
-            let bodySnippet = String(data: data.prefix(500), encoding: .utf8) ?? "<non-utf8>"
-            AppErrorReporter.log(message: "Gemini decode failed: \(error.localizedDescription)\nResponse: \(bodySnippet)", context: "GeminiLLMClient.completeChat")
+            AppErrorReporter.log(message: "Gemini decode failed: \(error.localizedDescription); response body omitted", context: "GeminiLLMClient.completeChat")
             #endif
             throw error
         }

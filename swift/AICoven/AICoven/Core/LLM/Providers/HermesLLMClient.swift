@@ -5,11 +5,12 @@ import Foundation
 /// Hermes is a family of models fine-tuned for agentic capabilities and tool use.
 /// This client supports both Together AI cloud hosting and self-hosted deployments.
 ///
-/// Configuration keys (via UserDefaults):
-/// - hermes_api_key: API key for Together AI or your self-hosted instance
-///   (Alternatively, use together_api_key for Together AI)
+/// Configuration keys:
 /// - hermes_base_url: For self-hosted instances (default: Together AI)
 /// - hermes_model: Model alias or full model ID (default: "hermes-3")
+///
+/// API keys are resolved from Keychain-backed provider accounts, with
+/// HERMES_API_KEY / TOGETHER_API_KEY environment variables as development fallbacks.
 ///
 /// Environment variables:
 /// - HERMES_API_KEY or TOGETHER_API_KEY
@@ -93,10 +94,9 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
             ?? ProcessInfo.processInfo.environment["HERMES_BASE_URL"]
         let baseURL = rawBaseURL.flatMap { $0.isEmpty ? nil : URL(string: $0) }
 
-        // Resolve API key (hermes_api_key preferred, fallback to together_api_key)
+        // Resolve API key from Keychain-backed provider accounts, then environment.
         let apiKey = [
-            defaults.string(forKey: UserScope.scopedKey("hermes_api_key")),
-            defaults.string(forKey: UserScope.scopedKey("together_api_key")),
+            ProviderAccountService.apiKeyFromKeychain(forProvider: "hermes"),
             ProcessInfo.processInfo.environment["HERMES_API_KEY"],
             ProcessInfo.processInfo.environment["TOGETHER_API_KEY"]
         ].compactMap(\.self).first(where: { !$0.isEmpty })
@@ -264,8 +264,7 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
 
         let (data, response) = try await urlSession.data(for: request)
         if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-            let bodyText = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-            let message = "Hermes HTTP \(http.statusCode): \(bodyText)"
+            let message = "Hermes HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
             throw NSError(
                 domain: "HermesLLMClient",
                 code: http.statusCode,
@@ -346,8 +345,7 @@ final class HermesLLMClient: LLMClient, @unchecked Sendable {
 
         let (data, response) = try await urlSession.data(for: request)
         if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-            let bodyText = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-            let message = "Hermes embeddings HTTP \(http.statusCode): \(bodyText)"
+            let message = "Hermes embeddings HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
             throw NSError(
                 domain: "HermesLLMClient",
                 code: http.statusCode,

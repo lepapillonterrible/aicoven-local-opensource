@@ -46,6 +46,7 @@ final class AgentRunnerToolingTests: XCTestCase {
     func testToolExecution_currentTimeProducesContextBlock() async {
         let mock = MockToolService()
         let service = ToolExecutionService(toolService: mock)
+        await service.setWhitelist(for: "test-agent", tools: ["current_time", "web_search", "nonexistent_tool"])
 
         let call = ParsedToolCall(name: "current_time", args: [:])
         let result = await service.execute(toolCall: call, agentType: "test-agent")
@@ -72,6 +73,7 @@ final class AgentRunnerToolingTests: XCTestCase {
         ]
 
         let service = ToolExecutionService(toolService: mock)
+        await service.setWhitelist(for: "test-agent", tools: ["current_time", "web_search", "nonexistent_tool"])
         let call = ParsedToolCall(name: "web_search", args: ["query": AnyJSONValue("swift programming")])
         let result = await service.execute(toolCall: call, agentType: "test-agent")
 
@@ -87,6 +89,7 @@ final class AgentRunnerToolingTests: XCTestCase {
         mock.webSearchResults = [] // No results
 
         let service = ToolExecutionService(toolService: mock)
+        await service.setWhitelist(for: "test-agent", tools: ["current_time", "web_search", "nonexistent_tool"])
         let call = ParsedToolCall(name: "web_search", args: ["query": AnyJSONValue("xyznonexistentquery12345")])
         let result = await service.execute(toolCall: call, agentType: "test-agent")
 
@@ -105,6 +108,7 @@ final class AgentRunnerToolingTests: XCTestCase {
         )
 
         let service = ToolExecutionService(toolService: mock)
+        await service.setWhitelist(for: "test-agent", tools: ["current_time", "web_search", "nonexistent_tool"])
         let call = ParsedToolCall(name: "web_search", args: ["query": AnyJSONValue("swift programming")])
         let result = await service.execute(toolCall: call, agentType: "test-agent")
 
@@ -117,6 +121,7 @@ final class AgentRunnerToolingTests: XCTestCase {
     func testToolExecution_webSearchMissingQueryReturnsValidationError() async {
         let mock = MockToolService()
         let service = ToolExecutionService(toolService: mock)
+        await service.setWhitelist(for: "test-agent", tools: ["current_time", "web_search", "nonexistent_tool"])
 
         let call = ParsedToolCall(name: "web_search", args: [:])
         let result = await service.execute(toolCall: call, agentType: "test-agent")
@@ -128,11 +133,24 @@ final class AgentRunnerToolingTests: XCTestCase {
     func testToolExecution_unknownToolReturnsError() async {
         let mock = MockToolService()
         let service = ToolExecutionService(toolService: mock)
+        await service.setWhitelist(for: "test-agent", tools: ["current_time", "web_search", "nonexistent_tool"])
 
         let call = ParsedToolCall(name: "nonexistent_tool", args: [:])
         let result = await service.execute(toolCall: call, agentType: "test-agent")
 
         XCTAssertEqual(result.status, "error", "Expected error status for unknown tool")
         XCTAssertTrue(result.error?.contains("Unknown tool") == true)
+    }
+
+    func testToolExecution_missingWhitelistDeniesToolByDefault() async {
+        let mock = MockToolService()
+        let service = ToolExecutionService(toolService: mock)
+
+        let call = ParsedToolCall(name: "current_time", args: [:])
+        let result = await service.execute(toolCall: call, agentType: "unconfigured-agent")
+
+        XCTAssertEqual(result.status, "denied")
+        XCTAssertEqual(result.errorType, "permission_denied")
+        XCTAssertTrue(result.error?.contains("not allowed") == true)
     }
 }
