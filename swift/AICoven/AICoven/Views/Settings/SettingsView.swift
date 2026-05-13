@@ -10,6 +10,8 @@ struct SettingsView: View {
     @AppStorage("analytics_product_enabled") private var productAnalyticsEnabled = true
     @AppStorage("analytics_performance_enabled") private var performanceAnalyticsEnabled = true
 
+    @State private var cacheClearMessage: String?
+
     private let analytics = AnalyticsService.shared
 
     var body: some View {
@@ -143,13 +145,24 @@ struct SettingsView: View {
             .onAppear {
                 analytics.trackScreenView(screenName: "SettingsView", screenClass: "SettingsView")
             }
+            .alert(
+                "Cache Cleared",
+                isPresented: Binding(
+                    get: { cacheClearMessage != nil },
+                    set: { if !$0 { cacheClearMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(cacheClearMessage ?? "")
+            }
         }
     }
 
     /// Clear cached data
     private func clearCache() {
-        // TODO: Implement cache clearing
-        print("Clearing cache...")
+        let result = CacheManagementService.clearLocalCaches()
+        cacheClearMessage = result.userMessage
     }
 
     /// Update analytics consent based on user preferences

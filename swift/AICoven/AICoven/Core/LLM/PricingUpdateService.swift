@@ -50,6 +50,36 @@ final class PricingUpdateService {
         }
     }
 
+    /// Clear locally cached provider pricing overrides without touching user
+    /// data, provider credentials, memories, or threads.
+    @discardableResult
+    func clearCachedOverrides() -> Int {
+        var removedItems = 0
+
+        if !cachedOverrides.isEmpty {
+            cachedOverrides = []
+            removedItems += 1
+        }
+
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: lastFetchedKey) != nil {
+            defaults.removeObject(forKey: lastFetchedKey)
+            removedItems += 1
+        }
+
+        let url = cacheURL()
+        if FileManager.default.fileExists(atPath: url.path) {
+            do {
+                try FileManager.default.removeItem(at: url)
+                removedItems += 1
+            } catch {
+                AppErrorReporter.log(error: error, context: "PricingUpdateService.clearCachedOverrides.removeFile")
+            }
+        }
+
+        return removedItems
+    }
+
     #if DEBUG
     /// Testing-only entry point that directly invokes the async refresh logic
     /// without spawning a detached Task. This allows XCTest to await the
