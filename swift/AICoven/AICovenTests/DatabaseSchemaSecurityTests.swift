@@ -9,7 +9,7 @@ final class DatabaseSchemaSecurityTests: XCTestCase {
         DatabaseManager.shared.configureIfNeeded()
     }
 
-    func testUserScopedTablesRejectMissingUserID() async throws {
+    func testUserScopedTablesRejectMissingUserID() throws {
         let dbQueue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
 
         XCTAssertThrowsError(try dbQueue.write { db in
@@ -27,7 +27,7 @@ final class DatabaseSchemaSecurityTests: XCTestCase {
         })
     }
 
-    func testMessagesMustBelongToSameUserAsThread() async throws {
+    func testMessagesMustBelongToSameUserAsThread() throws {
         let dbQueue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
         let threadID = "phase2-thread-\(UUID().uuidString)"
 
@@ -46,7 +46,7 @@ final class DatabaseSchemaSecurityTests: XCTestCase {
         })
     }
 
-    func testRolesMustBelongToSameUserAsCoven() async throws {
+    func testRolesMustBelongToSameUserAsCoven() throws {
         let dbQueue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
         let covenID = "phase2-coven-\(UUID().uuidString)"
 
