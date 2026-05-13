@@ -152,12 +152,12 @@ final class ErrorReportingTests: XCTestCase {
     }
 
     func testLogRedactorRedactsSecretsAndPersonalIdentifiers() {
-        let input = "email person@example.com api_key=sk-test_abcdefghijklmnopqrstuvwxyz userId: firebase-user-1234567890abcdef"
+        let input = "email person@example.com api_key=sample-secret-value userId: firebase-user-1234567890abcdef"
 
         let redacted = AppLogRedactor.redact(input)
 
         XCTAssertFalse(redacted.contains("person@example.com"))
-        XCTAssertFalse(redacted.contains("sk-test_abcdefghijklmnopqrstuvwxyz"))
+        XCTAssertFalse(redacted.contains("sample-secret-value"))
         XCTAssertFalse(redacted.contains("firebase-user-1234567890abcdef"))
         XCTAssertTrue(redacted.contains("<redacted>"))
     }

@@ -14,7 +14,7 @@ enum AppLogRedactor {
         let patterns = [
             // Provider/API tokens and bearer credentials.
             #"(?i)(authorization\s*[:=]\s*bearer\s+)[A-Za-z0-9._\-+/=]{8,}"#,
-            #"(?i)((api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|secret|password)\s*[:=]\s*)[^\s,;\]\}\)]+"#,
+            #"(?i)((api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password)\s*[:=]\s*)[^\s,;\]\}\)]+"#,
             #"\b(sk|pk|rk|xox[baprs]|gh[pousr])_[A-Za-z0-9_\-]{12,}\b"#,
             #"\bAIza[0-9A-Za-z_\-]{20,}\b"#,
 
