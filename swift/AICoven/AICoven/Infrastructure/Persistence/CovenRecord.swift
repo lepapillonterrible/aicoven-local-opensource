@@ -201,7 +201,7 @@ actor CovenRepository {
 
         let now = Date()
         let id = UUID().uuidString
-        let uid = await UserScope.currentUserID
+        let uid = UserScope.currentUserID
         let record = CovenRecord(
             id: id,
             name: name,
@@ -232,7 +232,7 @@ actor CovenRepository {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
         // Fetch user ID outside the synchronous database closure
-        let uid = await UserScope.currentUserID
+        let uid = UserScope.currentUserID
 
         let records: [CovenRecord] = try await dbQueue.read { db in
             var request = CovenRecord.order(CovenRecord.Columns.createdAt.desc)
@@ -298,7 +298,7 @@ actor CovenRepository {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
         // Fetch user ID outside the synchronous database closure
-        let uid = await UserScope.currentUserID
+        let uid = UserScope.currentUserID
 
         let records: [RoleRecord] = try await dbQueue.read { db in
             var request = RoleRecord

@@ -46,7 +46,7 @@ class StoreService: ObservableObject {
 
     /// Whether user is authenticated. Entitlements require authentication.
     private var isAuthenticated: Bool {
-        UserScope.currentUserID != nil
+        UserScope.firebaseUserID != nil
     }
 
     var hasCreator: Bool {
@@ -116,7 +116,7 @@ class StoreService: ObservableObject {
     /// Reload entitlements for the current user. Call after user switch.
     /// Requires authentication - clears entitlements if no user is signed in.
     func reloadForCurrentUser() async {
-        let userID = UserScope.currentUserID ?? "<none>"
+        let userID = UserScope.currentUserID
         print("💳 StoreService.reloadForCurrentUser: userID=\(userID)")
 
         await MainActor.run {
@@ -124,7 +124,7 @@ class StoreService: ObservableObject {
             purchasedProductIDs = []
 
             // Only load purchases if user is authenticated
-            guard UserScope.currentUserID != nil else {
+            guard isAuthenticated else {
                 AppErrorReporter.log(message: "Clearing purchases - no authenticated user", context: "StoreService.reloadForCurrentUser")
                 return
             }
@@ -135,7 +135,7 @@ class StoreService: ObservableObject {
         }
 
         // Only refresh from StoreKit if authenticated
-        guard UserScope.currentUserID != nil else { return }
+        guard isAuthenticated else { return }
         await refreshEntitlements()
         print("💳 After StoreKit refresh: \(purchasedProductIDs)")
     }
@@ -143,7 +143,7 @@ class StoreService: ObservableObject {
     /// Clear stale test purchases that were cached for this user but made by automated tests.
     /// Call this once to clean up after running tests with a real Firebase account.
     func clearStalePurchasesForCurrentUser() {
-        guard UserScope.currentUserID != nil else { return }
+        guard isAuthenticated else { return }
         print("🧹 Clearing stale purchases for current user")
         print("   Was: \(purchasedProductIDs)")
         purchasedProductIDs = []
@@ -164,8 +164,8 @@ class StoreService: ObservableObject {
     private var transactionListenerTask: Task<Void, Never>?
 
     private init() {
-        // Don't load persisted purchases here - they're unscoped if no user is signed in.
-        // Instead, load them in reloadForCurrentUser() which is called after auth.
+        // Don't load persisted purchases here. The active user scope may change
+        // after authentication, so entitlements load in reloadForCurrentUser().
         transactionListenerTask = listenForTransactions()
         Task {
             await loadProducts()
@@ -223,7 +223,7 @@ class StoreService: ObservableObject {
         purchaseError = nil
 
         // Require authentication before allowing purchase
-        guard UserScope.currentUserID != nil else {
+        guard isAuthenticated else {
             purchaseError = "Please sign in to make a purchase."
             return
         }

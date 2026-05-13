@@ -18,10 +18,9 @@ actor ThreadService {
     private var persistenceURL: URL
 
     private init() {
-        // IMPORTANT: Do NOT load threads here. At init time, the Firebase user
-        // may not be authenticated yet, so UserScope.currentUserID returns nil
-        // and we'd load from the unscoped file, causing data leakage between users.
-        // Threads are loaded in reloadForCurrentUser() after authentication.
+        // IMPORTANT: Do NOT load threads here. The active user scope may change
+        // after authentication, so threads are loaded in reloadForCurrentUser()
+        // using the scoped persistence path for the current owner.
         persistenceURL = ThreadService.makePersistenceURL()
         // Start with empty array - will be populated after auth via reloadForCurrentUser()
         personalThreads = []
@@ -29,7 +28,7 @@ actor ThreadService {
 
     /// Reload threads for the current user. Call after user switch.
     func reloadForCurrentUser() {
-        let currentUID = UserScope.currentUserID ?? "<none>"
+        let currentUID = UserScope.currentUserID
         persistenceURL = ThreadService.makePersistenceURL()
         print("🔄 ThreadService.reloadForCurrentUser: currentUID=\(currentUID), file=\(persistenceURL.lastPathComponent)")
 
@@ -73,22 +72,11 @@ actor ThreadService {
     /// This handles legacy threads created before auth was required.
     private func cleanupOrphanedThreads() {
         let currentUserID = UserScope.currentUserID
-        guard let currentUserID else {
-            // No user signed in - clear all threads to prevent data leakage
-            if !personalThreads.isEmpty {
-                print("⚠️ Clearing \(personalThreads.count) threads - no authenticated user")
-                AppErrorReporter.log(message: "Clearing \(personalThreads.count) threads - no authenticated user", context: "ThreadService.cleanupOrphanedThreads")
-                personalThreads = []
-                persistPersonalThreads()
-            }
-            return
-        }
 
-        // Remove threads with missing, invalid, or mismatched user IDs
+        // Remove threads with missing or mismatched user IDs
         let validUserIDs = [currentUserID] // Only current user's threads are valid
         let orphanedThreads = personalThreads.filter { thread in
             thread.userId.isEmpty ||
-                thread.userId == "local-user" ||
                 !validUserIDs.contains(thread.userId)
         }
 
@@ -195,14 +183,8 @@ actor ThreadService {
     ///   - covenId: The coven ID (nil for personal thread)
     ///   - agentId: AI agent/role ID (optional)
     /// - Returns: The created thread
-    /// Fallback user ID for local-first mode when no Firebase user is authenticated.
-    /// This allows the app to work fully offline without requiring sign-in.
-    private static let localFallbackUserID = "local-user"
-
     func createThread(title: String? = nil, covenId: String? = nil, agentId: String? = nil, agentName: String? = nil) async throws -> Thread {
-        // Use authenticated user ID if available, otherwise fall back to local user ID.
-        // This allows the app to work in offline/local-first mode without Firebase.
-        let currentUserID = await AuthService.shared.currentUser?.id ?? Self.localFallbackUserID
+        let currentUserID = UserScope.currentUserID
 
         if let covenId {
             // Coven threads are persisted locally just like personal threads.

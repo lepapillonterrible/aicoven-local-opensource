@@ -38,8 +38,7 @@ actor DataEncryptionService {
     private let keychainService = "com.aicoven.local.encryption"
     /// User-scoped Keychain account for device passphrase isolation.
     private var keychainAccount: String {
-        guard let uid = UserScope.currentUserID else { return "device_passphrase" }
-        return "device_passphrase_\(uid)"
+        "device_passphrase_\(UserScope.currentUserID)"
     }
 
     /// Cached in-memory data-encryption key (K_data) for the current session.

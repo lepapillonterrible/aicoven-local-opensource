@@ -53,6 +53,7 @@ struct ShellApprovalView: View {
             Image(systemName: riskIcon)
                 .font(.system(size: 28))
                 .foregroundColor(riskColor)
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Shell Command Approval")
@@ -74,6 +75,7 @@ struct ShellApprovalView: View {
                 .background(riskColor.opacity(0.2))
                 .foregroundColor(riskColor)
                 .cornerRadius(4)
+                .accessibilityLabel("Risk level: \(request.riskLevel.rawValue)")
         }
     }
 
@@ -92,6 +94,8 @@ struct ShellApprovalView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.aicovenGlass)
             .cornerRadius(8)
+            .accessibilityLabel("Command to run")
+            .accessibilityValue(request.command)
         }
     }
 
@@ -114,6 +118,7 @@ struct ShellApprovalView: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "info.circle")
                 .foregroundColor(.blue)
+                .accessibilityHidden(true)
 
             Text(riskExplanation)
                 .font(.caption)
@@ -135,8 +140,10 @@ struct ShellApprovalView: View {
             TextField("e.g. ^ls\\b or ^git status", text: $customPattern)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(.body, design: .monospaced))
+                .accessibilityLabel("Auto-approve regex pattern")
+                .accessibilityHint("Only use narrow read-only command patterns. Unsafe patterns are rejected before approval.")
 
-            Text("Commands matching this pattern will be approved automatically in the future.")
+            Text("Commands matching this pattern will be approved automatically only if they also pass AICoven's shell safety checks.")
                 .font(.caption2)
                 .foregroundColor(.secondary)
         }
@@ -160,6 +167,8 @@ struct ShellApprovalView: View {
                 }
                 .buttonStyle(.bordered)
                 .tint(.red)
+                .accessibilityLabel("Deny shell command")
+                .accessibilityHint("Blocks this command from running.")
 
                 // Approve button
                 Button(action: { onDecision(.approve) }) {
@@ -172,6 +181,8 @@ struct ShellApprovalView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.green)
+                .accessibilityLabel("Approve shell command once")
+                .accessibilityHint("Runs this command one time in the displayed working directory.")
             }
 
             // Always approve toggle/button
@@ -188,6 +199,8 @@ struct ShellApprovalView: View {
                 }
                 .buttonStyle(.bordered)
                 .tint(.blue)
+                .accessibilityLabel("Always approve matching safe commands")
+                .accessibilityHint("Saves this regex pattern, but commands must still pass shell safety checks.")
             } else {
                 Button(action: {
                     // Generate a default pattern from the command
@@ -201,6 +214,8 @@ struct ShellApprovalView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundColor(.blue)
+                .accessibilityLabel("Create auto-approve pattern")
+                .accessibilityHint("Shows a regex field for defining a narrow safe auto-approval pattern.")
             }
         }
     }

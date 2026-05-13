@@ -45,7 +45,9 @@ final class DatabaseManager {
         guard dbQueue == nil else { return }
 
         do {
-            let queue = try DatabaseQueue(path: databaseURL.path)
+            var configuration = Configuration()
+            configuration.foreignKeysEnabled = true
+            let queue = try DatabaseQueue(path: databaseURL.path, configuration: configuration)
             var migrator = DatabaseMigrator()
 
             migrator.registerMigration("v1_schema") { db in
@@ -205,6 +207,80 @@ final class DatabaseManager {
                 try db.create(index: "messages_user_id", on: "messages", columns: ["user_id"])
                 try db.create(index: "memory_chunks_user_id", on: "memory_chunks", columns: ["user_id"])
                 try db.create(index: "memory_proposals_user_id", on: "memory_proposals", columns: ["user_id"])
+            }
+
+            // v6: enforce local user isolation at the database boundary.
+            // Existing v4/v5 migrations added nullable user_id columns for compatibility;
+            // triggers below fail closed for all future inserts/updates and prevent
+            // child rows from referencing a parent owned by a different user.
+            migrator.registerMigration("v6_user_isolation_guards") { db in
+                for table in ["covens", "roles", "threads", "messages", "memory_chunks", "memory_proposals"] {
+                    try db.execute(sql: """
+                    CREATE TRIGGER IF NOT EXISTS \(table)_require_user_id_insert
+                    BEFORE INSERT ON \(table)
+                    WHEN NEW.user_id IS NULL OR length(trim(NEW.user_id)) = 0
+                    BEGIN
+                        SELECT RAISE(ABORT, '\(table).user_id is required');
+                    END;
+                    """)
+                    try db.execute(sql: """
+                    CREATE TRIGGER IF NOT EXISTS \(table)_require_user_id_update
+                    BEFORE UPDATE OF user_id ON \(table)
+                    WHEN NEW.user_id IS NULL OR length(trim(NEW.user_id)) = 0
+                    BEGIN
+                        SELECT RAISE(ABORT, '\(table).user_id is required');
+                    END;
+                    """)
+                }
+
+                try db.create(index: "roles_user_coven", on: "roles", columns: ["user_id", "coven_id"])
+                try db.create(index: "messages_user_thread", on: "messages", columns: ["user_id", "thread_id"])
+
+                try db.execute(sql: """
+                CREATE TRIGGER IF NOT EXISTS roles_match_coven_user_insert
+                BEFORE INSERT ON roles
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM covens
+                    WHERE covens.id = NEW.coven_id AND covens.user_id = NEW.user_id
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'roles.coven_id must reference a coven owned by the same user');
+                END;
+                """)
+                try db.execute(sql: """
+                CREATE TRIGGER IF NOT EXISTS roles_match_coven_user_update
+                BEFORE UPDATE OF user_id, coven_id ON roles
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM covens
+                    WHERE covens.id = NEW.coven_id AND covens.user_id = NEW.user_id
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'roles.coven_id must reference a coven owned by the same user');
+                END;
+                """)
+
+                try db.execute(sql: """
+                CREATE TRIGGER IF NOT EXISTS messages_match_thread_user_insert
+                BEFORE INSERT ON messages
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM threads
+                    WHERE threads.id = NEW.thread_id AND threads.user_id = NEW.user_id
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'messages.thread_id must reference a thread owned by the same user');
+                END;
+                """)
+                try db.execute(sql: """
+                CREATE TRIGGER IF NOT EXISTS messages_match_thread_user_update
+                BEFORE UPDATE OF user_id, thread_id ON messages
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM threads
+                    WHERE threads.id = NEW.thread_id AND threads.user_id = NEW.user_id
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'messages.thread_id must reference a thread owned by the same user');
+                END;
+                """)
             }
 
             try migrator.migrate(queue)
