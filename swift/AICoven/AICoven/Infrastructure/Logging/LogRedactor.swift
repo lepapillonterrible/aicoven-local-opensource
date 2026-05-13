@@ -42,6 +42,11 @@ enum AppLogRedactor {
 struct RedactedLoggedError: LocalizedError, CustomStringConvertible {
     let redactedDescription: String
 
-    var errorDescription: String? { redactedDescription }
-    var description: String { redactedDescription }
+    var errorDescription: String? {
+        redactedDescription
+    }
+
+    var description: String {
+        redactedDescription
+    }
 }
