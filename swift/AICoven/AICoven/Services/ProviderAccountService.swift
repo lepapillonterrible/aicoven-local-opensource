@@ -537,20 +537,19 @@ extension ProviderAccountService {
 
     static func clearLegacyAPIKeyCache(provider: String) {
         let defaults = UserDefaults.standard
-        let keys: [String]
-        switch provider.lowercased() {
+        let keys: [String] = switch provider.lowercased() {
         case "openai":
-            keys = ["openai_api_key"]
+            ["openai_api_key"]
         case "anthropic":
-            keys = ["anthropic_api_key"]
+            ["anthropic_api_key"]
         case "google", "gemini":
-            keys = ["gemini_api_key"]
+            ["gemini_api_key"]
         case "openclaw":
-            keys = ["openclaw_api_key"]
+            ["openclaw_api_key"]
         case "hermes", "together":
-            keys = ["hermes_api_key", "together_api_key"]
+            ["hermes_api_key", "together_api_key"]
         default:
-            keys = []
+            []
         }
         for key in keys {
             defaults.removeObject(forKey: UserScope.scopedKey(key))
