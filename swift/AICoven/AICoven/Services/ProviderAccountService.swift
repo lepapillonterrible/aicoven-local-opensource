@@ -522,8 +522,8 @@ extension ProviderAccountService {
             if normalized == "google" || normalized == "gemini" {
                 return lower == "google" || lower == "gemini"
             }
-            if normalized == "together" {
-                return lower == "hermes"
+            if normalized == "hermes" || normalized == "together" {
+                return lower == "hermes" || lower == "together"
             }
             return lower == normalized
         }

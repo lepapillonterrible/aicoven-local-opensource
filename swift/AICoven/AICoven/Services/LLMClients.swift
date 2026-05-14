@@ -5,13 +5,16 @@ import Foundation
 /// Errors specific to local chat orchestration
 enum LocalChatError: Error, LocalizedError {
     case missingOpenAIAPIKey
+    case missingAPIKey(provider: String)
     case missingBaseURL
     case invalidResponse
 
     var errorDescription: String? {
         switch self {
         case .missingOpenAIAPIKey:
-            "No API key configured. Set the appropriate environment variable or store the key in UserDefaults."
+            "No OpenAI API key configured. Add an OpenAI provider account or set OPENAI_API_KEY."
+        case let .missingAPIKey(provider):
+            "No \(provider) API key configured. Add a \(provider) provider account or set the provider-specific environment variable."
         case .missingBaseURL:
             "No base URL configured. Set the appropriate base URL in UserDefaults."
         case .invalidResponse:
@@ -138,7 +141,7 @@ private actor AnthropicClient {
         if let env = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"], !env.isEmpty {
             return env
         }
-        throw LocalChatError.missingOpenAIAPIKey
+        throw LocalChatError.missingAPIKey(provider: "Anthropic")
     }
 
     func sendChat(
@@ -241,7 +244,7 @@ private actor GeminiClient {
         if let env = ProcessInfo.processInfo.environment["GEMINI_API_KEY"], !env.isEmpty {
             return env
         }
-        throw LocalChatError.missingOpenAIAPIKey
+        throw LocalChatError.missingAPIKey(provider: "Gemini")
     }
 
     func sendChat(

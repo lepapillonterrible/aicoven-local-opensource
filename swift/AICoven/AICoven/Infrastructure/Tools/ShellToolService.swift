@@ -101,7 +101,7 @@ actor ShellToolService {
         // and always prompts for medium/high risk commands.
         let decision = await requestApproval(
             command: command,
-            workingDir: workingDir,
+            workingDir: normalizedWorkingDir,
             riskLevel: riskLevel,
             metadata: metadata
         )
