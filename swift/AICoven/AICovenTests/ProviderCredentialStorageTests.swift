@@ -71,10 +71,10 @@ final class ProviderCredentialStorageTests: XCTestCase {
         try KeychainHelper.save(key: "provider-account-hermes-test", value: "HERMES_KEY")
         try KeychainHelper.save(key: "provider-account-together-test", value: "TOGETHER_KEY")
 
-        defaults.set(try JSONEncoder().encode([hermesAccount]), forKey: UserScope.scopedKey("provider_accounts.v1"))
+        try defaults.set(JSONEncoder().encode([hermesAccount]), forKey: UserScope.scopedKey("provider_accounts.v1"))
         XCTAssertEqual(ProviderAccountService.apiKeyFromKeychain(forProvider: "together"), "HERMES_KEY")
 
-        defaults.set(try JSONEncoder().encode([togetherAccount]), forKey: UserScope.scopedKey("provider_accounts.v1"))
+        try defaults.set(JSONEncoder().encode([togetherAccount]), forKey: UserScope.scopedKey("provider_accounts.v1"))
         XCTAssertEqual(ProviderAccountService.apiKeyFromKeychain(forProvider: "hermes"), "TOGETHER_KEY")
     }
 
