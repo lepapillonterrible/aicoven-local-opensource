@@ -252,11 +252,6 @@ struct EnhancedSettingsView: View {
                     }
                     .padding(.horizontal, Spacing.lg)
 
-                    #if os(macOS)
-                    // File Access section
-                    FileAccessSettingsSection()
-                    #endif
-
                     // Privacy & Analytics section
                     VStack(spacing: Spacing.md) {
                         HStack {

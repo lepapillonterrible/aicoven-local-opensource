@@ -8,8 +8,16 @@ import SwiftUI
 /// no account/sign-out section (the local app has no user accounts) and only
 /// the settings surfaces that exist locally are listed.
 struct SettingsWorkspaceView: View {
+    /// Settings surfaces available in the gear workspace.
+    private enum Item: Hashable {
+        case profile, preferences
+        case providerKeys, usage, connectedApps, mcpServers
+        case localModels, fileAccess
+        case terms, privacy
+    }
+
     /// The setting currently shown in the content pane.
-    @State private var selectedSetting: WorkspaceTabType = .providerKeys
+    @State private var selectedSetting: Item = .providerKeys
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -60,8 +68,8 @@ struct SettingsWorkspaceView: View {
                         SettingsSidebarRow(
                             icon: "gear",
                             title: "Preferences",
-                            isSelected: selectedSetting == .settings,
-                            action: { selectedSetting = .settings }
+                            isSelected: selectedSetting == .preferences,
+                            action: { selectedSetting = .preferences }
                         )
                     }
 
@@ -90,6 +98,25 @@ struct SettingsWorkspaceView: View {
                             isSelected: selectedSetting == .mcpServers,
                             action: { selectedSetting = .mcpServers }
                         )
+                    }
+
+                    // Local Agent — on-device models and local file access,
+                    // the core of the local-first client.
+                    SettingsSidebarSection(title: "Local Agent") {
+                        SettingsSidebarRow(
+                            icon: "brain",
+                            title: "On-Device Models",
+                            isSelected: selectedSetting == .localModels,
+                            action: { selectedSetting = .localModels }
+                        )
+                        #if os(macOS)
+                        SettingsSidebarRow(
+                            icon: "folder.badge.gearshape",
+                            title: "File Access",
+                            isSelected: selectedSetting == .fileAccess,
+                            action: { selectedSetting = .fileAccess }
+                        )
+                        #endif
                     }
 
                     SettingsSidebarSection(title: "Legal") {
@@ -124,11 +151,11 @@ struct SettingsWorkspaceView: View {
     // MARK: - Render the selected setting's content view
 
     @ViewBuilder
-    private func renderSettingContent(_ type: WorkspaceTabType) -> some View {
+    private func renderSettingContent(_ type: Item) -> some View {
         switch type {
         case .profile:
             EnhancedProfileView()
-        case .settings:
+        case .preferences:
             EnhancedSettingsView()
         case .providerKeys:
             ProviderKeysView()
@@ -139,15 +166,24 @@ struct SettingsWorkspaceView: View {
                 .environmentObject(StoreService.shared)
         case .mcpServers:
             MCPServerManagementView()
+        case .localModels:
+            MLXModelSettingsView()
+        case .fileAccess:
+            #if os(macOS)
+            ScrollView {
+                FileAccessSettingsSection()
+                    .padding(Spacing.lg)
+            }
+            #else
+            Text("File Access is available on macOS.")
+                .font(.aicovenBody)
+                .foregroundColor(.aicovenTextSecondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            #endif
         case .terms:
             TermsOfServiceView()
         case .privacy:
             PrivacyPolicyView()
-        default:
-            Text("Setting not available")
-                .font(.aicovenBody)
-                .foregroundColor(.aicovenTextSecondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }

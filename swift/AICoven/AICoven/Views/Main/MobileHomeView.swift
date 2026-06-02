@@ -618,6 +618,12 @@ struct MobileProfileRootView: View {
                         }
                     }
 
+                    Section("Local Agent") {
+                        NavigationLink(destination: MLXModelSettingsView()) {
+                            Label("On-Device Models", systemImage: "brain")
+                        }
+                    }
+
                     Section("Premium") {
                         NavigationLink(destination: StoreView()) {
                             Label("Upgrade", systemImage: "sparkles")
