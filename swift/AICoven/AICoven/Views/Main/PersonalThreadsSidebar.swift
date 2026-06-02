@@ -20,7 +20,6 @@ struct PersonalThreadsSidebar: View {
     let onSwitchToCovens: () -> Void
     let onSelectCoven: (Coven) -> Void
     let onOpenWorkspaceTab: (WorkspaceTabType) -> Void
-    @State private var showCovenMenu = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -68,12 +67,8 @@ struct PersonalThreadsSidebar: View {
                     .buttonStyle(.plain)
                 }
 
-                #if os(macOS)
-                if isExpanded {
-                    covenScopeDropdown
-                        .padding(.top, Spacing.xs)
-                }
-                #endif
+                // Coven switching now lives in the icon rail, so the personal
+                // sidebar no longer shows a coven scope dropdown (cloud parity).
 
                 // Action buttons (only show when expanded)
                 if isExpanded {
@@ -127,7 +122,7 @@ struct PersonalThreadsSidebar: View {
                             HStack(spacing: Spacing.xs) {
                                 Image(systemName: "brain")
                                     .font(.system(size: 14, weight: .semibold))
-                                Text("Memory")
+                                Text("Knowledge Hub")
                                     .font(.aicovenBodyMedium)
                                 Spacer()
                                 Text("Strix")
@@ -222,162 +217,7 @@ struct PersonalThreadsSidebar: View {
         }
     }
 
-    #if os(macOS)
-    private var covenScopeDropdown: some View {
-        Button {
-            showCovenMenu.toggle()
-        } label: {
-            HStack(spacing: Spacing.xs) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 13))
-                    .foregroundColor(.aicovenTeal)
-
-                if isExpanded {
-                    Text("Coven: Strix")
-                        .font(.aicovenBodySmall)
-                        .foregroundColor(.aicovenTextPrimary)
-
-                    Spacer()
-
-                    Text("\(covens.count)")
-                        .font(.aicovenCaption)
-                        .foregroundColor(.aicovenTextTertiary)
-
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10))
-                        .foregroundColor(.aicovenTextTertiary)
-                }
-            }
-            .padding(.horizontal, isExpanded ? Spacing.xs : 4)
-            .padding(.vertical, Spacing.xs)
-            .background(Color.aicovenGlass)
-            .cornerRadius(BorderRadius.sm)
-        }
-        .buttonStyle(.plain)
-        .frame(maxWidth: isExpanded ? .infinity : nil)
-        .popover(isPresented: $showCovenMenu) {
-            CovenScopePopoverContent(
-                covens: covens,
-                onSelectStrix: {
-                    showCovenMenu = false
-                },
-                onSelectCoven: { coven in
-                    showCovenMenu = false
-                    onSelectCoven(coven)
-                },
-                onCreateCoven: {
-                    showCovenMenu = false
-                    onCreateCoven()
-                }
-            )
-        }
-    }
-    #endif
 }
-
-#if os(macOS)
-private struct CovenScopePopoverContent: View {
-    let covens: [Coven]
-    let onSelectStrix: () -> Void
-    let onSelectCoven: (Coven) -> Void
-    let onCreateCoven: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.xs) {
-            Text("Covens")
-                .font(.aicovenCaption)
-                .foregroundColor(.aicovenTextTertiary)
-                .padding(.horizontal, Spacing.sm)
-                .padding(.top, Spacing.xs)
-
-            scopeRow(
-                icon: "sparkles",
-                title: "Strix",
-                subtitle: "Default coven",
-                isSelected: true,
-                tint: .aicovenTeal,
-                action: onSelectStrix
-            )
-
-            if !covens.isEmpty {
-                Rectangle()
-                    .fill(Color.aicovenBorder)
-                    .frame(height: 1)
-                    .padding(.vertical, Spacing.xs)
-
-                Text("Covens Pro")
-                    .font(.aicovenCaption)
-                    .foregroundColor(.aicovenTextTertiary)
-                    .padding(.horizontal, Spacing.sm)
-
-                ForEach(covens) { coven in
-                    scopeRow(
-                        icon: "person.3.fill",
-                        title: coven.name,
-                        action: { onSelectCoven(coven) }
-                    )
-                }
-            }
-
-            Rectangle()
-                .fill(Color.aicovenBorder)
-                .frame(height: 1)
-                .padding(.vertical, Spacing.xs)
-
-            scopeRow(
-                icon: "plus.circle.fill",
-                title: "New Coven",
-                tint: .aicovenTeal,
-                action: onCreateCoven
-            )
-        }
-        .padding(Spacing.xs)
-        .frame(width: 260)
-        .background(Color.aicovenSurfaceElevated)
-    }
-
-    private func scopeRow(
-        icon: String,
-        title: String,
-        subtitle: String? = nil,
-        isSelected: Bool = false,
-        tint: Color = .aicovenTextSecondary,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: Spacing.sm) {
-                Image(systemName: icon)
-                    .font(.aicovenBodySmall)
-                    .foregroundColor(tint)
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(.aicovenBodySmall)
-                        .foregroundColor(.aicovenTextPrimary)
-                    if let subtitle {
-                        Text(subtitle)
-                            .font(.aicovenCaption)
-                            .foregroundColor(.aicovenTextTertiary)
-                    }
-                }
-
-                Spacer()
-
-                if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(.aicovenTeal)
-                }
-            }
-            .padding(.horizontal, Spacing.sm)
-            .padding(.vertical, Spacing.xs)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}
-#endif
 
 /// Individual thread row in sidebar
 struct PersonalThreadRow: View {

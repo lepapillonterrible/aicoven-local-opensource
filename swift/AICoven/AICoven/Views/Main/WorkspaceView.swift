@@ -70,7 +70,8 @@ struct WorkspaceView: View {
                     openTabs: $openTabs,
                     activeTabId: $activeTabId,
                     roles: $roles,
-                    onCreateThread: selectedCoven != nil ? { showNewThreadSheet = true } : nil
+                    onCreateThread: selectedCoven != nil ? { showNewThreadSheet = true } : nil,
+                    onSwitchToHome: onSwitchToHome
                 )
             }
         }
@@ -105,6 +106,8 @@ struct WorkspaceView: View {
                  let .addMemory(tabCovenId):
                 tabCovenId != covenId
             case let .editMemory(_, tabCovenId):
+                tabCovenId != covenId
+            case let .covenSettings(tabCovenId):
                 tabCovenId != covenId
             default:
                 false
@@ -203,6 +206,8 @@ struct WorkspaceContentView: View {
     @Binding var roles: [Role]
     /// Optional callback to create a new thread (passed to empty state CTA)
     var onCreateThread: (() -> Void)?
+    /// Optional callback to leave the coven workspace (used after coven deletion)
+    var onSwitchToHome: (() -> Void)?
 
     var activeTab: WorkspaceTab? {
         openTabs.first(where: { $0.id == activeTabId })
@@ -214,7 +219,7 @@ struct WorkspaceContentView: View {
             if openTabs.isEmpty {
                 HStack {
                     Spacer()
-                    ProfileMenuView(onOpenTab: openTab)
+                    ActivityBellButton(action: { openTab(.activity) })
                         .frame(width: 44, height: 44)
                         .padding(.trailing, Spacing.xs)
                 }
@@ -229,7 +234,7 @@ struct WorkspaceContentView: View {
                     )
                     .frame(maxWidth: .infinity)
 
-                    ProfileMenuView(onOpenTab: openTab)
+                    ActivityBellButton(action: { openTab(.activity) })
                         .frame(width: 44, height: 44)
                         .padding(.trailing, Spacing.xs)
                 }
@@ -376,10 +381,34 @@ struct WorkspaceContentView: View {
                 openTabs: $openTabs,
                 activeTabId: $activeTabId
             )
+        case let .covenSettings(covenId):
+            if let coven = selectedCoven, coven.id == covenId {
+                CovenSettingsView(
+                    coven: coven,
+                    onSaved: { closeTab(tab.id) },
+                    onDeleted: { _ in
+                        closeTab(tab.id)
+                        onSwitchToHome?()
+                    }
+                )
+                .id(covenId)
+            }
         case .terms:
             TermsOfServiceView()
+        case .activity:
+            ActivityView(onOpenTab: openTab)
         default:
             EmptyView()
+        }
+    }
+
+    /// Close the tab with the given id, falling back to the last remaining tab.
+    private func closeTab(_ id: String) {
+        if let index = openTabs.firstIndex(where: { $0.id == id }) {
+            openTabs.remove(at: index)
+        }
+        if activeTabId == id {
+            activeTabId = openTabs.last?.id
         }
     }
 
@@ -419,10 +448,14 @@ struct WorkspaceContentView: View {
             tab = WorkspaceTab.memoryList(covenId: covenId)
         case let .memoryProposals(covenId):
             tab = WorkspaceTab.memoryProposals(covenId: covenId)
+        case let .covenSettings(covenId):
+            tab = WorkspaceTab.covenSettings(covenId: covenId)
         case .store:
             tab = .store
         case .terms:
             tab = .terms
+        case .activity:
+            tab = .activity
         default:
             return
         }

@@ -156,6 +156,22 @@ struct ProviderAccountCard: View {
         }
     }
 
+    /// Brand logo asset + tint for the provider badge. Returns an empty asset
+    /// name for providers we don't bundle a logo for (e.g. local Ollama/MLX),
+    /// which makes `ProviderLogoBadge` fall back to the emoji/key glyph.
+    var providerLogo: (asset: String, tint: Color) {
+        switch account.provider.lowercased() {
+        case "openai": ("provider_openai", Color(hex: "#10A37F"))
+        case "anthropic": ("provider_claude", Color(hex: "#D97757"))
+        case "google": ("provider_gemini", Color(hex: "#1A73E8"))
+        case "mistral": ("provider_mistral", Color(hex: "#FA520F"))
+        case "cohere": ("provider_cohere", Color(hex: "#39594D"))
+        case "openclaw": ("provider_openclaw", .orange)
+        case "hermes": ("provider_hermes", .aicovenPurple)
+        default: ("", providerInfo.color)
+        }
+    }
+
     var statusColor: Color {
         switch account.status {
         case "healthy": .green
@@ -171,8 +187,12 @@ struct ProviderAccountCard: View {
                 // Header
                 HStack {
                     HStack(spacing: Spacing.sm) {
-                        Text(providerInfo.icon)
-                            .font(.system(size: 32))
+                        if providerLogo.asset.isEmpty {
+                            Text(providerInfo.icon)
+                                .font(.system(size: 32))
+                        } else {
+                            ProviderLogoBadge(assetName: providerLogo.asset, tint: providerLogo.tint, size: 40)
+                        }
 
                         VStack(alignment: .leading, spacing: Spacing.xxs) {
                             Text(account.displayName)

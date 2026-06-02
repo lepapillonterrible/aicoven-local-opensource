@@ -16,6 +16,8 @@ enum WorkspaceTabType: Equatable {
     case memoryProposals(covenId: String?)
     case addMemory(covenId: String?)
     case editMemory(memoryId: String, covenId: String?)
+    /// Coven identity settings tab (scoped to one coven)
+    case covenSettings(covenId: String)
     /// Personal Strix settings tab (personal default assistant)
     case personalStrixSettings
     /// In-app purchase store tab
@@ -24,6 +26,8 @@ enum WorkspaceTabType: Equatable {
     case terms
     /// Privacy Policy tab
     case privacy
+    /// Activity feed tab (pending proposals, agent replies, budget alerts)
+    case activity
 
     static func == (lhs: WorkspaceTabType, rhs: WorkspaceTabType) -> Bool {
         switch (lhs, rhs) {
@@ -41,6 +45,8 @@ enum WorkspaceTabType: Equatable {
             c1 == c2
         case let (.editMemory(m1, c1), .editMemory(m2, c2)):
             m1 == m2 && c1 == c2
+        case let (.covenSettings(c1), .covenSettings(c2)):
+            c1 == c2
         case (.profile, .profile),
              (.settings, .settings),
              (.providerKeys, .providerKeys),
@@ -51,7 +57,8 @@ enum WorkspaceTabType: Equatable {
              (.personalStrixSettings, .personalStrixSettings),
              (.store, .store),
              (.terms, .terms),
-             (.privacy, .privacy):
+             (.privacy, .privacy),
+             (.activity, .activity):
             true
         default:
             false
@@ -74,10 +81,12 @@ enum WorkspaceTabType: Equatable {
         case .memoryProposals: "memory_proposals"
         case .addMemory: "add_memory"
         case .editMemory: "edit_memory"
+        case .covenSettings: "coven_settings"
         case .personalStrixSettings: "personal_strix_settings"
         case .store: "store"
         case .terms: "terms"
         case .privacy: "privacy"
+        case .activity: "activity"
         }
     }
 }
@@ -218,6 +227,15 @@ struct WorkspaceTab: Identifiable, Equatable {
         )
     }
 
+    /// Create a tab for coven identity settings
+    static func covenSettings(covenId: String) -> WorkspaceTab {
+        WorkspaceTab(
+            id: "coven-settings-\(covenId)",
+            type: .covenSettings(covenId: covenId),
+            title: "Coven Settings"
+        )
+    }
+
     /// Tab for personal Strix (default assistant) settings in the personal workspace
     static var personalStrix: WorkspaceTab {
         WorkspaceTab(
@@ -251,6 +269,15 @@ struct WorkspaceTab: Identifiable, Equatable {
             id: "privacy",
             type: .privacy,
             title: "Privacy Policy"
+        )
+    }
+
+    /// Tab for the Activity feed
+    static var activity: WorkspaceTab {
+        WorkspaceTab(
+            id: "activity",
+            type: .activity,
+            title: "Activity"
         )
     }
 }

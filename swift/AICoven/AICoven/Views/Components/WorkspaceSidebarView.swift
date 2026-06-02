@@ -47,40 +47,34 @@ struct WorkspaceSidebarView: View {
             if isExpanded {
                 ScrollView {
                     VStack(spacing: Spacing.lg) {
-                        CovenSelectorView(
-                            selectedCoven: $selectedCoven,
-                            covens: $covens,
-                            showNewCovenSheet: $showNewCovenSheet,
-                            onSwitchToHome: onSwitchToHome
-                        )
-
-                        // Show Memory CTA for both Covens and Strix
-                        Button {
-                            openMemoryTab(covenId: selectedCoven?.id)
-                        } label: {
-                            HStack(spacing: Spacing.xs) {
-                                Image(systemName: "brain")
-                                    .font(.system(size: 14, weight: .semibold))
-                                Text("Memory")
-                                    .font(.aicovenBodyMedium)
-                                Spacer()
-                                Text(selectedCoven?.name ?? "Strix")
-                                    .font(.aicovenCaption)
-                                    .foregroundColor(.aicovenTextTertiary)
-                                    .lineLimit(1)
+                        // Coven workspace tools — coven switching now lives in
+                        // the icon rail, so no coven dropdown here (cloud parity).
+                        VStack(spacing: Spacing.xs) {
+                            // Knowledge Hub (memory) — available for coven and Strix.
+                            sidebarToolButton(
+                                icon: "brain",
+                                title: "Knowledge Hub",
+                                trailing: selectedCoven?.name ?? "Strix"
+                            ) {
+                                openMemoryTab(covenId: selectedCoven?.id)
                             }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, Spacing.sm)
-                            .padding(.horizontal, Spacing.sm)
-                            .background(Color.aicovenGlass)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: BorderRadius.md)
-                                    .strokeBorder(Color.aicovenBorder, lineWidth: 1)
-                            )
-                            .cornerRadius(BorderRadius.md)
+
+                            // Coven Settings — only when a coven is selected.
+                            // Opens as a workspace tab (cloud parity).
+                            if let coven = selectedCoven {
+                                sidebarToolButton(
+                                    icon: "gearshape",
+                                    title: "Coven Settings",
+                                    trailing: nil
+                                ) {
+                                    let tab = WorkspaceTab.covenSettings(covenId: coven.id)
+                                    if !openTabs.contains(where: { $0.id == tab.id }) {
+                                        openTabs.append(tab)
+                                    }
+                                    activeTabId = tab.id
+                                }
+                            }
                         }
-                        .buttonStyle(.plain)
-                        .foregroundColor(.aicovenTextPrimary)
 
                         ThreadManagementView(
                             selectedCoven: $selectedCoven,
@@ -170,6 +164,41 @@ struct WorkspaceSidebarView: View {
                 }
             }
         }
+    }
+
+    /// A glassy sidebar tool button used for Knowledge Hub, Coven Settings, etc.
+    private func sidebarToolButton(
+        icon: String,
+        title: String,
+        trailing: String?,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .semibold))
+                Text(title)
+                    .font(.aicovenBodyMedium)
+                Spacer()
+                if let trailing {
+                    Text(trailing)
+                        .font(.aicovenCaption)
+                        .foregroundColor(.aicovenTextTertiary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, Spacing.sm)
+            .padding(.horizontal, Spacing.sm)
+            .background(Color.aicovenGlass)
+            .overlay(
+                RoundedRectangle(cornerRadius: BorderRadius.md)
+                    .strokeBorder(Color.aicovenBorder, lineWidth: 1)
+            )
+            .cornerRadius(BorderRadius.md)
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(.aicovenTextPrimary)
     }
 
     /// Load covens from API
