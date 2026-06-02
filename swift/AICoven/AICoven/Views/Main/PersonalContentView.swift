@@ -380,6 +380,7 @@ struct PersonalChatView: View {
                         ForEach(Array(enhancedMessages.enumerated()), id: \.element.id) { _, em in
                             RichMessageBubble(
                                 message: em,
+                                isPersonal: thread.covenId == nil,
                                 onApproveToolCall: { _ in },
                                 onRejectToolCall: { _ in }
                             )

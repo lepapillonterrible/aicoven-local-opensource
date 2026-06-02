@@ -103,14 +103,30 @@ The Swift client is structured into a few main layers inside `swift/AICoven/AICo
   - No login/auth routing; it always shows `HomeView()`.
   - Expects an `AppState` environment object for global state.
 
-- `swift/AICoven/AICoven/Views/Main/HomeView.swift` and `Views/Main/MainTabView.swift`
-  - `HomeView` encapsulates the main layout and likely embeds `MainTabView`.
-  - `MainTabView` defines the primary tabs for the local client:
-    - **Chat** (threads/conversations)
-    - **Documents** (currently a placeholder view)
-    - **Settings** (reusing `ProfileView` as a settings/profile area)
+- `swift/AICoven/AICoven/Views/Main/HomeView.swift` (macOS / wide layout)
+  - The macOS shell mirrors the cloud client: a persistent Discord-style
+    `CovenIconRail` (`Views/Components/CovenIconRail.swift`) on the far left
+    for switching between Strix (personal) and coven workspaces, plus a gear
+    for settings, alongside the personal workspace (`PersonalWorkspaceView`)
+    or `WorkspaceView` (coven). The rail is local-first: covens render as name
+    initials (no server-hosted avatar endpoint).
+
+- `swift/AICoven/AICoven/Views/Main/MobileHomeView.swift` (iOS / compact layout)
+  - `MobileRootView` is a 3-tab shell matching cloud: **Chats**, **Activity**
+    (with an unread badge), and **Settings**. The Activity tab is backed by
+    `MobileActivityRootView` → `ActivityView`.
 
 Agents making navigation changes should do so via these entry views rather than wiring new roots elsewhere.
+
+#### Activity surface
+
+- `Views/Main/ActivityView.swift` renders pending memory proposals, unread
+  agent replies, and budget alerts using the same card components as cloud.
+- `Services/ActivityService.swift` is the local-first aggregator: it derives
+  the feed from on-device sources (pending memory proposals via
+  `MemoryService`) instead of a `GET /activity` backend call. Unread agent
+  replies and budget alerts are placeholders for future on-device wiring.
+  `ActivityBadgeStore` (also in that file) drives the tab's unread badge.
 
 ### 3.2 Core layer (local-first abstractions)
 

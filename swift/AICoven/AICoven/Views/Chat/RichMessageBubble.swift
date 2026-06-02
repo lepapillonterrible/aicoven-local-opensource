@@ -8,6 +8,8 @@ import UIKit
 /// Rich message bubble that renders markdown, attachments, thoughts, and tool calls
 struct RichMessageBubble: View {
     let message: EnhancedChatMessage
+    /// Whether this is a personal thread (uses "Strix" as fallback instead of "Assistant")
+    var isPersonal: Bool = false
     var onApproveToolCall: ((String) -> Void)?
     var onRejectToolCall: ((String) -> Void)?
 
@@ -34,11 +36,12 @@ struct RichMessageBubble: View {
                 .padding(16)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
-                        .fill(isUser ? Color.aicovenTeal.opacity(0.15) : Color.aicovenSurfaceElevated.opacity(0.6))
-                        .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
+                        .fill(isUser ? Color.aicovenPurple : Color.aicovenSurfaceElevated)
+                        .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
                 )
-                .foregroundStyle(Color.aicovenTextPrimary)
+                .foregroundStyle(isUser ? Color.white : Color.aicovenTextPrimary)
                 // Ensure links and other tappable elements have sufficient contrast
+                // against the purple assistant bubble.
                 .tint(Color.aicovenTeal)
 
                 // Attachments
@@ -92,8 +95,8 @@ struct RichMessageBubble: View {
     private var header: some View {
         HStack(spacing: 6) {
             Image(systemName: "sparkles")
-            // Default to "Strix" for personal threads when no agent role is provided
-            Text(message.agentRole ?? "Strix")
+            // Use "Strix" for personal threads, role name or fallback for coven threads
+            Text(message.agentRole ?? (isPersonal ? "Strix" : "Assistant"))
             if let model = message.model { Text(model).font(.caption2).padding(.horizontal, 6).padding(.vertical, 2).background(Color.secondary.opacity(0.15)).clipShape(Capsule()) }
         }
         .font(.caption)

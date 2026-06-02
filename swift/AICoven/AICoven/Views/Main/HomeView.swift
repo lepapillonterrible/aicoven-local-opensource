@@ -24,7 +24,95 @@ struct HomeView: View {
     /// Workspace state - always start in home
     @State private var currentWorkspace: WorkspaceType = .home
 
+    /// Currently selected coven id for the icon rail (nil = Strix/personal).
+    private var railSelectedCovenId: String? {
+        currentWorkspace == .home ? nil : pendingCovenSelection?.id
+    }
+
     var body: some View {
+        #if os(macOS)
+        HStack(spacing: 0) {
+            if !isLoadingCovens {
+                CovenIconRail(
+                    covens: covens,
+                    selectedCovenId: railSelectedCovenId,
+                    onSelectStrix: {
+                        if currentWorkspace != .home {
+                            currentWorkspace = .home
+                            openTabs = []
+                            activeTabId = nil
+                            pendingCovenSelection = nil
+                            pendingThreadSelection = nil
+                            analytics.trackTabSwitch(fromTab: "covens", toTab: "home")
+                        }
+                    },
+                    onSelectCoven: { coven in
+                        pendingCovenSelection = coven
+                        pendingThreadSelection = nil
+                        currentWorkspace = .covens
+                        analytics.trackTabSwitch(fromTab: "home", toTab: "covens")
+                    },
+                    onCreateCoven: { showCreateCoven = true },
+                    onOpenSettings: {
+                        currentWorkspace = .home
+                        openPersonalTab(.settings)
+                    }
+                )
+            }
+            workspaceContent
+        }
+        .task {
+            await loadInitialData()
+            analytics.trackScreenView(screenName: "HomeView", screenClass: "HomeView")
+        }
+        .onChange(of: appState.pendingDeepLink) { _, newValue in
+            guard let target = newValue else { return }
+            handleDeepLink(target)
+            _ = appState.consumeDeepLink()
+        }
+        .sheet(isPresented: $showCreateCoven) {
+            CreateCovenSheet(onCreated: { _ in
+                Task { await loadCovens() }
+            })
+            .environmentObject(StoreService.shared)
+        }
+        .sheet(item: $shellApprovalManager.currentRequest) { request in
+            ShellApprovalView(
+                request: request,
+                onDecision: { decision in
+                    shellApprovalManager.handleDecision(decision)
+                }
+            )
+        }
+        #else
+        workspaceContent
+            .task {
+                await loadInitialData()
+                analytics.trackScreenView(screenName: "HomeView", screenClass: "HomeView")
+            }
+            .onChange(of: appState.pendingDeepLink) { _, newValue in
+                guard let target = newValue else { return }
+                handleDeepLink(target)
+                _ = appState.consumeDeepLink()
+            }
+            .sheet(isPresented: $showCreateCoven) {
+                CreateCovenSheet(onCreated: { _ in
+                    Task { await loadCovens() }
+                })
+                .environmentObject(StoreService.shared)
+            }
+            .sheet(item: $shellApprovalManager.currentRequest) { request in
+                ShellApprovalView(
+                    request: request,
+                    onDecision: { decision in
+                        shellApprovalManager.handleDecision(decision)
+                    }
+                )
+            }
+        #endif
+    }
+
+    private var workspaceContent: some View {
         Group {
             if isLoadingCovens {
                 // Loading state
@@ -71,31 +159,10 @@ struct HomeView: View {
                         pendingThreadSelection = nil
                     }
                 )
+                // Recreate the coven workspace when the rail switches covens so
+                // its internal selected-coven state resets to the new coven.
+                .id(pendingCovenSelection?.id)
             }
-        }
-        .task {
-            await loadInitialData()
-            analytics.trackScreenView(screenName: "HomeView", screenClass: "HomeView")
-        }
-        .onChange(of: appState.pendingDeepLink) { _, newValue in
-            guard let target = newValue else { return }
-            handleDeepLink(target)
-            _ = appState.consumeDeepLink()
-        }
-        .sheet(isPresented: $showCreateCoven) {
-            // Pass StoreService so CreateCovenSheet can check entitlements
-            CreateCovenSheet(onCreated: { _ in
-                Task { await loadCovens() }
-            })
-            .environmentObject(StoreService.shared)
-        }
-        .sheet(item: $shellApprovalManager.currentRequest) { request in
-            ShellApprovalView(
-                request: request,
-                onDecision: { decision in
-                    shellApprovalManager.handleDecision(decision)
-                }
-            )
         }
     }
 

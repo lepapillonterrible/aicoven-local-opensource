@@ -1,7 +1,9 @@
 import SwiftUI
 
-/// Root mobile UI: tab bar for Home / Covens / Profile
+/// Root mobile UI: tab bar for Chats / Activity / Settings
 struct MobileRootView: View {
+    @ObservedObject private var activityBadgeStore = ActivityBadgeStore.shared
+
     var body: some View {
         TabView {
             MobileChatsRootView()
@@ -9,12 +11,74 @@ struct MobileRootView: View {
                     Label("Chats", systemImage: "bubble.left.and.bubble.right.fill")
                 }
 
+            MobileActivityRootView()
+                .tabItem {
+                    Label("Activity", systemImage: "bell.fill")
+                }
+                .badge(activityBadgeStore.unreadCount)
+
             MobileProfileRootView()
                 .tabItem {
-                    Label("Profile", systemImage: "person.crop.circle")
+                    Label("Settings", systemImage: "gearshape.fill")
                 }
         }
         .tint(.aicovenTeal)
+        .task {
+            await activityBadgeStore.refresh()
+        }
+    }
+}
+
+/// Root wrapper for the Activity feed on iOS. Surfaces pending memory
+/// proposals, unread agent replies, and budget alerts; tapping a card
+/// navigates to the relevant surface.
+struct MobileActivityRootView: View {
+    @State private var showProposals = false
+    @State private var selectedThread: Thread?
+    @State private var showBudget = false
+    @State private var openTabs: [WorkspaceTab] = []
+    @State private var activeTabId: String?
+
+    var body: some View {
+        NavigationStack {
+            ActivityView(onOpenTab: handleOpenTab)
+                .navigationTitle("Activity")
+            #if os(iOS)
+                .navigationBarTitleDisplayMode(.large)
+            #endif
+                .navigationDestination(isPresented: $showProposals) {
+                    MemoryProposalsView(
+                        covenId: nil,
+                        openTabs: $openTabs,
+                        activeTabId: $activeTabId
+                    )
+                    .navigationTitle("Memory Proposals")
+                }
+                .navigationDestination(isPresented: $showBudget) {
+                    BudgetView()
+                        .navigationTitle("Budget")
+                }
+                .navigationDestination(item: $selectedThread) { thread in
+                    PersonalChatView(
+                        thread: thread,
+                        onEditAgent: nil,
+                        onBack: { selectedThread = nil }
+                    )
+                }
+        }
+    }
+
+    private func handleOpenTab(_ type: WorkspaceTabType) {
+        switch type {
+        case let .thread(thread):
+            selectedThread = thread
+        case .memoryProposals:
+            showProposals = true
+        case .budget:
+            showBudget = true
+        default:
+            break
+        }
     }
 }
 
