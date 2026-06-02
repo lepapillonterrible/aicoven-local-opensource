@@ -20,7 +20,7 @@ struct PersonalContentView: View {
             if openTabs.isEmpty {
                 HStack {
                     Spacer()
-                    ProfileMenuView(onOpenTab: openTab)
+                    ActivityBellButton(action: { openTab(.activity) })
                         .frame(width: 44, height: 44)
                         .padding(.trailing, Spacing.xs)
                 }
@@ -36,7 +36,7 @@ struct PersonalContentView: View {
                     .frame(maxWidth: .infinity)
 
                     // Profile menu
-                    ProfileMenuView(onOpenTab: openTab)
+                    ActivityBellButton(action: { openTab(.activity) })
                         .frame(width: 44, height: 44)
                         .padding(.trailing, Spacing.xs)
                 }
@@ -164,6 +164,8 @@ struct PersonalContentView: View {
             TermsOfServiceView()
         case .privacy:
             PrivacyPolicyView()
+        case .activity:
+            ActivityView(onOpenTab: openTab)
         default:
             EmptyView()
         }
@@ -209,6 +211,8 @@ struct PersonalContentView: View {
             tab = .terms
         case .privacy:
             tab = .privacy
+        case .activity:
+            tab = .activity
         default:
             return
         }

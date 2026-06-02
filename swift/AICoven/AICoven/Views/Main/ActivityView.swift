@@ -295,3 +295,34 @@ struct BudgetAlertCard: View {
         .buttonStyle(.plain)
     }
 }
+
+/// Top-bar bell button that opens the Activity feed, with an unread badge.
+/// Replaces the old profile menu in the workspace top bar (cloud parity).
+struct ActivityBellButton: View {
+    @ObservedObject private var activityBadgeStore = ActivityBadgeStore.shared
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: "bell")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(.aicovenTextSecondary)
+                    .frame(width: 32, height: 32)
+
+                if activityBadgeStore.unreadCount > 0 {
+                    Text(activityBadgeStore.unreadCount > 9 ? "9+" : "\(activityBadgeStore.unreadCount)")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.red)
+                        .clipShape(Capsule())
+                        .offset(x: 2, y: -2)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Activity")
+    }
+}

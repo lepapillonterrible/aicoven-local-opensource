@@ -24,6 +24,10 @@ struct HomeView: View {
     /// Workspace state - always start in home
     @State private var currentWorkspace: WorkspaceType = .home
 
+    /// When true, the gear (global settings) workspace is shown instead of the
+    /// personal/coven workspace. Mirrors the cloud icon-rail settings mode.
+    @State private var showSettingsWorkspace = false
+
     /// Currently selected coven id for the icon rail (nil = Strix/personal).
     private var railSelectedCovenId: String? {
         currentWorkspace == .home ? nil : pendingCovenSelection?.id
@@ -37,6 +41,7 @@ struct HomeView: View {
                     covens: covens,
                     selectedCovenId: railSelectedCovenId,
                     onSelectStrix: {
+                        showSettingsWorkspace = false
                         if currentWorkspace != .home {
                             currentWorkspace = .home
                             openTabs = []
@@ -47,6 +52,7 @@ struct HomeView: View {
                         }
                     },
                     onSelectCoven: { coven in
+                        showSettingsWorkspace = false
                         pendingCovenSelection = coven
                         pendingThreadSelection = nil
                         currentWorkspace = .covens
@@ -54,9 +60,9 @@ struct HomeView: View {
                     },
                     onCreateCoven: { showCreateCoven = true },
                     onOpenSettings: {
-                        currentWorkspace = .home
-                        openPersonalTab(.settings)
-                    }
+                        showSettingsWorkspace = true
+                    },
+                    isSettingsSelected: showSettingsWorkspace
                 )
             }
             workspaceContent
@@ -119,6 +125,9 @@ struct HomeView: View {
                 CauldronLoadingView(message: "Loading workspace...", size: 80)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color.aicovenDark)
+            } else if showSettingsWorkspace {
+                // Global settings workspace (gear in the icon rail)
+                SettingsWorkspaceView()
             } else if currentWorkspace == .home {
                 // Personal workspace
                 PersonalWorkspaceView(
