@@ -139,7 +139,7 @@ struct AboutSettingsPane: View {
 }
 
 /// A Settings pane's Form: grouped, in the person's typography, on the
-/// theme's surface.
+/// stone surface.
 struct SettingsForm<Content: View>: View {
     @ViewBuilder var content: Content
 

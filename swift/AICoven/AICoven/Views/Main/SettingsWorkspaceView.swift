@@ -8,7 +8,7 @@ struct SettingsWorkspaceView: View {
     /// The request that opened Settings, when one named a place in it.
     @State private var request: WorkspaceTabType?
     /// The pane on screen, kept on this Mac: Settings reopens on it, and
-    /// stays on it when a theme or typography change rebuilds this view.
+    /// stays on it when a typography change rebuilds this view.
     @AppStorage("settings.pane") private var selectedPaneID = SettingsPane.aiConnections.rawValue
     /// Counts requests, so a repeated one opens its pane afresh.
     @State private var requestCount = 0
