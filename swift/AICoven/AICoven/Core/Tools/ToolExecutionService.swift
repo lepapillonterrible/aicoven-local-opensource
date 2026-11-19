@@ -437,37 +437,48 @@ actor ToolExecutionService {
             return await .error(tool: toolCall.name, message: "MCP server '\(serverSlug)' not found or not connected.")
         }
 
-        // Fetch the stored auth token (Bearer/API key) from keychain so
-        // runtime tool calls use the same auth path as MCP connection tests.
-        // The tool as the server listed it: the current protocol sends the
-        // arguments its schema marks for it as headers too.
-        let listed = server.cachedTools?.first { $0.name == actionName }
-
         // A tool the server marks as only reading is used without asking.
         // Any other (one it does not mark, or does not list) may change
         // something on the person's behalf, so they are asked first.
-        if listed?.readOnlyHint != true {
+        let wasMarkedReadOnly = server.cachedTools?.first { $0.name == actionName }?.readOnlyHint == true
+        if !wasMarkedReadOnly {
             let asked = await answer(in: threadID) {
                 .mcp(server: server.name, address: Self.shownAddress(of: server), tool: actionName, arguments: toolCall.args, threadID: $0)
             }
             if let refusal = await ToolExecutionResult.refusal(asked, tool: toolCall.name) {
                 return refusal
             }
-            // The person may have taken a while. What they approved is this
-            // tool on this server at this address: if the server has been
-            // removed or pointed elsewhere meanwhile, it is not that any more.
-            guard let current = await connectedAccountsService.getMCPServer(id: server.id),
-                  current.name == server.name, current.serverUrl == server.serverUrl else {
-                return await .error(
-                    tool: toolCall.name,
-                    message: "This MCP server was removed or changed while its tool was waiting to be approved: the tool was not called.",
-                    errorType: "mcp_server_changed"
-                )
-            }
-            server = current
         }
 
+        // The stored auth token (Bearer/API key), as connection tests use it.
         let token = try? await connectedAccountsService.getMCPToken(forServerId: server.id)
+
+        // The last thing before the call, with nothing waited for after
+        // it: the server as it is stored now. The person may have taken a
+        // while, and what they approved (or what needed no asking) is this
+        // tool on this server at this address. If the server has been
+        // removed, renamed or pointed elsewhere, or a tool that needed no
+        // asking is no longer marked as only reading, it is not that any
+        // more, and the tool is not called.
+        guard let current = await connectedAccountsService.getMCPServer(id: server.id),
+              current.name == server.name, current.serverUrl == server.serverUrl else {
+            return .error(
+                tool: toolCall.name,
+                message: "This MCP server was removed or changed before its tool could be called: the tool was not called.",
+                errorType: "mcp_server_changed"
+            )
+        }
+        // The tool as the server lists it now: the current protocol sends
+        // the arguments its schema marks for it as headers too.
+        let listed = current.cachedTools?.first { $0.name == actionName }
+        guard wasMarkedReadOnly == false || listed?.readOnlyHint == true else {
+            return .error(
+                tool: toolCall.name,
+                message: "This tool is no longer marked as read-only by its MCP server: the tool was not called. Ask again to be asked first.",
+                errorType: "mcp_server_changed"
+            )
+        }
+        server = current
         let client = mcpClient(server, token)
 
         do {

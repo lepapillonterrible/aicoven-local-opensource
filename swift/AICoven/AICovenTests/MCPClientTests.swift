@@ -1020,7 +1020,7 @@ final class MCPToolApprovalTests: XCTestCase {
         await removing.setWhitelist(for: "test", tools: ["mcp.\(removedSlug).send_note"])
         let gone = await removing.execute(toolCall: ParsedToolCall(name: "mcp.\(removedSlug).send_note", args: [:]), agentType: "test", threadID: "thread-1")
         XCTAssertEqual(gone.status, "error")
-        XCTAssertEqual(gone.error, "This MCP server was removed or changed while its tool was waiting to be approved: the tool was not called.")
+        XCTAssertEqual(gone.error, "This MCP server was removed or changed before its tool could be called: the tool was not called.")
         XCTAssertEqual(removedPlayed.methods, [], "Nothing is sent to a server that is no longer connected")
 
         // Pointed at another address: not what the approval showed.
@@ -1037,6 +1037,54 @@ final class MCPToolApprovalTests: XCTestCase {
         let moved = await editing.execute(toolCall: ParsedToolCall(name: "mcp.\(editedSlug).send_note", args: [:]), agentType: "test", threadID: "thread-1")
         XCTAssertEqual(moved.status, "error")
         XCTAssertEqual(editedPlayed.methods, [])
+
+        // Renamed: no longer the server the approval named.
+        let (named, namedSlug, namedPlayed) = try await keptServer()
+        let renaming = ToolExecutionService(toolService: NoChatTools(), ask: { _ in
+            var renamed = named
+            renamed.name = "Another name"
+            try? await service.updateMCPServer(renamed)
+            return .approved
+        })
+        let namedSession = namedPlayed.session()
+        await renaming.setMCPClient { MCPClient(server: $0, token: $1, session: namedSession, eras: MCPEraCache()) }
+        await renaming.setWhitelist(for: "test", tools: ["mcp.\(namedSlug).send_note"])
+        let renamed = await renaming.execute(toolCall: ParsedToolCall(name: "mcp.\(namedSlug).send_note", args: [:]), agentType: "test", threadID: "thread-1")
+        XCTAssertEqual(renamed.status, "error")
+        XCTAssertEqual(namedPlayed.methods, [])
+    }
+
+    func testTheToolIsCalledAsTheServerListsItNow_andOneNoLongerMarkedReadOnlyIsNotCalledUnasked() async throws {
+        let service = ConnectedAccountsService.shared
+
+        // Listed anew while the person decided, with an argument now marked
+        // for a header: the call is made as it is listed now.
+        let (kept, slug, played) = try await keptServer()
+        let relisting = ToolExecutionService(toolService: NoChatTools(), ask: { _ in
+            await service.cacheMCPTools([
+                MCPToolDefinition(name: "send_note", description: nil, inputSchema: ["type": "object", "properties": ["to": ["type": "string", "x-mcp-header": "To"]]]),
+            ], forServerId: kept.id)
+            return .approved
+        })
+        let session = played.session()
+        await relisting.setMCPClient { MCPClient(server: $0, token: $1, session: session, eras: MCPEraCache()) }
+        await relisting.setWhitelist(for: "test", tools: ["mcp.\(slug).send_note", "mcp.\(slug).read_note"])
+        let sent = await relisting.execute(toolCall: ParsedToolCall(name: "mcp.\(slug).send_note", args: ["to": "sam"]), agentType: "test", threadID: "thread-1")
+        XCTAssertEqual(sent.status, "ok")
+        XCTAssertEqual(played.asked.last?.header("Mcp-Param-To"), "sam")
+
+        // read_note is no longer listed as only reading (it is not listed
+        // at all now): it was not asked about, so it is not called.
+        let unasked = await relisting.execute(toolCall: ParsedToolCall(name: "mcp.\(slug).read_note", args: [:]), agentType: "test", threadID: "thread-1")
+        XCTAssertEqual(unasked.status, "ok", "Not marked now, so it asks, and here is approved")
+
+        let (_, quietSlug, quietPlayed) = try await keptServer()
+        let person = AskedOfThePerson(answering: .approved)
+        let quiet = await executor(asking: person, playing: quietPlayed, tools: ["mcp.\(quietSlug).read_note"])
+        _ = await quiet.execute(toolCall: ParsedToolCall(name: "mcp.\(quietSlug).read_note", args: [:]), agentType: "test", threadID: "thread-1")
+        let asked = await person.approvals
+        XCTAssertEqual(asked, [], "Still marked as only reading: used unasked")
+        XCTAssertEqual(quietPlayed.methods, ["server/discover", "tools/call"])
     }
 
     func testWhereAServerIs_isShownByItsHostOnly() {
