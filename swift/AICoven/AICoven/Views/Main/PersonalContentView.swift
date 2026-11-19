@@ -802,7 +802,7 @@ struct PersonalChatView: View {
             ).post()
             return true
         }
-        let userMessage = TurnProgress.message(in: thread.id, role: "user", content: parts.userText)
+        let userMessage = TurnProgress.userMessage(in: thread.id, text: parts.userText, attachments: attachments)
         // Shown at once, before anything waits: this view can be showing
         // another thread by the time the message is stored.
         putInTheField("")

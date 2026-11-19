@@ -768,6 +768,22 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertEqual(messages.filter { $0.role == "user" }.map(\.id), [sent.id], "And its message is not stored")
     }
 
+    func testAWaitingMessagesFiles_areStoredWithItWhenItIsSent() async throws {
+        let engine = makeEngine()
+        let file = try await AttachmentStore.shared.add(Data("notes".utf8), named: "notes.txt", mimeType: "text/plain", toThread: threadID)
+        try await engine.start(with: question("First"), context: "First", roleID: nil, agentName: "Strix", attachments: nil)
+        XCTAssertTrue(engine.enqueue(waiting("Second", attachments: [file]), threadID: threadID))
+
+        provider.release()
+        await settled(engine)
+
+        let messages = try await ChatService.shared.loadMessages(threadId: threadID)
+        let second = try XCTUnwrap(messages.first { $0.content == "Second" })
+        XCTAssertEqual(FileAttachmentDetail.attachments(in: second.metadata ?? [:]), [file], "The thread shows the message with its file")
+        let marked = try await messageID(of: file.id)
+        XCTAssertEqual(marked, second.id, "And the file is that message's from then on")
+    }
+
     // MARK: - Helpers
 
     private func question(_ text: String) -> ChatMessage {
