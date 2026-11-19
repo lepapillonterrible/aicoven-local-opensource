@@ -354,8 +354,9 @@ actor ChatService {
         if prefProvider == "hermes", let agent = hermesAgent() {
             threadsLastAnsweredByAnAgent.insert(threadId)
             let earlier = try await loadMessages(threadId: threadId, limit: Self.hermesHistoryLimit)
+            let said = await message + AttachmentContext.block(for: attachments ?? [])
             try await HermesTurn(client: agent, threadID: threadId).run(
-                input: message,
+                input: said,
                 history: Self.hermesHistory(from: earlier),
                 started: { await onAgentRun?(AgentRun(provider: AgentRun.hermes, runID: $0)) },
                 report: onStateChange
@@ -367,8 +368,9 @@ actor ChatService {
         if prefProvider == "openclaw", let turn = openClawTurn(threadId) {
             threadsLastAnsweredByAnAgent.insert(threadId)
             let earlier = try await loadMessages(threadId: threadId, limit: Self.hermesHistoryLimit)
+            let said = await message + AttachmentContext.block(for: attachments ?? [])
             try await turn.run(
-                message: OpenClawTurn.message(message, after: Self.hermesHistory(from: earlier).map { ($0.role, $0.content) }),
+                message: OpenClawTurn.message(said, after: Self.hermesHistory(from: earlier).map { ($0.role, $0.content) }),
                 started: { await onAgentRun?(AgentRun(provider: AgentRun.openClaw, runID: $0, origin: turn.address.absoluteString)) },
                 report: onStateChange
             )
@@ -486,55 +488,13 @@ actor ChatService {
         // Track initial message sent
         AnalyticsService.shared.trackMessageSent(threadId: threadId, hasAttachments: !(attachments?.isEmpty ?? true), attachmentCount: attachments?.count ?? 0)
 
-        // ── Build attachment context block ────────────────────────────────
-        // Read file contents from local attachments and build a context block
-        // so the agent can see the attached files.
-        var attachmentContextBlock = ""
-        if let attachments, !attachments.isEmpty {
-            var attachmentLines: [String] = []
-            for attachment in attachments {
-                let name = attachment.name
-                let mime = attachment.mimeType ?? "unknown"
-
-                // Its bytes, from the app's own store.
-                do {
-                    if mime.hasPrefix("image/") {
-                        // For images, describe them (actual image content would need vision API)
-                        let sizeDesc = attachment.sizeBytes.map { "\(ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file))" } ?? "unknown size"
-                        let dims = (attachment.width != nil && attachment.height != nil) ? "\(attachment.width!)×\(attachment.height!)" : ""
-                        attachmentLines.append("[Image: \(name)] (\(mime), \(sizeDesc)\(dims.isEmpty ? "" : ", \(dims)"))")
-                        attachmentLines.append("Note: This is an image attachment. Describe what you see or ask the user about it if needed.")
-                    } else {
-                        // For text-based files, read the content
-                        let data = try await Self.bytes(of: attachment)
-                        if let text = String(data: data, encoding: .utf8) {
-                            // Truncate very large files to avoid context overflow
-                            let maxChars = 8000
-                            let truncated = text.count > maxChars
-                            let content = truncated ? String(text.prefix(maxChars)) + "\n... [truncated, \(text.count - maxChars) more characters]" : text
-                            attachmentLines.append("[File: \(name)] (\(mime))")
-                            attachmentLines.append("```")
-                            attachmentLines.append(content)
-                            attachmentLines.append("```")
-                        } else {
-                            // Binary file that's not an image - just note its presence
-                            let sizeDesc = attachment.sizeBytes.map { "\(ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file))" } ?? "unknown size"
-                            attachmentLines.append("[Binary file: \(name)] (\(mime), \(sizeDesc)) - Contents cannot be displayed as text.")
-                        }
-                    }
-                } catch {
-                    let failure = error as NSError
-                    AppErrorReporter.log(message: "An attachment could not be read (\(failure.domain) \(failure.code)).", context: "ChatService.streamMessage.readAttachment")
-                    attachmentLines.append("[File: \(name)] (\(mime)) - Its contents could not be read.")
-                }
-            }
-            if !attachmentLines.isEmpty {
-                attachmentContextBlock = "\n\n[User attached files]\n" + attachmentLines.joined(separator: "\n")
-            }
-        }
-
-        // Append attachment context to the message so the LLM can see the files
-        let messageWithAttachments = attachmentContextBlock.isEmpty ? message : message + attachmentContextBlock
+        // What the model is told of the files attached to the message: the
+        // text read from each, after the message. A model on this device or
+        // this network is given less of each, as it has less room.
+        let messageWithAttachments = await message + AttachmentContext.block(
+            for: attachments ?? [],
+            longestText: isLocalModel ? Self.longestAttachmentTextForLocalModels : AttachmentContext.longestText
+        )
 
         // ── Pre-execute tools for local models ────────────────────────────
         // Small local models (MLX/Ollama) cannot reliably produce JSON tool
@@ -1425,15 +1385,6 @@ actor ChatService {
         }
     }
 
-    /// An attachment's bytes: from the app's own store, or, for one that
-    /// still names a file elsewhere, from that file.
-    private static func bytes(of attachment: FileAttachmentDetail) async throws -> Data {
-        if let url = attachment.url {
-            return try Data(contentsOf: url)
-        }
-        return try await AttachmentStore.shared.data(of: attachment.id)
-    }
-
     /// Human-readable label for a provider string.
     private func providerLabel(for provider: String) -> String {
         switch provider {
@@ -1486,6 +1437,10 @@ actor ChatService {
     /// OpenClaw run through its Gateway): the agent keeps its own memory
     /// of the session as well.
     static let hermesHistoryLimit = 40
+
+    /// The most characters of one attachment's text a model running on
+    /// this device or this network is given.
+    static let longestAttachmentTextForLocalModels = 8000
 
     /// What was said before the message an agent's run answers (a Hermes
     /// run, or an OpenClaw run through its Gateway). The message
