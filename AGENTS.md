@@ -160,7 +160,7 @@ This is the local-first backbone intended to replace many backend-oriented servi
 - `Features/ConnectedApps/`
   - `MCPServerAccount` represents a configured MCP server connection (URL, transport type, auth, cached tools).
   - `MCPServerManagementView` provides UI for adding, editing, testing, and removing MCP server connections.
-  - `ConnectedAccountsService` manages MCP server persistence (UserDefaults) and Keychain storage for tokens. What it holds in memory is one account's: when the signed-in account is another, that account's connections are read in its place. Every method first asks who is signed in and waits for nothing after that before it reads or writes, and the lists and Keychain names it uses are spelled from that account, so a connection begun as one account stays that account's.
+  - `ConnectedAccountsService` manages MCP server persistence (UserDefaults) and Keychain storage for tokens. What it holds in memory is one account's: when the signed-in account is another, that account's connections are read in its place. Every method first asks who is signed in, and the lists and Keychain names it uses are spelled from that account, so a connection begun as one account stays that account's. A method that changes something waits for nothing after asking; the one that must wait, refreshing a Google token, asks again afterwards and keeps the new token only if the same account is still signed in and still has the connection.
 
 **Note:** Model types are in `swift/AICoven/AICoven/Models/` (not in Core). Some legacy types (`User`, `Coven`, `WorkspaceTab`) from the original multi-tenant design remain but are not used in the local client.
 
