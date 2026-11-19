@@ -425,6 +425,68 @@ final class OpenClawGatewayTests: XCTestCase {
         XCTAssertEqual(seen, 1)
     }
 
+    func testRequests_reachTheGatewayInTheOrderAskedAndAStoppedOneStopsWaiting() async throws {
+        let socket = ScriptedGatewaySocket()
+        let gateway = try connection(socket)
+        async let opened = gateway.open()
+        await socket.welcomeNextConnection(in: self)
+        _ = try await opened
+
+        let asking = (1 ... 20).map { number in
+            Task { try await gateway.call("agent.wait", ["runId": "r\(number)"]) }
+        }
+        // Each is asked before the next: the tasks are started in order,
+        // and each registers its request before it waits.
+        for task in asking {
+            task.cancel()
+        }
+        for task in asking {
+            do {
+                _ = try await task.value
+                XCTFail("A stopped request does not wait for its answer")
+            } catch {
+                XCTAssertTrue(error is CancellationError || (error as? OpenClawGatewayError) == .closed)
+            }
+        }
+        let sent = socket.sent.dropFirst().compactMap { ($0["params"] as? [String: String])?["runId"] }
+        XCTAssertEqual(sent, sent.sorted { Int($0.dropFirst()) ?? 0 < Int($1.dropFirst()) ?? 0 }, "Whatever was sent went in the order asked")
+        await gateway.close()
+
+        // Nothing is sent once the connection has ended.
+        let before = socket.sent.count
+        do {
+            _ = try await gateway.call("chat.abort", ["runId": "r"])
+            XCTFail("The connection has ended")
+        } catch {
+            XCTAssertEqual(error as? OpenClawGatewayError, .closed)
+        }
+        XCTAssertEqual(socket.sent.count, before)
+    }
+
+    func testThisDevice_isOneHoweverManyConnectionsStartAtOnce() throws {
+        let key = "openclaw-gateway-device-identity.ed25519-v1"
+        let saved = KeychainHelper.load(key: key)
+        addTeardownBlock {
+            if let saved {
+                try? KeychainHelper.save(key: key, value: saved)
+            } else {
+                KeychainHelper.delete(key: key)
+            }
+        }
+        // What is stored and is not a key is replaced.
+        try KeychainHelper.save(key: key, value: Data("short".utf8).base64EncodedString())
+
+        let ids = Collected()
+        DispatchQueue.concurrentPerform(iterations: 30) { _ in
+            if let identity = try? OpenClawDeviceIdentity.loadOrCreate() {
+                ids.add(identity.deviceID)
+            }
+        }
+
+        XCTAssertEqual(ids.all.count, 30)
+        XCTAssertEqual(Set(ids.all).count, 1)
+    }
+
     func testARequestLargerThanTheGatewayTakes_isNotSent() async throws {
         let socket = ScriptedGatewaySocket()
         let gateway = try connection(socket)
@@ -459,7 +521,7 @@ final class OpenClawGatewayTests: XCTestCase {
             _ = try await OpenClawGateway.hello(at: address, token: "T", timeout: .milliseconds(50), over: { _ in silent })
             XCTFail("Nothing answered")
         } catch {
-            XCTAssertEqual(error as? OpenClawGatewayError, .closed)
+            XCTAssertEqual(error as? OpenClawGatewayError, .unexpectedReply, "Said as what it is: nothing answered as a Gateway")
         }
         XCTAssertTrue(silent.isClosed)
     }
@@ -593,9 +655,14 @@ final class OpenClawGatewayTests: XCTestCase {
         try await service.updateProviderAccount(id: account.id, displayName: "Renamed")
         let afterRename = try await service.gatewayAddress(forAccount: account.id)
         XCTAssertEqual(afterRename, "ws://127.0.0.1:18789")
+        // A token the Gateway issued goes when the connection stops naming it.
+        let issuedKey = "openclaw-gateway-device-token.ws://127.0.0.1:18789"
+        addTeardownBlock { KeychainHelper.delete(key: issuedKey) }
+        try KeychainHelper.save(key: issuedKey, value: "ISSUED")
         try await service.updateProviderAccount(id: account.id, gatewayURL: "")
         let afterClear = try await service.gatewayAddress(forAccount: account.id)
         XCTAssertNil(afterClear)
+        XCTAssertNil(KeychainHelper.load(key: issuedKey))
     }
 
     func testAConnectionStoredBeforeGateways_stillLoadsAndHasNone() throws {
@@ -669,5 +736,19 @@ private actor AskedGateways {
 
     func offer(methods: [String]) {
         self.methods = methods
+    }
+}
+
+/// Strings gathered from many threads at once.
+private final class Collected: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String] = []
+
+    func add(_ value: String) {
+        lock.withLock { values.append(value) }
+    }
+
+    var all: [String] {
+        lock.withLock { values }
     }
 }

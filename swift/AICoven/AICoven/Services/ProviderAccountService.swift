@@ -289,6 +289,13 @@ actor ProviderAccountService {
         return ProviderAccount(from: local)
     }
 
+    /// A token a Gateway issued this device goes with the connection that
+    /// named the Gateway, unless another connection still names it.
+    private func forgetIssuedToken(for gateway: String?, unlessStillNamedIn accounts: [LocalProviderAccount]) {
+        guard let gateway, !accounts.contains(where: { $0.gatewayURL == gateway }) else { return }
+        OpenClawGateway.forgetIssuedToken(for: gateway)
+    }
+
     /// The Gateway address stored with a connection, if it has one.
     func gatewayAddress(forAccount id: String) throws -> String? {
         try loadLocalAccounts().first { $0.id == id }?.gatewayURL
@@ -396,6 +403,9 @@ actor ProviderAccountService {
         )
         locals[index] = updated
         try saveLocalAccounts(locals)
+        if old.gatewayURL != updated.gatewayURL {
+            forgetIssuedToken(for: old.gatewayURL, unlessStillNamedIn: locals)
+        }
 
         // Update Keychain if API key changed. Do not mirror secrets into UserDefaults.
         if let apiKey, !apiKey.isEmpty {
@@ -422,6 +432,7 @@ actor ProviderAccountService {
 
         // Remove Keychain entry
         KeychainHelper.delete(key: keychainKey(for: id))
+        forgetIssuedToken(for: removed.gatewayURL, unlessStillNamedIn: locals)
 
         // If this was the last account for its provider, clear the global
         // UserDefaults API key hint so the UI can surface a proper error.

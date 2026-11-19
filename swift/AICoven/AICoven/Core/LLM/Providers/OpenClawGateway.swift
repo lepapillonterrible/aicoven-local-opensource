@@ -70,13 +70,22 @@ nonisolated struct OpenClawDeviceIdentity {
     /// The current account's identity on this device, made the first time
     /// it is asked for.
     static func loadOrCreate() throws -> OpenClawDeviceIdentity {
-        if let stored = KeychainHelper.load(key: keychainKey), let key = Data(base64Encoded: stored) {
+        // One at a time: two first uses at once would each make a key, and
+        // the Gateway would meet this device as two.
+        try making.withLock {
+            // What is stored and is not a key (cut short, or not this
+            // app's) is replaced: it could never be used.
+            if let stored = KeychainHelper.load(key: keychainKey), let key = Data(base64Encoded: stored),
+               let identity = try? OpenClawDeviceIdentity(privateKey: key) {
+                return identity
+            }
+            let key = Curve25519.Signing.PrivateKey().rawRepresentation
+            try KeychainHelper.save(key: keychainKey, value: key.base64EncodedString())
             return try OpenClawDeviceIdentity(privateKey: key)
         }
-        let key = Curve25519.Signing.PrivateKey().rawRepresentation
-        try KeychainHelper.save(key: keychainKey, value: key.base64EncodedString())
-        return try OpenClawDeviceIdentity(privateKey: key)
     }
+
+    private static let making = NSLock()
 
     private static func base64URL(_ data: Data) -> String {
         data.base64EncodedString()
@@ -123,6 +132,15 @@ nonisolated struct OpenClawGatewayEvent: Equatable {
 /// order the Gateway numbered them.
 actor OpenClawGatewayConnection {
     static let protocolVersion = 4
+    /// What this device is, as the Gateway lists it.
+    static var platform: String {
+        #if os(iOS)
+        "ios"
+        #else
+        "macos"
+        #endif
+    }
+
     static let scopes = ["operator.read", "operator.write", "operator.approvals"]
     /// The largest frame sent before the Gateway has said what it takes,
     /// and the most this app sends or keeps whatever the Gateway takes.
@@ -140,6 +158,8 @@ actor OpenClawGatewayConnection {
     private var maxPayload = OpenClawGatewayConnection.firstFrameLimit
     private var lastSequence: Int?
     private var reading: Task<Void, Never>?
+    /// The last request's sending, which the next waits for.
+    private var lastSend: Task<Void, Never>?
     private var ended: Error?
     private let eventsIn: AsyncThrowingStream<OpenClawGatewayEvent, Error>.Continuation
 
@@ -194,7 +214,7 @@ actor OpenClawGatewayConnection {
         var params: [String: Any] = try [
             "minProtocol": Self.protocolVersion,
             "maxProtocol": Self.protocolVersion,
-            "client": ["id": "gateway-client", "displayName": "AICoven Local", "version": clientVersion, "platform": "macos", "mode": "backend"],
+            "client": ["id": "gateway-client", "displayName": "AICoven Local", "version": clientVersion, "platform": Self.platform, "mode": "backend"],
             "role": "operator",
             "scopes": Self.scopes,
             "caps": ["session-scoped-events", "chat-only-assistant-text", "approvals", "exec-approvals", "plugin-approvals"],
@@ -261,15 +281,28 @@ actor OpenClawGatewayConnection {
         let id = newID()
         let params = try JSONSerialization.jsonObject(with: paramsJSON)
         let text = try Self.text(["type": "req", "id": id, "method": method, "params": params], limit: maxPayload)
-        return try await withCheckedThrowingContinuation { continuation in
-            waiting[id] = continuation
-            Task {
-                do {
-                    try await socket.send(text)
-                } catch {
-                    self.fail(id, with: error)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                waiting[id] = continuation
+                // One at a time, in the order asked: a request sent after
+                // another reaches the Gateway after it.
+                let previous = lastSend
+                lastSend = Task {
+                    await previous?.value
+                    // Nothing more is sent once the connection has ended,
+                    // which has already answered whoever was waiting.
+                    guard ended == nil, waiting[id] != nil else { return }
+                    do {
+                        try await socket.send(text)
+                    } catch {
+                        self.fail(id, with: error)
+                    }
                 }
             }
+        } onCancel: {
+            // Whoever asked has stopped waiting; the answer, if it comes,
+            // is dropped.
+            Task { await self.fail(id, with: CancellationError()) }
         }
     }
 
@@ -445,8 +478,11 @@ nonisolated enum OpenClawGateway {
         )
         // An address that takes the connection and says nothing would hold
         // this for ever: closing the socket ends the wait.
+        // Says, where the wait is given up, that this is why it ended.
+        let gaveUp = GaveUp()
         let givingUp = Task {
             try await Task.sleep(for: timeout)
+            gaveUp.set()
             transport.close()
         }
         defer { givingUp.cancel() }
@@ -466,7 +502,30 @@ nonisolated enum OpenClawGateway {
             return (gateway, hello)
         } catch {
             await gateway.close()
-            throw error
+            // Closing the socket ends the wait with the system's own
+            // error; what happened is that nothing answered as a Gateway.
+            throw gaveUp.isSet ? OpenClawGatewayError.unexpectedReply : error
+        }
+    }
+
+    /// Forgets the token a Gateway issued this device: its connection has
+    /// been removed, or no longer names that Gateway.
+    static func forgetIssuedToken(for address: String) {
+        guard let address = OpenClawGatewayConnection.address(address) else { return }
+        deviceTokens.withLock { KeychainHelper.delete(key: deviceTokenKey(for: address)) }
+    }
+
+    /// Set from the task that gives a handshake up, read by the one waiting.
+    private final class GaveUp: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = false
+
+        var isSet: Bool {
+            lock.withLock { value }
+        }
+
+        func set() {
+            lock.withLock { value = true }
         }
     }
 
