@@ -18,6 +18,9 @@ struct LocalProviderAccount: Codable {
     let baseURL: String?
     let status: String
     let createdAt: Date
+    /// For an OpenClaw connection, the address of its native Gateway, if
+    /// the person gave one.
+    var gatewayURL: String?
 }
 
 extension ProviderAccount {
@@ -53,7 +56,15 @@ enum KeychainHelper {
         UserScope.scopedKeychainService("AICovenProviderKeys")
     }
 
-    static func save(key: String, value: String) throws {
+    /// The current account's Keychain service, to keep for work that waits:
+    /// passed back as `service`, what is saved or deleted afterwards is
+    /// that account's, whoever is signed in by then.
+    static var currentService: String {
+        service
+    }
+
+    static func save(key: String, value: String, service: String? = nil) throws {
+        let service = service ?? self.service
         let data = Data(value.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -71,7 +82,8 @@ enum KeychainHelper {
         }
     }
 
-    static func load(key: String) -> String? {
+    static func load(key: String, service: String? = nil) -> String? {
+        let service = service ?? self.service
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -87,7 +99,8 @@ enum KeychainHelper {
         return String(data: data, encoding: .utf8)
     }
 
-    static func delete(key: String) {
+    static func delete(key: String, service: String? = nil) {
+        let service = service ?? self.service
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -117,6 +130,15 @@ actor ProviderAccountService {
     /// its start, by callers that arrive while it runs too. A failed download
     /// is not kept.
     private var openRouterCatalog: (startedAt: Date, download: Task<[ProviderInitializationStatus.ModelMetadata], Error>)?
+
+    /// Asks a Gateway what it offers; stood in for by tests.
+    private var gatewayHello: @Sendable (URL, String?) async throws -> OpenClawGatewayHello = { address, token in
+        try await OpenClawGateway.hello(at: address, token: token)
+    }
+
+    func askGateways(with hello: @escaping @Sendable (URL, String?) async throws -> OpenClawGatewayHello) {
+        gatewayHello = hello
+    }
 
     private init() {}
 
@@ -235,7 +257,8 @@ actor ProviderAccountService {
         displayName: String,
         baseURL: String,
         apiKey: String?,
-        defaultModel: String?
+        defaultModel: String?,
+        gatewayURL: String? = nil
     ) async throws -> ProviderAccount {
         var locals = try loadLocalAccounts()
         let now = Date()
@@ -248,7 +271,8 @@ actor ProviderAccountService {
             defaultModel: defaultModel,
             baseURL: baseURL,
             status: "healthy",
-            createdAt: now
+            createdAt: now,
+            gatewayURL: gatewayURL.flatMap { $0.isEmpty ? nil : $0 }
         )
         locals.append(local)
         try saveLocalAccounts(locals)
@@ -263,6 +287,18 @@ actor ProviderAccountService {
         await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
 
         return ProviderAccount(from: local)
+    }
+
+    /// A token a Gateway issued this device goes with the connection that
+    /// named the Gateway, unless another connection still names it.
+    private func forgetIssuedToken(for gateway: String?, unlessStillNamedIn accounts: [LocalProviderAccount]) {
+        guard let gateway, !accounts.contains(where: { $0.gatewayURL == gateway }) else { return }
+        OpenClawGateway.forgetIssuedToken(for: gateway)
+    }
+
+    /// The Gateway address stored with a connection, if it has one.
+    func gatewayAddress(forAccount id: String) throws -> String? {
+        try loadLocalAccounts().first { $0.id == id }?.gatewayURL
     }
 
     /// Create a connection to a Hermes agent: the address of its API server,
@@ -344,7 +380,8 @@ actor ProviderAccountService {
         displayName: String? = nil,
         apiKey: String? = nil,
         baseURL: String? = nil,
-        defaultModel: String? = nil
+        defaultModel: String? = nil,
+        gatewayURL: String? = nil
     ) async throws {
         var locals = try loadLocalAccounts()
         guard let index = locals.firstIndex(where: { $0.id == id }) else {
@@ -360,10 +397,15 @@ actor ProviderAccountService {
             // An empty address clears it, and the provider's own applies again.
             baseURL: baseURL.map { $0.isEmpty ? nil : $0 } ?? old.baseURL,
             status: old.status,
-            createdAt: old.createdAt
+            createdAt: old.createdAt,
+            // As for the address: not given leaves it, empty clears it.
+            gatewayURL: gatewayURL.map { $0.isEmpty ? nil : $0 } ?? old.gatewayURL
         )
         locals[index] = updated
         try saveLocalAccounts(locals)
+        if old.gatewayURL != updated.gatewayURL {
+            forgetIssuedToken(for: old.gatewayURL, unlessStillNamedIn: locals)
+        }
 
         // Update Keychain if API key changed. Do not mirror secrets into UserDefaults.
         if let apiKey, !apiKey.isEmpty {
@@ -390,6 +432,7 @@ actor ProviderAccountService {
 
         // Remove Keychain entry
         KeychainHelper.delete(key: keychainKey(for: id))
+        forgetIssuedToken(for: removed.gatewayURL, unlessStillNamedIn: locals)
 
         // If this was the last account for its provider, clear the global
         // UserDefaults API key hint so the UI can surface a proper error.
@@ -465,7 +508,23 @@ actor ProviderAccountService {
             if account.provider.lowercased() == "openrouter" {
                 try await checkOpenRouterKey(accountId: accountId)
             }
-            outcome = try await .success(fetchRemoteModels(for: account).count)
+            if let gateway = account.gatewayURL {
+                // A connection with a Gateway is tested at its Gateway,
+                // where its turns run: that it answers as one, takes this
+                // device and the token, and offers what a turn needs.
+                guard let address = OpenClawGatewayConnection.address(gateway) else { throw OpenClawGatewayError.invalidAddress }
+                let hello = try await gatewayHello(address, testedKey)
+                if let missing = hello.missing { throw OpenClawGatewayError.notSupported(missing) }
+                // The models are asked of the server address with the key
+                // as it is stored now. If either was edited while the
+                // Gateway answered, the new key is not sent to the old
+                // address: the models are not asked.
+                let current = try loadLocalAccounts().first { $0.id == accountId }
+                let unchanged = current?.baseURL == account.baseURL && KeychainHelper.load(key: keychainKey(for: accountId)) == testedKey
+                outcome = unchanged ? await .success((try? fetchRemoteModels(for: account).count) ?? 0) : .success(0)
+            } else {
+                outcome = try await .success(fetchRemoteModels(for: account).count)
+            }
         } catch {
             outcome = .failure(error)
         }
@@ -476,6 +535,7 @@ actor ProviderAccountService {
         var locals = try loadLocalAccounts()
         if let index = locals.firstIndex(where: { $0.id == accountId }),
            locals[index].baseURL == account.baseURL,
+           locals[index].gatewayURL == account.gatewayURL,
            KeychainHelper.load(key: keychainKey(for: accountId)) == testedKey {
             let current = locals[index]
             locals[index] = LocalProviderAccount(
@@ -486,7 +546,8 @@ actor ProviderAccountService {
                 defaultModel: current.defaultModel,
                 baseURL: current.baseURL,
                 status: (try? outcome.get()) == nil ? "unhealthy" : "healthy",
-                createdAt: current.createdAt
+                createdAt: current.createdAt,
+                gatewayURL: current.gatewayURL
             )
             try saveLocalAccounts(locals)
         }
