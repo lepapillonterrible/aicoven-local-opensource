@@ -130,6 +130,8 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertEqual(statuses?.contains("running"), false)
     }
 
+    /// Async, as is every test that makes an engine: a main-actor object
+    /// released outside a task crashes on macOS 15 (see issue #61).
     func testTextOfAFailedSend_isKeptForItsThreadAndGivenBackOnce() {
         let engine = makeEngine()
 
@@ -140,6 +142,126 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertEqual(kept?.text, "Do not lose this")
         XCTAssertEqual(kept?.reason, "The data is locked")
         XCTAssertNil(engine.takeUnsent(for: threadID))
+    }
+
+    // MARK: - Stop
+
+    func testStop_saysStoppingUntilTheTurnHasEndedThenRecordsItAsStopped() async throws {
+        let engine = makeEngine()
+        try await engine.start(with: question("A long one"), context: "A long one", roleID: nil, agentName: nil, attachments: nil)
+        await provider.called()
+
+        engine.stop(threadID: threadID)
+        // A second press changes nothing.
+        engine.stop(threadID: threadID)
+        XCTAssertEqual(engine.running[threadID]?.isStopping, true)
+        XCTAssertEqual(engine.running[threadID]?.message, TurnProgress.stoppingMessage)
+        await finished(engine)
+
+        let messages = try await ChatService.shared.loadMessages(threadId: threadID)
+        XCTAssertEqual(messages.map(\.content), ["A long one", "Stopped before any reply."])
+        XCTAssertEqual(engine.endings[threadID]?.outcome, .cancelled)
+        let turn = try await storedTurn()
+        XCTAssertEqual(turn?.status, "cancelled")
+        // Another send starts once the stopped turn is over.
+        provider.release()
+        try await engine.start(with: question("Next"), context: "Next", roleID: nil, agentName: nil, attachments: nil)
+        await finished(engine)
+    }
+
+    func testStop_keepsWhatAStreamedAnswerHadSaidAndDoesNotCallItComplete() async throws {
+        let firstPart = expectation(description: "The answer has started to arrive")
+        let engine = makeEngine(provider: StreamingProvider(parts: [LLMStreamDelta(text: "Once upon a")], sent: firstPart))
+        // A request the reply loop answers without tools, so the answer is
+        // streamed.
+        try await engine.start(with: question("Tell me about dragons"), context: "Tell me about dragons", roleID: nil, agentName: nil, attachments: nil)
+        await fulfillment(of: [firstPart], timeout: 10)
+
+        engine.stop(threadID: threadID)
+        await finished(engine)
+
+        // The stream ended without an error when it was cancelled, as an
+        // on-device model's does; that is not a finished answer.
+        let messages = try await ChatService.shared.loadMessages(threadId: threadID)
+        XCTAssertEqual(messages.last?.content, "Once upon a\n\n_Stopped here._")
+        let turn = try await storedTurn()
+        XCTAssertEqual(turn?.status, "cancelled")
+    }
+
+    func testStop_afterAStreamedAnswerHasArrivedInFullKeepsItAsTheReply() async throws {
+        let wholeAnswer = expectation(description: "The whole answer has arrived")
+        let engine = makeEngine(provider: StreamingProvider(
+            parts: [LLMStreamDelta(text: "Dragons are large."), LLMStreamDelta(text: "", isFinished: true)],
+            sent: wholeAnswer
+        ))
+        try await engine.start(with: question("Tell me about dragons"), context: "Tell me about dragons", roleID: nil, agentName: nil, attachments: nil)
+        await fulfillment(of: [wholeAnswer], timeout: 10)
+
+        // The stream has said it is finished but has not closed.
+        engine.stop(threadID: threadID)
+        await finished(engine)
+
+        let messages = try await ChatService.shared.loadMessages(threadId: threadID)
+        XCTAssertEqual(messages.last?.content, "Dragons are large.")
+        let turn = try await storedTurn()
+        XCTAssertEqual(turn?.status, "completed")
+    }
+
+    func testStop_startsNoToolOnceTheTurnIsStopped() async {
+        let stopped = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await ChatService.shared.executeChatToolCall(ChatToolInvocation(tool: "current_time", input: nil, reason: nil))
+        }
+
+        do {
+            _ = try await stopped.value
+            XCTFail("A stopped turn must not start a tool")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+    }
+
+    func testStop_worksOnATurnStartedRightAfterAnotherEnded() async throws {
+        let engine = makeEngine()
+        try await engine.start(with: question("First"), context: "First", roleID: nil, agentName: nil, attachments: nil)
+        provider.release()
+        await finished(engine)
+        // The first turn's summary is still to be asked for, or is waiting on
+        // the provider, when the next turn starts.
+        provider.hold()
+        try await engine.start(with: question("Second"), context: "Second", roleID: nil, agentName: nil, attachments: nil)
+
+        engine.stop(threadID: threadID)
+        XCTAssertEqual(engine.running[threadID]?.isStopping, true)
+        await finished(engine)
+
+        let statuses = try await DatabaseManager.shared.dbQueue?.read { [threadID] db in
+            try String.fetchAll(db, sql: "SELECT status FROM turns WHERE thread_id = ? ORDER BY started_at", arguments: [threadID])
+        }
+        XCTAssertEqual(statuses, ["completed", "cancelled"])
+    }
+
+    func testStop_doesNothingWhereNoTurnRuns() {
+        let engine = makeEngine()
+
+        engine.stop(threadID: threadID)
+
+        XCTAssertNil(engine.running[threadID])
+    }
+
+    func testAStoppedTurn_keepsWhatHadBeenAnsweredAndAReplyThatArrivedInFullWins() {
+        var stoppedMidAnswer = TurnProgress(agentName: nil)
+        stoppedMidAnswer.note(TurnState(answer: "Half of the ans", phase: .answering))
+        stoppedMidAnswer.note(TurnState(answer: "Error: cancelled", status: .failed, phase: .finalizing))
+        let partial = stoppedMidAnswer.ending(in: "t", thrown: nil, stopped: true)
+        XCTAssertEqual(partial.outcome, .cancelled)
+        XCTAssertEqual(partial.message.content, "Half of the ans\n\n_Stopped here._")
+
+        var finishedFirst = TurnProgress(agentName: nil)
+        finishedFirst.note(TurnState(answer: "The whole answer.", status: .completed, phase: .finalizing))
+        let whole = finishedFirst.ending(in: "t", thrown: nil, stopped: true)
+        XCTAssertEqual(whole.outcome, .completed)
+        XCTAssertEqual(whole.message.content, "The whole answer.")
     }
 
     // MARK: - A turn the app closed on
@@ -247,6 +369,10 @@ final class TurnEngineTests: XCTestCase {
     }
 
     private func makeEngine() -> TurnEngine {
+        makeEngine(provider: provider)
+    }
+
+    private func makeEngine(provider: LLMClient) -> TurnEngine {
         let model = ModelDescriptor(
             providerID: "test-provider", modelID: "test-model", maxContextTokens: 4096,
             supportsTools: false, supportsEmbeddings: false, costClass: .cheap
@@ -279,37 +405,111 @@ final class TurnEngineTests: XCTestCase {
     }
 }
 
-/// A provider that answers when the test lets it, with a reply or an error.
+/// A provider that streams the parts it is given and then nothing more,
+/// until its consumer is cancelled; the stream then ends without an error.
+/// It says its parts are read when the consumer asks for the one after.
+private final class StreamingProvider: StreamingLLMClient, @unchecked Sendable {
+    // The consumer asks for one part at a time, so nothing here is touched
+    // from two places at once; the lock is for the compiler's sake too.
+    private let lock = NSLock()
+    private var remaining: [LLMStreamDelta]
+    /// XCTestExpectation is safe to fulfil from any thread.
+    private let read: XCTestExpectation
+
+    init(parts: [LLMStreamDelta], sent read: XCTestExpectation) {
+        remaining = parts
+        self.read = read
+    }
+
+    func streamChat(messages _: [LLMMessage], model _: String, options _: ChatOptions) -> AsyncThrowingStream<LLMStreamDelta, Error> {
+        AsyncThrowingStream(unfolding: { [self] in
+            if let next = lock.withLock({ remaining.isEmpty ? nil : remaining.removeFirst() }) {
+                return next
+            }
+            // Every part has been read. Nothing more comes until the
+            // consumer is cancelled, and then the stream just ends.
+            read.fulfill()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+            return nil
+        })
+    }
+
+    func completeChat(messages _: [LLMMessage], model: String, options _: ChatOptions) async throws -> LLMChatResponse {
+        LLMChatResponse(
+            message: LLMMessage(role: .assistant, content: "Once upon a time, the end."),
+            providerID: "test-provider",
+            modelID: model,
+            usage: nil
+        )
+    }
+
+    func embed(texts: [String], model _: String) async throws -> [[Float]] {
+        Array(repeating: [0, 0, 0], count: texts.count)
+    }
+}
+
+/// A provider that answers when the test lets it, with a reply or an error,
+/// and gives up, as a network call does, when its task is cancelled.
 private final class ScriptedProvider: LLMClient, @unchecked Sendable {
     // Read and written from the test and from the chat service's actor, so
     // every access takes the lock.
     private let lock = NSLock()
     private var released = false
-    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var waiting: [UUID: CheckedContinuation<Void, Never>] = [:]
     private var failure: String?
+    private var calls = 0
+    private var awaitingCall: [CheckedContinuation<Void, Never>] = []
 
     func fail(with message: String) {
         lock.withLock { failure = message }
     }
 
+    /// Makes the provider wait again before it answers.
+    func hold() {
+        lock.withLock { released = false }
+    }
+
     func release() {
         let resumed = lock.withLock {
             released = true
-            defer { waiting = [] }
-            return waiting
+            defer { waiting = [:] }
+            return Array(waiting.values)
         }
         resumed.forEach { $0.resume() }
     }
 
-    func completeChat(messages _: [LLMMessage], model: String, options _: ChatOptions) async throws -> LLMChatResponse {
+    /// Returns once the chat service is waiting on this provider.
+    func called() async {
         await withCheckedContinuation { continuation in
-            let resumeNow = lock.withLock {
-                if released { return true }
-                waiting.append(continuation)
+            let already = lock.withLock {
+                if calls > 0 { return true }
+                awaitingCall.append(continuation)
                 return false
             }
-            if resumeNow { continuation.resume() }
+            if already { continuation.resume() }
         }
+    }
+
+    func completeChat(messages _: [LLMMessage], model: String, options _: ChatOptions) async throws -> LLMChatResponse {
+        let call = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let (resumeNow, watchers) = lock.withLock {
+                    calls += 1
+                    defer { awaitingCall = [] }
+                    if released || Task.isCancelled { return (true, awaitingCall) }
+                    waiting[call] = continuation
+                    return (false, awaitingCall)
+                }
+                watchers.forEach { $0.resume() }
+                if resumeNow { continuation.resume() }
+            }
+        } onCancel: {
+            lock.withLock { waiting.removeValue(forKey: call) }?.resume()
+        }
+        try Task.checkCancellation()
         if let failure = lock.withLock({ failure }) {
             throw NSError(domain: "ScriptedProvider", code: 1, userInfo: [NSLocalizedDescriptionKey: failure])
         }

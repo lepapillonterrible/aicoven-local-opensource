@@ -1,3 +1,4 @@
+import Accessibility
 internal import Combine
 import Foundation
 
@@ -18,6 +19,9 @@ final class TurnEngine: ObservableObject {
     struct Activity: Equatable {
         let turnID: String
         var message: String
+        /// True from the moment the person asks to stop until the turn has
+        /// in fact ended.
+        var isStopping = false
     }
 
     enum TurnError: LocalizedError {
@@ -37,6 +41,7 @@ final class TurnEngine: ObservableObject {
     /// How a thread's last turn ended, for the thread to show.
     struct Ending: Equatable {
         let turnID: String
+        let outcome: TurnOutcome
         /// The reply or what went wrong, followed, if that could not be
         /// stored, by a line saying so.
         let messages: [ChatMessage]
@@ -55,6 +60,11 @@ final class TurnEngine: ObservableObject {
     /// ahead of it, and no later ending takes its place.
     private var unstored: [String: (turnID: String, outcome: TurnOutcome, message: ChatMessage)] = [:]
 
+    /// The task running each thread's reply, which Stop cancels.
+    private var replies: [String: Task<Error?, Never>] = [:]
+    /// Turns, by id, whose reply has ended and whose ending is being
+    /// stored: too late to stop.
+    private var settling: Set<String> = []
     /// The text of a send that failed after its thread had left the screen,
     /// and why, by thread id: given back when the thread is next opened.
     private var unsent: [String: (text: String, reason: String)] = [:]
@@ -93,6 +103,20 @@ final class TurnEngine: ObservableObject {
         Task {
             await run(turnID: turnID, threadID: threadID, context: context, roleID: roleID, agentName: agentName, attachments: attachments)
         }
+    }
+
+    /// Asks the turn running in a thread to stop. The turn is shown as
+    /// stopping until it has ended: a model call in flight is cancelled, a
+    /// step that cannot be cancelled runs to its end, and no further step is
+    /// taken. If the reply arrives first, the turn ends with it.
+    func stop(threadID: String) {
+        guard let turn = running[threadID], !turn.isStopping, !settling.contains(turn.turnID) else { return }
+        running[threadID]?.isStopping = true
+        running[threadID]?.message = TurnProgress.stoppingMessage
+        replies[threadID]?.cancel()
+        // Said here, once for the turn, whatever screen is showing: with
+        // the keyboard shortcut, VoiceOver's focus can be anywhere.
+        AccessibilityNotification.Announcement("Stopping").post()
     }
 
     /// Keeps the text of a send that could not be started, for a thread that
@@ -141,7 +165,7 @@ final class TurnEngine: ObservableObject {
         guard unstored[threadID]?.turnID == waiting.turnID else { return }
         guard stored else { throw TurnError.endingNotStored }
         unstored[threadID] = nil
-        endings[threadID] = Ending(turnID: waiting.turnID, messages: [waiting.message], stored: true)
+        endings[threadID] = Ending(turnID: waiting.turnID, outcome: waiting.outcome, messages: [waiting.message], stored: true)
     }
 
     private func run(
@@ -172,23 +196,31 @@ final class TurnEngine: ObservableObject {
             }
         }
 
+        replies[threadID] = reply
+        // Stop can have been asked while the turn was being stored.
+        if running[threadID]?.isStopping == true {
+            reply.cancel()
+        }
+
         var progress = TurnProgress(agentName: agentName)
         for await state in states {
             progress.note(state)
             // Most reports leave the line as it is; the thread redraws only
-            // when it changes.
-            if running[threadID]?.message != progress.activity {
+            // when it changes. A stopping turn keeps saying so.
+            if running[threadID]?.isStopping == false, running[threadID]?.message != progress.activity {
                 running[threadID]?.message = progress.activity
             }
         }
         let thrown = await reply.value
-        let ending = progress.ending(in: threadID, thrown: thrown)
+        replies[threadID] = nil
+        settling.insert(turnID)
+        let ending = progress.ending(in: threadID, thrown: thrown, stopped: running[threadID]?.isStopping == true)
 
         do {
             guard try await store.endTurn(id: turnID, outcome: ending.outcome, message: ending.message) else {
                 throw TurnError.endingNotStored
             }
-            endings[threadID] = Ending(turnID: turnID, messages: [ending.message], stored: true)
+            endings[threadID] = Ending(turnID: turnID, outcome: ending.outcome, messages: [ending.message], stored: true)
         } catch {
             // The reply exists and the thread shows it, with why it may not
             // be there later. It is tried again before the thread's next
@@ -201,9 +233,14 @@ final class TurnEngine: ObservableObject {
                 role: "assistant",
                 content: "AICoven couldn't save this reply yet. It will try again when you send your next message here; if the app closes first, the reply is lost. \(error.localizedDescription)"
             )
-            endings[threadID] = Ending(turnID: turnID, messages: [ending.message, notice], stored: false)
+            endings[threadID] = Ending(turnID: turnID, outcome: ending.outcome, messages: [ending.message, notice], stored: false)
         }
         running[threadID] = nil
+        settling.remove(turnID)
+        if ending.outcome == .cancelled {
+            // Once, when the turn has in fact stopped and Stop is gone.
+            AccessibilityNotification.Announcement("Stopped").post()
+        }
         if ending.outcome == .completed {
             await chat.updateThreadSummary(threadId: threadID)
         }
@@ -214,6 +251,7 @@ final class TurnEngine: ObservableObject {
 /// it runs and the message it ends with.
 struct TurnProgress {
     static let startingMessage = "Thinking through your request…"
+    static let stoppingMessage = "Stopping…"
     static let interruptedNotice = "No reply to this message was saved. Send it again to get an answer."
 
     let agentName: String?
@@ -222,6 +260,8 @@ struct TurnProgress {
     private var thoughts: [String] = []
     private var usedTools = false
     private var last: TurnState?
+    /// What had been answered so far, while the answer was arriving.
+    private var partialAnswer = ""
 
     init(agentName: String?) {
         self.agentName = agentName
@@ -242,14 +282,23 @@ struct TurnProgress {
             if let tool = state.toolsInProgress.values.first ?? state.toolsCompleted.last {
                 activity = Self.toolActivity(for: tool.name)
             }
-        case .answering, .finalizing:
+        case .answering:
+            partialAnswer = state.answer
+        case .finalizing:
             break
         }
     }
 
     /// How the turn ended and the message that says so: the reply, the
-    /// failure the chat service reported, or the error it threw.
-    func ending(in threadID: String, thrown: Error?) -> (outcome: TurnOutcome, message: ChatMessage) {
+    /// failure the chat service reported, or the error it threw. A turn the
+    /// person stopped ends as stopped, with what had been answered so far,
+    /// unless the reply had already arrived in full: then it ends with it.
+    func ending(in threadID: String, thrown: Error?, stopped: Bool = false) -> (outcome: TurnOutcome, message: ChatMessage) {
+        if stopped, thrown != nil || last?.status != .completed {
+            let partial = MessageAdapter.sanitizeContentForDisplay(partialAnswer).trimmingCharacters(in: .whitespacesAndNewlines)
+            let content = partial.isEmpty ? "Stopped before any reply." : "\(partial)\n\n_Stopped here._"
+            return (.cancelled, Self.message(in: threadID, role: "assistant", content: content))
+        }
         if let thrown {
             let text = "I ran into an error while contacting your provider: \(thrown.localizedDescription)"
             return (.failed, Self.message(in: threadID, role: "assistant", content: text))

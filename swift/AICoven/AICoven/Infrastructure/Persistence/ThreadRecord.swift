@@ -391,6 +391,8 @@ enum TurnOutcome: String {
     case running
     case completed
     case failed
+    /// The person stopped it.
+    case cancelled
     /// The app closed while it was running.
     case interrupted
 }
