@@ -18,17 +18,28 @@ actor ToolExecutionService {
     /// answer.
     private let ask: @Sendable (ToolApproval) async -> ApprovalAnswer
 
+    /// Which connections the coven of a thread lets its agents use.
+    private let covenConnections: @Sendable (_ threadID: String) async -> CovenConnections?
+
     /// Default initializer uses the shared ToolService singleton.
     init() {
         toolService = ToolService.shared
         ask = Self.askInItsThread
+        covenConnections = { await CovenService.shared.connections(forThread: $0) }
     }
 
-    /// Test-friendly initializer that accepts a mock tool service, and an
-    /// answer to every approval in place of the person's.
-    init(toolService: any ChatToolService, ask: @escaping @Sendable (ToolApproval) async -> ApprovalAnswer = { _ in .denied }) {
+    /// Test-friendly initializer that accepts a mock tool service, an
+    /// answer to every approval in place of the person's, and a coven's
+    /// choice of connections in place of the thread's (none made, unless
+    /// given).
+    init(
+        toolService: any ChatToolService,
+        ask: @escaping @Sendable (ToolApproval) async -> ApprovalAnswer = { _ in .denied },
+        covenConnections: @escaping @Sendable (_ threadID: String) async -> CovenConnections? = { _ in nil }
+    ) {
         self.toolService = toolService
         self.ask = ask
+        self.covenConnections = covenConnections
     }
 
     // Configuration
@@ -226,7 +237,19 @@ actor ToolExecutionService {
             )
         }
 
-        // 3. Entitlement Check – shell, GitHub, Google Drive require Tools Pack
+        // 3. A connected app's tool is used only as the thread's coven
+        // lets its agents use that app, whatever else would be said of it.
+        // (An MCP server's is checked where the server is found.) Without
+        // a thread there is no coven.
+        if CovenConnectionRules.app(of: toolCall.name) != nil, let threadID {
+            let decision = await CovenConnectionRules.decision(forAppTool: toolCall.name, in: covenConnections(threadID))
+            let connection = CovenConnectionRules.app(of: toolCall.name) == "github" ? "GitHub" : "Google Drive"
+            if let refusal = CovenConnectionRules.refusal(decision, tool: toolCall.name, connection: connection) {
+                return .error(tool: toolCall.name, message: refusal.message, errorType: refusal.code)
+            }
+        }
+
+        // 4. Entitlement Check – shell, GitHub, Google Drive require Tools Pack
         if requiresToolsPack(toolCall.name) {
             let entitled = await hasToolsPackEntitlement()
             if !entitled {
@@ -239,12 +262,12 @@ actor ToolExecutionService {
             }
         }
 
-        // 4. MCP Toll Routing
+        // 5. MCP Tool Routing
         if toolCall.name.hasPrefix("mcp.") {
             return await executeMCPTool(toolCall: toolCall, threadID: threadID)
         }
 
-        // 5. Built-in Routing
+        // 6. Built-in Routing
         switch toolCall.name {
 
         // --- File Tools ---
@@ -437,10 +460,21 @@ actor ToolExecutionService {
             return await .error(tool: toolCall.name, message: "MCP server '\(serverSlug)' not found or not connected.")
         }
 
+        let wasMarkedReadOnly = server.cachedTools?.first { $0.name == actionName }?.readOnlyHint == true
+
+        // The server is used only as the thread's coven lets its agents
+        // use it: not at all if it is not on there, and only its tools
+        // marked as read-only if it is on to read.
+        if let threadID {
+            let decision = await CovenConnectionRules.decision(forToolMarkedReadOnly: wasMarkedReadOnly, ofMCPServer: server.id, in: covenConnections(threadID))
+            if let refusal = CovenConnectionRules.refusal(decision, tool: toolCall.name, connection: server.name) {
+                return .error(tool: toolCall.name, message: refusal.message, errorType: refusal.code)
+            }
+        }
+
         // A tool the server marks as only reading is used without asking.
         // Any other (one it does not mark, or does not list) may change
         // something on the person's behalf, so they are asked first.
-        let wasMarkedReadOnly = server.cachedTools?.first { $0.name == actionName }?.readOnlyHint == true
         if !wasMarkedReadOnly {
             let asked = await answer(in: threadID) {
                 .mcp(server: server.name, address: Self.shownAddress(of: server), tool: actionName, arguments: toolCall.args, threadID: $0)

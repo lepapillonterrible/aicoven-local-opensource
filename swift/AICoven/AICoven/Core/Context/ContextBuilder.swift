@@ -85,12 +85,20 @@ struct ContextBuilder {
         /// `deliversFiles` says the caller gives the files a tool makes to
         /// its reply (a chat turn does; an agent run does not): only then
         /// are the tools that make files for the person offered.
-        static func connected(deliversFiles: Bool = false) async -> ToolConfig {
-            var tools = await PromptTemplates.connectedToolSet()
+        ///
+        /// `connections` is the choice of the thread's coven
+        /// (`CovenService.connections(forThread:)`): the connected apps'
+        /// tools and the MCP servers offered are those it allows.
+        static func connected(deliversFiles: Bool = false, connections: CovenConnections? = nil) async -> ToolConfig {
+            var connectedTools = await PromptTemplates.connectedToolSet()
             if deliversFiles {
-                tools.formUnion(PromptTemplates.offeredImageTools())
+                connectedTools.formUnion(PromptTemplates.offeredImageTools())
             }
-            let mcpServers = await ConnectedAccountsService.shared.getAllMCPServers()
+            let (tools, mcpServers) = await CovenConnectionRules.offered(
+                tools: connectedTools,
+                servers: ConnectedAccountsService.shared.getAllMCPServers(),
+                in: connections
+            )
 
             // Add all cached tools to the enabled list so the prompt generator includes them.
             var allTools = tools
@@ -111,8 +119,8 @@ struct ContextBuilder {
 
         /// Configuration optimized for small local models (MLX, Ollama).
         /// Uses fewer tools and no thought/scratchpad/memory instructions.
-        static func mlxTools() async -> ToolConfig {
-            let mcpServers = await ConnectedAccountsService.shared.getAllMCPServers()
+        static func mlxTools(connections: CovenConnections? = nil) async -> ToolConfig {
+            let (_, mcpServers) = await CovenConnectionRules.offered(tools: [], servers: ConnectedAccountsService.shared.getAllMCPServers(), in: connections)
             var tools = PromptTemplates.basicChatTools
                 .union(PromptTemplates.fileTools)
                 .union(PromptTemplates.shellTools)

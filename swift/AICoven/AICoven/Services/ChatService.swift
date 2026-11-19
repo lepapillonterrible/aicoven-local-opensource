@@ -184,6 +184,9 @@ actor ChatService {
     /// A turn through the OpenClaw Gateway connected, if one is; injected
     /// for tests.
     private let openClawTurn: @Sendable (_ threadID: String) -> OpenClawTurn?
+    /// Which connections the thread's coven lets its agents use; injected
+    /// for tests.
+    private let covenConnections: @Sendable (_ threadID: String) async -> CovenConnections?
     /// The threads whose latest turn was an agent's run (Hermes, or
     /// OpenClaw through its Gateway). What follows a turn (the thread's
     /// summary, and the memory proposed from it) is made by one of the
@@ -205,7 +208,8 @@ actor ChatService {
         hermesAgent: @escaping @Sendable () -> HermesAgentClient? = ProviderAccountService.hermesAgent,
         openClawTurn: @escaping @Sendable (_ threadID: String) -> OpenClawTurn? = { threadID in
             ProviderAccountService.openClawGateway().map { OpenClawTurn(address: $0.address, token: $0.token, threadID: threadID) }
-        }
+        },
+        covenConnections: @escaping @Sendable (_ threadID: String) async -> CovenConnections? = { await CovenService.shared.connections(forThread: $0) }
     ) {
         self.contextBuilder = contextBuilder
         self.modelRouter = modelRouter
@@ -215,6 +219,7 @@ actor ChatService {
         self.shouldAutoRefreshEnvironment = shouldAutoRefreshEnvironment
         self.hermesAgent = hermesAgent
         self.openClawTurn = openClawTurn
+        self.covenConnections = covenConnections
     }
 
     /// Ensure that we have an up-to-date LLM environment based on the latest
@@ -451,9 +456,12 @@ actor ChatService {
         // OpenClaw and OpenAI-compatible servers are treated as local
         // when pointing at a localhost / private-network endpoint.
         let isLocalModel = isLocalDeployment(providerID: descriptor.providerID)
+        // Of the person's connections, a turn is offered what its
+        // thread's coven lets its agents use.
+        let connections = await covenConnections(threadId)
         let toolConfig: ContextBuilder.ToolConfig = isLocalModel
-            ? await .mlxTools()
-            : await .connected(deliversFiles: true)
+            ? await .mlxTools(connections: connections)
+            : await .connected(deliversFiles: true, connections: connections)
         await ToolExecutionService.shared.setWhitelist(for: "chat", tools: toolConfig.enabledTools)
 
         // ── Context-aware repeat detection (ported from backend) ──────────

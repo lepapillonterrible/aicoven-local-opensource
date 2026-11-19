@@ -282,6 +282,32 @@ actor CovenRepository {
         return coven
     }
 
+    /// Sets which connections the coven's agents may use, keeping the rest
+    /// of its settings as they are. `nil` takes the choice away. Only the
+    /// current account's coven is changed.
+    func setConnections(_ connections: CovenConnections?, forCoven id: String) async throws {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let uid = await MainActor.run { UserScope.currentUserID }
+        try await dbQueue.write { db in
+            guard var record = try CovenRecord
+                .filter(CovenRecord.Columns.id == id)
+                .filter(CovenRecord.Columns.userId == uid)
+                .fetchOne(db) else {
+                throw CovenRepositoryError.covenNotFound
+            }
+            let stored = record.settings.flatMap { $0.data(using: .utf8) }.flatMap { try? JSONDecoder().decode(CovenSettings.self, from: $0) }
+            let settings = CovenSettings(
+                defaultMemoryPolicy: stored?.defaultMemoryPolicy,
+                budgetCaps: stored?.budgetCaps,
+                autoRouteEnabled: stored?.autoRouteEnabled,
+                connections: connections
+            )
+            record.settings = try String(data: JSONEncoder().encode(settings), encoding: .utf8)
+            record.updatedAt = Date()
+            try record.update(db)
+        }
+    }
+
     func deleteCoven(id: String) async throws {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 

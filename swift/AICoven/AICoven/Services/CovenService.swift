@@ -50,6 +50,32 @@ actor CovenService {
         )
     }
 
+    /// Sets which connections the coven's agents may use.
+    func setConnections(_ connections: CovenConnections?, forCoven id: String) async throws {
+        try await CovenRepository.shared.setConnections(connections, forCoven: id)
+    }
+
+    /// Which connections may be used in a thread: nil for a thread in no
+    /// coven (a personal thread), or in a coven that has made no choice
+    /// yet, where everything connected is used; the coven's choice
+    /// otherwise. If the thread or its coven cannot be read, nothing is
+    /// on: what cannot be checked is not allowed.
+    func connections(forThread threadID: String) async -> CovenConnections? {
+        do {
+            let thread = try await ThreadService.shared.getThread(threadId: threadID)
+            guard let covenID = thread.covenId else { return nil }
+            guard let coven = try await CovenRepository.shared.loadCovens().first(where: { $0.id == covenID }) else {
+                AppErrorReporter.log(message: "A thread's coven was not found", context: "CovenService.connections")
+                return CovenConnections()
+            }
+            return coven.settings?.connections
+        } catch {
+            let failure = error as NSError
+            AppErrorReporter.log(message: "A thread's connections could not be read (\(failure.domain) \(failure.code)).", context: "CovenService.connections")
+            return CovenConnections()
+        }
+    }
+
     /// Delete a coven
     /// - Parameter id: Coven ID
     func deleteCoven(id: String) async throws {

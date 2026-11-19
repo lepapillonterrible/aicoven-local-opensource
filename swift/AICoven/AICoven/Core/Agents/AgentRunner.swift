@@ -86,7 +86,13 @@ final class AgentRunner {
 
         // Dynamically build the tool config so every connected tool and MCP
         // server is available to the agent by default.
-        let toolConfig = await ContextBuilder.ToolConfig.connected()
+        // Of the person's connections, a run is offered what its thread's
+        // coven lets its agents use; a run with no thread yet is in no coven.
+        var connections: CovenConnections?
+        if let threadID {
+            connections = await CovenService.shared.connections(forThread: threadID)
+        }
+        let toolConfig = await ContextBuilder.ToolConfig.connected(connections: connections)
         await toolExecutionService.setWhitelist(for: profile.type, tools: toolConfig.enabledTools)
 
         do {
