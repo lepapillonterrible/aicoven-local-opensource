@@ -52,14 +52,45 @@ nonisolated enum GoogleToolArguments {
         return .leftOut
     }
 
+    /// What was given as text that is JSON, read as the JSON. Some
+    /// models (those told a list holds text) write a list, or each thing
+    /// in it, as JSON in text; it is read as what it says. Anything else
+    /// is itself.
+    private static func read(_ value: AnyJSONValue) -> AnyJSONValue {
+        guard case let .string(text) = value,
+              let first = text.first(where: { !$0.isWhitespace }), first == "[" || first == "{",
+              let json = try? JSONSerialization.jsonObject(with: Data(text.utf8)) else { return value }
+        return jsonValue(json)
+    }
+
+    /// What `JSONSerialization` read, as a value: true and false as
+    /// themselves and not as 1 and 0, a whole number as a whole number.
+    private static func jsonValue(_ json: Any) -> AnyJSONValue {
+        switch json {
+        case let text as String:
+            return .string(text)
+        case let number as NSNumber:
+            if CFGetTypeID(number) == CFBooleanGetTypeID() { return .bool(number.boolValue) }
+            if let whole = Int(exactly: number.doubleValue), !CFNumberIsFloatType(number) { return .int(whole) }
+            return .double(number.doubleValue)
+        case let members as [String: Any]:
+            return .dictionary(members.mapValues(jsonValue))
+        case let elements as [Any]:
+            return .array(elements.map(jsonValue))
+        default:
+            return .null
+        }
+    }
+
     /// The rows a call gives to write (`values`): rows of cells, each
     /// cell text, a number or true/false, or null for an empty one. Nil
-    /// if it is not that, or has no rows.
+    /// if it is not that, or has no rows. (The rows, or a row, may be
+    /// given as JSON in text.)
     static func rows(in args: [String: AnyJSONValue]) -> [[AnyJSONValue]]? {
-        guard case let .array(given)? = args["values"], !given.isEmpty else { return nil }
+        guard let values = args["values"], case let .array(given) = read(values), !given.isEmpty else { return nil }
         var rows: [[AnyJSONValue]] = []
         for row in given {
-            guard case let .array(cells) = row else { return nil }
+            guard case let .array(cells) = read(row) else { return nil }
             for cell in cells {
                 switch cell {
                 case .string, .int, .double, .bool, .null: continue
@@ -93,12 +124,13 @@ nonisolated enum GoogleToolArguments {
 
     /// The changes a call asks Google to make (`requests`), in Google's
     /// own form for the kind of file: one or more objects. Nil if it is
-    /// not that.
+    /// not that. (The requests, or a request, may be given as JSON in
+    /// text.)
     static func requests(in args: [String: AnyJSONValue]) -> [[String: AnyJSONValue]]? {
-        guard case let .array(given)? = args["requests"], !given.isEmpty else { return nil }
+        guard let asked = args["requests"], case let .array(given) = read(asked), !given.isEmpty else { return nil }
         var requests: [[String: AnyJSONValue]] = []
         for request in given {
-            guard case let .dictionary(members) = request, !members.isEmpty else { return nil }
+            guard case let .dictionary(members) = read(request), !members.isEmpty else { return nil }
             requests.append(members)
         }
         return requests

@@ -443,7 +443,7 @@ final class GoogleToolsTests: XCTestCase {
 
         let written = await world.call("google_sheets.updateValues", ["spreadsheet_id": AnyJSONValue("s1"), "range": AnyJSONValue("My Sheet!A1"), "values": values], threadID: "thread")
         XCTAssertEqual(written.status, "ok")
-        XCTAssertEqual(written.contextBlock, "[Google Sheets Updated: My Sheet!A1]\nWrote 3 rows")
+        XCTAssertEqual(written.contextBlock, "[Google Sheets Updated: My Sheet!A1]\nSent 3 rows", "Google's answer here does not say what it wrote")
         // This app's older name for it, and exactly as written.
         let old = await world.call("google_sheets.writeValues", ["spreadsheet_id": AnyJSONValue("s1"), "range": AnyJSONValue("A1"), "values": .array([.array([.string("=1+1")])]), "value_input_option": AnyJSONValue("RAW")], threadID: "thread")
         XCTAssertEqual(old.status, "ok")
@@ -458,6 +458,43 @@ final class GoogleToolsTests: XCTestCase {
         XCTAssertEqual(world.asked.requests.map(\.address), ["sheets.googleapis.com/v4/spreadsheets/s1/values/My%20Sheet%21A1", "sheets.googleapis.com/v4/spreadsheets/s1/values/A1"])
         XCTAssertEqual(world.asked.requests.map(\.query), [["valueInputOption": "USER_ENTERED"], ["valueInputOption": "RAW"]])
         XCTAssertEqual(world.asked.requests.first?.sent?["values"] as? NSArray, [["Name", "Total"], ["Ada", 3], [true, "", 1.5]] as NSArray, "Text as text, a number as a number, an empty cell for null")
+    }
+
+    func testWhatGoogleSaysItWrote_isWhatTheModelIsTold() async throws {
+        let world = try await world(ask: { _ in .approved }, answer: { [self] _ in
+            json(#"{"spreadsheetId": "s1", "updatedRange": "Sheet1!A1:A1", "updatedRows": 1, "updatedColumns": 1, "updatedCells": 1}"#)
+        })
+        defer { world.forget() }
+
+        // Two rows are sent; the second has no cells, so one row is written.
+        let written = await world.call("google_sheets.updateValues", ["spreadsheet_id": AnyJSONValue("s1"), "range": AnyJSONValue("A1"), "values": .array([.array([.string("x")]), .array([])])], threadID: "thread")
+
+        XCTAssertEqual(written.contextBlock, "[Google Sheets Updated: Sheet1!A1:A1]\nWrote 1 row (1 cell)")
+        XCTAssertEqual(written.result?["updated_rows"]?.value as? Int, 1)
+    }
+
+    func testAListGivenAsJSONInText_isReadAsWhatItSays() {
+        // As a model writes it when it has been told a list holds text.
+        XCTAssertEqual(
+            GoogleToolArguments.requests(in: ["requests": .array([.string(#"{"addSheet": {"properties": {"title": "Summary"}}}"#), .dictionary(["createSlide": .dictionary([:])])])]),
+            [["addSheet": .dictionary(["properties": .dictionary(["title": .string("Summary")])])], ["createSlide": .dictionary([:])]]
+        )
+        XCTAssertEqual(GoogleToolArguments.requests(in: ["requests": .string(#" [{"createSlide": {}}]"#)]), [["createSlide": .dictionary([:])]])
+        XCTAssertEqual(
+            GoogleToolArguments.rows(in: ["values": .array([.string(#"["Name", "Total"]"#), .array([.string("Ada"), .int(3)])])]),
+            [[.string("Name"), .string("Total")], [.string("Ada"), .int(3)]]
+        )
+        XCTAssertEqual(GoogleToolArguments.rows(in: ["values": .string(#"[["a", 1], [true, null]]"#)]), [[.string("a"), .int(1)], [.bool(true), .null]])
+
+        // Text that is not JSON for a list or an object is not one.
+        XCTAssertNil(GoogleToolArguments.requests(in: ["requests": .array([.string("addSheet")])]))
+        XCTAssertNil(GoogleToolArguments.requests(in: ["requests": .array([.string("[1, 2]")])]), "A request is an object")
+        XCTAssertNil(GoogleToolArguments.requests(in: ["requests": .string(#"{"createSlide": {}}"#)]), "Requests are a list")
+        XCTAssertNil(GoogleToolArguments.requests(in: ["requests": .string("[{")]))
+        XCTAssertNil(GoogleToolArguments.rows(in: ["values": .array([.string("a,b")])]))
+        XCTAssertNil(GoogleToolArguments.rows(in: ["values": .string(#"{"a": 1}"#)]))
+        // A cell that is text stays text, whatever it looks like.
+        XCTAssertEqual(GoogleToolArguments.rows(in: ["values": .array([.array([.string("[1]"), .string("{}")])])]), [[.string("[1]"), .string("{}")]])
     }
 
     func testValuesThatAreNotRowsOfCells_orAnOptionGoogleDoesNotHave_areNotAskedAbout() async throws {

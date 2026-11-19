@@ -1262,7 +1262,7 @@ actor ToolExecutionService {
         }
 
         do {
-            _ = try await googleDriveService.writeSpreadsheetValues(
+            let answer = try await googleDriveService.writeSpreadsheetValues(
                 accountId: account.id,
                 spreadsheetId: spreadsheetId,
                 range: range,
@@ -1270,8 +1270,14 @@ actor ToolExecutionService {
                 values: rows.map { $0.map { cell in cell == .null ? "" : MCPClient.plain(cell) } },
                 inputOption: inputOption
             )
-            let block = "[Google Sheets Updated: \(range)]\nWrote \(rows.count) \(rows.count == 1 ? "row" : "rows")"
-            return await .success(tool: toolCall.name, result: ["updated_rows": AnyJSONValue(rows.count)], contextBlock: block)
+            // What Google says it wrote (a row counts if a cell in it was
+            // written); where it does not say, how many rows were sent.
+            let written = answer["updatedRows"] as? Int
+            let cells = answer["updatedCells"] as? Int
+            let block = "[Google Sheets Updated: \(answer["updatedRange"] as? String ?? range)]\n"
+                + (written.map { "Wrote \($0) \($0 == 1 ? "row" : "rows")" } ?? "Sent \(rows.count) \(rows.count == 1 ? "row" : "rows")")
+                + (cells.map { " (\($0) \($0 == 1 ? "cell" : "cells"))" } ?? "")
+            return await .success(tool: toolCall.name, result: ["updated_rows": AnyJSONValue(written ?? rows.count)], contextBlock: block)
         } catch {
             return await .error(tool: toolCall.name, message: error.localizedDescription)
         }

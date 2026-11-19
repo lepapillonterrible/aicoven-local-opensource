@@ -299,7 +299,7 @@ enum PromptTemplates {
             parameters: [
                 ToolParameter(name: "spreadsheet_id", type: "string", description: "Spreadsheet ID", required: true),
                 ToolParameter(name: "range", type: "string", description: "A1 notation range", required: true),
-                ToolParameter(name: "values", type: "array", description: "Rows of cells (a 2D array) to write", required: true),
+                ToolParameter(name: "values", type: "array", description: "Rows of cells to write: a list of rows, each a list of cells", required: true),
                 ToolParameter(name: "value_input_option", type: "string", description: "USER_ENTERED (the default: as if typed, so formulas work) or RAW (exactly as written)", required: false)
             ],
             example: #"{"tool": "google_sheets.updateValues", "input": {"spreadsheet_id": "abc123", "range": "Sheet1!A1", "values": [["Name", "Value"], ["Test", 123]]}, "reason": "Update spreadsheet"}"#
@@ -309,7 +309,7 @@ enum PromptTemplates {
             description: "Change a Google Sheets spreadsheet's structure or formatting (add a sheet, format cells, sort) with Sheets API batchUpdate requests.",
             parameters: [
                 ToolParameter(name: "spreadsheet_id", type: "string", description: "Spreadsheet ID", required: true),
-                ToolParameter(name: "requests", type: "array", description: "Sheets API requests, as spreadsheets.batchUpdate takes them", required: true)
+                ToolParameter(name: "requests", type: "array", description: "Sheets API requests, as spreadsheets.batchUpdate takes them: a list of JSON objects", required: true)
             ],
             example: #"{"tool": "google_sheets.batchUpdate", "input": {"spreadsheet_id": "abc123", "requests": [{"addSheet": {"properties": {"title": "Summary"}}}]}, "reason": "Add a sheet for the summary"}"#
         ),
@@ -320,7 +320,7 @@ enum PromptTemplates {
                 ToolParameter(name: "document_id", type: "string", description: "Document ID", required: true),
                 ToolParameter(name: "content", type: "string", description: "Text to add to the document", required: false),
                 ToolParameter(name: "index", type: "integer", description: "Position to add the text at (1 is the start); at the end if left out", required: false),
-                ToolParameter(name: "requests", type: "array", description: "Docs API requests, as documents.batchUpdate takes them (instead of content)", required: false)
+                ToolParameter(name: "requests", type: "array", description: "Docs API requests, as documents.batchUpdate takes them: a list of JSON objects (instead of content)", required: false)
             ],
             example: #"{"tool": "google_docs.update", "input": {"document_id": "abc123", "content": "Next steps: ..."}, "reason": "Add the next steps to the document"}"#
         ),
@@ -329,7 +329,7 @@ enum PromptTemplates {
             description: "Change a Google Slides presentation with Slides API batchUpdate requests.",
             parameters: [
                 ToolParameter(name: "presentation_id", type: "string", description: "Presentation ID", required: true),
-                ToolParameter(name: "requests", type: "array", description: "Slides API requests, as presentations.batchUpdate takes them", required: true)
+                ToolParameter(name: "requests", type: "array", description: "Slides API requests, as presentations.batchUpdate takes them: a list of JSON objects", required: true)
             ],
             example: #"{"tool": "google_slides.update", "input": {"presentation_id": "abc123", "requests": [{"createSlide": {}}]}, "reason": "Add a slide"}"#
         )
