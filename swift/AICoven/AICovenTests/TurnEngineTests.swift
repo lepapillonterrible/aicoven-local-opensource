@@ -142,6 +142,52 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertNil(engine.takeUnsent(for: threadID))
     }
 
+    // MARK: - Stop
+
+    func testStop_saysStoppingUntilTheTurnHasEndedThenRecordsItAsStopped() async throws {
+        let engine = makeEngine()
+        try await engine.start(with: question("A long one"), context: "A long one", roleID: nil, agentName: nil, attachments: nil)
+        await provider.called()
+
+        engine.stop(threadID: threadID)
+        XCTAssertEqual(engine.running[threadID]?.isStopping, true)
+        XCTAssertEqual(engine.running[threadID]?.message, TurnProgress.stoppingMessage)
+        await finished(engine)
+
+        let messages = try await ChatService.shared.loadMessages(threadId: threadID)
+        XCTAssertEqual(messages.map(\.content), ["A long one", "Stopped before any reply."])
+        XCTAssertEqual(messages.last?.metadata?["stopped"], AnyJSONValue(true))
+        let turn = try await storedTurn()
+        XCTAssertEqual(turn?.status, "cancelled")
+        // Another send starts once the stopped turn is over.
+        provider.release()
+        try await engine.start(with: question("Next"), context: "Next", roleID: nil, agentName: nil, attachments: nil)
+        await finished(engine)
+    }
+
+    func testStop_doesNothingWhereNoTurnRuns() {
+        let engine = makeEngine()
+
+        engine.stop(threadID: threadID)
+
+        XCTAssertNil(engine.running[threadID])
+    }
+
+    func testAStoppedTurn_keepsWhatHadBeenAnsweredAndAReplyThatArrivedInFullWins() {
+        var stoppedMidAnswer = TurnProgress(agentName: nil)
+        stoppedMidAnswer.note(TurnState(answer: "Half of the ans", phase: .answering))
+        stoppedMidAnswer.note(TurnState(answer: "Error: cancelled", status: .failed, phase: .finalizing))
+        let partial = stoppedMidAnswer.ending(in: "t", thrown: nil, stopped: true)
+        XCTAssertEqual(partial.outcome, .cancelled)
+        XCTAssertEqual(partial.message.content, "Half of the ans\n\n_Stopped here._")
+
+        var finishedFirst = TurnProgress(agentName: nil)
+        finishedFirst.note(TurnState(answer: "The whole answer.", status: .completed, phase: .finalizing))
+        let whole = finishedFirst.ending(in: "t", thrown: nil, stopped: true)
+        XCTAssertEqual(whole.outcome, .completed)
+        XCTAssertEqual(whole.message.content, "The whole answer.")
+    }
+
     // MARK: - A turn the app closed on
 
     func testOpeningAThread_endsATurnTheAppClosedOnAndSaysSoOnce() async throws {
@@ -279,14 +325,17 @@ final class TurnEngineTests: XCTestCase {
     }
 }
 
-/// A provider that answers when the test lets it, with a reply or an error.
+/// A provider that answers when the test lets it, with a reply or an error,
+/// and gives up, as a network call does, when its task is cancelled.
 private final class ScriptedProvider: LLMClient, @unchecked Sendable {
     // Read and written from the test and from the chat service's actor, so
     // every access takes the lock.
     private let lock = NSLock()
     private var released = false
-    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var waiting: [UUID: CheckedContinuation<Void, Never>] = [:]
     private var failure: String?
+    private var calls = 0
+    private var awaitingCall: [CheckedContinuation<Void, Never>] = []
 
     func fail(with message: String) {
         lock.withLock { failure = message }
@@ -295,21 +344,42 @@ private final class ScriptedProvider: LLMClient, @unchecked Sendable {
     func release() {
         let resumed = lock.withLock {
             released = true
-            defer { waiting = [] }
-            return waiting
+            defer { waiting = [:] }
+            return Array(waiting.values)
         }
         resumed.forEach { $0.resume() }
     }
 
-    func completeChat(messages _: [LLMMessage], model: String, options _: ChatOptions) async throws -> LLMChatResponse {
+    /// Returns once the chat service is waiting on this provider.
+    func called() async {
         await withCheckedContinuation { continuation in
-            let resumeNow = lock.withLock {
-                if released { return true }
-                waiting.append(continuation)
+            let already = lock.withLock {
+                if calls > 0 { return true }
+                awaitingCall.append(continuation)
                 return false
             }
-            if resumeNow { continuation.resume() }
+            if already { continuation.resume() }
         }
+    }
+
+    func completeChat(messages _: [LLMMessage], model: String, options _: ChatOptions) async throws -> LLMChatResponse {
+        let call = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let (resumeNow, watchers) = lock.withLock {
+                    calls += 1
+                    defer { awaitingCall = [] }
+                    if released || Task.isCancelled { return (true, awaitingCall) }
+                    waiting[call] = continuation
+                    return (false, awaitingCall)
+                }
+                watchers.forEach { $0.resume() }
+                if resumeNow { continuation.resume() }
+            }
+        } onCancel: {
+            lock.withLock { waiting.removeValue(forKey: call) }?.resume()
+        }
+        try Task.checkCancellation()
         if let failure = lock.withLock({ failure }) {
             throw NSError(domain: "ScriptedProvider", code: 1, userInfo: [NSLocalizedDescriptionKey: failure])
         }

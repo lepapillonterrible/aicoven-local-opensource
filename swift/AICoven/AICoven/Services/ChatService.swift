@@ -672,6 +672,8 @@ actor ChatService {
         // whether to call a tool. Each successful tool invocation consumes one
         // step from the budget; a direct natural-language reply ends the loop.
         while remainingToolSteps > 0, finalText == nil {
+            // A stopped turn takes no further step.
+            try Task.checkCancellation()
             stepNumber += 1
             // Build the effective user message. Only append tool protocol
             // instructions when tools are allowed — the system prompt from
@@ -1069,6 +1071,8 @@ actor ChatService {
                 toolConfig: finalToolConfig
             )
 
+            // A stopped turn does not ask for its answer.
+            try Task.checkCancellation()
             do {
                 // If the client supports streaming, use token-by-token delivery
                 // for the final answer so the user sees text appear in real time.
