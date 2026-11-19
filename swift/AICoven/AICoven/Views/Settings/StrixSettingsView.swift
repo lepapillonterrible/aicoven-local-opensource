@@ -49,24 +49,16 @@ struct StrixSettingsView: View {
         ("openai_compatible", "OpenAI-compatible server"),
         ("mistral", "Mistral AI"),
         ("openclaw", "OpenClaw (Self-Hosted)"),
-        ("hermes", "Hermes (Together AI / Self-Hosted)"),
         ("ollama", "Ollama (Local)"),
         ("mlx", "MLX (On-Device)"),
     ]
 
     /// Whether the selected provider is local (no API key needed).
     /// OpenClaw is always treated as local since it requires a self-hosted
-    /// endpoint. Hermes is local only when configured with a local base URL.
+    /// endpoint.
     private var isLocalProvider: Bool {
         if provider == "mlx" || provider == "ollama" || provider == "openclaw" {
             return true
-        }
-        if provider == "hermes" {
-            // Hermes is local only when pointing at a local endpoint
-            let baseURL = UserDefaults.standard.string(forKey: UserScope.scopedKey("hermes_base_url")) ?? ""
-            if let url = URL(string: baseURL), OpenClawLLMClient.isLocalAddress(url) {
-                return true
-            }
         }
         return false
     }
@@ -85,9 +77,9 @@ struct StrixSettingsView: View {
             let ollamaModel = UserDefaults.standard.string(forKey: UserScope.scopedKey("ollama_model")) ?? "llama3.2"
             return [(ollamaModel, ollamaModel)]
         }
-        // OpenClaw and Hermes don't need model pickers — the model is
-        // determined by whatever is running on the server endpoint.
-        if provider == "openclaw" || provider == "hermes" {
+        // OpenClaw doesn't need a model picker — the model is determined by
+        // whatever is running on the server endpoint.
+        if provider == "openclaw" {
             return []
         }
         if let accountId = providerAccountId,
@@ -250,7 +242,7 @@ struct StrixSettingsView: View {
                                 ForEach(providerOptions, id: \.0) { option in
                                     let accountsForProvider = accountsByProvider[option.0] ?? []
                                     let isLocal = option.0 == "mlx" || option.0 == "ollama"
-                                        || option.0 == "openclaw" || option.0 == "hermes"
+                                        || option.0 == "openclaw"
 
                                     if isLocal {
                                         // Local/self-hosted provider – one tap selects provider and model
@@ -268,9 +260,6 @@ struct StrixSettingsView: View {
                                             } else if option.0 == "openclaw" {
                                                 model = UserDefaults.standard.string(forKey: UserScope.scopedKey("openclaw_model"))
                                                     ?? "openai/gpt-3.5-turbo"
-                                            } else if option.0 == "hermes" {
-                                                model = UserDefaults.standard.string(forKey: UserScope.scopedKey("hermes_model"))
-                                                    ?? HermesLLMClient.defaultModelAlias
                                             }
                                         } label: {
                                             HStack {
@@ -289,7 +278,6 @@ struct StrixSettingsView: View {
                                                         let subtitle = switch option.0 {
                                                         case "mlx": "On-device via Apple Silicon"
                                                         case "openclaw": "OpenAI-compatible self-hosted proxy"
-                                                        case "hermes": "Nous Research - Together AI or self-hosted"
                                                         default: "Running locally"
                                                         }
                                                         Text(subtitle)
@@ -378,9 +366,9 @@ struct StrixSettingsView: View {
                             }
 
                             // Model picker – only for cloud providers that support
-                            // model selection. OpenClaw and Hermes use whatever
-                            // model is running on the server endpoint.
-                            if !isLocalProvider, provider != "openclaw", provider != "hermes" {
+                            // model selection. OpenClaw uses whatever model is
+                            // running on the server endpoint.
+                            if !isLocalProvider, provider != "openclaw" {
                                 if !availableModels.isEmpty {
                                     VStack(alignment: .leading, spacing: Spacing.xs) {
                                         Text("Model")

@@ -7,16 +7,16 @@ import XCTest
 @MainActor
 final class AIConnectionsTests: XCTestCase {
     private let accountsKey = UserScope.scopedKey("provider_accounts.v1")
-    private let hermesAddressKey = UserScope.scopedKey("hermes_base_url")
+    private let serverAddressKey = UserScope.scopedKey("openclaw_base_url")
     private var savedAccounts: Any?
-    private var savedHermesAddress: Any?
+    private var savedServerAddress: Any?
     private let service = ProviderAccountService.shared
     private let status = HTTPStatus(200)
 
     override func setUp() {
         super.setUp()
         savedAccounts = UserDefaults.standard.object(forKey: accountsKey)
-        savedHermesAddress = UserDefaults.standard.object(forKey: hermesAddressKey)
+        savedServerAddress = UserDefaults.standard.object(forKey: serverAddressKey)
         let status = status
         URLProtocol.registerClass(MockURLProtocol.self)
         MockURLProtocol.handler = { request in
@@ -27,7 +27,7 @@ final class AIConnectionsTests: XCTestCase {
 
     override func tearDown() {
         UserDefaults.standard.set(savedAccounts, forKey: accountsKey)
-        UserDefaults.standard.set(savedHermesAddress, forKey: hermesAddressKey)
+        UserDefaults.standard.set(savedServerAddress, forKey: serverAddressKey)
         KeychainHelper.delete(key: "provider-account-openai-test")
         URLProtocol.unregisterClass(MockURLProtocol.self)
         MockURLProtocol.handler = nil
@@ -72,31 +72,31 @@ final class AIConnectionsTests: XCTestCase {
     }
 
     func testEdit_anEmptyAddressClearsTheStoredOne() async throws {
-        let hermes = LocalProviderAccount(
-            id: "hermes-test",
-            provider: "hermes",
-            displayName: "Hermes",
+        let server = LocalProviderAccount(
+            id: "server-test",
+            provider: "openclaw",
+            displayName: "OpenClaw",
             scopes: ["chat"],
             defaultModel: nil,
             baseURL: "http://localhost:8642",
             status: "healthy",
             createdAt: Date()
         )
-        try store([hermes])
+        try store([server])
 
-        try await service.updateProviderAccount(id: "hermes-test", displayName: "Renamed")
+        try await service.updateProviderAccount(id: "server-test", displayName: "Renamed")
         let renamed = try await service.loadProviderAccounts().first
         XCTAssertEqual(renamed?.baseURL, "http://localhost:8642")
 
-        try await service.updateProviderAccount(id: "hermes-test", baseURL: "http://localhost:9000")
-        XCTAssertEqual(UserDefaults.standard.string(forKey: hermesAddressKey), "http://localhost:9000")
+        try await service.updateProviderAccount(id: "server-test", baseURL: "http://localhost:9000")
+        XCTAssertEqual(UserDefaults.standard.string(forKey: serverAddressKey), "http://localhost:9000")
 
-        try await service.updateProviderAccount(id: "hermes-test", baseURL: "")
+        try await service.updateProviderAccount(id: "server-test", baseURL: "")
         let cleared = try await service.loadProviderAccounts().first
         XCTAssertEqual(cleared?.displayName, "Renamed")
         XCTAssertNil(cleared?.baseURL)
         // The chat client reads the address from here.
-        XCTAssertNil(UserDefaults.standard.object(forKey: hermesAddressKey))
+        XCTAssertNil(UserDefaults.standard.object(forKey: serverAddressKey))
     }
 
     // MARK: - The list

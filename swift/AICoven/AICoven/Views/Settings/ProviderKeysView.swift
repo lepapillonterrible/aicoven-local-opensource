@@ -228,7 +228,7 @@ struct AddProviderKeySheet: View {
     let onComplete: () -> Void
 
     private static let providers = [
-        "openai", "anthropic", "google", "openrouter", "openai_compatible", "hermes", "ollama", "openclaw", "mlx",
+        "openai", "anthropic", "google", "openrouter", "openai_compatible", "ollama", "openclaw", "mlx",
     ]
 
     #if os(macOS)
@@ -542,10 +542,6 @@ private struct AddProviderKeyStep2View: View {
         selectedProvider == "openclaw"
     }
 
-    private var isHermes: Bool {
-        selectedProvider == "hermes"
-    }
-
     private var isCompatibleServer: Bool {
         selectedProvider == "openai_compatible"
     }
@@ -621,7 +617,7 @@ private struct AddProviderKeyStep2View: View {
         } else {
             Section {
                 Toggle(
-                    isOpenClaw || isHermes || isCompatibleServer ? "Share my messages with this server" : "Share my messages with \(providerName)",
+                    isOpenClaw || isCompatibleServer ? "Share my messages with this server" : "Share my messages with \(providerName)",
                     isOn: $acceptedPrivacy
                 )
             } footer: {
@@ -637,8 +633,6 @@ private struct AddProviderKeyStep2View: View {
         switch selectedProvider {
         case "openclaw", "openai_compatible":
             return "Messages and their context go to the server address you enter. Use a server you trust. \(policy)"
-        case "hermes":
-            return "Messages and their context go to the server address you enter, or to Together AI when you enter none. \(policy)"
         case "openrouter":
             return "Messages and their context go to OpenRouter, and to the provider of the model you choose, to generate replies. Each has its own privacy policy. \(policy)"
         default:
@@ -659,15 +653,6 @@ private struct AddProviderKeyStep2View: View {
         } else if isOpenClaw {
             Section("Server") {
                 FormAddressField(label: "Address", text: $baseURL, prompt: "http://localhost:3000")
-            }
-        } else if isHermes {
-            Section {
-                FormAddressField(label: "Address", text: $baseURL, prompt: "Together AI")
-            } header: {
-                Text("Server")
-            } footer: {
-                Text("Leave the address empty to use Together AI, which needs an API key.")
-                    .font(.aicovenBodySmall)
             }
         }
     }
@@ -807,7 +792,6 @@ private struct AddProviderKeyStep2View: View {
 
     private var keyPrompt: String {
         if isOpenClaw || isCompatibleServer { return "Optional" }
-        if isHermes { return "Needed for Together AI" }
         return "Required"
     }
 
@@ -817,7 +801,6 @@ private struct AddProviderKeyStep2View: View {
         if isMLX { return selectedMLXModelID.isEmpty }
         if isCompatibleServer { return selectedServerModel.isEmpty || !acceptedPrivacy }
         if isOpenClaw { return baseURL.isEmpty || !acceptedPrivacy }
-        if isHermes { return (apiKey.isEmpty && baseURL.isEmpty) || !acceptedPrivacy }
         return apiKey.isEmpty || !acceptedPrivacy
     }
 
@@ -930,13 +913,6 @@ private struct AddProviderKeyStep2View: View {
                     apiKey: apiKey.isEmpty ? nil : apiKey,
                     defaultModel: nil
                 )
-            } else if isHermes {
-                _ = try await service.createHermesAccount(
-                    displayName: displayName,
-                    apiKey: apiKey.isEmpty ? nil : apiKey,
-                    baseURL: baseURL.isEmpty ? nil : baseURL,
-                    defaultModel: nil
-                )
             } else {
                 _ = try await service.createProviderAccount(
                     provider: selectedProvider,
@@ -980,7 +956,7 @@ struct EditProviderKeySheet: View {
     }
 
     private var hasAddress: Bool {
-        ["ollama", "openclaw", "hermes", "openai_compatible"].contains(slug)
+        ["ollama", "openclaw", "openai_compatible"].contains(slug)
     }
 
     private var hasKey: Bool {
@@ -991,8 +967,7 @@ struct EditProviderKeySheet: View {
         switch slug {
         case "ollama": "http://localhost:11434"
         case "openclaw": "http://localhost:3000"
-        case "openai_compatible": "http://127.0.0.1:1234"
-        default: "Together AI"
+        default: "http://127.0.0.1:1234"
         }
     }
 

@@ -265,42 +265,6 @@ actor ProviderAccountService {
         return ProviderAccount(from: local)
     }
 
-    /// Create a local Hermes provider account.
-    @discardableResult
-    func createHermesAccount(
-        displayName: String,
-        apiKey: String?,
-        baseURL: String?,
-        defaultModel: String?
-    ) async throws -> ProviderAccount {
-        var locals = try loadLocalAccounts()
-        let now = Date()
-        let id = UUID().uuidString
-        let local = LocalProviderAccount(
-            id: id,
-            provider: "hermes",
-            displayName: displayName,
-            scopes: ["chat"],
-            defaultModel: defaultModel,
-            baseURL: baseURL,
-            status: "healthy",
-            createdAt: now
-        )
-        locals.append(local)
-        try saveLocalAccounts(locals)
-
-        if let apiKey, !apiKey.isEmpty {
-            try KeychainHelper.save(key: keychainKey(for: id), value: apiKey)
-        }
-
-        updateProviderConfigCache(provider: "hermes", baseURL: baseURL)
-        clearLegacyAPIKeyCache(provider: "hermes")
-
-        await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
-
-        return ProviderAccount(from: local)
-    }
-
     /// Create a connection to a server that speaks the OpenAI chat API. The
     /// key is optional: many servers on a person's own machine ask for none.
     @discardableResult
@@ -685,9 +649,6 @@ extension ProviderAccountService {
             if normalized == "google" || normalized == "gemini" {
                 return lower == "google" || lower == "gemini"
             }
-            if normalized == "hermes" || normalized == "together" {
-                return lower == "hermes" || lower == "together"
-            }
             return lower == normalized
         }
 
@@ -720,6 +681,7 @@ extension ProviderAccountService {
     }
 
     private static func loadLocalAccountsFromDefaults() -> [LocalProviderAccount] {
+        convertHermesModelConnectionsIfNeeded()
         let storageKey = UserScope.scopedKey("provider_accounts.v1")
         guard let data = UserDefaults.standard.data(forKey: storageKey) else {
             return []
@@ -736,6 +698,103 @@ extension ProviderAccountService {
         "provider-account-\(accountId)"
     }
 
+    // MARK: - Hermes model connections
+
+    static let togetherAddress = "https://api.together.xyz"
+
+    /// "Hermes" used to mean Nous Research's Hermes models, served by
+    /// Together AI or by a server of the person's own, over the OpenAI chat
+    /// API. Such a connection becomes what it is: an OpenAI-compatible
+    /// server, at Together AI's address when it named none, with the model
+    /// it was using. Its id stays, and so its key stays where it is in the
+    /// Keychain. Done once for each account on this device, before anything
+    /// reads the connections: "hermes" is to mean the Hermes agent, whose
+    /// connections must not be taken for these.
+    static func convertHermesModelConnectionsIfNeeded() {
+        let defaults = UserDefaults.standard
+        let doneKey = UserScope.scopedKey("hermes_model_connections_converted.v1")
+        guard !defaults.bool(forKey: doneKey) else { return }
+        let storageKey = UserScope.scopedKey("provider_accounts.v1")
+        guard let data = defaults.data(forKey: storageKey) else {
+            defaults.set(true, forKey: doneKey)
+            return
+        }
+        do {
+            let accounts = try JSONDecoder().decode([LocalProviderAccount].self, from: data)
+            let alias = defaults.string(forKey: UserScope.scopedKey("hermes_model"))
+            let hadServer = accounts.contains { $0.provider.lowercased() == "openai_compatible" }
+            var firstModel: String?
+            let converted = accounts.map { account -> LocalProviderAccount in
+                guard ["hermes", "together"].contains(account.provider.lowercased()) else { return account }
+                let ownAddress = account.baseURL.flatMap { $0.isEmpty ? nil : $0 }
+                let named = account.defaultModel ?? alias ?? "hermes-3"
+                // A server of the person's own was sent the model's name as
+                // they gave it; Together AI was sent the name it knows.
+                let model = ownAddress == nil ? togetherModelID(for: named) : named
+                firstModel = firstModel ?? model
+                return LocalProviderAccount(
+                    id: account.id,
+                    provider: "openai_compatible",
+                    displayName: account.displayName,
+                    scopes: account.scopes,
+                    defaultModel: model,
+                    baseURL: ownAddress ?? togetherAddress,
+                    status: account.status,
+                    createdAt: account.createdAt
+                )
+            }
+            if let firstModel {
+                try defaults.set(JSONEncoder().encode(converted), forKey: storageKey)
+                // The server in use is the first one: a server connected
+                // before this keeps its place and its model.
+                if !hadServer {
+                    defaults.set(firstModel, forKey: UserScope.scopedKey("openai_compatible_model"))
+                }
+                moveChosenProviderOffHermes(to: hadServer ? nil : firstModel)
+            }
+            defaults.removeObject(forKey: UserScope.scopedKey("hermes_base_url"))
+            defaults.removeObject(forKey: UserScope.scopedKey("hermes_model"))
+            defaults.set(true, forKey: doneKey)
+        } catch {
+            // Left to be tried again: nothing has been changed.
+            AppErrorReporter.log(error: error, context: "ProviderAccountService.convertHermesModelConnections")
+        }
+    }
+
+    /// The name Together AI knows a Hermes model by, for the short names
+    /// this app used.
+    static func togetherModelID(for alias: String) -> String {
+        let known = [
+            "hermes-3": "NousResearch/Hermes-3-Llama-3.1-405B-Turbo",
+            "hermes-3-405b": "NousResearch/Hermes-3-Llama-3.1-405B-Turbo",
+            "hermes-3-70b": "NousResearch/Hermes-3-Llama-3.1-70B",
+            "hermes-3-8b": "NousResearch/Hermes-3-Llama-3.1-8B",
+            "hermes-2": "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO",
+            "hermes-2-mixtral": "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO",
+            "hermes-2-mistral": "NousResearch/Nous-Hermes-2-Mistral-7B-DPO",
+            "hermes-2-vision": "NousResearch/Nous-Hermes-2-Vision-Alpha",
+        ]
+        return known[alias.lowercased()] ?? alias
+    }
+
+    /// Where Hermes was the provider chosen for replies, the server it
+    /// became is; with `model` when that server is the one in use.
+    private static func moveChosenProviderOffHermes(to model: String?) {
+        let defaults = UserDefaults.standard
+        if defaults.string(forKey: UserScope.scopedKey("llm_provider"))?.lowercased() == "hermes" {
+            defaults.set("openai_compatible", forKey: UserScope.scopedKey("llm_provider"))
+        }
+        let settingsKey = UserScope.scopedKey("strix_settings.v1")
+        guard let data = defaults.data(forKey: settingsKey),
+              var settings = try? JSONDecoder().decode(LocalStrixSettings.self, from: data),
+              settings.provider?.lowercased() == "hermes" else { return }
+        settings.provider = "openai_compatible"
+        settings.model = model ?? defaults.string(forKey: UserScope.scopedKey("openai_compatible_model"))
+        if let updated = try? JSONEncoder().encode(settings) {
+            defaults.set(updated, forKey: settingsKey)
+        }
+    }
+
     private static func sanitizedHTTPError(provider: String, statusCode: Int) -> NSError {
         NSError(
             domain: "ProviderAccountService",
@@ -745,6 +804,7 @@ extension ProviderAccountService {
     }
 
     private func loadLocalAccounts() throws -> [LocalProviderAccount] {
+        Self.convertHermesModelConnectionsIfNeeded()
         let defaults = UserDefaults.standard
         guard let data = defaults.data(forKey: storageKey) else {
             return []
@@ -770,7 +830,7 @@ extension ProviderAccountService {
     private func updateProviderConfigCache(provider: String, baseURL: String? = nil) {
         let defaults = UserDefaults.standard
         clearLegacyAPIKeyCache(provider: provider)
-        guard let baseURL, ["ollama", "openclaw", "hermes"].contains(provider.lowercased()) else { return }
+        guard let baseURL, ["ollama", "openclaw"].contains(provider.lowercased()) else { return }
         let key = UserScope.scopedKey("\(provider.lowercased())_base_url")
         // An empty address is no address, as it is in the stored account.
         if baseURL.isEmpty {
@@ -791,8 +851,6 @@ extension ProviderAccountService {
             defaults.removeObject(forKey: "MLXModelManager.downloadedModelIDs")
         case "openclaw":
             defaults.removeObject(forKey: UserScope.scopedKey("openclaw_base_url"))
-        case "hermes":
-            defaults.removeObject(forKey: UserScope.scopedKey("hermes_base_url"))
         case "openai_compatible":
             defaults.removeObject(forKey: UserScope.scopedKey("openai_compatible_model"))
         default:
@@ -919,11 +977,10 @@ extension ProviderAccountService {
                     contextLength: 128_000
                 )
             }
-        case "openclaw", "hermes", "openai_compatible":
+        case "openclaw", "openai_compatible":
             let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) ?? ""
             let defaultBaseURL = switch provider {
             case "openclaw": "http://localhost:3000"
-            case "hermes": "https://api.together.xyz"
             default: ""
             }
             guard let url = URL(string: account.baseURL ?? defaultBaseURL)?.appendingPathComponent("v1/models"), url.host != nil else {

@@ -73,23 +73,6 @@ enum LLMConfiguration {
             )
         }
 
-        // Hermes: Nous Research Hermes models via Together AI or self-hosted
-        let hermesKey = ProviderAccountService.apiKeyFromKeychain(forProvider: "hermes")
-            ?? ProcessInfo.processInfo.environment["HERMES_API_KEY"]
-            ?? ProcessInfo.processInfo.environment["TOGETHER_API_KEY"]
-        let hermesBaseURL = defaults.string(forKey: UserScope.scopedKey("hermes_base_url"))
-            ?? ProcessInfo.processInfo.environment["HERMES_BASE_URL"]
-
-        let hasKey = !(hermesKey?.isEmpty ?? true)
-        let hasBaseURL = !(hermesBaseURL?.isEmpty ?? true)
-
-        if hasKey || hasBaseURL {
-            result["hermes"] = HermesLLMClient(
-                apiKey: hasKey ? hermesKey : nil,
-                baseURL: hermesBaseURL.flatMap { URL(string: $0) }
-            )
-        }
-
         return result
     }
 
@@ -138,52 +121,6 @@ enum LLMConfiguration {
                 supportsTools: true, // OpenClaw can support tools depending on backend
                 supportsEmbeddings: false,
                 costClass: .free // Self-hosted = no cost
-            ))
-        }
-
-        // Register Hermes models if configured
-        if clients["hermes"] != nil {
-            // Check for custom Hermes base URL (self-hosted) vs Together AI (cloud)
-            let hermesBaseURL = UserDefaults.standard.string(forKey: UserScope.scopedKey("hermes_base_url"))
-            let isSelfHosted = hermesBaseURL != nil && !hermesBaseURL!.isEmpty
-
-            // Get preferred model alias or full model ID
-            let modelAlias = UserDefaults.standard.string(forKey: UserScope.scopedKey("hermes_model")) ?? "hermes-3"
-
-            // Map alias to full Together AI model ID if using cloud
-            let modelID: String = if isSelfHosted {
-                // For self-hosted, use the raw model identifier
-                modelAlias
-            } else {
-                // Together AI hosted - map aliases to full names
-                switch modelAlias.lowercased() {
-                case "hermes-3", "hermes-3-405b":
-                    "NousResearch/Hermes-3-Llama-3.1-405B-Turbo"
-                case "hermes-3-70b":
-                    "NousResearch/Hermes-3-Llama-3.1-70B"
-                case "hermes-3-8b":
-                    "NousResearch/Hermes-3-Llama-3.1-8B"
-                case "hermes-2":
-                    "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO"
-                case "hermes-2-mistral":
-                    "NousResearch/Nous-Hermes-2-Mistral-7B-DPO"
-                case "hermes-2-vision":
-                    "NousResearch/Nous-Hermes-2-Vision-Alpha"
-                default:
-                    modelAlias // Assume user provided full model ID
-                }
-            }
-
-            // Context window varies by model size
-            let contextTokens = HermesLLMClient.contextWindow(for: modelID)
-
-            models.append(ModelDescriptor(
-                providerID: "hermes",
-                modelID: modelID,
-                maxContextTokens: contextTokens,
-                supportsTools: true, // Hermes excels at function calling
-                supportsEmbeddings: false,
-                costClass: isSelfHosted ? .free : .medium
             ))
         }
 
