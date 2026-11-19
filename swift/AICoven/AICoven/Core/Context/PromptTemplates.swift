@@ -51,6 +51,23 @@ enum PromptTemplates {
             ]
         ),
 
+        // Image generation
+        ToolDefinition(
+            name: "image.generate",
+            description: "Generate an image from a text prompt using AI. The image is shown to the user in the app with your reply; do not write a link to it.",
+            parameters: [
+                ToolParameter(name: "prompt", type: "string", description: "What the image should show", required: true),
+                ToolParameter(name: "model", type: "string", description: "Optional: an OpenAI image model, e.g. 'gpt-image-2.6-sunburst'. Leave out to use the best one available.", required: false),
+                ToolParameter(name: "size", type: "string", description: "Optional: width x height in pixels, like '1024x1024', '1536x1024' or '1024x1536'", required: false),
+                ToolParameter(name: "quality", type: "string", description: "Optional: 'low', 'medium', 'high' or 'auto'", required: false),
+            ],
+            example: #"{"tool": "image.generate", "input": {"prompt": "A watercolour of a lighthouse at dawn"}, "reason": "The user asked for a picture"}"#,
+            inputExamples: [
+                ToolInputExample(description: "A picture from a description", input: ["prompt": "A watercolour of a lighthouse at dawn"]),
+                ToolInputExample(description: "A wide picture", input: ["prompt": "A city skyline at night, seen from the river", "size": "1536x1024"]),
+            ]
+        ),
+
         // File tools
         ToolDefinition(
             name: "file.read",
@@ -642,6 +659,10 @@ enum PromptTemplates {
         "google_sheets.readValues", "google_sheets.writeValues"
     ]
 
+    /// Image generation, offered where there is an OpenAI key to make
+    /// images with.
+    static let imageTools: Set<String> = ["image.generate"]
+
     /// All tools combined.
     static let allTools: Set<String> = basicChatTools
         .union(fileTools)
@@ -657,6 +678,12 @@ enum PromptTemplates {
         let hasToolsPack = await MainActor.run { StoreService.shared.hasToolsPack }
         if hasToolsPack {
             tools.formUnion(shellTools)
+        }
+
+        // Images are made with the person's OpenAI key, whichever model
+        // answers the turn.
+        if let key = ProviderAccountService.apiKeyFromKeychain(forProvider: "openai"), !key.isEmpty {
+            tools.formUnion(imageTools)
         }
 
         let accountsService = ConnectedAccountsService.shared
