@@ -1,454 +1,328 @@
 import SwiftUI
 
-/// Provider Keys management view
+/// The AI connections pane: the person's provider accounts, and adding,
+/// editing, testing, and deleting them.
 struct ProviderKeysView: View {
-    @State private var providerAccounts: [ProviderAccount] = []
-    @State private var loading = true
-    @State private var showAddSheet = false
-    @State private var selectedAccount: ProviderAccount?
+    @StateObject private var viewModel = ProviderKeysViewModel()
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: Spacing.xl) {
-                // Header
-                VStack(spacing: Spacing.sm) {
-                    IconBadge(icon: "key.fill", size: 60, color: .aicovenTeal)
-
-                    Text("Provider Keys")
-                        .font(.aicovenDisplaySmall)
-                        .foregroundColor(.aicovenTextPrimary)
-
-                    Text("Manage your AI provider API keys")
-                        .font(.aicovenBody)
-                        .foregroundColor(.aicovenTextSecondary)
-
-                    // Data retention policy disclaimer
-                    Text("By using a provider API key, you agree to that provider's data retention policy as agreed when the key was obtained.")
-                        .font(.aicovenCaption)
-                        .foregroundColor(.aicovenTextTertiary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, Spacing.lg)
+        SettingsForm {
+            Section {
+                Button {
+                    viewModel.showAddSheet = true
+                } label: {
+                    Label("Add AI Connection…", systemImage: "plus.circle.fill")
                 }
-                .padding(.top, Spacing.xl)
+                .accessibilityIdentifier("add-provider-key")
+            } footer: {
+                Text("Each provider's data retention policy applies to its key.")
+                    .font(.aicovenBodySmall)
+            }
 
-                if loading {
-                    ProgressView()
-                        .scaleEffect(1.5)
-                        .tint(.aicovenTeal)
-                        .padding(.top, 50)
-                } else if providerAccounts.isEmpty {
-                    // Empty state
-                    emptyState
-                } else {
-                    // Provider list
-                    VStack(spacing: Spacing.md) {
-                        ForEach(providerAccounts) { account in
-                            ProviderAccountCard(account: account) {
-                                selectedAccount = account
-                            } onDelete: {
-                                Task {
-                                    await deleteAccount(account)
-                                }
-                            }
-                        }
-                    }
-                    .padding(.horizontal, Spacing.lg)
+            if let error = viewModel.lastErrorMessage {
+                Section {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Color.aicovenError)
+                }
+            }
 
-                    // Add button
-                    GradientButton("Add Provider Key", icon: "plus.circle.fill", style: .primary) {
-                        showAddSheet = true
+            // The spinner shows only while there are no accounts to list; a
+            // reload (after a test, an edit, or a delete) keeps the list in
+            // place.
+            if viewModel.loading, viewModel.providerAccounts.isEmpty {
+                ProgressView()
+            } else if viewModel.providerAccounts.isEmpty {
+                Section {
+                    Text("Add your first AI connection to start chatting. Keys are kept in this device's Keychain.")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Section {
+                    ForEach(viewModel.providerAccounts) { account in
+                        ProviderAccountRow(
+                            account: account,
+                            testActionState: viewModel.testActionState(for: account),
+                            onEdit: { viewModel.selectedAccount = account },
+                            onDelete: { viewModel.pendingDelete = account },
+                            onTest: { Task { await viewModel.testConnection(for: account) } }
+                        )
                     }
-                    .padding(.horizontal, Spacing.lg)
-                    .padding(.bottom, Spacing.xl)
+                } footer: {
+                    Text("Choose a connection to edit it.")
+                        .font(.aicovenBodySmall)
                 }
             }
         }
-        .background(NebulaBackground().ignoresSafeArea())
-        .sheet(isPresented: $showAddSheet) {
-            AddProviderKeySheet {
-                showAddSheet = false
-                Task {
-                    await loadProviderAccounts()
-                }
-            }
-        }
-        .sheet(item: $selectedAccount) { account in
-            EditProviderKeySheet(account: account) {
-                selectedAccount = nil
-                Task {
-                    await loadProviderAccounts()
-                }
-            }
-        }
-        .task {
-            await loadProviderAccounts()
-        }
-    }
-
-    var emptyState: some View {
-        VStack(spacing: Spacing.lg) {
-            Image(systemName: "key.fill")
-                .font(.system(size: 60))
-                .foregroundColor(.aicovenTeal.opacity(0.6))
-
-            Text("No Provider Keys")
-                .font(.aicovenH2)
-                .foregroundColor(.aicovenTextPrimary)
-
-            Text("Add your first API key to start using AI providers with AICoven. All keys are encrypted and stored securely.")
-                .font(.aicovenBody)
-                .foregroundColor(.aicovenTextSecondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 400)
-
-            GradientButton("Add Provider Key", icon: "plus.circle.fill", style: .primary) {
-                showAddSheet = true
-            }
-        }
-        .padding(Spacing.xxl)
-    }
-
-    /// Load provider accounts
-    private func loadProviderAccounts() async {
-        loading = true
-        defer { loading = false }
-
-        do {
-            providerAccounts = try await ProviderAccountService.shared.loadProviderAccounts()
-        } catch {
-            AppErrorReporter.log(error: error, context: "ProviderKeysView.loadProviderAccounts")
-            providerAccounts = []
-        }
-    }
-
-    /// Delete provider account
-    private func deleteAccount(_ account: ProviderAccount) async {
-        do {
-            try await ProviderAccountService.shared.deleteProviderAccount(id: account.id)
-            await loadProviderAccounts()
-        } catch {
-            AppErrorReporter.log(error: error, context: "ProviderKeysView.deleteAccount")
-        }
-    }
-}
-
-/// Provider account card
-struct ProviderAccountCard: View {
-    let account: ProviderAccount
-    let onEdit: () -> Void
-    let onDelete: () -> Void
-    @State private var showDeleteConfirmation = false
-    @State private var isTesting = false
-    @State private var testResult: (success: Bool, message: String)? = nil
-
-    var providerInfo: (icon: String, name: String, color: Color) {
-        switch account.provider.lowercased() {
-        case "openai": ("🤖", "OpenAI", .aicovenTeal)
-        case "google": ("🔵", "Google AI", .blue)
-        case "anthropic": ("🟣", "Anthropic", .aicovenPurple)
-        case "openrouter": ("🔀", "OpenRouter", .aicovenTeal)
-        case "cohere": ("🧠", "Cohere", .aicovenPink)
-        case "mistral": ("🌬️", "Mistral AI", .cyan)
-        case "ollama": ("🦙", "Ollama (Local)", .orange)
-        case "mlx": ("🧠", "MLX (On-Device)", .purple)
-        case "openclaw": ("🦅", "OpenClaw", .orange)
-        case "hermes": ("🪽", "Hermes", .aicovenPurple)
-        default: ("🔑", account.provider, .aicovenTeal)
-        }
-    }
-
-    var statusColor: Color {
-        switch account.status {
-        case "healthy": .green
-        case "unhealthy": .red
-        case "pending": .orange
-        default: .gray
-        }
-    }
-
-    var body: some View {
-        GlassCard {
-            VStack(spacing: Spacing.md) {
-                // Header
-                HStack {
-                    HStack(spacing: Spacing.sm) {
-                        Text(providerInfo.icon)
-                            .font(.system(size: 32))
-
-                        VStack(alignment: .leading, spacing: Spacing.xxs) {
-                            Text(account.displayName)
-                                .font(.aicovenH3)
-                                .foregroundColor(.aicovenTextPrimary)
-
-                            Text(providerInfo.name)
-                                .font(.aicovenCaption)
-                                .foregroundColor(.aicovenTextSecondary)
-
-                            if let model = account.defaultModel {
-                                Text("Model: \(model)")
-                                    .font(.aicovenCaption)
-                                    .foregroundColor(.aicovenTextTertiary)
-                            }
-                        }
-                    }
-
-                    Spacer()
-
-                    // Status badge
-                    HStack(spacing: Spacing.xxs) {
-                        Circle()
-                            .fill(statusColor)
-                            .frame(width: 8, height: 8)
-
-                        Text(account.status.capitalized)
-                            .font(.aicovenCaption)
-                            .foregroundColor(.aicovenTextSecondary)
-                    }
-                    .padding(.horizontal, Spacing.sm)
-                    .padding(.vertical, Spacing.xxs)
-                    .background(Color.aicovenGlass)
-                    .cornerRadius(BorderRadius.circle)
-                }
-
-                // Scopes
-                if !account.scopes.isEmpty {
-                    HStack {
-                        Text("Capabilities:")
-                            .font(.aicovenCaption)
-                            .foregroundColor(.aicovenTextSecondary)
-
-                        Spacer()
-                    }
-
-                    FlowLayout(spacing: Spacing.xs) {
-                        ForEach(account.scopes, id: \.self) { scope in
-                            Text(scope)
-                                .font(.aicovenCaption)
-                                .foregroundColor(.aicovenTextSecondary)
-                                .padding(.horizontal, Spacing.sm)
-                                .padding(.vertical, Spacing.xxs)
-                                .background(Color.aicovenGlass)
-                                .cornerRadius(BorderRadius.circle)
-                        }
-                    }
-                }
-
-                // Metadata
-                VStack(alignment: .leading, spacing: Spacing.xxs) {
-                    if let lastCheck = account.lastHealthCheckAt {
-                        Text("Last checked: \(lastCheck, style: .date)")
-                            .font(.aicovenCaption)
-                            .foregroundColor(.aicovenTextTertiary)
-                    }
-
-                    if let quota = account.quotaHint {
-                        Text(quota)
-                            .font(.aicovenCaption)
-                            .foregroundColor(.aicovenTextTertiary)
-                    }
-                }
-
-                // Test result
-                if let result = testResult {
-                    HStack(spacing: Spacing.xs) {
-                        Image(systemName: result.success ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                            .foregroundColor(result.success ? .green : .red)
-                        Text(result.message)
-                            .font(.aicovenCaption)
-                            .foregroundColor(result.success ? .green : .red)
-                            .lineLimit(2)
-                    }
-                    .padding(Spacing.sm)
-                    .background(Color.aicovenGlass)
-                    .cornerRadius(BorderRadius.sm)
-                }
-
-                // Actions
-                HStack(spacing: Spacing.sm) {
-                    Button {
-                        Task { await testConnection() }
-                    } label: {
-                        HStack(spacing: Spacing.xxs) {
-                            if isTesting {
-                                ProgressView()
-                                    .scaleEffect(0.6)
-                                    .tint(.aicovenTextPrimary)
-                            }
-                            Text(isTesting ? "Testing..." : "Test")
-                        }
-                    }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(isTesting)
-
-                    Button("Edit") {
-                        onEdit()
-                    }
-                    .buttonStyle(SecondaryButtonStyle())
-
-                    Button("Delete") {
-                        showDeleteConfirmation = true
-                    }
-                    .buttonStyle(DangerButtonStyle())
-                }
-            }
-        }
-        .alert("Delete Provider Key", isPresented: $showDeleteConfirmation) {
+        .alert(
+            "Delete \(viewModel.pendingDelete?.displayName ?? "")?",
+            isPresented: Binding(
+                get: { viewModel.pendingDelete != nil },
+                set: { if !$0 { viewModel.pendingDelete = nil } }
+            ),
+            presenting: viewModel.pendingDelete
+        ) { account in
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
-                onDelete()
+                Task { await viewModel.deleteAccount(account) }
             }
-        } message: {
-            Text("Are you sure you want to delete this provider key? This action cannot be undone.")
+        } message: { account in
+            Text(ProviderKeysViewModel.deleteMessage(for: account))
         }
-    }
-
-    private func testConnection() async {
-        isTesting = true
-        testResult = nil
-        defer { isTesting = false }
-
-        do {
-            if account.provider.lowercased() == "openrouter" {
-                try await ProviderAccountService.shared.checkOpenRouterKey(accountId: account.id)
+        .sheet(isPresented: $viewModel.showAddSheet) {
+            AddProviderKeySheet {
+                Task { await viewModel.loadProviderAccounts() }
             }
-            let status = try await ProviderAccountService.shared.getInitializationStatus(accountId: account.id)
-            let modelCount = status.modelMetadata.count
-            if modelCount > 0 {
-                testResult = (true, "Connected! Found \(modelCount) model(s).")
-            } else {
-                testResult = (true, "Connected but no models found.")
+        }
+        .sheet(item: $viewModel.selectedAccount) { account in
+            EditProviderKeySheet(account: account) {
+                Task { await viewModel.loadProviderAccounts() }
             }
-        } catch {
-            // Format error message consistently for all error types
-            let errorMessage: String
-
-            // Check if it's an NSError with HTTP status code context
-            if let nsError = error as NSError?, nsError.domain == "ProviderAccountService" {
-                // HTTP errors from the provider API (e.g., 401, 403, 500)
-                let statusCode = nsError.code
-                if statusCode > 0 {
-                    let description = nsError.localizedDescription
-                    // Extract just the HTTP status and brief description
-                    if description.contains("HTTP") {
-                        errorMessage = description
-                    } else {
-                        errorMessage = "HTTP \(statusCode): \(description)"
-                    }
-                } else {
-                    // Non-HTTP error (e.g., missing API key)
-                    errorMessage = nsError.localizedDescription
-                }
-            } else {
-                // URLError (network issues) or other error types
-                errorMessage = error.localizedDescription
-            }
-
-            testResult = (false, errorMessage)
+        }
+        // Onboarding and other screens add accounts too.
+        .onReceive(NotificationCenter.default.publisher(for: .providerKeysUpdated)) { _ in
+            Task { await viewModel.loadProviderAccounts() }
+        }
+        .task {
+            await viewModel.loadProviderAccounts()
         }
     }
 }
 
-/// Add provider key sheet — Step 1: choose a provider
+/// One provider account as a single row: its logo, name, provider and
+/// model, a status dot, and Test. A failed test's reason shows under the
+/// name while its cross does. Choosing the row edits the account; Delete is
+/// in the swipe actions and the context menu, and asks first.
+struct ProviderAccountRow: View {
+    let account: ProviderAccount
+    let testActionState: ProviderAccountTestActionState
+    let onEdit: () -> Void
+    /// Asks to delete the account; the screen shows the confirmation.
+    let onDelete: () -> Void
+    let onTest: () -> Void
+
+    private var subtitle: String {
+        let provider = providerDisplayName(slug: account.provider)
+        return account.defaultModel.map { "\(provider) · \($0)" } ?? provider
+    }
+
+    private var failureMessage: String? {
+        if case let .failure(message) = testActionState { return message }
+        return nil
+    }
+
+    var body: some View {
+        HStack(spacing: Spacing.sm) {
+            // A button, not a tap gesture, so the keyboard reaches Edit too.
+            Button(action: onEdit) {
+                HStack(spacing: Spacing.sm) {
+                    ProviderLogoBadge(assetName: providerLogoAssetName(slug: account.provider), size: 28)
+                    VStack(alignment: .leading, spacing: Spacing.xxxs) {
+                        Text(account.displayName)
+                            .lineLimit(1)
+                        Text(subtitle)
+                            .font(.aicovenBodySmall)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        if let failureMessage {
+                            Text(failureMessage)
+                                .font(.aicovenBodySmall)
+                                .foregroundStyle(Color.aicovenError)
+                                .lineLimit(3)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                    ProviderAccountStatus(account: account, compact: true)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Edit")
+            Button(action: onTest) {
+                testButtonLabel
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(testActionState == .testing)
+            .accessibilityLabel("Test")
+            .accessibilityValue(testAccessibilityValue)
+            .help(testActionState.resultMessage ?? "Test the connection")
+        }
+        .accessibilityAction(named: "Delete", onDelete)
+        .contextMenu {
+            Button("Edit…", action: onEdit)
+            Button("Delete…", role: .destructive, action: onDelete)
+        }
+        .swipeActions(edge: .trailing) {
+            Button("Delete", role: .destructive, action: onDelete)
+            Button("Edit", action: onEdit)
+        }
+    }
+
+    /// The Test button shows the test: a spinner while it runs, then a tick
+    /// or a cross, then "Test" again. The word stays in place, hidden, so
+    /// the button keeps its size.
+    private var testButtonLabel: some View {
+        ZStack {
+            Text("Test")
+                .opacity(testActionState == .idle ? 1 : 0)
+            switch testActionState {
+            case .idle:
+                EmptyView()
+            case .testing:
+                ProgressView()
+                    .controlSize(.small)
+            case .success:
+                Image(systemName: "checkmark")
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Color.aicovenTextSecondary)
+            case .failure:
+                Image(systemName: "xmark")
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Color.aicovenError)
+            }
+        }
+    }
+
+    private var testAccessibilityValue: String {
+        switch testActionState {
+        case .idle: ""
+        case .testing: "Testing"
+        case let .success(message), let .failure(message): message
+        }
+    }
+}
+
+/// A provider account's stored status, which the last Test set. Compact is
+/// the dot alone, for the account row; otherwise the dot and the status
+/// word, for the edit form.
+struct ProviderAccountStatus: View {
+    let account: ProviderAccount
+    let compact: Bool
+
+    private var color: Color {
+        switch account.status {
+        case "healthy", "pending": .aicovenTextSecondary
+        case "unhealthy": .aicovenError
+        default: .aicovenTextTertiary
+        }
+    }
+
+    var body: some View {
+        if compact {
+            StatusDot(color: color, label: account.status.capitalized)
+        } else {
+            HStack(spacing: Spacing.xxs) {
+                StatusDot(color: color, label: account.status.capitalized)
+                Text(account.status.capitalized)
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(account.status.capitalized)
+        }
+    }
+}
+
+/// Add an AI connection, step 1: choose a provider. Each opens its form.
 struct AddProviderKeySheet: View {
     @Environment(\.dismiss) private var dismiss
     let onComplete: () -> Void
 
-    @State private var selectedProvider = "openai"
-    @State private var showStep2 = false
-
-    let providers = [
-        ("openai", "OpenAI", "🤖"),
-        ("anthropic", "Anthropic Claude", "🟣"),
-        ("google", "Google Gemini", "🔵"),
-        ("openrouter", "OpenRouter", "🔀"),
-        ("hermes", "Hermes", "🪽"),
-        ("ollama", "Ollama (Local)", "🦙"),
-        ("openclaw", "OpenClaw (Local)", "🦅"),
-        ("mlx", "MLX (On-Device)", "🧠")
-    ]
+    private static let providers = ["openai", "anthropic", "google", "openrouter", "hermes", "ollama", "openclaw", "mlx"]
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: Spacing.lg) {
-                    VStack(alignment: .leading, spacing: Spacing.sm) {
-                        Text("Choose a Provider")
-                            .font(.aicovenH3)
-                            .foregroundColor(.aicovenTextPrimary)
-
-                        Text("Select the AI provider whose API key you want to add.")
-                            .font(.aicovenCaption)
-                            .foregroundColor(.aicovenTextSecondary)
-
-                        ForEach(providers, id: \.0) { provider in
-                            Button {
-                                selectedProvider = provider.0
-                            } label: {
-                                HStack {
-                                    Text(provider.2)
-                                        .font(.system(size: 24))
-
-                                    Text(provider.1)
-                                        .font(.aicovenBody)
-                                        .foregroundColor(.aicovenTextPrimary)
-
-                                    Spacer()
-
-                                    if selectedProvider == provider.0 {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundColor(.aicovenTeal)
-                                    }
-                                }
-                                .padding(Spacing.md)
-                                .background(
-                                    RoundedRectangle(cornerRadius: BorderRadius.md)
-                                        .fill(selectedProvider == provider.0 ? Color.aicovenGlass : Color.clear)
-                                )
+            SettingsForm {
+                Section("Provider") {
+                    ForEach(Self.providers, id: \.self) { provider in
+                        NavigationLink {
+                            AddProviderKeyStep2View(
+                                selectedProvider: provider,
+                                onComplete: onComplete,
+                                // The form's own `dismiss` only pops back to
+                                // this list; a saved connection closes the
+                                // sheet.
+                                dismissSheet: { dismiss() }
+                            )
+                        } label: {
+                            Label {
+                                Text(providerDisplayName(slug: provider))
+                            } icon: {
+                                ProviderLogoBadge(assetName: providerLogoAssetName(slug: provider), size: 24)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
-
-                    GradientButton("Continue", icon: "arrow.right.circle.fill", style: .primary) {
-                        showStep2 = true
-                    }
                 }
-                .padding(Spacing.lg)
             }
-            .background(NebulaBackground().ignoresSafeArea())
-            .navigationTitle("Add Provider Key")
+            .navigationTitle("Add AI Connection")
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
             }
-            .navigationDestination(isPresented: $showStep2) {
-                AddProviderKeyStep2View(
-                    selectedProvider: selectedProvider,
-                    onComplete: onComplete
-                )
-            }
         }
+        .aiConnectionSheet()
     }
-
 }
 
-/// Step 2: privacy disclosure (pinned at top) + provider-specific configuration
+private extension View {
+    /// One size on the Mac for the provider list and every form, which
+    /// scroll inside it, and the app's light or dark choice.
+    func aiConnectionSheet() -> some View {
+        themedColorScheme()
+        #if os(macOS)
+            .frame(minWidth: 480, idealWidth: 520, minHeight: 360, idealHeight: 520)
+        #endif
+    }
+
+    func inlineNavigationTitle() -> some View {
+        #if os(iOS)
+        navigationBarTitleDisplayMode(.inline)
+        #else
+        self
+        #endif
+    }
+}
+
+/// A line of a connection form that says what went wrong.
+private struct FormErrorRow: View {
+    let message: String
+
+    var body: some View {
+        Label(message, systemImage: "exclamationmark.triangle.fill")
+            .foregroundStyle(Color.aicovenError)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// Add an AI connection, step 2: where messages go (always first), then the
+/// provider's own settings, the connection's name, and its key.
 private struct AddProviderKeyStep2View: View {
-    @Environment(\.dismiss) private var dismiss
     let selectedProvider: String
     let onComplete: () -> Void
+    /// Dismisses the whole Add sheet.
+    let dismissSheet: () -> Void
 
-    @State private var displayName = ""
+    @State private var displayName: String
     @State private var apiKey = ""
-    @State private var baseURL = "http://localhost:11434"
+    @State private var baseURL: String
     @State private var saving = false
+    @State private var errorMessage: String?
     @State private var isLoadingModels = false
     @State private var ollamaModels: [OllamaLLMClient.OllamaModel] = []
-    @State private var selectedOllamaModel: String = ""
-    @State private var connectionTestResult: (success: Bool, message: String)? = nil
-    @State private var selectedMLXModelID: String = ""
+    @State private var selectedOllamaModel = ""
+    @State private var ollamaConnectionFailure: String?
+    @State private var selectedMLXModelID = ""
     @State private var acceptedPrivacy = false
+
+    init(selectedProvider: String, onComplete: @escaping () -> Void, dismissSheet: @escaping () -> Void) {
+        self.selectedProvider = selectedProvider
+        self.onComplete = onComplete
+        self.dismissSheet = dismissSheet
+        // Named after the provider; the person can rename it here.
+        _displayName = State(initialValue: providerDisplayName(slug: selectedProvider))
+        _baseURL = State(initialValue: selectedProvider == "ollama" ? "http://localhost:11434" : "")
+    }
 
     private var isOllama: Bool {
         selectedProvider == "ollama"
@@ -466,206 +340,214 @@ private struct AddProviderKeyStep2View: View {
         selectedProvider == "hermes"
     }
 
-    private var isLocal: Bool {
-        isOllama || isMLX
+    private var providerName: String {
+        providerDisplayName(slug: selectedProvider)
     }
 
-    private var isSelfHosted: Bool {
-        isOpenClaw || isHermes
+    private var trimmedName: String {
+        displayName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: Spacing.lg) {
-                // Privacy disclosure is the very first thing shown — impossible to miss
-                privacyView
+        SettingsForm {
+            privacySection
+            configurationSections
 
-                // Display name
-                VStack(alignment: .leading, spacing: Spacing.sm) {
-                    Text("Display Name")
-                        .font(.aicovenH3)
-                        .foregroundColor(.aicovenTextPrimary)
-
-                    TextField(isOllama ? "My Ollama" : isMLX ? "My Local LLM" : "My API Key", text: $displayName)
-                        .font(.aicovenBody)
-                        .foregroundColor(.aicovenTextPrimary)
-                        .padding(Spacing.md)
-                        .background(Color.aicovenGlass)
-                        .cornerRadius(BorderRadius.md)
+            Section {
+                FormTextField(label: "Name", text: $displayName, prompt: providerName)
+                if !isOllama, !isMLX {
+                    SecureFieldWithPaste(label: "API key", prompt: keyPrompt, text: $apiKey)
                 }
-
-                // Provider-specific configuration
-                configurationView
-
-                // Save button
-                saveButton
+            } footer: {
+                if !isOllama, !isMLX {
+                    Text("The key is kept in this device's Keychain.")
+                        .font(.aicovenBodySmall)
+                }
             }
-            .padding(Spacing.lg)
+
+            // Last in the form, directly under the fields it is about: a
+            // failed save must not look like nothing happened.
+            if let errorMessage {
+                Section { FormErrorRow(message: errorMessage) }
+            }
         }
-        .background(NebulaBackground().ignoresSafeArea())
-        .navigationTitle(providerDisplayName)
-        #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-        #endif
-    }
-
-    // MARK: - Privacy disclosure (always first)
-
-    private var privacyView: some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
-            Text("Privacy & Data Sharing")
-                .font(.aicovenH3)
-                .foregroundColor(.aicovenTextPrimary)
-
-            if isLocal {
-                HStack(alignment: .top, spacing: Spacing.sm) {
-                    Image(systemName: "checkmark.shield.fill")
-                        .foregroundColor(.green)
-                        .font(.system(size: 20))
-                        .padding(.top, 2)
-
-                    VStack(alignment: .leading, spacing: Spacing.xs) {
-                        Text("Your data stays on this device")
-                            .font(.aicovenBodySmall)
-                            .foregroundColor(.aicovenTextPrimary)
-                            .fontWeight(.semibold)
-                        Text("This provider runs locally. Your message content and conversation context are never sent to any external server.")
-                            .font(.aicovenCaption)
-                            .foregroundColor(.aicovenTextSecondary)
+        .navigationTitle(providerName)
+        .inlineNavigationTitle()
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                if saving {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Adding")
+                } else {
+                    Button("Add") {
+                        Task { await saveProviderKey() }
                     }
-                }
-                .padding(Spacing.md)
-                .background(Color.green.opacity(0.12))
-                .cornerRadius(BorderRadius.md)
-                .overlay(
-                    RoundedRectangle(cornerRadius: BorderRadius.md)
-                        .stroke(Color.green.opacity(0.3), lineWidth: 1)
-                )
-
-            } else if isSelfHosted {
-                HStack(alignment: .top, spacing: Spacing.sm) {
-                    Image(systemName: "server.rack")
-                        .foregroundColor(.orange)
-                        .font(.system(size: 20))
-                        .padding(.top, 2)
-
-                    VStack(alignment: .leading, spacing: Spacing.xs) {
-                        Text("Self-Hosted / Private Server")
-                            .font(.aicovenBodySmall)
-                            .foregroundColor(.aicovenTextPrimary)
-                            .fontWeight(.semibold)
-                        Text("Data is sent to the custom URL you provide. Make sure you trust the destination server. If left blank, it may default to a cloud service (e.g., Together AI).")
-                            .font(.aicovenCaption)
-                            .foregroundColor(.aicovenTextSecondary)
-                    }
-                }
-                .padding(Spacing.md)
-                .background(Color.orange.opacity(0.12))
-                .cornerRadius(BorderRadius.md)
-                .overlay(
-                    RoundedRectangle(cornerRadius: BorderRadius.md)
-                        .stroke(Color.orange.opacity(0.3), lineWidth: 1)
-                )
-
-            } else {
-                VStack(alignment: .leading, spacing: Spacing.md) {
-                    VStack(alignment: .leading, spacing: Spacing.sm) {
-                        Label("What data is sent", systemImage: "paperplane.fill")
-                            .font(.aicovenBodySmall)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.aicovenTextPrimary)
-
-                        Text("Your message content and conversation context will be sent to \(providerDisplayName) for AI processing. No other personal data (account details, contacts, etc.) is shared.")
-                            .font(.aicovenCaption)
-                            .foregroundColor(.aicovenTextSecondary)
-
-                        Label("Who receives it", systemImage: "person.crop.circle.fill")
-                            .font(.aicovenBodySmall)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.aicovenTextPrimary)
-
-                        Text(
-                            selectedProvider == "openrouter"
-                                ? "OpenRouter, and the provider of the model you choose, to which OpenRouter passes your content. Each is subject to its own privacy policy. AICoven does not store or access your message content on its servers."
-                                : "\(providerDisplayName) — subject to their privacy policy. AICoven does not store or access your message content on its servers."
-                        )
-                        .font(.aicovenCaption)
-                        .foregroundColor(.aicovenTextSecondary)
-                    }
-                    .padding(Spacing.md)
-                    .background(Color.aicovenGlass)
-                    .cornerRadius(BorderRadius.md)
-
-                    Toggle(isOn: $acceptedPrivacy) {
-                        Text("I consent to sharing my message content and conversation context with \(providerDisplayName) for AI processing")
-                            .font(.aicovenCaption)
-                            .foregroundColor(.aicovenTextPrimary)
-                    }
-                    .toggleStyle(SwitchToggleStyle(tint: .aicovenTeal))
-
-                    Link(destination: URL(string: "https://aicoven.ai/privacy")!) {
-                        HStack(spacing: Spacing.xs) {
-                            Text("Read AICoven's Privacy Policy")
-                                .font(.aicovenCaption)
-                                .foregroundColor(.aicovenTeal)
-                            Image(systemName: "arrow.up.right.square")
-                                .font(.aicovenCaption)
-                                .foregroundColor(.aicovenTeal)
-                        }
-                    }
+                    .disabled(saveDisabled)
                 }
             }
         }
     }
 
-    // MARK: - Configuration
+    // MARK: - Where messages go (always first)
 
     @ViewBuilder
-    private var configurationView: some View {
-        if isOllama {
-            ollamaConfigSection
-        } else if isMLX {
-            mlxConfigSection
-        } else if isOpenClaw {
-            openClawConfigSection
-        } else if isHermes {
-            hermesConfigSection
+    private var privacySection: some View {
+        if isMLX {
+            Section {
+                Label("Messages stay on this device", systemImage: "lock.shield")
+            } footer: {
+                Text("The model runs on this device. Messages and their context are not sent anywhere.")
+                    .font(.aicovenBodySmall)
+            }
+        } else if isOllama {
+            Section {
+                Label("Messages go only to your Ollama server", systemImage: "lock.shield")
+            } footer: {
+                Text("Messages and their context go to the Ollama server at the address below, and nowhere else.")
+                    .font(.aicovenBodySmall)
+            }
         } else {
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                Text("API Key")
-                    .font(.aicovenH3)
-                    .foregroundColor(.aicovenTextPrimary)
+            Section {
+                Toggle(isOpenClaw || isHermes ? "Share my messages with this server" : "Share my messages with \(providerName)", isOn: $acceptedPrivacy)
+            } footer: {
+                // Built as a key so the policy link is a link.
+                Text(LocalizedStringKey(privacyFooter))
+                    .font(.aicovenBodySmall)
+            }
+        }
+    }
 
-                SecureField("sk-...", text: $apiKey)
-                    .font(.aicovenBody)
-                    .foregroundColor(.aicovenTextPrimary)
-                    .padding(Spacing.md)
-                    .background(Color.aicovenGlass)
-                    .cornerRadius(BorderRadius.md)
+    private var privacyFooter: String {
+        let policy = "AICoven does not store or read them on its servers. [Privacy Policy](https://aicoven.ai/privacy)"
+        switch selectedProvider {
+        case "openclaw":
+            return "Messages and their context go to the server address you enter. Use a server you trust. \(policy)"
+        case "hermes":
+            return "Messages and their context go to the server address you enter, or to Together AI when you enter none. \(policy)"
+        case "openrouter":
+            return "Messages and their context go to OpenRouter, and to the provider of the model you choose, to generate replies. Each has its own privacy policy. \(policy)"
+        default:
+            return "Messages and their context go to \(providerName) to generate replies, under its privacy policy. \(policy)"
+        }
+    }
 
-                Text("🔒 Your API key is encrypted and stored securely on this device")
-                    .font(.aicovenCaption)
-                    .foregroundColor(.aicovenTextSecondary)
+    // MARK: - The provider's own settings
+
+    @ViewBuilder
+    private var configurationSections: some View {
+        if isOllama {
+            ollamaSections
+        } else if isMLX {
+            mlxSection
+        } else if isOpenClaw {
+            Section("Server") {
+                FormAddressField(label: "Address", text: $baseURL, prompt: "http://localhost:3000")
+            }
+        } else if isHermes {
+            Section {
+                FormAddressField(label: "Address", text: $baseURL, prompt: "Together AI")
+            } header: {
+                Text("Server")
+            } footer: {
+                Text("Leave the address empty to use Together AI, which needs an API key.")
+                    .font(.aicovenBodySmall)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var ollamaSections: some View {
+        Section {
+            FormAddressField(label: "Address", text: $baseURL, prompt: "http://localhost:11434")
+            Button {
+                Task { await connectToOllama() }
+            } label: {
+                HStack(spacing: Spacing.xs) {
+                    Text("Connect")
+                    if isLoadingModels {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+            }
+            .disabled(isLoadingModels || baseURL.isEmpty)
+            if let ollamaConnectionFailure {
+                FormErrorRow(message: ollamaConnectionFailure)
+            }
+        } header: {
+            Text("Server")
+        } footer: {
+            Text("Ollama must be running at this address. Connect lists its models.")
+                .font(.aicovenBodySmall)
+        }
+
+        if !ollamaModels.isEmpty {
+            Section {
+                Picker("Model", selection: $selectedOllamaModel) {
+                    ForEach(ollamaModels) { model in
+                        Text(model.formattedSize.map { "\(model.name) (\($0))" } ?? model.name)
+                            .tag(model.name)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var mlxSection: some View {
+        if MLXModelManager.isSupported {
+            Section {
+                ForEach(MLXModelManager.defaultCatalog) { model in
+                    Button {
+                        selectedMLXModelID = model.id
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: Spacing.xxxs) {
+                                Text(model.displayName)
+                                Text(model.summary)
+                                    .font(.aicovenBodySmall)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                                Text("\(model.formattedDownloadSize) download · \(model.minRAMGB) GB memory · \(model.quantization)")
+                                    .font(.aicovenBodySmall)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 0)
+                            if selectedMLXModelID == model.id {
+                                Image(systemName: "checkmark")
+                                    .fontWeight(.semibold)
+                                    .foregroundStyle(Color.aicovenTeal)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(selectedMLXModelID == model.id ? .isSelected : [])
+                }
+            } header: {
+                Text("Model")
+            } footer: {
+                Text("Downloaded from Hugging Face the first time it is used. No server or API key is needed.")
+                    .font(.aicovenBodySmall)
+            }
+        } else {
+            Section {
+                FormErrorRow(message: "MLX needs Apple silicon (M1 or newer). This device can't run it.")
             }
         }
     }
 
     // MARK: - Save
 
-    private var saveButton: some View {
-        GradientButton(
-            isOllama ? "Add Ollama" : isMLX ? "Add MLX Model" : "Add Provider Key",
-            icon: "checkmark.circle.fill",
-            style: .primary
-        ) {
-            Task { await saveProviderKey() }
-        }
-        .disabled(saveDisabled)
+    private var keyPrompt: String {
+        if isOpenClaw { return "Optional" }
+        if isHermes { return "Needed for Together AI" }
+        return "Required"
     }
 
     private var saveDisabled: Bool {
-        if saving { return true }
-        if displayName.isEmpty { return true }
+        if trimmedName.isEmpty { return true }
         if isOllama { return baseURL.isEmpty || selectedOllamaModel.isEmpty }
         if isMLX { return selectedMLXModelID.isEmpty }
         if isOpenClaw { return baseURL.isEmpty || !acceptedPrivacy }
@@ -673,468 +555,171 @@ private struct AddProviderKeyStep2View: View {
         return apiKey.isEmpty || !acceptedPrivacy
     }
 
-    // MARK: - OpenClaw & Hermes config sections
-
-    private var openClawConfigSection: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                Text("Server URL (Required)")
-                    .font(.aicovenH3)
-                    .foregroundColor(.aicovenTextPrimary)
-
-                TextField("http://localhost:3000", text: $baseURL)
-                    .font(.aicovenBody)
-                    .foregroundColor(.aicovenTextPrimary)
-                    .padding(Spacing.md)
-                    .background(Color.aicovenGlass)
-                    .cornerRadius(BorderRadius.md)
-                    .autocorrectionDisabled()
-
-                Text("API Key (Optional)")
-                    .font(.aicovenH3)
-                    .foregroundColor(.aicovenTextPrimary)
-
-                SecureField("sk-...", text: $apiKey)
-                    .font(.aicovenBody)
-                    .foregroundColor(.aicovenTextPrimary)
-                    .padding(Spacing.md)
-                    .background(Color.aicovenGlass)
-                    .cornerRadius(BorderRadius.md)
-            }
-        }
-    }
-
-    private var hermesConfigSection: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                Text("API Key")
-                    .font(.aicovenH3)
-                    .foregroundColor(.aicovenTextPrimary)
-
-                SecureField("Required for Together AI", text: $apiKey)
-                    .font(.aicovenBody)
-                    .foregroundColor(.aicovenTextPrimary)
-                    .padding(Spacing.md)
-                    .background(Color.aicovenGlass)
-                    .cornerRadius(BorderRadius.md)
-
-                Text("Server URL (Optional)")
-                    .font(.aicovenH3)
-                    .foregroundColor(.aicovenTextPrimary)
-
-                TextField("Custom self-hosted base URL", text: $baseURL)
-                    .font(.aicovenBody)
-                    .foregroundColor(.aicovenTextPrimary)
-                    .padding(Spacing.md)
-                    .background(Color.aicovenGlass)
-                    .cornerRadius(BorderRadius.md)
-                    .autocorrectionDisabled()
-            }
-        }
-    }
-
-    // MARK: - Ollama config section
-
-    private var ollamaConfigSection: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                Text("Server URL")
-                    .font(.aicovenH3)
-                    .foregroundColor(.aicovenTextPrimary)
-
-                HStack(spacing: Spacing.sm) {
-                    TextField("http://localhost:11434", text: $baseURL)
-                        .font(.aicovenBody)
-                        .foregroundColor(.aicovenTextPrimary)
-                        .padding(Spacing.md)
-                        .background(Color.aicovenGlass)
-                        .cornerRadius(BorderRadius.md)
-                        .autocorrectionDisabled()
-
-                    Button {
-                        Task { await testOllamaConnection() }
-                    } label: {
-                        HStack(spacing: Spacing.xs) {
-                            if isLoadingModels {
-                                ProgressView()
-                                    .scaleEffect(0.7)
-                                    .tint(.aicovenTextPrimary)
-                            }
-                            Text("Connect")
-                        }
-                        .font(.aicovenBodySmall)
-                        .foregroundColor(.aicovenTextPrimary)
-                        .padding(.horizontal, Spacing.md)
-                        .padding(.vertical, Spacing.sm)
-                        .background(Color.aicovenGlass)
-                        .cornerRadius(BorderRadius.md)
-                    }
-                    .disabled(isLoadingModels || baseURL.isEmpty)
-                }
-
-                Text("🏠 Make sure Ollama is running on your machine")
-                    .font(.aicovenCaption)
-                    .foregroundColor(.aicovenTextSecondary)
-            }
-
-            if let result = connectionTestResult {
-                HStack {
-                    Image(systemName: result.success ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                        .foregroundColor(result.success ? .green : .red)
-                    Text(result.message)
-                        .font(.aicovenCaption)
-                        .foregroundColor(result.success ? .green : .red)
-                }
-                .padding(.vertical, Spacing.xs)
-            }
-
-            if !ollamaModels.isEmpty {
-                VStack(alignment: .leading, spacing: Spacing.sm) {
-                    Text("Model")
-                        .font(.aicovenH3)
-                        .foregroundColor(.aicovenTextPrimary)
-
-                    Text("Select a model to use as the default")
-                        .font(.aicovenCaption)
-                        .foregroundColor(.aicovenTextSecondary)
-
-                    ForEach(ollamaModels) { model in
-                        Button {
-                            selectedOllamaModel = model.name
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(model.name)
-                                        .font(.aicovenBody)
-                                        .foregroundColor(.aicovenTextPrimary)
-
-                                    if let size = model.formattedSize {
-                                        Text(size)
-                                            .font(.aicovenCaption)
-                                            .foregroundColor(.aicovenTextTertiary)
-                                    }
-                                }
-                                Spacer()
-                                if selectedOllamaModel == model.name {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundColor(.aicovenTeal)
-                                }
-                            }
-                            .padding(Spacing.sm)
-                            .background(
-                                RoundedRectangle(cornerRadius: BorderRadius.sm)
-                                    .fill(selectedOllamaModel == model.name ? Color.aicovenGlass : Color.clear)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: - MLX config section
-
-    private var mlxConfigSection: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            if !MLXModelManager.isSupported {
-                HStack {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.orange)
-                    Text("MLX requires Apple Silicon (M1 or newer). This Mac is not supported.")
-                        .font(.aicovenCaption)
-                        .foregroundColor(.orange)
-                }
-                .padding(.vertical, Spacing.xs)
-            } else {
-                VStack(alignment: .leading, spacing: Spacing.sm) {
-                    Text("Select a Model")
-                        .font(.aicovenH3)
-                        .foregroundColor(.aicovenTextPrimary)
-
-                    Text("Models run entirely on your device. Downloaded from Hugging Face on first use.")
-                        .font(.aicovenCaption)
-                        .foregroundColor(.aicovenTextSecondary)
-
-                    ForEach(MLXModelManager.defaultCatalog) { model in
-                        Button {
-                            selectedMLXModelID = model.id
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(model.displayName)
-                                        .font(.aicovenBody)
-                                        .foregroundColor(.aicovenTextPrimary)
-
-                                    Text(model.summary)
-                                        .font(.aicovenCaption)
-                                        .foregroundColor(.aicovenTextSecondary)
-                                        .lineLimit(2)
-
-                                    HStack(spacing: Spacing.sm) {
-                                        Label(model.formattedDownloadSize, systemImage: "arrow.down.circle")
-                                        Label("\(model.minRAMGB) GB RAM", systemImage: "memorychip")
-                                        Label(model.quantization, systemImage: "cube")
-                                    }
-                                    .font(.aicovenCaption)
-                                    .foregroundColor(.aicovenTextTertiary)
-                                }
-                                Spacer()
-                                if selectedMLXModelID == model.id {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundColor(.aicovenTeal)
-                                }
-                            }
-                            .padding(Spacing.sm)
-                            .background(
-                                RoundedRectangle(cornerRadius: BorderRadius.sm)
-                                    .fill(selectedMLXModelID == model.id ? Color.aicovenGlass : Color.clear)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-
-                Text("🧠 No server or API key needed — runs natively on Apple Silicon")
-                    .font(.aicovenCaption)
-                    .foregroundColor(.aicovenTextSecondary)
-            }
-        }
-    }
-
-    // MARK: - Helpers
-
-    private var providerDisplayName: String {
-        switch selectedProvider {
-        case "openai": "OpenAI"
-        case "anthropic": "Anthropic Claude"
-        case "google": "Google Gemini"
-        case "openrouter": "OpenRouter"
-        case "ollama": "Ollama (Local)"
-        case "mlx": "MLX (On-Device)"
-        case "openclaw": "OpenClaw"
-        case "hermes": "Hermes"
-        default: selectedProvider.capitalized
-        }
-    }
-
-    func testOllamaConnection() async {
+    private func connectToOllama() async {
         isLoadingModels = true
+        ollamaConnectionFailure = nil
         defer { isLoadingModels = false }
 
         let client = OllamaLLMClient(baseURL: URL(string: baseURL) ?? OllamaLLMClient.defaultBaseURL)
-        let connected = await client.testConnection()
-
-        if connected {
-            do {
-                let models = try await client.discoverModels()
-                ollamaModels = models
-                if let first = models.first { selectedOllamaModel = first.name }
-                connectionTestResult = (true, "Connected! Found \(models.count) model(s).")
-            } catch {
-                connectionTestResult = (false, "Connected but failed to list models: \(error.localizedDescription)")
+        guard await client.testConnection() else {
+            ollamaModels = []
+            ollamaConnectionFailure = "Can't reach \(baseURL). Is Ollama running?"
+            return
+        }
+        do {
+            ollamaModels = try await client.discoverModels()
+            if !ollamaModels.contains(where: { $0.name == selectedOllamaModel }) {
+                selectedOllamaModel = ollamaModels.first?.name ?? ""
             }
-        } else {
-            connectionTestResult = (false, "Cannot connect to \(baseURL). Is Ollama running?")
+            if ollamaModels.isEmpty {
+                ollamaConnectionFailure = "Connected, but this server has no models. Pull one with Ollama first."
+            }
+        } catch {
+            ollamaModels = []
+            ollamaConnectionFailure = "Connected, but couldn't list models: \(error.localizedDescription)"
         }
     }
 
     private func saveProviderKey() async {
         saving = true
+        errorMessage = nil
         defer { saving = false }
 
+        let service = ProviderAccountService.shared
         do {
             if isOllama {
-                let name = displayName.isEmpty ? "My Ollama" : displayName
-                _ = try await ProviderAccountService.shared.createOllamaAccount(
-                    displayName: name,
-                    baseURL: baseURL,
-                    defaultModel: selectedOllamaModel.isEmpty ? nil : selectedOllamaModel
-                )
+                _ = try await service.createOllamaAccount(displayName: trimmedName, baseURL: baseURL, defaultModel: selectedOllamaModel)
             } else if isMLX {
-                let name = displayName.isEmpty ? "My Local LLM" : displayName
-                _ = try await ProviderAccountService.shared.createMLXAccount(
-                    displayName: name,
-                    modelID: selectedMLXModelID
-                )
+                _ = try await service.createMLXAccount(displayName: trimmedName, modelID: selectedMLXModelID)
             } else if isOpenClaw {
-                let name = displayName.isEmpty ? "OpenClaw Server" : displayName
-                _ = try await ProviderAccountService.shared.createOpenClawAccount(
-                    displayName: name,
+                _ = try await service.createOpenClawAccount(
+                    displayName: trimmedName,
                     baseURL: baseURL,
                     apiKey: apiKey.isEmpty ? nil : apiKey,
                     defaultModel: nil
                 )
             } else if isHermes {
-                let name = displayName.isEmpty ? "Hermes Server" : displayName
-                _ = try await ProviderAccountService.shared.createHermesAccount(
-                    displayName: name,
+                _ = try await service.createHermesAccount(
+                    displayName: trimmedName,
                     apiKey: apiKey.isEmpty ? nil : apiKey,
                     baseURL: baseURL.isEmpty ? nil : baseURL,
                     defaultModel: nil
                 )
             } else {
-                _ = try await ProviderAccountService.shared.createProviderAccount(
+                _ = try await service.createProviderAccount(
                     provider: selectedProvider,
-                    displayName: displayName,
+                    displayName: trimmedName,
                     apiKey: apiKey,
                     scopes: ["chat"],
                     defaultModel: nil
                 )
             }
-
             onComplete()
-            dismiss()
-
+            dismissSheet()
         } catch {
             AppErrorReporter.log(error: error, context: "ProviderKeysView.saveProviderKey")
+            errorMessage = "Couldn't add the connection: \(error.localizedDescription)"
         }
     }
 }
 
-/// Edit an existing provider key
+/// Edit an AI connection: its name, its server address where it has one,
+/// and its key, which stays as it is when the field is left empty.
 struct EditProviderKeySheet: View {
     @Environment(\.dismiss) private var dismiss
     let account: ProviderAccount
     let onComplete: () -> Void
 
-    @State private var displayName: String = ""
-    @State private var apiKey: String = ""
-    @State private var baseURL: String = ""
+    @State private var displayName: String
+    @State private var apiKey = ""
+    @State private var baseURL: String
     @State private var saving = false
     @State private var errorMessage: String?
 
-    private var isOllama: Bool {
-        account.provider.lowercased() == "ollama"
+    init(account: ProviderAccount, onComplete: @escaping () -> Void) {
+        self.account = account
+        self.onComplete = onComplete
+        _displayName = State(initialValue: account.displayName)
+        _baseURL = State(initialValue: account.baseURL ?? "")
     }
 
-    private var isMLX: Bool {
-        account.provider.lowercased() == "mlx"
+    private var slug: String {
+        account.provider.lowercased()
     }
 
-    private var isOpenClaw: Bool {
-        account.provider.lowercased() == "openclaw"
+    private var hasAddress: Bool {
+        ["ollama", "openclaw", "hermes"].contains(slug)
     }
 
-    private var isHermes: Bool {
-        account.provider.lowercased() == "hermes"
+    private var hasKey: Bool {
+        !account.isLocalProvider
     }
 
-    private var isLocal: Bool {
-        isOllama || isMLX
+    private var trimmedName: String {
+        displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var addressPrompt: String {
+        switch slug {
+        case "ollama": "http://localhost:11434"
+        case "openclaw": "http://localhost:3000"
+        default: "Together AI"
+        }
     }
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: Spacing.lg) {
-                    // Display name
-                    VStack(alignment: .leading, spacing: Spacing.sm) {
-                        Text("Display Name")
-                            .font(.aicovenH3)
-                            .foregroundColor(.aicovenTextPrimary)
-
-                        TextField("My API Key", text: $displayName)
-                            .font(.aicovenBody)
-                            .foregroundColor(.aicovenTextPrimary)
-                            .padding(Spacing.md)
-                            .background(Color.aicovenGlass)
-                            .cornerRadius(BorderRadius.md)
+            SettingsForm {
+                Section {
+                    HStack(spacing: Spacing.sm) {
+                        ProviderLogoBadge(assetName: providerLogoAssetName(slug: slug), size: 28)
+                        FormTextField(label: "Name", text: $displayName, prompt: "My AI connection")
                     }
-
-                    // API key or Base URL
-                    if isOllama {
-                        VStack(alignment: .leading, spacing: Spacing.sm) {
-                            Text("Server URL")
-                                .font(.aicovenH3)
-                                .foregroundColor(.aicovenTextPrimary)
-
-                            TextField("http://localhost:11434", text: $baseURL)
-                                .font(.aicovenBody)
-                                .foregroundColor(.aicovenTextPrimary)
-                                .padding(Spacing.md)
-                                .background(Color.aicovenGlass)
-                                .cornerRadius(BorderRadius.md)
-                                .autocorrectionDisabled()
-                        }
-                    } else if isOpenClaw || isHermes {
-                        VStack(alignment: .leading, spacing: Spacing.sm) {
-                            Text("API Key")
-                                .font(.aicovenH3)
-                                .foregroundColor(.aicovenTextPrimary)
-
-                            SecureField("Leave blank to keep current key", text: $apiKey)
-                                .font(.aicovenBody)
-                                .foregroundColor(.aicovenTextPrimary)
-                                .padding(Spacing.md)
-                                .background(Color.aicovenGlass)
-                                .cornerRadius(BorderRadius.md)
-
-                            Text("🔒 Leave blank to keep your existing key")
-                                .font(.aicovenCaption)
-                                .foregroundColor(.aicovenTextSecondary)
-
-                            Text("Server URL")
-                                .font(.aicovenH3)
-                                .foregroundColor(.aicovenTextPrimary)
-
-                            TextField(isOpenClaw ? "http://localhost:3000" : "Custom self-hosted base URL", text: $baseURL)
-                                .font(.aicovenBody)
-                                .foregroundColor(.aicovenTextPrimary)
-                                .padding(Spacing.md)
-                                .background(Color.aicovenGlass)
-                                .cornerRadius(BorderRadius.md)
-                                .autocorrectionDisabled()
-                        }
-                    } else if !isMLX {
-                        VStack(alignment: .leading, spacing: Spacing.sm) {
-                            Text("API Key")
-                                .font(.aicovenH3)
-                                .foregroundColor(.aicovenTextPrimary)
-
-                            SecureField("Leave blank to keep current key", text: $apiKey)
-                                .font(.aicovenBody)
-                                .foregroundColor(.aicovenTextPrimary)
-                                .padding(Spacing.md)
-                                .background(Color.aicovenGlass)
-                                .cornerRadius(BorderRadius.md)
-
-                            Text("🔒 Leave blank to keep your existing key")
-                                .font(.aicovenCaption)
-                                .foregroundColor(.aicovenTextSecondary)
-                        }
+                    LabeledContent("Status") {
+                        ProviderAccountStatus(account: account, compact: false)
                     }
-
-                    if let error = errorMessage {
-                        HStack(spacing: Spacing.xs) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.red)
-                            Text(error)
-                                .font(.aicovenCaption)
-                                .foregroundColor(.red)
-                        }
+                    if let model = account.defaultModel {
+                        LabeledContent("Model", value: model)
                     }
-
-                    // Save button
-                    GradientButton(saving ? "Saving..." : "Save Changes", icon: "checkmark.circle.fill", style: .primary) {
-                        Task { await saveChanges() }
-                    }
-                    .disabled(saving || displayName.isEmpty)
+                } footer: {
+                    Text("Test, in the list, checks the connection and sets its status.")
+                        .font(.aicovenBodySmall)
                 }
-                .padding(Spacing.lg)
+
+                if hasAddress {
+                    Section("Server") {
+                        FormAddressField(label: "Address", text: $baseURL, prompt: addressPrompt)
+                    }
+                }
+
+                if hasKey {
+                    Section {
+                        SecureFieldWithPaste(label: "API key", prompt: "Unchanged", text: $apiKey)
+                    } footer: {
+                        Text("Leave it empty to keep the current key.")
+                            .font(.aicovenBodySmall)
+                    }
+                }
+
+                if let errorMessage {
+                    Section { FormErrorRow(message: errorMessage) }
+                }
             }
-            .background(NebulaBackground().ignoresSafeArea())
-            .navigationTitle("Edit Provider Key")
+            .navigationTitle(providerDisplayName(slug: slug))
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        Task { await saveChanges() }
+                    }
+                    .disabled(saving || trimmedName.isEmpty)
+                }
             }
         }
-        .onAppear {
-            displayName = account.displayName
-            baseURL = account.baseURL ?? (isOpenClaw ? "http://localhost:3000" : "")
-        }
+        .aiConnectionSheet()
     }
 
     private func saveChanges() async {
@@ -1145,14 +730,15 @@ struct EditProviderKeySheet: View {
         do {
             try await ProviderAccountService.shared.updateProviderAccount(
                 id: account.id,
-                displayName: displayName,
+                displayName: trimmedName,
                 apiKey: apiKey.isEmpty ? nil : apiKey,
-                baseURL: (isOllama || isOpenClaw || isHermes) ? baseURL : nil
+                baseURL: hasAddress ? baseURL : nil
             )
             onComplete()
             dismiss()
         } catch {
-            errorMessage = "Failed to save: \(error.localizedDescription)"
+            AppErrorReporter.log(error: error, context: "ProviderKeysView.saveChanges")
+            errorMessage = "Couldn't save: \(error.localizedDescription)"
         }
     }
 }
@@ -1266,19 +852,6 @@ struct SecondaryButtonStyle: ButtonStyle {
         configuration.label
             .font(.aicovenBodySmall)
             .foregroundColor(.aicovenTextPrimary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, Spacing.sm)
-            .background(Color.aicovenGlass)
-            .cornerRadius(BorderRadius.md)
-            .opacity(configuration.isPressed ? 0.7 : 1.0)
-    }
-}
-
-struct DangerButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.aicovenBodySmall)
-            .foregroundColor(.red)
             .frame(maxWidth: .infinity)
             .padding(.vertical, Spacing.sm)
             .background(Color.aicovenGlass)

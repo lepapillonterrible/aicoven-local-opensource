@@ -406,6 +406,44 @@ actor ProviderAccountService {
         }
     }
 
+    /// Tests an account against its provider and records the outcome as the
+    /// account's status. It reads the models the account can use; for
+    /// OpenRouter, whose model list is public, it first asks whether the key
+    /// is accepted. Returns the number of models, and throws what failed.
+    @discardableResult
+    func testConnection(accountId: String) async throws -> Int {
+        guard let account = try loadLocalAccounts().first(where: { $0.id == accountId }) else {
+            throw LocalProviderAccountError.accountNotFound
+        }
+        let outcome: Result<Int, Error>
+        do {
+            if account.provider.lowercased() == "openrouter" {
+                try await checkOpenRouterKey(accountId: accountId)
+            }
+            outcome = try await .success(fetchRemoteModels(for: account).count)
+        } catch {
+            outcome = .failure(error)
+        }
+        // Read again: the account may have been edited or deleted while the
+        // provider answered.
+        var locals = try loadLocalAccounts()
+        if let index = locals.firstIndex(where: { $0.id == accountId }) {
+            let current = locals[index]
+            locals[index] = LocalProviderAccount(
+                id: current.id,
+                provider: current.provider,
+                displayName: current.displayName,
+                scopes: current.scopes,
+                defaultModel: current.defaultModel,
+                baseURL: current.baseURL,
+                status: (try? outcome.get()) == nil ? "unhealthy" : "healthy",
+                createdAt: current.createdAt
+            )
+            try saveLocalAccounts(locals)
+        }
+        return try outcome.get()
+    }
+
     /// Run initialization for a provider account. In the local-only client we
     /// simply return static model metadata without performing network calls.
     @discardableResult

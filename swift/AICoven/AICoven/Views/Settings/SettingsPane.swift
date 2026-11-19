@@ -16,7 +16,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         rawValue
     }
 
-    var title: String {
+    nonisolated var title: String {
         switch self {
         case .aiConnections: "AI connections"
         case .connectedApps: "Connected apps"
@@ -31,7 +31,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
 
     /// The Mac Settings window's tab label: short, so every tab fits the
     /// toolbar.
-    var tabTitle: String {
+    nonisolated var tabTitle: String {
         switch self {
         case .aiConnections: "AI"
         case .connectedApps: "Apps"
@@ -46,7 +46,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
 
     /// The pane's name where this device lists it: the tab on the Mac, the
     /// row on the iPad and iPhone. Text that sends someone to a pane uses it.
-    var listedTitle: String {
+    nonisolated var listedTitle: String {
         #if os(macOS)
         tabTitle
         #else
