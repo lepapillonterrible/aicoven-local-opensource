@@ -127,7 +127,7 @@ This keeps the conversation history readable while still giving the model access
 
 The same `ToolService` instance is available to the autonomous `AgentRunner`.
 
-- Agents can call web search, attachment analysis, and file/image generation helpers as part of their planning/execution loop.
+- Agents can call web search, attachment analysis, and file generation helpers as part of their planning/execution loop. Agent runs are not offered `image.generate`: only a chat turn gives an image to its reply.
 - Each use of a tool is recorded in the `agent_steps` table along with any intermediate reasoning the model exposes.
 - The step limit (`max_steps`) is enforced regardless of tool usage, so tools cannot cause unbounded execution.
 
