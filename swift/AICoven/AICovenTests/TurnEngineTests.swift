@@ -130,6 +130,8 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertEqual(statuses?.contains("running"), false)
     }
 
+    /// Async, as is every test that makes an engine: a main-actor object
+    /// released outside a task crashes on macOS 15 (see issue #61).
     func testTextOfAFailedSend_isKeptForItsThreadAndGivenBackOnce() {
         let engine = makeEngine()
 
