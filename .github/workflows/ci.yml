@@ -56,8 +56,16 @@ jobs:
           xcodebuild -version
           swift --version
 
-      - name: Install SwiftLint
-        run: brew install swiftlint
+      - name: Install SwiftLint 0.63.2
+        run: |
+          # Pinned for the same reason as SwiftFormat below: a newer version
+          # adds rules that fail files no change touched.
+          curl -fsSL -o "$RUNNER_TEMP/swiftlint.zip" \
+            https://github.com/realm/SwiftLint/releases/download/0.63.2/portable_swiftlint.zip
+          echo "c59a405c85f95b92ced677a500804e081596a4cae4a6a485af76065557d6ed29  $RUNNER_TEMP/swiftlint.zip" | shasum -a 256 -c -
+          unzip -o -q "$RUNNER_TEMP/swiftlint.zip" -d "$RUNNER_TEMP/swiftlint"
+          chmod +x "$RUNNER_TEMP/swiftlint/swiftlint"
+          echo "$RUNNER_TEMP/swiftlint" >> "$GITHUB_PATH"
 
       - name: Install SwiftFormat 0.61.1
         run: |
@@ -84,7 +92,9 @@ jobs:
           }
 
       - name: Run SwiftLint
-        run: swiftlint --strict
+        run: |
+          swiftlint version
+          swiftlint --strict
 
       - name: Create placeholder GoogleService-Info.plist
         run: |
