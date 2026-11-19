@@ -708,6 +708,22 @@ final class MCPClientTests: XCTestCase {
             XCTAssertFalse(message.contains("kkkk"), "No part of the token is left by the cut")
         }
 
+        // A result type of 60 characters is quoted whole, and no more of a longer one.
+        let sixty = String(repeating: "r", count: 60)
+        let long = modernServer(call: .result(#"{"resultType":"\#(sixty)more"}"#))
+        do {
+            _ = try await client(long, eras: eras, token: token, auth: .bearer).callTool(name: "get_weather", arguments: [:])
+            XCTFail("Not a result type")
+        } catch {
+            XCTAssertEqual(error as? MCPClientError, .invalidResponse("result type \(sixty)"))
+        }
+
+        // A token with a slash in it, said back in structured content.
+        let slashed = "abc/def+ghi/jkl=="
+        let structured = modernServer(call: .result(#"{"resultType":"complete","structuredContent":{"sent":"\#(slashed)"}}"#))
+        let said = try await client(structured, eras: eras, token: slashed, auth: .bearer).callTool(name: "get_weather", arguments: [:])
+        XCTAssertEqual(said.map(\.shown), [#"{"sent":"[token]"}"#])
+
         let kinded = modernServer(call: .result(#"{"resultType":"complete","content":[{"type":"\#(String(repeating: "t", count: 50) + token)"}]}"#))
         let pieces = try await client(kinded, eras: eras, token: token, auth: .bearer).callTool(name: "get_weather", arguments: [:])
         XCTAssertFalse(pieces.map(\.shown).joined().contains("kkkk"))

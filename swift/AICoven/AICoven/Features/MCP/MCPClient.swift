@@ -171,7 +171,7 @@ actor MCPClient {
         var content = response.content.map { MCPContentItem(type: String(withoutToken($0.type).prefix(Self.mostOfAKind)), text: $0.text.map(withoutToken)) }
         // A tool that answers only with structured content is still read.
         if !content.contains(where: { $0.text?.isEmpty == false }), let structured = response.structuredContent,
-           let data = try? JSONSerialization.data(withJSONObject: Self.plain(structured), options: [.fragmentsAllowed, .sortedKeys]) {
+           let data = try? JSONSerialization.data(withJSONObject: Self.plain(structured), options: [.fragmentsAllowed, .sortedKeys, .withoutEscapingSlashes]) {
             content.append(MCPContentItem(type: "text", text: withoutToken(String(decoding: data, as: UTF8.self))))
         }
         if response.isError == true {
@@ -204,9 +204,11 @@ actor MCPClient {
         }
         authorize(&request)
         // In a task of its own: a turn that was stopped still ends the
-        // session it had, which a cancelled task would not send.
+        // session it had, which a cancelled task would not send. A
+        // stopped turn does not wait for the server's answer to it.
         let session = session
-        await Task.detached { _ = try? await session.data(for: request) }.value
+        let ending = Task.detached { _ = try? await session.data(for: request) }
+        if !Task.isCancelled { await ending.value }
     }
 
     // MARK: - Requests
@@ -355,6 +357,14 @@ actor MCPClient {
         }
     }
 
+    /// What is said of an invalid answer, with no more of the server's own
+    /// words than `mostOfAKind` characters: the odd result type it gave.
+    private static func cut(_ what: String) -> String {
+        let said = "result type "
+        guard what.hasPrefix(said) else { return String(what.prefix(mostOfAKind)) }
+        return said + what.dropFirst(said.count).prefix(mostOfAKind)
+    }
+
     /// `text` without this connection's token, should a server say it back.
     private func withoutToken(_ text: String) -> String {
         guard let token, token.count >= 8 else { return text }
@@ -368,7 +378,7 @@ actor MCPClient {
     private func withoutToken(_ error: MCPClientError) -> MCPClientError {
         switch error {
         case let .serverError(code, message): .serverError(code: code, message: String(withoutToken(message).prefix(Self.mostOfAMessage)))
-        case let .invalidResponse(what): .invalidResponse(String(withoutToken(what).prefix(Self.mostOfAKind)))
+        case let .invalidResponse(what): .invalidResponse(Self.cut(withoutToken(what)))
         case let .unsupportedVersion(supported): .unsupportedVersion(supported: supported.prefix(6).map { String(withoutToken($0).prefix(Self.mostOfAKind)) })
         case let .toolFailed(what): .toolFailed(withoutToken(what))
         case .invalidURL, .notReached, .refused, .oldTransport, .needsInput, .tooLarge: error
