@@ -150,6 +150,8 @@ final class TurnEngineTests: XCTestCase {
         await provider.called()
 
         engine.stop(threadID: threadID)
+        // A second press changes nothing.
+        engine.stop(threadID: threadID)
         XCTAssertEqual(engine.running[threadID]?.isStopping, true)
         XCTAssertEqual(engine.running[threadID]?.message, TurnProgress.stoppingMessage)
         await finished(engine)
@@ -381,25 +383,35 @@ final class TurnEngineTests: XCTestCase {
     }
 }
 
-/// A provider that streams the parts it is given and then nothing more;
-/// when its consumer is cancelled the stream ends without an error.
+/// A provider that streams the parts it is given and then nothing more,
+/// until its consumer is cancelled; the stream then ends without an error.
+/// It says its parts are read when the consumer asks for the one after.
 private final class StreamingProvider: StreamingLLMClient, @unchecked Sendable {
-    private let parts: [LLMStreamDelta]
-    /// Fulfilled once, from the stream's task; XCTestExpectation is safe to
-    /// fulfil from any thread.
-    private let sent: XCTestExpectation
+    // The consumer asks for one part at a time, so nothing here is touched
+    // from two places at once; the lock is for the compiler's sake too.
+    private let lock = NSLock()
+    private var remaining: [LLMStreamDelta]
+    /// XCTestExpectation is safe to fulfil from any thread.
+    private let read: XCTestExpectation
 
-    init(parts: [LLMStreamDelta], sent: XCTestExpectation) {
-        self.parts = parts
-        self.sent = sent
+    init(parts: [LLMStreamDelta], sent read: XCTestExpectation) {
+        remaining = parts
+        self.read = read
     }
 
     func streamChat(messages _: [LLMMessage], model _: String, options _: ChatOptions) -> AsyncThrowingStream<LLMStreamDelta, Error> {
-        AsyncThrowingStream { continuation in
-            continuation.onTermination = { _ in continuation.finish() }
-            parts.forEach { continuation.yield($0) }
-            sent.fulfill()
-        }
+        AsyncThrowingStream(unfolding: { [self] in
+            if let next = lock.withLock({ remaining.isEmpty ? nil : remaining.removeFirst() }) {
+                return next
+            }
+            // Every part has been read. Nothing more comes until the
+            // consumer is cancelled, and then the stream just ends.
+            read.fulfill()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+            return nil
+        })
     }
 
     func completeChat(messages _: [LLMMessage], model: String, options _: ChatOptions) async throws -> LLMChatResponse {

@@ -62,6 +62,9 @@ final class TurnEngine: ObservableObject {
 
     /// The task running each thread's reply, which Stop cancels.
     private var replies: [String: Task<Error?, Never>] = [:]
+    /// Threads whose reply has ended and whose ending is being stored: too
+    /// late to stop.
+    private var settling: Set<String> = []
     /// The text of a send that failed after its thread had left the screen,
     /// and why, by thread id: given back when the thread is next opened.
     private var unsent: [String: (text: String, reason: String)] = [:]
@@ -107,7 +110,7 @@ final class TurnEngine: ObservableObject {
     /// step that cannot be cancelled runs to its end, and no further step is
     /// taken. If the reply arrives first, the turn ends with it.
     func stop(threadID: String) {
-        guard running[threadID]?.isStopping == false else { return }
+        guard running[threadID]?.isStopping == false, !settling.contains(threadID) else { return }
         running[threadID]?.isStopping = true
         running[threadID]?.message = TurnProgress.stoppingMessage
         replies[threadID]?.cancel()
@@ -210,11 +213,9 @@ final class TurnEngine: ObservableObject {
         }
         let thrown = await reply.value
         replies[threadID] = nil
+        settling.insert(threadID)
+        defer { settling.remove(threadID) }
         let ending = progress.ending(in: threadID, thrown: thrown, stopped: running[threadID]?.isStopping == true)
-        if ending.outcome == .cancelled {
-            // Once, when the turn has in fact stopped.
-            AccessibilityNotification.Announcement("Stopped").post()
-        }
 
         do {
             guard try await store.endTurn(id: turnID, outcome: ending.outcome, message: ending.message) else {
@@ -236,6 +237,10 @@ final class TurnEngine: ObservableObject {
             endings[threadID] = Ending(turnID: turnID, outcome: ending.outcome, messages: [ending.message, notice], stored: false)
         }
         running[threadID] = nil
+        if ending.outcome == .cancelled {
+            // Once, when the turn has in fact stopped and Stop is gone.
+            AccessibilityNotification.Announcement("Stopped").post()
+        }
         if ending.outcome == .completed {
             await chat.updateThreadSummary(threadId: threadID)
         }

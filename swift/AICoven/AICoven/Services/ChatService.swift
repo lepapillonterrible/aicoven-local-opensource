@@ -994,7 +994,10 @@ actor ChatService {
 
                 // Track error with a low-cardinality code; avoid logging full
                 // user-visible error text into analytics.
-                AnalyticsService.shared.trackMessageError(threadId: threadId, errorType: errorCode)
+                // A stopped turn is not a provider error.
+                if !Task.isCancelled {
+                    AnalyticsService.shared.trackMessageError(threadId: threadId, errorType: errorCode)
+                }
 
                 state.phase = .finalizing
                 state.status = .failed
@@ -1149,7 +1152,10 @@ actor ChatService {
 
                 // Track error with a low-cardinality code; avoid logging full
                 // user-visible error text into analytics.
-                AnalyticsService.shared.trackMessageError(threadId: threadId, errorType: errorCode)
+                // A stopped turn is not a provider error.
+                if !Task.isCancelled {
+                    AnalyticsService.shared.trackMessageError(threadId: threadId, errorType: errorCode)
+                }
 
                 state.phase = .finalizing
                 state.status = .failed
