@@ -91,6 +91,156 @@ final class CovenConnectionsTests: XCTestCase {
         XCTAssertEqual(nothing.servers, [])
     }
 
+    // MARK: - The Connections screen
+
+    func testAChange_startsFromWhatIsThere_andWhatIsTurnedOnStartsOnRead() {
+        let living = CovenConnections.everything(apps: ["github", "google_drive"], mcpServers: ["a", "b"])
+        XCTAssertEqual(living, CovenConnections(apps: ["github": .readWrite, "google_drive": .readWrite], mcpServers: ["a": .readWrite, "b": .readWrite]))
+
+        let withoutGoogle = living.turning(app: "google_drive", on: false)
+        XCTAssertEqual(withoutGoogle.apps, ["github": .readWrite], "The others stay as they were")
+        XCTAssertEqual(withoutGoogle.turning(app: "google_drive", on: true).apps["google_drive"], .readOnly, "Turned on, it starts on Read")
+        XCTAssertEqual(living.turning(app: "github", on: true), living, "One already on keeps what it has")
+        XCTAssertEqual(living.setting(app: "github", to: .readOnly).apps["github"], .readOnly)
+        XCTAssertEqual(withoutGoogle.setting(app: "google_drive", to: .readWrite), withoutGoogle, "Nothing changes for one that is off")
+
+        let withoutB = living.turning(mcpServer: "b", on: false)
+        XCTAssertEqual(withoutB.mcpServers, ["a": .readWrite])
+        XCTAssertEqual(withoutB.turning(mcpServer: "b", on: true).mcpServers["b"], .readOnly)
+        XCTAssertEqual(living.setting(mcpServer: "a", to: .readOnly).mcpServers["a"], .readOnly)
+        XCTAssertEqual(withoutB.setting(mcpServer: "b", to: .readWrite), withoutB)
+
+        XCTAssertEqual(CovenConnections.Access.allCases.map(\.label), ["Read", "Read and make changes"])
+    }
+
+    /// What the screen is given in place of the app's stores.
+    private final class World: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: CovenConnections?
+        private var saves: [CovenConnections] = []
+        private var failsToSave = false
+        private var failsToLoad = false
+
+        init(stored: CovenConnections?) {
+            self.stored = stored
+        }
+
+        var saved: [CovenConnections] {
+            lock.withLock { saves }
+        }
+
+        func failSaving(_ fails: Bool) {
+            lock.withLock { failsToSave = fails }
+        }
+
+        func failLoading(_ fails: Bool) {
+            lock.withLock { failsToLoad = fails }
+        }
+
+        var sources: CovenConnectionsModel.Sources {
+            CovenConnectionsModel.Sources(
+                choice: { [self] _ in
+                    try lock.withLock {
+                        if failsToLoad { throw CovenRepositoryError.settingsUnreadable }
+                        return stored
+                    }
+                },
+                apps: {
+                    [
+                        .init(id: "github", name: "GitHub", account: "octocat"),
+                        .init(id: "google_drive", name: "Google Drive", account: nil),
+                    ]
+                },
+                servers: {
+                    [
+                        .init(id: "a", name: "Notes", line: "2 tools", cannotConnect: false, marksReadOnlyTools: true),
+                        .init(id: "b", name: "Mail", line: "Can't connect. Test it in Settings.", cannotConnect: true, marksReadOnlyTools: false),
+                    ]
+                },
+                save: { [self] choice, _ in
+                    try lock.withLock {
+                        if failsToSave { throw CovenRepositoryError.settingsUnreadable }
+                        stored = choice
+                        saves.append(choice)
+                    }
+                }
+            )
+        }
+    }
+
+    @MainActor
+    func testACovenThatHasMadeNoChoice_showsWhatItWasUsing_andItsFirstChangeKeepsTheRest() async {
+        let world = World(stored: nil)
+        let model = CovenConnectionsModel(covenID: "coven", sources: world.sources)
+        XCTAssertFalse(model.isLoaded)
+
+        await model.load()
+
+        XCTAssertTrue(model.isLoaded)
+        XCTAssertTrue(model.keptFromBefore)
+        XCTAssertEqual(model.access(ofApp: "github"), .readWrite, "What it was already using")
+        XCTAssertNil(model.access(ofApp: "google_drive"), "An app with no account connected is not on")
+        XCTAssertEqual(model.access(ofServer: "a"), .readWrite)
+        XCTAssertEqual(model.access(ofServer: "b"), .readWrite)
+        XCTAssertEqual(world.saved, [], "Looking changes nothing")
+
+        await model.setServer("b", on: false)
+
+        XCTAssertEqual(world.saved, [CovenConnections(apps: ["github": .readWrite], mcpServers: ["a": .readWrite])], "Its first change keeps the rest as it was")
+        XCTAssertFalse(model.keptFromBefore)
+        XCTAssertNil(model.access(ofServer: "b"))
+
+        await model.setServer("b", on: true)
+        XCTAssertEqual(model.access(ofServer: "b"), .readOnly, "Turned on, it starts on Read")
+        await model.setServer("b", access: .readWrite)
+        await model.setApp("github", access: .readOnly)
+        await model.setApp("github", access: .readOnly)
+        XCTAssertEqual(world.saved.count, 4, "Choosing what is already chosen saves nothing")
+        XCTAssertEqual(world.saved.last, CovenConnections(apps: ["github": .readOnly], mcpServers: ["a": .readWrite, "b": .readWrite]))
+        XCTAssertEqual(model.saving, [])
+    }
+
+    @MainActor
+    func testAChangeThatCannotBeSaved_isTakenBackAndSaidSo_andAChoiceThatCannotBeReadIsNotShownAsNothing() async {
+        let world = World(stored: CovenConnections(apps: ["github": .readOnly]))
+        let model = CovenConnectionsModel(covenID: "coven", sources: world.sources)
+        await model.load()
+        XCTAssertFalse(model.keptFromBefore)
+        XCTAssertNil(model.access(ofServer: "a"), "A choice that was made is shown as made")
+
+        world.failSaving(true)
+        await model.setApp("github", on: false)
+        XCTAssertEqual(model.access(ofApp: "github"), .readOnly, "As it was")
+        XCTAssertEqual(model.errorMessage, "That change could not be saved.")
+        XCTAssertEqual(world.saved, [])
+        XCTAssertEqual(model.saving, [])
+
+        world.failLoading(true)
+        await model.load()
+        XCTAssertFalse(model.isLoaded)
+        XCTAssertTrue(model.loadFailed)
+        await model.setApp("github", on: false)
+        XCTAssertEqual(world.saved, [], "Nothing is changed from a screen that shows nothing")
+
+        world.failLoading(false)
+        world.failSaving(false)
+        await model.load()
+        XCTAssertTrue(model.isLoaded)
+        XCTAssertFalse(model.loadFailed)
+    }
+
+    func testAServersRow_saysItsToolsOrThatItCannotConnect() {
+        let listed = server("s", tools: [("look", true), ("change", false)])
+        XCTAssertEqual(CovenConnectionsModel.Server(account: listed).line, "2 tools")
+        XCTAssertTrue(CovenConnectionsModel.Server(account: listed).marksReadOnlyTools)
+        XCTAssertEqual(CovenConnectionsModel.Server(account: server("one", tools: [("change", false)])).line, "1 tool")
+        XCTAssertFalse(CovenConnectionsModel.Server(account: server("one", tools: [("change", false)])).marksReadOnlyTools)
+        var broken = server("down", tools: [])
+        broken.status = .error
+        XCTAssertEqual(CovenConnectionsModel.Server(account: broken).line, "Can't connect. Test it in Settings.")
+        XCTAssertTrue(CovenConnectionsModel.Server(account: broken).cannotConnect)
+    }
+
     // MARK: - Kept with the coven
 
     func testAChoice_isKeptAsItWasMade_andWhatIsNotAnAccessIsNoGrant() throws {
@@ -135,8 +285,17 @@ final class CovenConnectionsTests: XCTestCase {
 
         let ofPersonal = await CovenService.shared.connections(forThread: personal)
         XCTAssertNil(ofPersonal, "A personal thread is in no coven")
+        let whenNew = await CovenService.shared.connections(forThread: inCoven)
+        XCTAssertEqual(whenNew, CovenConnections(), "A new coven starts with nothing on")
+        XCTAssertEqual(coven.settings?.connections, CovenConnections())
+
+        // A coven made before there was a choice has none stored, and
+        // uses everything connected, as before.
+        let found = await MainActor.run { DatabaseManager.shared.dbQueue }
+        let queue = try XCTUnwrap(found)
+        try await queue.write { db in try db.execute(sql: "UPDATE covens SET settings = NULL WHERE id = ?", arguments: [coven.id]) }
         let beforeAChoice = await CovenService.shared.connections(forThread: inCoven)
-        XCTAssertNil(beforeAChoice, "A coven that has made no choice uses everything connected, as before")
+        XCTAssertNil(beforeAChoice)
 
         let choice = CovenConnections(apps: ["github": .readOnly], mcpServers: ["server-1": .readWrite])
         try await CovenService.shared.setConnections(choice, forCoven: coven.id)

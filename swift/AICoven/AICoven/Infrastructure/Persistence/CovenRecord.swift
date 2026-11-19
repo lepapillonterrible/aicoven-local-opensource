@@ -202,12 +202,17 @@ actor CovenRepository {
         let now = Date()
         let id = UUID().uuidString
         let uid = await UserScope.currentUserID
-        let record = CovenRecord(
+        // A new coven starts with none of the person's connections on:
+        // its agents use only what is turned on in its Connections. (A
+        // coven made before there was a choice has none stored, and keeps
+        // using everything until one is made for it.)
+        let settings = CovenSettings(connections: CovenConnections())
+        let record = try CovenRecord(
             id: id,
             name: name,
             description: description,
             avatar: avatar,
-            settings: nil,
+            settings: String(data: JSONEncoder().encode(settings), encoding: .utf8),
             userId: uid,
             createdAt: now,
             updatedAt: now
@@ -222,7 +227,7 @@ actor CovenRepository {
             name: name,
             description: description,
             avatar: avatar,
-            settings: nil,
+            settings: settings,
             createdAt: now,
             updatedAt: now
         )
