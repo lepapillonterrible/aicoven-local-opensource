@@ -50,6 +50,8 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertEqual(ended?.status, "completed")
         XCTAssertEqual(ended?.messageID, messages.last?.id)
         XCTAssertNil(engine.running[threadID])
+        XCTAssertEqual(engine.endings[threadID]?.messages, [messages[1]])
+        XCTAssertEqual(engine.endings[threadID]?.stored, true)
     }
 
     func testATurn_thatFailsStoresWhatWentWrongAndIsRecordedAsFailed() async throws {
@@ -82,6 +84,29 @@ final class TurnEngineTests: XCTestCase {
         await finished(engine)
         let messages = try await ChatService.shared.loadMessages(threadId: threadID)
         XCTAssertEqual(messages.filter { $0.role == "user" }.map(\.content), ["First"])
+    }
+
+    func testAReplyThatCannotBeStored_isStillShownWithWhyItWillNotLast() async throws {
+        let engine = makeEngine()
+        _ = try await engine.start(threadID: threadID, text: "Hello", context: "Hello", roleID: nil, agentName: nil, attachments: nil)
+        // Locked while the turn runs: however it ends, its ending cannot be
+        // encrypted.
+        await DataEncryptionService.shared.lock()
+        provider.release()
+        await finished(engine)
+
+        let ending = try XCTUnwrap(engine.endings[threadID])
+        XCTAssertFalse(ending.stored)
+        XCTAssertEqual(ending.messages.count, 2)
+        XCTAssertFalse(ending.messages[0].content.isEmpty)
+        XCTAssertTrue(ending.messages[1].content.hasPrefix("AICoven couldn't save this reply"))
+
+        // The engine still holds this ending, so opening the thread adds no
+        // line about a reply that was not saved; the turn stays as it is.
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        await engine.settleInterruptedTurns(threadID: threadID)
+        let turn = try await storedTurn()
+        XCTAssertEqual(turn?.status, "running")
     }
 
     // MARK: - A turn the app closed on
@@ -150,11 +175,14 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertEqual(ending.message.metadata?["thoughts"], AnyJSONValue(["Reading the question Reading the results"]))
     }
 
-    func testProgress_endsAsFailedWhenTheServiceThrowsOrNeverFinishes() {
+    func testProgress_endsAsFailedWhenTheServiceThrowsOrReportsAFailure() {
         var progress = TurnProgress(agentName: nil)
         progress.note(TurnState(scratchpad: "Thinking", phase: .planning))
+        progress.note(TurnState(answer: "Error: no model", status: .failed, phase: .finalizing))
 
-        XCTAssertEqual(progress.ending(in: "t", thrown: nil).outcome, .failed)
+        let reported = progress.ending(in: "t", thrown: nil)
+        XCTAssertEqual(reported.outcome, .failed)
+        XCTAssertEqual(reported.message.content, "Error: no model")
         let thrown = progress.ending(in: "t", thrown: NSError(domain: "x", code: 1, userInfo: [NSLocalizedDescriptionKey: "No network"]))
         XCTAssertEqual(thrown.outcome, .failed)
         XCTAssertTrue(thrown.message.content.contains("No network"))

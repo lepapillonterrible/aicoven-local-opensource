@@ -7,8 +7,8 @@ import Foundation
 ///
 /// A turn is recorded when it starts, with the person's message, and when it
 /// ends, with the reply or what went wrong. A turn still recorded as running
-/// that this engine is not running was cut off by the app closing; opening
-/// its thread says so in the thread.
+/// that this engine is not running has no stored ending: the app closed on
+/// it, or its ending could not be stored. Opening its thread says so there.
 @MainActor
 final class TurnEngine: ObservableObject {
     static let shared = TurnEngine(chat: .shared)
@@ -27,8 +27,21 @@ final class TurnEngine: ObservableObject {
         }
     }
 
+    /// How a thread's last turn ended, for the thread to show.
+    struct Ending: Equatable {
+        let turnID: String
+        /// The reply or what went wrong, followed, if that could not be
+        /// stored, by a line saying so.
+        let messages: [ChatMessage]
+        let stored: Bool
+    }
+
     /// The turn running in each thread, by thread id.
     @Published private(set) var running: [String: Activity] = [:]
+    /// The ending of the last turn this engine ran in each thread, by
+    /// thread id. A thread shows it from here, so the reply appears where
+    /// its turn ended whether or not it could be stored.
+    @Published private(set) var endings: [String: Ending] = [:]
 
     private let chat: ChatService
     private let store = ThreadRepository.shared
@@ -67,11 +80,13 @@ final class TurnEngine: ObservableObject {
         return userMessage
     }
 
-    /// Ends any turn in the thread that is recorded as running but is not:
-    /// the app closed while it ran. The thread gets a line saying so.
+    /// Ends any turn in the thread that is recorded as running but is not,
+    /// and whose ending this engine does not hold: the thread gets a line
+    /// saying its reply was not saved.
     func settleInterruptedTurns(threadID: String) async {
         do {
-            for turnID in try await store.runningTurnIDs(threadID: threadID) where running[threadID]?.turnID != turnID {
+            for turnID in try await store.runningTurnIDs(threadID: threadID)
+                where running[threadID]?.turnID != turnID && endings[threadID]?.turnID != turnID {
                 try await store.endTurn(
                     id: turnID,
                     outcome: .interrupted,
@@ -121,9 +136,18 @@ final class TurnEngine: ObservableObject {
 
         do {
             try await store.endTurn(id: turnID, outcome: ending.outcome, message: ending.message)
+            endings[threadID] = Ending(turnID: turnID, messages: [ending.message], stored: true)
         } catch {
-            // Left recorded as running, so its thread says it was cut off.
+            // The reply exists and the thread shows it, with why it will not
+            // be there later. The turn stays recorded as running, and a
+            // later launch says its reply was not saved.
             AppErrorReporter.log(error: error, context: "TurnEngine.endTurn")
+            let notice = TurnProgress.message(
+                in: threadID,
+                role: "assistant",
+                content: "AICoven couldn't save this reply, so it will be gone when the app closes: \(error.localizedDescription)"
+            )
+            endings[threadID] = Ending(turnID: turnID, messages: [ending.message, notice], stored: false)
         }
         running[threadID] = nil
         if ending.outcome == .completed {
@@ -136,7 +160,7 @@ final class TurnEngine: ObservableObject {
 /// it runs and the message it ends with.
 struct TurnProgress {
     static let startingMessage = "Thinking through your request…"
-    static let interruptedNotice = "This reply was cut off because AICoven closed before it finished. Send your message again to get an answer."
+    static let interruptedNotice = "This reply was not saved: AICoven closed, or could not store it, before it was finished. Send your message again to get an answer."
 
     let agentName: String?
     /// The loader's line.
@@ -176,11 +200,11 @@ struct TurnProgress {
             let text = "I ran into an error while contacting your provider: \(thrown.localizedDescription)"
             return (.failed, Self.message(in: threadID, role: "assistant", content: text))
         }
-        guard let last, last.phase == .finalizing else {
-            return (.failed, Self.message(in: threadID, role: "assistant", content: "The reply ended without an answer. Send your message again."))
-        }
-        guard last.status != .failed else {
-            return (.failed, Self.message(in: threadID, role: "assistant", content: last.answer))
+        // The chat service's last report is its outcome: the answer, or what
+        // went wrong.
+        let answer = last?.answer ?? ""
+        guard last?.status != .failed else {
+            return (.failed, Self.message(in: threadID, role: "assistant", content: answer))
         }
 
         var metadata: [String: AnyJSONValue] = [:]
@@ -191,7 +215,7 @@ struct TurnProgress {
         if let agentName {
             metadata["role_name"] = AnyJSONValue(agentName)
         }
-        let content = MessageAdapter.sanitizeContentForDisplay(last.answer)
+        let content = MessageAdapter.sanitizeContentForDisplay(answer)
         return (.completed, Self.message(in: threadID, role: "assistant", content: content, metadata: metadata))
     }
 

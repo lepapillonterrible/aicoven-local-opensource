@@ -400,15 +400,17 @@ struct PersonalChatView: View {
                         }
                     }
                 }
-                .onChange(of: runningTurn?.turnID) { ended, started in
+                .onChange(of: runningTurn?.turnID) { _, started in
                     if started != nil {
                         withAnimation {
                             proxy.scrollTo("thinking-indicator", anchor: .bottom)
                         }
-                    } else if ended != nil {
-                        // The engine stored how the turn ended.
-                        Task { await loadNewMessages() }
                     }
+                }
+                // A turn ended here: its ending goes at the end of the
+                // thread at once, before anything else can be sent.
+                .onChange(of: turns.endings[thread.id]) { _, _ in
+                    showLastEnding()
                 }
                 .onAppear {
                     if let lastMessage = enhancedMessages.last {
@@ -467,6 +469,7 @@ struct PersonalChatView: View {
 
             await TurnEngine.shared.settleInterruptedTurns(threadID: thread.id)
             await loadInitialMessages()
+            showLastEnding()
             await loadProviderKeys()
         }
         .onReceive(NotificationCenter.default.publisher(for: .providerKeysUpdated)) { _ in
@@ -622,16 +625,13 @@ struct PersonalChatView: View {
         }
     }
 
-    /// Adds the messages stored since the newest one shown, such as the
-    /// reply a turn ended with.
-    private func loadNewMessages() async {
-        do {
-            let newest = try await ChatService.shared.loadMessages(threadId: thread.id, limit: pageSize, before: nil)
-            let shown = Set(messages.map(\.id))
-            messages.append(contentsOf: newest.filter { !shown.contains($0.id) })
-        } catch {
-            AppErrorReporter.log(error: error, context: "PersonalContentView.loadNewMessages")
-        }
+    /// Shows how the last turn in this thread ended, if it is not shown
+    /// yet. A stored ending is also among the loaded messages; one that
+    /// could not be stored is only here.
+    private func showLastEnding() {
+        guard let ending = turns.endings[thread.id] else { return }
+        let shown = Set(messages.map(\.id))
+        messages.append(contentsOf: ending.messages.filter { !shown.contains($0.id) })
     }
 
     /// Split the outgoing composer text into a user-visible question and
