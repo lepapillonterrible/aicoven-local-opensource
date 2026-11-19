@@ -39,7 +39,14 @@ nonisolated struct HermesTurn {
             try await follow(runID, &following, report)
         } onCancel: {
             // The run is Hermes's own: it goes on unless it is told to stop.
-            Task { try? await client.stop(runID) }
+            Task {
+                do {
+                    try await client.stop(runID)
+                } catch {
+                    // The turn has stopped here; the run may not have there.
+                    AppErrorReporter.log(error: error, context: "HermesTurn.stop")
+                }
+            }
         }
     }
 
@@ -81,8 +88,8 @@ nonisolated struct HermesTurn {
                 case .cancelled:
                     return stopped(&following, report)
                 case let .waitingForApproval(request):
-                    guard try await answer(request, of: runID, &following) else {
-                        return fail(&following, saying: Self.answerNotTaken, report)
+                    if let problem = try await answer(request, of: runID, &following) {
+                        return fail(&following, saying: problem, report)
                     }
                 case .running:
                     following.approvalPending = false
@@ -134,8 +141,8 @@ nonisolated struct HermesTurn {
             following.state.phase = .tooling
             following.state.toolsCompleted.append(call)
         case let .approvalRequested(request):
-            guard try await answer(request, of: runID, &following) else {
-                fail(&following, saying: Self.answerNotTaken, report)
+            if let problem = try await answer(request, of: runID, &following) {
+                fail(&following, saying: problem, report)
                 return true
             }
             return false
@@ -159,14 +166,15 @@ nonisolated struct HermesTurn {
 
     /// Asks the person about what Hermes is waiting to be allowed, once,
     /// and gives Hermes the answer. Where the person cannot be asked, or
-    /// the command is too long to show them whole, the answer is no. False
-    /// when Hermes did not take the answer: it is then still waiting, and
-    /// the request counts as answered only once it has.
-    private func answer(_ request: HermesApprovalRequest, of runID: String, _ following: inout Following) async throws -> Bool {
+    /// the command is too long to show them whole, the answer is no. Nil
+    /// once Hermes has taken the answer, and only then does the request
+    /// count as answered; otherwise what to say went wrong: Hermes would
+    /// not take it, or could not be reached to find out.
+    private func answer(_ request: HermesApprovalRequest, of runID: String, _ following: inout Following) async throws -> String? {
         if let id = request.id {
-            guard !following.approvalsAnswered.contains(id) else { return true }
+            guard !following.approvalsAnswered.contains(id) else { return nil }
         } else if following.approvalPending, let last = following.lastAnswered, request.isSame(as: last) {
-            return true
+            return nil
         }
         let approve: Bool
         if request.isTooLongToShow {
@@ -178,41 +186,48 @@ nonisolated struct HermesTurn {
             case .withdrawn: throw CancellationError()
             }
         }
-        var tries = 0
+        var sends = 0
         while true {
+            sends += 1
             do {
                 try await client.answerApproval(of: runID, approve: approve)
-                return answered(request, &following)
+                answered(request, &following)
+                return nil
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
                 try Task.checkCancellation()
             }
+            guard sends < triesToAnswer else { return Self.answerNotTaken }
             // The answer may have been taken though this app never heard
             // so, and the run gone on to ask for something else. An answer
             // names no request, so it is sent again only once Hermes says
             // it is still waiting on this one.
+            var failedLooks = 0
             while true {
-                tries += 1
-                guard tries < triesToAnswer else { return false }
                 try await Task.sleep(for: lookAgainAfter)
-                guard let standing = try? await client.state(of: runID) else { continue }
+                guard let standing = try? await client.state(of: runID) else {
+                    try Task.checkCancellation()
+                    failedLooks += 1
+                    guard failedLooks < looksBeforeGivingUp else { return Self.lostContact }
+                    continue
+                }
                 if case let .waitingForApproval(waitingOn) = standing.status, waitingOn.isSame(as: request) {
                     break
                 }
-                return answered(request, &following)
+                answered(request, &following)
+                return nil
             }
         }
     }
 
     /// Hermes has taken the answer to this request: it is not asked again.
-    private func answered(_ request: HermesApprovalRequest, _ following: inout Following) -> Bool {
+    private func answered(_ request: HermesApprovalRequest, _ following: inout Following) {
         if let id = request.id {
             following.approvalsAnswered.insert(id)
         }
         following.approvalPending = true
         following.lastAnswered = request
-        return true
     }
 
     /// Hermes says the run was stopped there, not by this turn: the turn

@@ -332,6 +332,19 @@ final class HermesAgentTests: XCTestCase {
         XCTAssertEqual(HermesStub.requests.count(where: { $0.path.hasSuffix("/approval") }), 3)
     }
 
+    func testWhenHermesCannotBeReachedAfterAnAnswerFailed_theAnswerIsNotSentBlindAndTheTurnSaysContactWasLost() async throws {
+        HermesStub.answer("GET", events, with: (200, stream(#"{"event":"approval.request","command":"git push"}"#)))
+        HermesStub.answer("POST", "/v1/runs/run_1/approval", with: (503, ""))
+        HermesStub.answer("GET", "/v1/runs/run_1", with: (503, ""))
+        let reports = Reports()
+
+        try await turn { _ in .approved }.run(input: "Push", history: [], report: reports.add)
+
+        XCTAssertEqual(reports.all.last?.answer, HermesTurn.lostContact)
+        XCTAssertEqual(HermesStub.requests.count(where: { $0.path.hasSuffix("/approval") }), 1, "Not sent again without knowing what Hermes is waiting on")
+        XCTAssertEqual(HermesStub.requests.count(where: { $0.path == "/v1/runs/run_1" }), 3, "As many looks as the turn is given")
+    }
+
     func testAnAnswerWhoseReplyWasLost_isNotSentAgainOnceTheRunHasMovedOn() async throws {
         // Hermes took the answer, but this app never heard so; by the time
         // it looks, the run is waiting on something else.
@@ -498,6 +511,20 @@ final class HermesAgentTests: XCTestCase {
         XCTAssertEqual(HermesAgentClient.event(from: ["event": "run.completed"]), .completed(output: nil))
         XCTAssertNil(HermesAgentClient.event(from: ["event": "run.status", "status": "queued"]))
         XCTAssertNil(HermesAgentClient.event(from: ["something": "else"]))
+        // A run that has ended has ended, whatever its last event was.
+        XCTAssertEqual(
+            HermesAgentClient.state(from: ["status": "completed", "last_event": "approval.request", "output": "Done."]).status,
+            .completed(output: "Done.")
+        )
+        XCTAssertEqual(
+            HermesAgentClient.state(from: ["status": "running", "last_event": "approval.request", "command": "ls"]).status,
+            .waitingForApproval(HermesApprovalRequest(command: "ls"))
+        )
+        let long = String(repeating: "d", count: 2005)
+        XCTAssertEqual(
+            HermesAgentClient.approvalRequest(from: ["description": long]).description,
+            String(repeating: "d", count: 2000) + "\n… and 5 more characters"
+        )
 
         let nested: [String: Any] = ["event": "approval.request", "payload": ["request": ["tool_call": ["name": "terminal", "arguments": ["cmd": "ls"]]]]]
         XCTAssertEqual(

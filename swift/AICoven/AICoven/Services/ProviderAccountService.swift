@@ -535,6 +535,10 @@ actor ProviderAccountService {
         for account in locals {
             let providerID = account.provider.lowercased()
             if providerID == "openai_compatible", account.id != compatibleServerID { continue }
+            // A Hermes agent has no models for the router to choose among,
+            // and is not asked for any here: this runs before every turn,
+            // and an agent that is switched off would hold each one up.
+            if providerID == "hermes" { continue }
             let metadata: [ProviderInitializationStatus.ModelMetadata]
             do {
                 metadata = try await fetchRemoteModels(for: account)
@@ -661,9 +665,6 @@ actor ProviderAccountService {
 // MARK: - ProviderAccountService Private Helpers
 
 extension ProviderAccountService {
-    /// The OpenAI-compatible server chat reaches: the first connected, with
-    /// its own key. Both come from the same connection, so one server's key
-    /// is never sent to another.
     /// The Hermes agent the app runs Hermes turns with: the first one
     /// connected.
     static func hermesAgent() -> HermesAgentClient? {
@@ -675,6 +676,9 @@ extension ProviderAccountService {
         return HermesAgentClient(baseURL: baseURL, apiKey: key?.isEmpty == false ? key : nil)
     }
 
+    /// The OpenAI-compatible server chat reaches: the first connected, with
+    /// its own key. Both come from the same connection, so one server's key
+    /// is never sent to another.
     static func openAICompatibleServer() -> (baseURL: URL, apiKey: String?)? {
         guard let account = loadLocalAccountsFromDefaults().first(where: { $0.provider.lowercased() == "openai_compatible" }),
               let baseURL = account.baseURL.flatMap(URL.init(string:)), baseURL.host != nil else {

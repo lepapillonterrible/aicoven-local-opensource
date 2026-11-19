@@ -192,14 +192,14 @@ nonisolated struct HermesAgentClient {
     static func state(from raw: [String: Any]) -> HermesRunState {
         let status = (raw["status"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let lastEvent = (raw["last_event"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if status == "waiting_for_approval" || lastEvent == "approval.request" {
-            return HermesRunState(status: .waitingForApproval(approvalRequest(from: raw)))
-        }
+        // A run that has ended has ended, whatever its last event was.
         switch status {
         case "completed": return HermesRunState(status: .completed(output: output(of: raw)))
         case "failed": return HermesRunState(status: .failed)
         case "cancelled": return HermesRunState(status: .cancelled)
-        default: return HermesRunState(status: .running)
+        case "waiting_for_approval": return HermesRunState(status: .waitingForApproval(approvalRequest(from: raw)))
+        default:
+            return HermesRunState(status: lastEvent == "approval.request" ? .waitingForApproval(approvalRequest(from: raw)) : .running)
         }
     }
 
@@ -248,7 +248,7 @@ nonisolated struct HermesAgentClient {
             id: id,
             command: command.flatMap { $0.count <= longestCommandShown ? $0 : nil },
             isTooLongToShow: (command?.count ?? 0) > longestCommandShown,
-            description: description.map { $0.count > 2000 ? "\($0.prefix(2000))…" : $0 },
+            description: description.map { $0.count > 2000 ? "\($0.prefix(2000))\n… and \($0.count - 2000) more characters" : $0 },
             tool: first(["tool_name", "tool", "name", "toolName"], limit: 160)
         )
     }
