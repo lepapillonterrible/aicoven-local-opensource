@@ -28,6 +28,8 @@ nonisolated enum AttachmentContext {
     ) async -> String {
         var parts: [String] = []
         for attachment in attachments {
+            // A turn that was stopped is not read for.
+            guard !Task.isCancelled else { break }
             let name = plainName(attachment.name)
             do {
                 let data = try await read(attachment)
