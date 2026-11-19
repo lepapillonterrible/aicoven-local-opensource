@@ -320,7 +320,8 @@ actor ProviderAccountService {
             displayName: displayName ?? old.displayName,
             scopes: old.scopes,
             defaultModel: defaultModel ?? old.defaultModel,
-            baseURL: baseURL ?? old.baseURL,
+            // An empty address clears it, and the provider's own applies again.
+            baseURL: baseURL.map { $0.isEmpty ? nil : $0 } ?? old.baseURL,
             status: old.status,
             createdAt: old.createdAt
         )
@@ -404,6 +405,49 @@ actor ProviderAccountService {
                 userInfo: [NSLocalizedDescriptionKey: "OpenRouter key check HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."]
             )
         }
+    }
+
+    /// Tests an account against its provider and records the outcome as the
+    /// account's status. It reads the models the account can use; for
+    /// OpenRouter, whose model list is public, it first asks whether the key
+    /// is accepted. Returns the number of models, and throws what failed.
+    @discardableResult
+    func testConnection(accountId: String) async throws -> Int {
+        guard let account = try loadLocalAccounts().first(where: { $0.id == accountId }) else {
+            throw LocalProviderAccountError.accountNotFound
+        }
+        let testedKey = KeychainHelper.load(key: keychainKey(for: accountId))
+        let outcome: Result<Int, Error>
+        do {
+            if account.provider.lowercased() == "openrouter" {
+                try await checkOpenRouterKey(accountId: accountId)
+            }
+            outcome = try await .success(fetchRemoteModels(for: account).count)
+        } catch {
+            outcome = .failure(error)
+        }
+        // Read again: the account may have been edited or deleted while the
+        // provider answered. The outcome is about the address and key that
+        // were tested, so it is recorded only if they are still the ones
+        // stored.
+        var locals = try loadLocalAccounts()
+        if let index = locals.firstIndex(where: { $0.id == accountId }),
+           locals[index].baseURL == account.baseURL,
+           KeychainHelper.load(key: keychainKey(for: accountId)) == testedKey {
+            let current = locals[index]
+            locals[index] = LocalProviderAccount(
+                id: current.id,
+                provider: current.provider,
+                displayName: current.displayName,
+                scopes: current.scopes,
+                defaultModel: current.defaultModel,
+                baseURL: current.baseURL,
+                status: (try? outcome.get()) == nil ? "unhealthy" : "healthy",
+                createdAt: current.createdAt
+            )
+            try saveLocalAccounts(locals)
+        }
+        return try outcome.get()
     }
 
     /// Run initialization for a provider account. In the local-only client we
@@ -650,15 +694,13 @@ extension ProviderAccountService {
     private func updateProviderConfigCache(provider: String, baseURL: String? = nil) {
         let defaults = UserDefaults.standard
         clearLegacyAPIKeyCache(provider: provider)
-        switch provider.lowercased() {
-        case "ollama":
-            if let baseURL { defaults.set(baseURL, forKey: UserScope.scopedKey("ollama_base_url")) }
-        case "openclaw":
-            if let baseURL { defaults.set(baseURL, forKey: UserScope.scopedKey("openclaw_base_url")) }
-        case "hermes":
-            if let baseURL { defaults.set(baseURL, forKey: UserScope.scopedKey("hermes_base_url")) }
-        default:
-            break
+        guard let baseURL, ["ollama", "openclaw", "hermes"].contains(provider.lowercased()) else { return }
+        let key = UserScope.scopedKey("\(provider.lowercased())_base_url")
+        // An empty address is no address, as it is in the stored account.
+        if baseURL.isEmpty {
+            defaults.removeObject(forKey: key)
+        } else {
+            defaults.set(baseURL, forKey: key)
         }
     }
 
