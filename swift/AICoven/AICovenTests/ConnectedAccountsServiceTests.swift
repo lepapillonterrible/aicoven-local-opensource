@@ -1,6 +1,25 @@
 @testable import AICoven
 import XCTest
 
+/// Tokens kept in memory in place of the Keychain, by service and key.
+/// Sendable by hand: `kept` is read and written under `lock`.
+final class InMemoryTokens: @unchecked Sendable {
+    private let lock = NSLock()
+    private var kept: [String: [String: String]] = [:]
+
+    var all: [String: [String: String]] {
+        lock.withLock { kept }
+    }
+
+    var store: ConnectedAccountsService.TokenStore {
+        ConnectedAccountsService.TokenStore(
+            save: { [self] key, value, service in lock.withLock { kept[service, default: [:]][key] = value } },
+            load: { [self] key, service in lock.withLock { kept[service]?[key] } },
+            delete: { [self] key, service in lock.withLock { kept[service]?[key] = nil } }
+        )
+    }
+}
+
 final class ConnectedAccountsServiceTests: XCTestCase {
     /// Who is signed in, as the test says. Sendable by hand: `id` is read
     /// and written under `lock`.
@@ -31,25 +50,6 @@ final class ConnectedAccountsServiceTests: XCTestCase {
         }
     }
 
-    /// Tokens kept in memory in place of the Keychain, by service and key.
-    /// Sendable by hand: `kept` is read and written under `lock`.
-    private final class Tokens: @unchecked Sendable {
-        private let lock = NSLock()
-        private var kept: [String: [String: String]] = [:]
-
-        var all: [String: [String: String]] {
-            lock.withLock { kept }
-        }
-
-        var store: ConnectedAccountsService.TokenStore {
-            ConnectedAccountsService.TokenStore(
-                save: { [self] key, value, service in lock.withLock { kept[service, default: [:]][key] = value } },
-                load: { [self] key, service in lock.withLock { kept[service]?[key] } },
-                delete: { [self] key, service in lock.withLock { kept[service]?[key] = nil } }
-            )
-        }
-    }
-
     private func defaultsOfThisTest() throws -> (UserDefaults, String) {
         let suite = "ConnectedAccountsServiceTests.\(UUID().uuidString)"
         return try (XCTUnwrap(UserDefaults(suiteName: suite)), suite)
@@ -59,7 +59,7 @@ final class ConnectedAccountsServiceTests: XCTestCase {
         let (defaults, suite) = try defaultsOfThisTest()
         defer { defaults.removePersistentDomain(forName: suite) }
         let who = Who("a")
-        let tokens = Tokens()
+        let tokens = InMemoryTokens()
         let service = ConnectedAccountsService(currentUser: { who.id }, defaults: defaults, tokens: tokens.store)
 
         let ofA = try await service.createMCPServer(name: "A's notes", serverUrl: "https://a.example/mcp", transport: .streamableHttp, authType: .bearer, token: "token-of-a")
@@ -84,7 +84,7 @@ final class ConnectedAccountsServiceTests: XCTestCase {
         let (defaults, suite) = try defaultsOfThisTest()
         defer { defaults.removePersistentDomain(forName: suite) }
         let who = Who("a")
-        let tokens = Tokens()
+        let tokens = InMemoryTokens()
         // B signs in the moment the service has asked who is signed in.
         let service = ConnectedAccountsService(currentUser: { who.idAndThenSignIn("b") }, defaults: defaults, tokens: tokens.store)
 
@@ -109,7 +109,7 @@ final class ConnectedAccountsServiceTests: XCTestCase {
         let (defaults, suite) = try defaultsOfThisTest()
         defer { defaults.removePersistentDomain(forName: suite) }
         let who = Who("a")
-        let service = ConnectedAccountsService(currentUser: { who.id }, defaults: defaults, tokens: Tokens().store)
+        let service = ConnectedAccountsService(currentUser: { who.id }, defaults: defaults, tokens: InMemoryTokens().store)
 
         let ofA = try await service.createMCPServer(name: "A's notes", serverUrl: "https://a.example/mcp", transport: .streamableHttp, authType: .none)
         var servers = await service.getAllMCPServers()
@@ -130,7 +130,7 @@ final class ConnectedAccountsServiceTests: XCTestCase {
         XCTAssertEqual(servers.map(\.id), [ofA.id], "B's server was not kept as A's")
 
         // What was kept is each account's own.
-        let afterwards = ConnectedAccountsService(currentUser: { "b" }, defaults: defaults, tokens: Tokens().store)
+        let afterwards = ConnectedAccountsService(currentUser: { "b" }, defaults: defaults, tokens: InMemoryTokens().store)
         servers = await afterwards.getAllMCPServers()
         XCTAssertEqual(servers.map(\.id), [ofB.id])
         let accounts = await afterwards.getAllAccounts()
