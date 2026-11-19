@@ -255,6 +255,11 @@ nonisolated struct LocalProviderDiscoveryService {
             break
         }
         value = value.components(separatedBy: CharacterSet(charactersIn: "/?#"))[0]
+        // A name and password before the host are never part of the address:
+        // it is saved outside the Keychain.
+        if let at = value.lastIndex(of: "@") {
+            value = String(value[value.index(after: at)...])
+        }
         guard !value.isEmpty, !value.contains(" ") else { return nil }
 
         if value.hasPrefix("[") {

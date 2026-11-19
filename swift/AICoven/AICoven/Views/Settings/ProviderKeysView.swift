@@ -913,7 +913,10 @@ private struct AddProviderKeyStep2View: View {
             } else if isCompatibleServer {
                 // Saved as the address requests go to, whatever form it was
                 // typed in. Connect listed models from it, so it is one.
-                guard let server = LocalProviderDiscoveryService.serverBaseURL(from: baseURL) else { return }
+                guard let server = LocalProviderDiscoveryService.serverBaseURL(from: baseURL) else {
+                    errorMessage = "Enter the server's address, such as http://127.0.0.1:1234."
+                    return
+                }
                 _ = try await service.createOpenAICompatibleAccount(
                     displayName: displayName,
                     baseURL: server.absoluteString,

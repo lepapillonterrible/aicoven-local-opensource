@@ -94,6 +94,9 @@ final class OpenAICompatibleServerTests: XCTestCase {
         XCTAssertNil(address("somewhere"))
         XCTAssertNil(address("http://localhost:70000"))
         XCTAssertEqual(address("https://name:secret@models.example.com:8443/v1"), "https://models.example.com:8443")
+        XCTAssertEqual(address("name@127.0.0.1:1234"), "http://127.0.0.1:1234")
+        XCTAssertEqual(address("name:secret@127.0.0.1:1234"), "http://127.0.0.1:1234")
+        XCTAssertEqual(address("http://name:secret@127.0.0.1:1234"), "http://127.0.0.1:1234")
     }
 
     func testProbe_followsARedirectOnlyWithinTheServerItAsked() {
