@@ -487,6 +487,240 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertTrue(thrown.message.content.contains("No network"))
     }
 
+    // MARK: - Messages sent while a reply runs
+
+    private func waiting(_ text: String, attachments: [FileAttachmentDetail] = []) -> TurnEngine.WaitingMessage {
+        TurnEngine.WaitingMessage(text: text, userText: text, context: text, roleID: nil, agentName: "Strix", attachments: attachments)
+    }
+
+    /// Waits until the thread has no turn running and nothing waiting.
+    private func settled(_ engine: TurnEngine) async {
+        let threadID = threadID
+        let done = expectation(description: "Nothing runs and nothing waits")
+        done.assertForOverFulfill = false
+        let watching = engine.$running.combineLatest(engine.$waiting).sink { running, waiting in
+            if running[threadID] == nil, waiting[threadID] == nil { done.fulfill() }
+        }
+        await fulfillment(of: [done], timeout: 10)
+        watching.cancel()
+    }
+
+    func testAMessageSentWhileAReplyRuns_waitsAndGoesWhenTheReplyCompletes() async throws {
+        let engine = makeEngine()
+        XCTAssertFalse(engine.enqueue(waiting("Too early"), threadID: threadID), "With no reply running it is sent now, not kept")
+        XCTAssertNil(engine.waiting[threadID])
+
+        try await engine.start(with: question("First"), context: "First", roleID: nil, agentName: "Strix", attachments: nil)
+        XCTAssertTrue(engine.enqueue(waiting("Second"), threadID: threadID))
+        XCTAssertTrue(engine.enqueue(waiting("Third"), threadID: threadID))
+        XCTAssertEqual(engine.waiting[threadID]?.map(\.text), ["Second", "Third"])
+        let stored = try await ChatService.shared.loadMessages(threadId: threadID)
+        XCTAssertEqual(stored.map(\.content), ["First"], "A waiting message is not in the thread yet")
+
+        provider.release()
+        await settled(engine)
+
+        let messages = try await ChatService.shared.loadMessages(threadId: threadID)
+        XCTAssertEqual(messages.map(\.role), ["user", "assistant", "user", "assistant", "user", "assistant"])
+        XCTAssertEqual(messages.filter { $0.role == "user" }.map(\.content), ["First", "Second", "Third"], "Each goes in the order it was sent, after the reply it waited for")
+        // A thread on screen shows what the engine added, all of it and in
+        // order, however its updates fall: each reply, and each waiting
+        // message as it was stored.
+        let added = try XCTUnwrap(engine.additions[threadID])
+        XCTAssertEqual(added.map(\.message), Array(messages.dropFirst()))
+        XCTAssertEqual(added.map(\.sequence), added.map(\.sequence).sorted())
+        XCTAssertEqual(added.map { $0.trace != nil }, [true, false, true, false, true], "A reply comes with the work behind it")
+        XCTAssertNil(engine.starting[threadID])
+        XCTAssertNil(engine.returned[threadID])
+        XCTAssertNil(engine.notSent[threadID])
+    }
+
+    func testAfterAStop_nothingWaitingIsSentAndItGoesBackToTheComposer() async throws {
+        let engine = makeEngine()
+        let file = FileAttachmentDetail(id: "a", name: "notes.txt", mimeType: "text/plain", sizeBytes: 3, width: nil, height: nil, url: nil)
+        try await engine.start(with: question("First"), context: "First", roleID: nil, agentName: "Strix", attachments: nil)
+        XCTAssertTrue(engine.enqueue(waiting("Second", attachments: [file]), threadID: threadID))
+        XCTAssertTrue(engine.enqueue(waiting("Third"), threadID: threadID))
+        await provider.called()
+
+        engine.stop(threadID: threadID)
+        await settled(engine)
+
+        XCTAssertEqual(engine.returned[threadID], ComposerDraft(text: "Second\n\nThird", attachments: [file]))
+        let messages = try await ChatService.shared.loadMessages(threadId: threadID)
+        XCTAssertEqual(messages.filter { $0.role == "user" }.map(\.content), ["First"])
+        XCTAssertEqual(engine.takeReturned(threadID: threadID)?.text, "Second\n\nThird")
+        XCTAssertNil(engine.takeReturned(threadID: threadID), "Taken once")
+    }
+
+    func testAfterAReplyThatFails_nothingWaitingIsSent() async throws {
+        let engine = makeEngine()
+        provider.fail(with: "The provider is down")
+        try await engine.start(with: question("First"), context: "First", roleID: nil, agentName: "Strix", attachments: nil)
+        XCTAssertTrue(engine.enqueue(waiting("Second"), threadID: threadID))
+
+        provider.release()
+        await settled(engine)
+
+        XCTAssertEqual(engine.endings[threadID]?.outcome, .failed)
+        XCTAssertEqual(engine.returned[threadID]?.text, "Second")
+        let messages = try await ChatService.shared.loadMessages(threadId: threadID)
+        XCTAssertEqual(messages.filter { $0.role == "user" }.map(\.content), ["First"])
+    }
+
+    func testAReplyThatArrivedInFullAfterStopWasPressed_isNotAGoAheadForWhatWaits() async throws {
+        let wholeAnswer = expectation(description: "The whole answer has arrived")
+        let engine = makeEngine(provider: StreamingProvider(
+            parts: [LLMStreamDelta(text: "Dragons are large."), LLMStreamDelta(text: "", isFinished: true)],
+            sent: wholeAnswer
+        ))
+        try await engine.start(with: question("Tell me about dragons"), context: "Tell me about dragons", roleID: nil, agentName: nil, attachments: nil)
+        XCTAssertTrue(engine.enqueue(waiting("And wyverns?"), threadID: threadID))
+        await fulfillment(of: [wholeAnswer], timeout: 10)
+
+        engine.stop(threadID: threadID)
+        await settled(engine)
+
+        XCTAssertEqual(engine.endings[threadID]?.outcome, .completed, "The reply that arrived in full is kept as the reply")
+        XCTAssertEqual(engine.returned[threadID]?.text, "And wyverns?", "The person meant to stop: nothing more is sent")
+        let messages = try await ChatService.shared.loadMessages(threadId: threadID)
+        XCTAssertEqual(messages.map(\.role), ["user", "assistant"])
+    }
+
+    func testAWaitingMessage_canBeRemovedOrTakenBackToBeEdited() async throws {
+        let engine = makeEngine()
+        try await engine.start(with: question("First"), context: "First", roleID: nil, agentName: "Strix", attachments: nil)
+        let second = waiting("Second")
+        let third = waiting("Third")
+        let fourth = waiting("Fourth")
+        for message in [second, third, fourth] {
+            XCTAssertTrue(engine.enqueue(message, threadID: threadID))
+        }
+
+        engine.removeWaiting(second.id, threadID: threadID)
+        XCTAssertEqual(engine.waiting[threadID]?.map(\.text), ["Third", "Fourth"])
+        XCTAssertNil(engine.returned[threadID], "Removed is gone, not handed back")
+
+        engine.editWaiting(fourth.id, threadID: threadID)
+        XCTAssertEqual(engine.waiting[threadID]?.map(\.text), ["Third"])
+        XCTAssertEqual(engine.returned[threadID]?.text, "Fourth")
+        engine.editWaiting("no-such-message", threadID: threadID)
+        XCTAssertEqual(engine.waiting[threadID]?.map(\.text), ["Third"])
+
+        // What is handed back before the composer takes it adds up, in order.
+        engine.editWaiting(third.id, threadID: threadID)
+        XCTAssertNil(engine.waiting[threadID])
+        XCTAssertEqual(engine.returned[threadID]?.text, "Fourth\n\nThird")
+
+        provider.release()
+        await settled(engine)
+        let messages = try await ChatService.shared.loadMessages(threadId: threadID)
+        XCTAssertEqual(messages.filter { $0.role == "user" }.map(\.content), ["First"], "Nothing taken out of the queue was sent")
+    }
+
+    func testAWaitingMessageThatCannotBeSent_goesBackToTheComposerWithWhatWaitedBehindItAndSaysWhy() async throws {
+        let engine = makeEngine()
+        try await engine.start(with: question("First"), context: "First", roleID: nil, agentName: "Strix", attachments: nil)
+        XCTAssertTrue(engine.enqueue(waiting("Second"), threadID: threadID))
+        XCTAssertTrue(engine.enqueue(waiting("Third"), threadID: threadID))
+        await provider.called()
+        // The thread goes while the turn runs: the reply arrives, but
+        // nothing more can be stored there, so nothing new can start.
+        try await ThreadService.shared.deleteThread(threadId: threadID)
+        provider.release()
+        await settled(engine)
+
+        XCTAssertEqual(engine.endings[threadID]?.outcome, .completed)
+        XCTAssertEqual(engine.returned[threadID]?.text, "Second\n\nThird")
+        XCTAssertEqual(engine.notSent[threadID]?.hasPrefix("Your waiting message could not be sent: "), true)
+        XCTAssertEqual(engine.additions[threadID]?.count, 2, "The reply and the line saying it could not be saved; no waiting message")
+
+        // The next message sent there takes back what the composer said.
+        XCTAssertFalse(engine.enqueue(waiting("Again"), threadID: threadID))
+        try? await engine.start(with: question("Again"), context: "Again", roleID: nil, agentName: nil, attachments: nil)
+        XCTAssertNil(engine.notSent[threadID])
+    }
+
+    func testAWaitingMessageWhoseTurnIsBeingStarted_canNoLongerBeEditedOrRemoved() async throws {
+        let engine = makeEngine()
+        try await engine.start(with: question("First"), context: "First", roleID: nil, agentName: "Strix", attachments: nil)
+        let second = waiting("Second")
+        XCTAssertTrue(engine.enqueue(second, threadID: threadID))
+        let threadID = threadID
+        // As soon as it is on its way, both are tried.
+        let tried = expectation(description: "Edit and Remove were tried while it was being sent")
+        tried.assertForOverFulfill = false
+        let watching = engine.$starting.sink { starting in
+            guard starting[threadID] == second.id else { return }
+            Task { @MainActor in
+                engine.removeWaiting(second.id, threadID: threadID)
+                engine.editWaiting(second.id, threadID: threadID)
+                tried.fulfill()
+            }
+        }
+
+        provider.release()
+        await fulfillment(of: [tried], timeout: 10)
+        await settled(engine)
+        watching.cancel()
+
+        let messages = try await ChatService.shared.loadMessages(threadId: threadID)
+        XCTAssertEqual(messages.filter { $0.role == "user" }.map(\.content), ["First", "Second"], "It was sent, once")
+        XCTAssertNil(engine.returned[threadID], "And not handed back as well")
+    }
+
+    func testMessagesSetToWaitForATurnThatCouldNotBeStarted_goBackToTheComposer() async throws {
+        let engine = makeEngine()
+        // Locked: the message cannot be stored, so the turn cannot start.
+        await DataEncryptionService.shared.lock()
+        let threadID = threadID
+        // The turn shows as running from the moment it is asked for:
+        // another window on the thread can send while it is being stored.
+        // Sent here as soon as it shows, before the storing can have
+        // failed: the main actor takes this up when the start first waits.
+        let second = waiting("Second")
+        let enqueued = expectation(description: "A second message was sent while the first was being started")
+        enqueued.assertForOverFulfill = false
+        let watching = engine.$running.sink { running in
+            guard running[threadID] != nil else { return }
+            Task { @MainActor in
+                XCTAssertTrue(engine.enqueue(second, threadID: threadID))
+                enqueued.fulfill()
+            }
+        }
+
+        do {
+            try await engine.start(with: question("First"), context: "First", roleID: nil, agentName: "Strix", attachments: nil)
+            XCTFail("The turn cannot start while its message cannot be stored")
+        } catch {}
+        await fulfillment(of: [enqueued], timeout: 10)
+        watching.cancel()
+
+        XCTAssertNil(engine.running[threadID])
+        XCTAssertNil(engine.waiting[threadID], "Nothing is left waiting for a turn that never started")
+        XCTAssertEqual(engine.returned[threadID]?.text, "Second")
+        XCTAssertEqual(engine.notSent[threadID]?.hasPrefix("Your waiting message could not be sent: "), true)
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+    }
+
+    func testTheEnginesAdditionsToAThread_areNumberedInOrderAndTheLastFewKept() async throws {
+        let engine = makeEngine()
+        provider.release()
+        let turns = TurnEngine.additionsKept + 3
+        for number in 1 ... turns {
+            try await engine.start(with: question("Question \(number)"), context: "Question \(number)", roleID: nil, agentName: nil, attachments: nil)
+            await finished(engine)
+        }
+
+        // One reply a turn: the first three are no longer kept, and the
+        // numbers say so to a thread that has not taken them in.
+        let added = try XCTUnwrap(engine.additions[threadID])
+        XCTAssertEqual(added.map(\.sequence), Array(4 ... turns))
+        XCTAssertEqual(added.count, TurnEngine.additionsKept)
+        // Numbered in each thread on its own.
+        XCTAssertNil(engine.additions["another-thread"])
+    }
+
     // MARK: - Helpers
 
     private func question(_ text: String) -> ChatMessage {
