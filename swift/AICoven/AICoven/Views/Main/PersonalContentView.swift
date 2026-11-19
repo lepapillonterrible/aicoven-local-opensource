@@ -451,34 +451,17 @@ struct PersonalChatView: View {
 
             GradientDivider()
 
-            // Message composer
-            EnhancedMessageComposer(
+            // The field stays open while a turn runs; what is typed then
+            // is sent once the turn has ended.
+            MessageComposer(
                 messageText: $messageText,
-                onSend: { attachments in
-                    Task { @MainActor in
-                        await sendMessage(attachments: attachments)
-                    }
-                },
-                onErrorMessage: { errorText in
-                    let errorMessage = ChatMessage(
-                        id: UUID().uuidString,
-                        threadId: thread.id,
-                        role: "assistant",
-                        content: errorText,
-                        metadata: nil,
-                        tokenUsage: nil,
-                        createdAt: Date(),
-                        isEncrypted: false,
-                        keyFingerprint: nil
-                    )
-                    messages.append(errorMessage)
-                    Task {
-                        await ChatService.shared.addLocalMessage(errorMessage)
-                    }
-                },
-                isDisabled: runningTurn != nil,
+                onSend: { attachments in await sendMessage(attachments: attachments) },
+                onStop: { turns.stop(threadID: thread.id) },
+                isAgentRunning: runningTurn != nil,
+                isStopping: runningTurn?.isStopping == true,
                 threadId: thread.id,
-                autoFocus: true
+                autoFocus: true,
+                recipientName: thread.agentName ?? "Strix"
             )
             .padding(Spacing.md)
         }
@@ -646,10 +629,12 @@ struct PersonalChatView: View {
 
     /// Send a message with optional file attachments to the LLM.
     /// Attachments are read from disk and their contents are injected into the context.
+    /// True once the turn has started; false if nothing was sent, with the
+    /// text back in the composer or kept for its thread.
     @MainActor
-    private func sendMessage(attachments: [FileAttachmentDetail]) async {
+    private func sendMessage(attachments: [FileAttachmentDetail]) async -> Bool {
         let raw = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !raw.isEmpty else { return }
+        guard !raw.isEmpty else { return false }
 
         // Split the outgoing content into the visible user question and any
         // tool-generated context blocks (web search results, attachment analysis).
@@ -677,11 +662,13 @@ struct PersonalChatView: View {
             // it is not, the text is kept for when the thread is opened.
             guard shownThreadID == userMessage.threadId else {
                 TurnEngine.shared.keepUnsent(raw, for: userMessage.threadId, because: error.localizedDescription)
-                return
+                return false
             }
             messages.removeAll { $0.id == userMessage.id }
             giveBack(raw, because: error.localizedDescription)
+            return false
         }
+        return true
     }
 
     /// Puts the text of a send that failed back in the composer, after
