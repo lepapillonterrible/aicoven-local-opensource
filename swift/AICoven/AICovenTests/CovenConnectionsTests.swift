@@ -160,7 +160,14 @@ final class CovenConnectionsTests: XCTestCase {
         addTeardownBlock { try? await ThreadRepository.shared.deleteThread(id: ofARun, for: UserScope.currentUserID) }
         let forTheRun = await CovenService.shared.connections(forThread: ofARun)
         XCTAssertNil(forTheRun)
+
+        // While the data is locked nothing is said of any thread, not
+        // even that it has no coven.
         await DataEncryptionService.shared.lock()
+        for thread in [ofARun, personal, inCoven] {
+            let whileLocked = await CovenService.shared.connections(forThread: thread)
+            XCTAssertEqual(whileLocked, CovenConnections(), "Nothing is on")
+        }
     }
 
     func testACovensOtherSettings_areKeptAsStored_andSettingsThatCannotBeReadGrantNothing() async throws {
@@ -201,7 +208,7 @@ final class CovenConnectionsTests: XCTestCase {
         XCTAssertEqual(kept?["budget_caps"] as? [String: Int], ["monthly": 5])
 
         // A choice that is not one: nothing is on, rather than everything.
-        for unreadable in [#"{"connections":[],"budget_caps":{"monthly":5}}"#, #"{"connections":"all"}"#, "not settings at all", "[1,2]"] {
+        for unreadable in [#"{"connections":[],"budget_caps":{"monthly":5}}"#, #"{"connections":"all"}"#, "not settings at all", "[1,2]", ""] {
             try await store(unreadable)
             let granted = await CovenService.shared.connections(forThread: thread)
             XCTAssertEqual(granted, CovenConnections(), unreadable)
@@ -218,7 +225,7 @@ final class CovenConnectionsTests: XCTestCase {
         XCTAssertEqual(untouched, "not settings at all")
 
         // No settings at all, or a null choice: none made.
-        for none in [nil, "", #"{"connections":null}"#, "{}"] as [String?] {
+        for none in [nil, #"{"connections":null}"#, "{}"] as [String?] {
             try await store(none)
             let granted = await CovenService.shared.connections(forThread: thread)
             XCTAssertNil(granted, none ?? "nil")

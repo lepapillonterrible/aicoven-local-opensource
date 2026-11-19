@@ -834,8 +834,10 @@ extension ThreadRepository {
                 .fetchOne(db)
         }
         guard let stored else { throw ThreadLookupError.noSuchThread }
-        guard let payload = stored.payloadCiphertext else { return nil }
+        // Nothing of the account's is said, not even that a thread has no
+        // coven, while its data is locked or another account's key is here.
         try await requireKey(of: userID)
+        guard let payload = stored.payloadCiphertext else { return nil }
         guard let thread = try await open(Thread.self, payload, purpose: "chat_thread", with: JSONDecoder()) else {
             throw ThreadLookupError.unreadable
         }

@@ -328,10 +328,11 @@ actor CovenRepository {
         return try JSONDecoder().decode(CovenConnections.self, from: JSONSerialization.data(withJSONObject: stored))
     }
 
-    /// A coven's settings as they are stored: an object, empty if there
-    /// are none. Throws if what is stored is not one.
+    /// A coven's settings as they are stored: an object, empty if none
+    /// are stored. Throws if what is stored is not one (empty text
+    /// included).
     private static func storedSettings(of record: CovenRecord) throws -> [String: Any] {
-        guard let text = record.settings, !text.isEmpty else { return [:] }
+        guard let text = record.settings else { return [:] }
         guard let settings = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else {
             throw CovenRepositoryError.settingsUnreadable
         }

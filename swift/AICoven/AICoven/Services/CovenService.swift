@@ -73,7 +73,10 @@ actor CovenService {
         }
         // What was read is the account's that asked: not another's that
         // signed in while it was read.
-        guard await MainActor.run(body: { UserScope.currentUserID }) == account else { return CovenConnections() }
+        guard await MainActor.run(body: { UserScope.currentUserID }) == account else {
+            AppErrorReporter.log(message: "A thread's connections were read for an account no longer signed in.", context: "CovenService.connections")
+            return CovenConnections()
+        }
         return found
     }
 

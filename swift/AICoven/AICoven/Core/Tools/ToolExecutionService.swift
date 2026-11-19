@@ -481,6 +481,13 @@ actor ToolExecutionService {
 
         // The stored auth token (Bearer/API key), as connection tests use it.
         let token = try? await connectedAccountsService.getMCPToken(forServerId: server.id)
+        // What the thread's coven lets now: it may have been switched to
+        // read-only or off while the person decided. Read before the
+        // server is, so that the server's reading stays the last wait.
+        var connectionsNow: CovenConnections?
+        if let threadID {
+            connectionsNow = await covenConnections(threadID)
+        }
 
         // The last thing before the call, with nothing waited for after
         // it: the server as it is stored now. The person may have taken a
@@ -500,10 +507,10 @@ actor ToolExecutionService {
         // The tool as the server lists it now: the current protocol sends
         // the arguments its schema marks for it as headers too.
         let listed = current.cachedTools?.first { $0.name == actionName }
-        // And as the thread's coven lets its server be used now: it may
-        // have been switched to read-only or off while the person decided.
-        if let threadID {
-            let decision = await CovenConnectionRules.decision(forToolMarkedReadOnly: listed?.readOnlyHint == true, ofMCPServer: current.id, in: covenConnections(threadID))
+        // And as the thread's coven lets the server be used now, for the
+        // tool as it is marked now.
+        if threadID != nil {
+            let decision = CovenConnectionRules.decision(forToolMarkedReadOnly: listed?.readOnlyHint == true, ofMCPServer: current.id, in: connectionsNow)
             if let refusal = CovenConnectionRules.refusal(decision, tool: toolCall.name, connection: current.name) {
                 return .error(tool: toolCall.name, message: refusal.message, errorType: refusal.code)
             }
