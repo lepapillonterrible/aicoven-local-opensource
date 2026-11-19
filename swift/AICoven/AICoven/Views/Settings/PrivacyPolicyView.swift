@@ -281,7 +281,7 @@ struct PrivacyPolicyView: View {
                 BulletPoint("Never includes message content, memories, or personal information.")
                 BulletPoint("Used solely for improving the app.")
 
-                Text("You can enable or disable analytics at any time in Settings → Privacy & Analytics.")
+                Text("You can enable or disable analytics at any time in Settings → About.")
                     .font(.aicovenBodySmall)
                     .foregroundColor(.aicovenTextSecondary)
                     .padding(.top, Spacing.xs)

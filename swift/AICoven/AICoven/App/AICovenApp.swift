@@ -89,6 +89,15 @@ struct AICovenApp: App {
                     isEncryptionUnlocked = false
                 }
             }
+            .onChange(of: authService.currentUser?.id) { previous, current in
+                // A direct switch from one account to another never signs
+                // out, so the first account's unlock would otherwise stand
+                // for the second.
+                if let previous, let current, previous != current {
+                    isEncryptionUnlocked = false
+                    Task { await DataEncryptionService.shared.lock() }
+                }
+            }
             // Expose the active theme + typography to every view. We re-
             // apply `.id()` on a composite of both: without it, `Text` views
             // that read static `Color.aicoven*` and `Font.aicoven*` computed
@@ -113,6 +122,36 @@ struct AICovenApp: App {
         .defaultSize(width: 820, height: 620)
         .commands {
             // macOS-specific menu commands can be re-added later if needed.
+        }
+        #endif
+
+        #if os(macOS)
+        // The standard Settings window on ⌘,.
+        Settings {
+            Group {
+                if authService.isAuthenticated, isEncryptionUnlocked {
+                    // Re-keyed on the account, so a pane loaded for one
+                    // account is rebuilt, not shown, for the next.
+                    SettingsWorkspaceView()
+                        .id(authService.currentUser?.id)
+                } else {
+                    ContentUnavailableView(
+                        "Sign in to change settings",
+                        systemImage: "gearshape",
+                        description: Text("Settings open once you're signed in and your local data is unlocked.")
+                    )
+                }
+            }
+            .frame(minWidth: 900, idealWidth: 960, minHeight: 520, idealHeight: 620)
+            .background(Color.aicovenDark)
+            .environmentObject(authService)
+            .environmentObject(AppState.shared)
+            .environmentObject(StoreService.shared)
+            .environmentObject(themeManager)
+            .environmentObject(typographyManager)
+            .environment(\.aicovenTheme, themeManager.theme)
+            .preferredColorScheme(themeManager.theme.preferredColorScheme)
+            .id("\(themeManager.theme.variant.rawValue)|\(typographyManager.variant.rawValue)|\(typographyManager.customFontFamily ?? "")|\(typographyManager.sizeScale.rawValue)")
         }
         #endif
     }

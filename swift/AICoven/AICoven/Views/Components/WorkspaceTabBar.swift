@@ -174,8 +174,8 @@ struct WorkspaceTabView: View {
                     updatedAt: Date(),
                     lastMessageAt: Date()
                 )),
-                .profile,
-                .settings
+                .mcpServers,
+                .personalStrix
             ]),
             activeTabId: .constant("1")
         )

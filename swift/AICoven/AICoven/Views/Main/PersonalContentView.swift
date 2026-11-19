@@ -103,23 +103,6 @@ struct PersonalContentView: View {
                 onBack: nil
             )
             .id(thread.id)
-        case .profile:
-            EnhancedProfileView()
-                .onAppear { AnalyticsService.shared.trackProfileOpened() }
-        case .settings:
-            EnhancedSettingsView()
-                .onAppear { AnalyticsService.shared.trackSettingsOpened() }
-        case .providerKeys:
-            ProviderKeysView()
-        case .usage:
-            UsageSettingsView()
-                .onAppear { AnalyticsService.shared.trackUsageViewed() }
-        case .budget:
-            BudgetView()
-        case .connectedApps:
-            ConnectedAppsView()
-                .environmentObject(StoreService.shared)
-                .onAppear { AnalyticsService.shared.trackConnectedAppsOpened() }
         case .mcpServers:
             MCPServerManagementView()
                 .onAppear { AnalyticsService.shared.trackMCPServersOpened() }
@@ -157,19 +140,14 @@ struct PersonalContentView: View {
                 activeTabId: $activeTabId
             )
             .onAppear { AnalyticsService.shared.trackMemoryProposalViewed() }
-        case .store:
-            StoreView()
-                .environmentObject(StoreService.shared)
-        case .terms:
-            TermsOfServiceView()
-        case .privacy:
-            PrivacyPolicyView()
         default:
             EmptyView()
         }
     }
 
     private func openTab(_ type: WorkspaceTabType) {
+        if AppState.shared.openSettings(for: type) { return }
+
         // Check if tab already open (this is a tab switch, not a new tab)
         if let existingTab = openTabs.first(where: { $0.type == type }) {
             // Note: Tab switch analytics are handled by .onChange(of: activeTabId)
@@ -183,18 +161,6 @@ struct PersonalContentView: View {
         switch type {
         case let .thread(thread):
             tab = .thread(thread)
-        case .profile:
-            tab = .profile
-        case .settings:
-            tab = .settings
-        case .providerKeys:
-            tab = .providerKeys
-        case .usage:
-            tab = .usage
-        case .budget:
-            tab = .budget
-        case .connectedApps:
-            tab = .connectedApps
         case .mcpServers:
             tab = .mcpServers
         case .personalStrixSettings:
@@ -203,12 +169,6 @@ struct PersonalContentView: View {
             tab = WorkspaceTab.memoryList(covenId: covenId)
         case let .memoryProposals(covenId):
             tab = WorkspaceTab.memoryProposals(covenId: covenId)
-        case .store:
-            tab = .store
-        case .terms:
-            tab = .terms
-        case .privacy:
-            tab = .privacy
         default:
             return
         }

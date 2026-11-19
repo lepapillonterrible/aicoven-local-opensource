@@ -37,7 +37,7 @@ For more on encryption and local storage, see `docs/local-context-architecture.m
 
 > UI labels and exact flows may change slightly over time, but this is the intended user experience.
 
-1. **Open the app** (iOS or macOS) and navigate to the **Settings / Provider Keys** screen.
+1. **Open the app** (iOS or macOS) and go to **Settings → AI connections** (⌘, opens Settings on the Mac).
 2. For each provider you want to use (e.g. OpenAI, Anthropic, Gemini):
    - Paste your API key into the corresponding field.
    - Optionally choose a default model if the UI exposes model selection.

@@ -300,7 +300,7 @@ actor ToolExecutionService {
     /// Execute github.listRepos
     private func executeGitHubListRepos(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .github) else {
-            return await .error(tool: toolCall.name, message: "GitHub not connected. Please connect GitHub in Settings > Connected Apps.")
+            return await .error(tool: toolCall.name, message: "GitHub not connected. Please connect GitHub in Settings > \(SettingsPane.connectedApps.listedTitle).")
         }
 
         do {
@@ -497,7 +497,7 @@ actor ToolExecutionService {
     /// Execute github.getPR - fetch pull request details including title, body, state, and diff info
     private func executeGitHubGetPR(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .github) else {
-            return await .error(tool: toolCall.name, message: "GitHub not connected. Please connect GitHub in Settings > Connected Apps.")
+            return await .error(tool: toolCall.name, message: "GitHub not connected. Please connect GitHub in Settings > \(SettingsPane.connectedApps.listedTitle).")
         }
 
         guard let owner = extractString(from: toolCall.args, key: "owner"),
@@ -569,7 +569,7 @@ actor ToolExecutionService {
     /// Execute github.listPRFiles - list files changed in a pull request with patches
     private func executeGitHubListPRFiles(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .github) else {
-            return await .error(tool: toolCall.name, message: "GitHub not connected. Please connect GitHub in Settings > Connected Apps.")
+            return await .error(tool: toolCall.name, message: "GitHub not connected. Please connect GitHub in Settings > \(SettingsPane.connectedApps.listedTitle).")
         }
 
         guard let owner = extractString(from: toolCall.args, key: "owner"),
@@ -639,7 +639,7 @@ actor ToolExecutionService {
     /// Execute google_drive.listFiles
     private func executeGoogleDriveListFiles(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .googleDrive) else {
-            return .error(tool: toolCall.name, message: "Google Drive not connected. Please connect in Settings > Connected Apps.")
+            return .error(tool: toolCall.name, message: "Google Drive not connected. Please connect in Settings > \(SettingsPane.connectedApps.listedTitle).")
         }
 
         let query = extractString(from: toolCall.args, key: "query")
