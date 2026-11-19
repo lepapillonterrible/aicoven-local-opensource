@@ -266,6 +266,9 @@ struct PersonalChatView: View {
     /// The thread this view's state belongs to. The view is reused when the
     /// thread changes, so work that waited checks it before touching state.
     @State private var shownThreadID: String?
+    /// The last of the engine's additions to the thread that was there
+    /// when the thread was opened: later ones are shown as they come.
+    @State private var additionsShown = 0
     /// The work traces of this thread's finished turns, by the id of the
     /// message each ended with: the receipt under a reply opens its trace.
     @State private var traces: [String: WorkTrace] = [:]
@@ -394,6 +397,7 @@ struct PersonalChatView: View {
                             WaitingMessageBubble(
                                 message: waiting,
                                 isNext: waiting.id == waitingMessages.first?.id,
+                                isBeingSent: turns.starting[thread.id] == waiting.id,
                                 agentName: thread.agentName ?? "Strix",
                                 onEdit: { turns.editWaiting(waiting.id, threadID: thread.id) },
                                 onRemove: { turns.removeWaiting(waiting.id, threadID: thread.id) }
@@ -441,20 +445,12 @@ struct PersonalChatView: View {
                         }
                     }
                 }
-                // A turn ended here: its ending goes at the end of the
-                // thread at once, before anything else can be sent.
-                .onChange(of: turns.endings[thread.id]) { _, _ in
-                    showLastEnding()
-                }
-                // A waiting message was sent: it takes its place in the
-                // thread as a message, after the reply it waited for.
-                .onChange(of: turns.sentFromWaiting[thread.id]) { _, sent in
-                    // Only while this thread is the one shown: on the way
-                    // to another thread, what was last sent there is among
-                    // the messages it loads.
-                    guard shownThreadID == thread.id, let sent, !messages.contains(where: { $0.id == sent.id }) else { return }
-                    showLastEnding()
-                    messages.append(sent)
+                // A turn ended here, or a waiting message was sent: each
+                // goes at the end of the thread at once, in the order the
+                // engine added them, however many there were since this
+                // view last looked.
+                .onChange(of: turns.additions[thread.id]?.last?.sequence) { _, _ in
+                    showAdditions()
                 }
                 .onChange(of: waitingMessages.last?.id) { _, added in
                     guard let added else { return }
@@ -507,6 +503,9 @@ struct PersonalChatView: View {
         // reset and reload the messages/provider keys for the new thread.
         .task(id: thread.id) {
             shownThreadID = thread.id
+            // What the engine added before now is among the messages
+            // loaded below; what it adds from here on is shown as added.
+            additionsShown = turns.additions[thread.id]?.last?.sequence ?? 0
             messages = []
             traces = [:]
             shownTrace = nil
@@ -521,6 +520,7 @@ struct PersonalChatView: View {
             await TurnEngine.shared.settleInterruptedTurns(threadID: thread.id)
             await loadInitialMessages()
             await loadTraces()
+            showAdditions()
             showLastEnding()
             if let unsent = TurnEngine.shared.takeUnsent(for: thread.id) {
                 giveBack(unsent.text, because: unsent.reason)
@@ -680,7 +680,8 @@ struct PersonalChatView: View {
         let parts = splitUserAndToolContext(from: raw)
         // While a turn runs the message waits for it, shown as waiting.
         let waiting = TurnEngine.WaitingMessage(
-            text: raw,
+            // As the field held it, to give back as it was.
+            text: messageText,
             userText: parts.userText,
             context: parts.fullText,
             roleID: thread.agentId,
@@ -743,6 +744,23 @@ struct PersonalChatView: View {
             ApprovalRecordLine(approval: approval)
                 .frame(maxWidth: 800, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Shows what the engine has added to this thread since it was opened
+    /// and that is not shown yet: replies, and waiting messages it sent, in
+    /// the order it added them.
+    private func showAdditions() {
+        // Only while this thread is the one shown: on the way to another
+        // thread, that thread's messages are loaded afresh.
+        guard shownThreadID == thread.id else { return }
+        for addition in turns.additions[thread.id] ?? [] where addition.sequence > additionsShown {
+            if !messages.contains(where: { $0.id == addition.message.id }) {
+                messages.append(addition.message)
+            }
+            if let trace = addition.trace {
+                traces[addition.message.id] = trace
+            }
         }
     }
 

@@ -109,7 +109,7 @@ struct MessageComposer: View {
     /// Who the next message goes to.
     let recipientName: String
     /// Something the thread has to say above the box: why waiting messages
-    /// were not sent.
+    /// were not sent. Whoever sets it announces it, once.
     var notice: String?
     /// Whether text and attachments were handed back to this thread's
     /// composer (waiting messages that were not sent, or one taken back to
@@ -179,9 +179,6 @@ struct MessageComposer: View {
         .onChange(of: messageText) { _, _ in suggestMentions() }
         .onChange(of: attachFailure) { _, failure in
             if let failure { AccessibilityNotification.Announcement(failure).post() }
-        }
-        .onChange(of: notice) { _, notice in
-            if let notice { AccessibilityNotification.Announcement(notice).post() }
         }
         .onAppear(perform: takeReturned)
         .onChange(of: hasReturnedDraft) { _, _ in takeReturned() }

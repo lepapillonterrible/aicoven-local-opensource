@@ -25,6 +25,7 @@ final class MessageComposerTests: XCTestCase {
         XCTAssertNil(ComposerRules.waitNote(isAgentRunning: false, runningName: "Strix"))
         XCTAssertEqual(WaitingMessageBubble.note(isNext: true, agentName: "Strix"), "Waiting. Sends when Strix finishes.")
         XCTAssertEqual(WaitingMessageBubble.note(isNext: false, agentName: "Strix"), "Waiting. Sends after the one above.")
+        XCTAssertEqual(WaitingMessageBubble.note(isNext: true, agentName: "Strix", isBeingSent: true), "Sending…")
     }
 
     func testWhatIsHandedBackToTheComposer_goesBeforeWhatIsInItABlankLineApart() {

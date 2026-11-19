@@ -7,13 +7,17 @@ struct WaitingMessageBubble: View {
     let message: TurnEngine.WaitingMessage
     /// First in line: it goes when the running turn finishes.
     let isNext: Bool
+    /// Its turn is being started: it is on its way, and can no longer be
+    /// edited or removed.
+    var isBeingSent: Bool = false
     let agentName: String
     let onEdit: () -> Void
     let onRemove: () -> Void
 
     /// What the line under the bubble says.
-    nonisolated static func note(isNext: Bool, agentName: String) -> String {
-        isNext ? "Waiting. Sends when \(agentName) finishes." : "Waiting. Sends after the one above."
+    nonisolated static func note(isNext: Bool, agentName: String, isBeingSent: Bool = false) -> String {
+        if isBeingSent { return "Sending…" }
+        return isNext ? "Waiting. Sends when \(agentName) finishes." : "Waiting. Sends after the one above."
     }
 
     var body: some View {
@@ -37,14 +41,16 @@ struct WaitingMessageBubble: View {
             // As wide as its text, up to most of the reading column.
             .frame(maxWidth: 560, alignment: .trailing)
             HStack(spacing: Spacing.sm) {
-                Text(Self.note(isNext: isNext, agentName: agentName))
+                Text(Self.note(isNext: isNext, agentName: agentName, isBeingSent: isBeingSent))
                     .foregroundStyle(Color.aicovenTextTertiary)
-                Button("Edit", action: onEdit)
-                    .buttonStyle(.textLink)
-                    .accessibilityHint("Takes this message back into the composer")
-                Button("Remove", action: onRemove)
-                    .buttonStyle(.textLink)
-                    .accessibilityHint("Deletes this waiting message")
+                if !isBeingSent {
+                    Button("Edit", action: onEdit)
+                        .buttonStyle(.textLink)
+                        .accessibilityHint("Takes this message back into the composer")
+                    Button("Remove", action: onRemove)
+                        .buttonStyle(.textLink)
+                        .accessibilityHint("Deletes this waiting message")
+                }
             }
             .font(.aicovenBodySmall)
         }
