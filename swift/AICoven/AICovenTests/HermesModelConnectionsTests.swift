@@ -85,20 +85,55 @@ final class HermesModelConnectionsTests: XCTestCase {
         XCTAssertEqual(converted.defaultModel, "hermes-3")
     }
 
-    func testAServerConnectedBefore_keepsItsPlaceAndItsModel() throws {
+    func testAServerConnectedBefore_keepsItsPlaceAndItsModelWhereverItWasListed() throws {
         try store([
-            account("server", provider: "openai_compatible", baseURL: "http://127.0.0.1:1234", model: "qwen"),
             account("hermes-test", provider: "together"),
+            account("server", provider: "openai_compatible", baseURL: "http://127.0.0.1:1234", model: "qwen"),
             account("claude", provider: "anthropic"),
         ])
         defaults.set("qwen", forKey: UserScope.scopedKey("openai_compatible_model"))
+        defaults.set("hermes", forKey: UserScope.scopedKey("llm_provider"))
 
         ProviderAccountService.convertHermesModelConnectionsIfNeeded()
 
         let accounts = try stored()
-        XCTAssertEqual(accounts.map(\.provider), ["openai_compatible", "openai_compatible", "anthropic"])
+        XCTAssertEqual(accounts.map(\.id), ["server", "claude", "hermes-test"], "The converted connection is listed after the rest")
         XCTAssertEqual(ProviderAccountService.openAICompatibleServer()?.baseURL.absoluteString, "http://127.0.0.1:1234")
         XCTAssertEqual(defaults.string(forKey: UserScope.scopedKey("openai_compatible_model")), "qwen")
+        XCTAssertEqual(defaults.string(forKey: UserScope.scopedKey("llm_provider")), "openai_compatible")
+    }
+
+    func testATogetherAddressGivenInFull_stillGetsTheModelNameTogetherKnows() throws {
+        try store([account("hermes-test", provider: "hermes", baseURL: "https://api.together.xyz", model: "hermes-3-70b")])
+
+        ProviderAccountService.convertHermesModelConnectionsIfNeeded()
+
+        XCTAssertEqual(try stored().first?.defaultModel, "NousResearch/Hermes-3-Llama-3.1-70B")
+    }
+
+    func testSettingsLoadedWhileHermesIsStillChosen_comeBackWithTheServerChosen() async throws {
+        try store([account("hermes-test", provider: "hermes", baseURL: "http://127.0.0.1:8080", model: "local-hermes")])
+        try defaults.set(JSONEncoder().encode(LocalStrixSettings(provider: "hermes")), forKey: UserScope.scopedKey("strix_settings.v1"))
+        defaults.set("hermes", forKey: UserScope.scopedKey("llm_provider"))
+
+        let settings = try await StrixSettingsService.shared.loadPersonalStrix()
+
+        XCTAssertEqual(settings.provider, "openai_compatible")
+        XCTAssertEqual(settings.model, "local-hermes")
+        XCTAssertEqual(defaults.string(forKey: UserScope.scopedKey("llm_provider")), "openai_compatible")
+    }
+
+    func testReadersThatConvertAtTheSameTime_leaveOneConversion() throws {
+        try store([account("hermes-test", provider: "hermes")])
+        defaults.set("hermes-3-8b", forKey: UserScope.scopedKey("hermes_model"))
+
+        DispatchQueue.concurrentPerform(iterations: 40) { _ in
+            _ = ProviderAccountService.openAICompatibleServer()
+        }
+
+        let accounts = try stored()
+        XCTAssertEqual(accounts.count, 1)
+        XCTAssertEqual(accounts.first?.defaultModel, "NousResearch/Hermes-3-Llama-3.1-8B", "A second reader did not convert again from half-changed state")
     }
 
     func testTheConversion_happensOnceSoALaterHermesConnectionIsLeftAsItIs() throws {

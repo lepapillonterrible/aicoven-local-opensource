@@ -708,58 +708,67 @@ extension ProviderAccountService {
     /// server, at Together AI's address when it named none, with the model
     /// it was using. Its id stays, and so its key stays where it is in the
     /// Keychain. Done once for each account on this device, before anything
-    /// reads the connections: "hermes" is to mean the Hermes agent, whose
-    /// connections must not be taken for these.
+    /// reads the connections or the provider chosen for replies: "hermes"
+    /// is to mean the Hermes agent, whose connections must not be taken for
+    /// these.
     static func convertHermesModelConnectionsIfNeeded() {
-        let defaults = UserDefaults.standard
-        let doneKey = UserScope.scopedKey("hermes_model_connections_converted.v1")
-        guard !defaults.bool(forKey: doneKey) else { return }
-        let storageKey = UserScope.scopedKey("provider_accounts.v1")
-        guard let data = defaults.data(forKey: storageKey) else {
-            defaults.set(true, forKey: doneKey)
-            return
-        }
-        do {
-            let accounts = try JSONDecoder().decode([LocalProviderAccount].self, from: data)
-            let alias = defaults.string(forKey: UserScope.scopedKey("hermes_model"))
-            let hadServer = accounts.contains { $0.provider.lowercased() == "openai_compatible" }
-            var firstModel: String?
-            let converted = accounts.map { account -> LocalProviderAccount in
-                guard ["hermes", "together"].contains(account.provider.lowercased()) else { return account }
-                let ownAddress = account.baseURL.flatMap { $0.isEmpty ? nil : $0 }
-                let named = account.defaultModel ?? alias ?? "hermes-3"
-                // A server of the person's own was sent the model's name as
-                // they gave it; Together AI was sent the name it knows.
-                let model = ownAddress == nil ? togetherModelID(for: named) : named
-                firstModel = firstModel ?? model
-                return LocalProviderAccount(
-                    id: account.id,
-                    provider: "openai_compatible",
-                    displayName: account.displayName,
-                    scopes: account.scopes,
-                    defaultModel: model,
-                    baseURL: ownAddress ?? togetherAddress,
-                    status: account.status,
-                    createdAt: account.createdAt
-                )
+        // One at a time: the connections are read from the chat's own
+        // actor and from this service's, and a second conversion begun
+        // before the first had finished would work from what the first
+        // was in the middle of changing.
+        hermesConversion.withLock {
+            let defaults = UserDefaults.standard
+            let doneKey = UserScope.scopedKey("hermes_model_connections_converted.v1")
+            guard !defaults.bool(forKey: doneKey) else { return }
+            let storageKey = UserScope.scopedKey("provider_accounts.v1")
+            guard let data = defaults.data(forKey: storageKey) else {
+                defaults.set(true, forKey: doneKey)
+                return
             }
-            if let firstModel {
-                try defaults.set(JSONEncoder().encode(converted), forKey: storageKey)
-                // The server in use is the first one: a server connected
-                // before this keeps its place and its model.
-                if !hadServer {
-                    defaults.set(firstModel, forKey: UserScope.scopedKey("openai_compatible_model"))
+            do {
+                let accounts = try JSONDecoder().decode([LocalProviderAccount].self, from: data)
+                let alias = defaults.string(forKey: UserScope.scopedKey("hermes_model"))
+                let isHermes: (LocalProviderAccount) -> Bool = { ["hermes", "together"].contains($0.provider.lowercased()) }
+                let hadServer = accounts.contains { $0.provider.lowercased() == "openai_compatible" }
+                let converted = accounts.filter(isHermes).map { account -> LocalProviderAccount in
+                    let ownAddress = account.baseURL.flatMap { $0.isEmpty ? nil : $0 }
+                    let address = ownAddress ?? togetherAddress
+                    let named = account.defaultModel ?? alias ?? "hermes-3"
+                    // Together AI is sent the name it knows; a server of the
+                    // person's own, the name as they gave it.
+                    let isTogether = URL(string: address)?.host?.lowercased() == URL(string: togetherAddress)?.host
+                    return LocalProviderAccount(
+                        id: account.id,
+                        provider: "openai_compatible",
+                        displayName: account.displayName,
+                        scopes: account.scopes,
+                        defaultModel: isTogether ? togetherModelID(for: named) : named,
+                        baseURL: address,
+                        status: account.status,
+                        createdAt: account.createdAt
+                    )
                 }
-                moveChosenProviderOffHermes(to: hadServer ? nil : firstModel)
+                if let first = converted.first {
+                    // The server in use is the first one listed, so the
+                    // converted ones go after the rest: a server connected
+                    // before this keeps its place, and its model.
+                    try defaults.set(JSONEncoder().encode(accounts.filter { !isHermes($0) } + converted), forKey: storageKey)
+                    if !hadServer, let model = first.defaultModel {
+                        defaults.set(model, forKey: UserScope.scopedKey("openai_compatible_model"))
+                    }
+                    moveChosenProviderOffHermes(to: hadServer ? nil : first.defaultModel)
+                }
+                defaults.removeObject(forKey: UserScope.scopedKey("hermes_base_url"))
+                defaults.removeObject(forKey: UserScope.scopedKey("hermes_model"))
+                defaults.set(true, forKey: doneKey)
+            } catch {
+                // Left to be tried again: nothing has been changed.
+                AppErrorReporter.log(error: error, context: "ProviderAccountService.convertHermesModelConnections")
             }
-            defaults.removeObject(forKey: UserScope.scopedKey("hermes_base_url"))
-            defaults.removeObject(forKey: UserScope.scopedKey("hermes_model"))
-            defaults.set(true, forKey: doneKey)
-        } catch {
-            // Left to be tried again: nothing has been changed.
-            AppErrorReporter.log(error: error, context: "ProviderAccountService.convertHermesModelConnections")
         }
     }
+
+    private static let hermesConversion = NSLock()
 
     /// The name Together AI knows a Hermes model by, for the short names
     /// this app used.
