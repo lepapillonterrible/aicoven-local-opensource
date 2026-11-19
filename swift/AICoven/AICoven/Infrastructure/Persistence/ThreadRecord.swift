@@ -496,18 +496,20 @@ extension ThreadRepository {
     /// order they are added, one at a time: storing one waits on encryption,
     /// and a later one must not get ahead of it.
     func appendChatMessage(_ message: ChatMessage) async throws {
-        try await storeInOrder(message, turn: nil)
+        _ = try await storeInOrder(message, turn: nil)
     }
 
     /// Stores the person's message and a running turn for it, together.
     func beginTurn(id: String, userMessage: ChatMessage) async throws {
-        try await storeInOrder(userMessage, turn: .begin(id: id))
+        _ = try await storeInOrder(userMessage, turn: .begin(id: id))
     }
 
     /// Stores the message a turn ends with, the reply or what went wrong,
-    /// and the turn's outcome, together. A turn ends once: if it is no
-    /// longer running, nothing is stored and its outcome stands.
-    func endTurn(id: String, outcome: TurnOutcome, message: ChatMessage) async throws {
+    /// and the turn's outcome, together. A turn ends once: if it is not the
+    /// current account's running turn, nothing is stored, its state stands,
+    /// and the answer is false.
+    @discardableResult
+    func endTurn(id: String, outcome: TurnOutcome, message: ChatMessage) async throws -> Bool {
         try await storeInOrder(message, turn: .end(id: id, outcome: outcome))
     }
 
@@ -525,24 +527,26 @@ extension ThreadRepository {
         }
     }
 
-    private func storeInOrder(_ message: ChatMessage, turn: TurnChange?) async throws {
+    /// False when the message was not stored because it ends a turn that
+    /// this account is not running.
+    private func storeInOrder(_ message: ChatMessage, turn: TurnChange?) async throws -> Bool {
         let previous = lastAppend
         let task = Task {
             await previous?.value
-            try await store(message, turn: turn)
+            return try await store(message, turn: turn)
         }
         lastAppend = Task { _ = await task.result }
-        try await task.value
+        return try await task.value
     }
 
-    private func store(_ message: ChatMessage, turn: TurnChange?) async throws {
+    private func store(_ message: ChatMessage, turn: TurnChange?) async throws -> Bool {
         try await LegacyChatHistoryImport.shared.importIfNeeded()
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         let session = try await beginWrite()
         let record = try await Self.record(for: message, userId: session.userID)
         try await confirm(session)
 
-        try await dbQueue.write { db in
+        return try await dbQueue.write { db in
             switch turn {
             case nil:
                 break
@@ -556,9 +560,10 @@ extension ThreadRepository {
                     sql: "UPDATE turns SET status = ?, finished_at = ?, message_id = ? WHERE id = ? AND user_id = ? AND status = ?",
                     arguments: [outcome.rawValue, Date(), message.id, id, session.userID, TurnOutcome.running.rawValue]
                 )
-                guard db.changesCount > 0 else { return }
+                guard db.changesCount > 0 else { return false }
             }
             try record.insert(db)
+            return true
         }
     }
 

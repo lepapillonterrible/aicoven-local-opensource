@@ -22,9 +22,15 @@ final class TurnEngine: ObservableObject {
 
     enum TurnError: LocalizedError {
         case alreadyRunning
+        /// The turn is not this account's running turn, so its ending has
+        /// nowhere to be stored.
+        case endingNotStored
 
         var errorDescription: String? {
-            "A reply is already on its way in this thread."
+            switch self {
+            case .alreadyRunning: "A reply is already on its way in this thread."
+            case .endingNotStored: "The last reply in this thread could not be saved."
+            }
         }
     }
 
@@ -45,8 +51,8 @@ final class TurnEngine: ObservableObject {
     @Published private(set) var endings: [String: Ending] = [:]
 
     /// An ending that could not be stored, by thread id. It is stored
-    /// before the thread's next turn starts, so nothing later is ever
-    /// stored ahead of it, and no later ending takes its place.
+    /// before the thread's next turn starts, so no later turn is stored
+    /// ahead of it, and no later ending takes its place.
     private var unstored: [String: (turnID: String, outcome: TurnOutcome, message: ChatMessage)] = [:]
 
     private let chat: ChatService
@@ -56,24 +62,23 @@ final class TurnEngine: ObservableObject {
         self.chat = chat
     }
 
-    /// Starts a turn in a thread and returns the person's message as stored.
-    /// `text` is what the person wrote and what the thread shows; `context`
-    /// is what the model is sent, which can carry more. Throws, with nothing
-    /// started, if a turn is already running in the thread, or the message,
-    /// or an earlier ending still waiting to be stored, cannot be stored.
+    /// Starts a turn with the person's message, which is stored as it is:
+    /// what they wrote and the thread shows. `context` is what the model is
+    /// sent, which can carry more. Throws, with nothing started, if a turn
+    /// is already running in the thread, or the message, or an earlier
+    /// ending still waiting to be stored, cannot be stored.
     func start(
-        threadID: String,
-        text: String,
+        with userMessage: ChatMessage,
         context: String,
         roleID: String?,
         agentName: String?,
         attachments: [FileAttachmentDetail]?
-    ) async throws -> ChatMessage {
+    ) async throws {
+        let threadID = userMessage.threadId
         guard running[threadID] == nil else { throw TurnError.alreadyRunning }
         let turnID = UUID().uuidString
         // Marked before anything waits, so a second send cannot start too.
         running[threadID] = Activity(turnID: turnID, message: TurnProgress.startingMessage)
-        let userMessage = TurnProgress.message(in: threadID, role: "user", content: text)
         do {
             try await storeWaitingEnding(threadID: threadID)
             try await store.beginTurn(id: turnID, userMessage: userMessage)
@@ -84,7 +89,6 @@ final class TurnEngine: ObservableObject {
         Task {
             await run(turnID: turnID, threadID: threadID, context: context, roleID: roleID, agentName: agentName, attachments: attachments)
         }
-        return userMessage
     }
 
     /// Ends any turn in the thread that is recorded as running but is not,
@@ -93,7 +97,11 @@ final class TurnEngine: ObservableObject {
     /// tried again first.
     func settleInterruptedTurns(threadID: String) async {
         do {
-            try? await storeWaitingEnding(threadID: threadID)
+            do {
+                try await storeWaitingEnding(threadID: threadID)
+            } catch {
+                AppErrorReporter.log(error: error, context: "TurnEngine.storeWaitingEnding")
+            }
             for turnID in try await store.runningTurnIDs(threadID: threadID)
                 where running[threadID]?.turnID != turnID && unstored[threadID]?.turnID != turnID {
                 try await store.endTurn(
@@ -111,7 +119,9 @@ final class TurnEngine: ObservableObject {
     /// is one. Throws if it still cannot be.
     private func storeWaitingEnding(threadID: String) async throws {
         guard let waiting = unstored[threadID] else { return }
-        try await store.endTurn(id: waiting.turnID, outcome: waiting.outcome, message: waiting.message)
+        guard try await store.endTurn(id: waiting.turnID, outcome: waiting.outcome, message: waiting.message) else {
+            throw TurnError.endingNotStored
+        }
         // Another call can have stored it while this one waited.
         guard unstored[threadID]?.turnID == waiting.turnID else { return }
         unstored[threadID] = nil
@@ -149,13 +159,19 @@ final class TurnEngine: ObservableObject {
         var progress = TurnProgress(agentName: agentName)
         for await state in states {
             progress.note(state)
-            running[threadID]?.message = progress.activity
+            // Most reports leave the line as it is; the thread redraws only
+            // when it changes.
+            if running[threadID]?.message != progress.activity {
+                running[threadID]?.message = progress.activity
+            }
         }
         let thrown = await reply.value
         let ending = progress.ending(in: threadID, thrown: thrown)
 
         do {
-            try await store.endTurn(id: turnID, outcome: ending.outcome, message: ending.message)
+            guard try await store.endTurn(id: turnID, outcome: ending.outcome, message: ending.message) else {
+                throw TurnError.endingNotStored
+            }
             endings[threadID] = Ending(turnID: turnID, messages: [ending.message], stored: true)
         } catch {
             // The reply exists and the thread shows it, with why it may not

@@ -31,9 +31,8 @@ final class TurnEngineTests: XCTestCase {
     func testATurn_storesTheQuestionRunsWithoutAScreenAndStoresTheReply() async throws {
         let engine = makeEngine()
 
-        let question = try await engine.start(
-            threadID: threadID, text: "What is the plan?", context: "What is the plan?", roleID: nil, agentName: "Strix", attachments: nil
-        )
+        let question = question("What is the plan?")
+        try await engine.start(with: question, context: "What is the plan?", roleID: nil, agentName: "Strix", attachments: nil)
         XCTAssertEqual(engine.running[threadID]?.message, TurnProgress.startingMessage)
         let turn = try await storedTurn()
         XCTAssertEqual(turn?.status, "running")
@@ -59,7 +58,7 @@ final class TurnEngineTests: XCTestCase {
         provider.release()
         let engine = makeEngine()
 
-        _ = try await engine.start(threadID: threadID, text: "Hello", context: "Hello", roleID: nil, agentName: nil, attachments: nil)
+        try await engine.start(with: question("Hello"), context: "Hello", roleID: nil, agentName: nil, attachments: nil)
         await finished(engine)
 
         let messages = try await ChatService.shared.loadMessages(threadId: threadID)
@@ -71,10 +70,10 @@ final class TurnEngineTests: XCTestCase {
 
     func testASecondSend_whileAReplyIsOnItsWayStartsNothing() async throws {
         let engine = makeEngine()
-        _ = try await engine.start(threadID: threadID, text: "First", context: "First", roleID: nil, agentName: nil, attachments: nil)
+        try await engine.start(with: question("First"), context: "First", roleID: nil, agentName: nil, attachments: nil)
 
         do {
-            _ = try await engine.start(threadID: threadID, text: "Second", context: "Second", roleID: nil, agentName: nil, attachments: nil)
+            try await engine.start(with: question("Second"), context: "Second", roleID: nil, agentName: nil, attachments: nil)
             XCTFail("A thread runs one turn at a time")
         } catch {
             XCTAssertTrue(error is TurnEngine.TurnError)
@@ -88,7 +87,7 @@ final class TurnEngineTests: XCTestCase {
 
     func testAReplyThatCannotBeStored_isShownKeptAndStoredBeforeTheNextTurn() async throws {
         let engine = makeEngine()
-        _ = try await engine.start(threadID: threadID, text: "First", context: "First", roleID: nil, agentName: nil, attachments: nil)
+        try await engine.start(with: question("First"), context: "First", roleID: nil, agentName: nil, attachments: nil)
         // Locked while the turn runs: however it ends, its ending cannot be
         // encrypted.
         await DataEncryptionService.shared.lock()
@@ -103,7 +102,7 @@ final class TurnEngineTests: XCTestCase {
         // While it still cannot be stored, nothing new starts in the thread
         // and the ending is kept.
         do {
-            _ = try await engine.start(threadID: threadID, text: "Too soon", context: "Too soon", roleID: nil, agentName: nil, attachments: nil)
+            try await engine.start(with: question("Too soon"), context: "Too soon", roleID: nil, agentName: nil, attachments: nil)
             XCTFail("A new turn must wait for the earlier ending to be stored")
         } catch {}
         XCTAssertEqual(engine.endings[threadID], unsaved)
@@ -112,7 +111,7 @@ final class TurnEngineTests: XCTestCase {
         // Storable again: opening the thread keeps the turn, and the next
         // send stores the earlier ending ahead of the new question.
         await DataEncryptionService.shared.unlockForTestingEphemeral()
-        _ = try await engine.start(threadID: threadID, text: "Second", context: "Second", roleID: nil, agentName: nil, attachments: nil)
+        try await engine.start(with: question("Second"), context: "Second", roleID: nil, agentName: nil, attachments: nil)
         await finished(engine)
 
         // The first question was stored under the key before the lock, so
@@ -132,8 +131,7 @@ final class TurnEngineTests: XCTestCase {
 
     func testOpeningAThread_endsATurnTheAppClosedOnAndSaysSoOnce() async throws {
         let engine = makeEngine()
-        let question = TurnProgress.message(in: threadID, role: "user", content: "Left hanging")
-        try await ThreadRepository.shared.beginTurn(id: "turn-\(threadID)", userMessage: question)
+        try await ThreadRepository.shared.beginTurn(id: "turn-\(threadID)", userMessage: question("Left hanging"))
 
         await engine.settleInterruptedTurns(threadID: threadID)
         await engine.settleInterruptedTurns(threadID: threadID)
@@ -146,7 +144,7 @@ final class TurnEngineTests: XCTestCase {
 
     func testOpeningAThread_leavesATurnThatIsRunningAlone() async throws {
         let engine = makeEngine()
-        _ = try await engine.start(threadID: threadID, text: "Still going", context: "Still going", roleID: nil, agentName: nil, attachments: nil)
+        try await engine.start(with: question("Still going"), context: "Still going", roleID: nil, agentName: nil, attachments: nil)
 
         await engine.settleInterruptedTurns(threadID: threadID)
 
@@ -159,18 +157,38 @@ final class TurnEngineTests: XCTestCase {
     }
 
     func testATurn_endsOnce() async throws {
-        let question = TurnProgress.message(in: threadID, role: "user", content: "Question")
-        try await ThreadRepository.shared.beginTurn(id: "turn-\(threadID)", userMessage: question)
+        try await ThreadRepository.shared.beginTurn(id: "turn-\(threadID)", userMessage: question("Question"))
         let reply = TurnProgress.message(in: threadID, role: "assistant", content: "Reply")
         let late = TurnProgress.message(in: threadID, role: "assistant", content: "Too late")
 
-        try await ThreadRepository.shared.endTurn(id: "turn-\(threadID)", outcome: .completed, message: reply)
-        try await ThreadRepository.shared.endTurn(id: "turn-\(threadID)", outcome: .interrupted, message: late)
+        let ended = try await ThreadRepository.shared.endTurn(id: "turn-\(threadID)", outcome: .completed, message: reply)
+        let endedAgain = try await ThreadRepository.shared.endTurn(id: "turn-\(threadID)", outcome: .interrupted, message: late)
+        XCTAssertTrue(ended)
+        XCTAssertFalse(endedAgain)
 
         let messages = try await ChatService.shared.loadMessages(threadId: threadID)
         XCTAssertEqual(messages.map(\.content), ["Question", "Reply"])
         let turn = try await storedTurn()
         XCTAssertEqual(turn?.status, "completed")
+    }
+
+    func testATurn_belongsToItsThreadsOwnerAndGoesWithItsThread() async throws {
+        try await ThreadRepository.shared.beginTurn(id: "turn-\(threadID)", userMessage: question("Mine"))
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+
+        // A turn for this thread under another user is refused.
+        XCTAssertThrowsError(try queue.inDatabase { [threadID] db in
+            try db.execute(
+                sql: "INSERT INTO turns (id, user_id, thread_id, status, started_at) VALUES (?, ?, ?, ?, ?)",
+                arguments: ["someone-elses-\(threadID)", "another-user", threadID, "running", Date()]
+            )
+        })
+
+        try await ThreadService.shared.deleteThread(threadId: threadID)
+        let left = try await queue.read { [threadID] db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM turns WHERE thread_id = ?", arguments: [threadID])
+        }
+        XCTAssertEqual(left, 0)
     }
 
     // MARK: - What a running turn shows
@@ -208,6 +226,10 @@ final class TurnEngineTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    private func question(_ text: String) -> ChatMessage {
+        TurnProgress.message(in: threadID, role: "user", content: text)
+    }
 
     private func makeEngine() -> TurnEngine {
         let model = ModelDescriptor(

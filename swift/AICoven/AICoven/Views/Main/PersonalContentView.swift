@@ -261,6 +261,9 @@ struct PersonalChatView: View {
     @State private var errorMessage: String?
     /// The engine runs the replies; this view shows the one in its thread.
     @ObservedObject private var turns = TurnEngine.shared
+    /// The thread this view's state belongs to. The view is reused when the
+    /// thread changes, so work that waited checks it before touching state.
+    @State private var shownThreadID: String?
     @State private var canEditAgent: Bool = true
 
     /// The reply on its way in this thread, if there is one.
@@ -458,6 +461,7 @@ struct PersonalChatView: View {
         // When the bound thread changes (e.g. user switches tabs on macOS),
         // reset and reload the messages/provider keys for the new thread.
         .task(id: thread.id) {
+            shownThreadID = thread.id
             messages = []
             isInitialLoading = false
             didLoadInitialMessages = false
@@ -601,24 +605,29 @@ struct PersonalChatView: View {
         // Only the human-authored question is stored, so the transcript stays
         // clean; tool context is treated as ephemeral system context.
         let parts = splitUserAndToolContext(from: raw)
+        let userMessage = TurnProgress.message(in: thread.id, role: "user", content: parts.userText)
+        // Shown at once, before anything waits: this view can be showing
+        // another thread by the time the message is stored.
         messageText = ""
+        messages.append(userMessage)
         do {
-            let userMessage = try await TurnEngine.shared.start(
-                threadID: thread.id,
-                text: parts.userText,
+            try await TurnEngine.shared.start(
+                with: userMessage,
                 context: parts.fullText,
                 roleID: thread.agentId,
                 agentName: thread.agentName,
                 attachments: attachments.isEmpty ? nil : attachments
             )
-            messages.append(userMessage)
         } catch {
             AppErrorReporter.log(error: error, context: "PersonalContentView.sendMessage")
-            // Nothing was sent or stored: the text goes back to the composer,
-            // and the thread says why, for now only on screen.
+            // Nothing was sent or stored. If this thread is still the one
+            // shown, the message comes out of it, the text goes back to the
+            // composer, and the thread says why, for now only on screen.
+            guard shownThreadID == userMessage.threadId else { return }
+            messages.removeAll { $0.id == userMessage.id }
             messageText = raw
             messages.append(TurnProgress.message(
-                in: thread.id,
+                in: userMessage.threadId,
                 role: "assistant",
                 content: "I couldn't send your message: \(error.localizedDescription)"
             ))
