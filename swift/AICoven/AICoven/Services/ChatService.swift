@@ -672,6 +672,8 @@ actor ChatService {
         // whether to call a tool. Each successful tool invocation consumes one
         // step from the budget; a direct natural-language reply ends the loop.
         while remainingToolSteps > 0, finalText == nil {
+            // A stopped turn takes no further step.
+            try Task.checkCancellation()
             stepNumber += 1
             // Build the effective user message. Only append tool protocol
             // instructions when tools are allowed — the system prompt from
@@ -992,7 +994,10 @@ actor ChatService {
 
                 // Track error with a low-cardinality code; avoid logging full
                 // user-visible error text into analytics.
-                AnalyticsService.shared.trackMessageError(threadId: threadId, errorType: errorCode)
+                // A stopped turn is not a provider error.
+                if !Task.isCancelled {
+                    AnalyticsService.shared.trackMessageError(threadId: threadId, errorType: errorCode)
+                }
 
                 state.phase = .finalizing
                 state.status = .failed
@@ -1069,6 +1074,8 @@ actor ChatService {
                 toolConfig: finalToolConfig
             )
 
+            // A stopped turn does not ask for its answer.
+            try Task.checkCancellation()
             do {
                 // If the client supports streaming, use token-by-token delivery
                 // for the final answer so the user sees text appear in real time.
@@ -1078,6 +1085,7 @@ actor ChatService {
                     state.bumpVersion()
                     onStateChange(state)
                     var accumulated = ""
+                    var answerFinished = false
                     let stream = streamingClient.streamChat(
                         messages: contextMessages,
                         model: descriptor.modelID,
@@ -1097,6 +1105,15 @@ actor ChatService {
                                 totalTokens: usage.totalTokens
                             )
                         }
+                        if delta.isFinished {
+                            answerFinished = true
+                        }
+                    }
+                    // A cancelled stream can end without an error; what
+                    // arrived by then is the whole answer only if its last
+                    // part did.
+                    if !answerFinished {
+                        try Task.checkCancellation()
                     }
                     // Mark streaming final answer so we skip the post-loop emission.
                     finalText = accumulated
@@ -1135,7 +1152,10 @@ actor ChatService {
 
                 // Track error with a low-cardinality code; avoid logging full
                 // user-visible error text into analytics.
-                AnalyticsService.shared.trackMessageError(threadId: threadId, errorType: errorCode)
+                // A stopped turn is not a provider error.
+                if !Task.isCancelled {
+                    AnalyticsService.shared.trackMessageError(threadId: threadId, errorType: errorCode)
+                }
 
                 state.phase = .finalizing
                 state.status = .failed
@@ -1693,6 +1713,8 @@ extension ChatService {
     /// plus an optional context block that can be fed back into the context sandwich.
     /// This enhanced version routes through the central ToolExecutionService for all tools.
     nonisolated func executeChatToolCall(_ call: ChatToolInvocation) async throws -> (summary: String, contextBlock: String?) {
+        // A stopped turn starts no tool.
+        try Task.checkCancellation()
         // Convert ChatToolInvocation to ParsedToolCall for ToolExecutionService
         var args: [String: AnyJSONValue] = [:]
         if let input = call.input {

@@ -362,6 +362,16 @@ struct PersonalChatView: View {
                                                 .fill(Color.aicovenSurfaceElevated)
                                                 .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
                                         )
+
+                                    // Stop says "Stopping…" until the turn
+                                    // has in fact ended.
+                                    Button(runningTurn.isStopping ? "Stopping…" : "Stop") {
+                                        turns.stop(threadID: thread.id)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                    .disabled(runningTurn.isStopping)
+                                    .keyboardShortcut(".", modifiers: .command)
                                 }
                                 .frame(maxWidth: 800, alignment: .leading)
 
