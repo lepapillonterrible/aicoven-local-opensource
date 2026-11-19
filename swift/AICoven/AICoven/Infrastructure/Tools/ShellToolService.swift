@@ -80,7 +80,7 @@ actor ShellToolService {
             return await .permissionDenied(
                 tool: "shell.execute",
                 message: "Shell working directory '\(normalizedWorkingDir)' is not authorized.",
-                helpfulInstructions: "Grant access in Settings > File Access before running shell commands there."
+                helpfulInstructions: "Grant access in Settings > This Mac before running shell commands there."
             )
         }
 

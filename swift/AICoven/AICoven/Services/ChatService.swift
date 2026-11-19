@@ -728,7 +728,7 @@ actor ChatService {
             that you do NOT have access to. You have no connected tool that can retrieve this data. \
             Do NOT make up or fabricate any content. Instead, tell the user honestly that you cannot \
             access their personal data and suggest they connect an appropriate tool (e.g. an MCP \
-            server for email or calendar) in Settings → Connected Apps.
+            server for email or calendar) in Settings → Apps.
             """
             remainingToolSteps = 0
         }

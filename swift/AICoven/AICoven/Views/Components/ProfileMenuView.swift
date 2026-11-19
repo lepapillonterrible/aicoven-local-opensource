@@ -37,7 +37,11 @@ struct ProfileMenuView: View {
             Divider()
 
             Button(role: .destructive) {
-                try? authService.signOut()
+                do {
+                    try authService.signOut()
+                } catch {
+                    AppErrorReporter.log(error: error, context: "ProfileMenuView.signOut")
+                }
             } label: {
                 Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
             }

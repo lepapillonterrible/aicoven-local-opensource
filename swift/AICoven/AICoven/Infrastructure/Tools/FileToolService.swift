@@ -524,7 +524,7 @@ actor FileToolService {
 
             return await .error(
                 tool: tool,
-                message: "Access to '\(resolvedPath)' has not been granted. Please add this folder in Settings > File Access, or grant access when prompted.",
+                message: "Access to '\(resolvedPath)' has not been granted. Please add this folder in Settings > This Mac, or grant access when prompted.",
                 errorType: "folder_not_authorized",
                 isRetryable: true
             )

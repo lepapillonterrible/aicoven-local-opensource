@@ -32,11 +32,6 @@ extension Color {
         ThemeManager.shared.theme.surface
     }
 
-    /// The theme's page surface, under the cloud app's name for it.
-    static var aicovenSurface: Color {
-        ThemeManager.shared.theme.surface
-    }
-
     /// UI colors
     static var aicovenGlass: Color {
         ThemeManager.shared.theme.glass

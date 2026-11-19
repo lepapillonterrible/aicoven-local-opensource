@@ -151,6 +151,6 @@ struct SettingsForm<Content: View>: View {
         .formStyle(.grouped)
         .font(.aicovenBody)
         .scrollContentBackground(.hidden)
-        .background(Color.aicovenSurface)
+        .background(Color.aicovenDark)
     }
 }
