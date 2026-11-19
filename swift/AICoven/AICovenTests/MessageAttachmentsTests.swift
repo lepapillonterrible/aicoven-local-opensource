@@ -249,6 +249,17 @@ final class MessageAttachmentsTests: XCTestCase {
         XCTAssertEqual(files(under: root), [])
         XCTAssertNil(presenter.errorMessage, "Nothing failed: there is nothing to say to the other account")
         XCTAssertFalse(presenter.isOpening)
+
+        // Nor is the other account told of a read that failed.
+        account = "account-a"
+        reads.isWaiting = expectation(description: "It is being read again")
+        let failing = Task { await presenter.open(attachmentID: "a", filename: "private.txt") }
+        await fulfillment(of: [reads.isWaiting].compactMap(\.self), timeout: 10)
+        account = "account-b"
+        reads.letGo(failing: true)
+        await failing.value
+        XCTAssertNil(presenter.errorMessage)
+        XCTAssertFalse(presenter.isOpening)
     }
 
     @MainActor

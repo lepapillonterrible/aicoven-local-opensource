@@ -80,7 +80,8 @@ final class AttachmentPreviewPresenter: ObservableObject {
             guard currentAccount() == account else { return }
             previewURL = try stage(data, named: filename)
         } catch {
-            guard opening == request else { return }
+            // Nor is its failure another account's to be told of.
+            guard opening == request, currentAccount() == account else { return }
             errorMessage = Self.cannotOpen
             // Said, as well as shown under the attachment: focus stays on
             // the button that was pressed.
