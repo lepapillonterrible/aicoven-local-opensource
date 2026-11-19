@@ -126,8 +126,12 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
             }
 
             // Function names must match ^[a-zA-Z0-9_-]{1,64}$, which excludes
-            // the dot in names such as `file.read`.
-            let wireName = tool.name.replacingOccurrences(of: ".", with: "_")
+            // the dot in names such as `file.read`. Two names that differ only
+            // by a dot and an underscore get distinct wire names.
+            var wireName = tool.name.replacingOccurrences(of: ".", with: "_")
+            while wireToOriginalName[wireName] != nil {
+                wireName += "_"
+            }
             wireToOriginalName[wireName] = tool.name
 
             return ToolDef(

@@ -131,10 +131,11 @@ final class OpenRouterProviderTests: XCTestCase {
         XCTAssertEqual(response.message.content, "Hello")
     }
 
-    func testCompleteChat_sendsADottedToolNameInFunctionNameFormAndMapsTheCallBack() async throws {
+    func testCompleteChat_sendsDottedToolNamesInFunctionNameFormAndMapsEachCallBack() async throws {
         let body = """
         {"choices": [{"message": {"role": "assistant", "content": null, "tool_calls": [
-            {"id": "call_1", "type": "function", "function": {"name": "file_read", "arguments": "{\\"path\\": \\"a.txt\\"}"}}
+            {"id": "call_1", "type": "function", "function": {"name": "file_read_", "arguments": "{\\"path\\": \\"a.txt\\"}"}},
+            {"id": "call_2", "type": "function", "function": {"name": "file_read", "arguments": "{\\"path\\": \\"b.txt\\"}"}}
          ]}}],
          "model": "anthropic/claude-sonnet-9"}
         """.data(using: .utf8)!
@@ -144,20 +145,20 @@ final class OpenRouterProviderTests: XCTestCase {
         let response = try await client.completeChat(
             messages: [LLMMessage(role: .user, content: "Read a.txt")],
             model: "anthropic/claude-sonnet-9",
-            options: ChatOptions(tools: [
+            options: ChatOptions(tools: ["file.read", "file_read"].map { name in
                 LLMToolDefinition(
-                    name: "file.read",
+                    name: name,
                     description: "Read a file",
                     parameters: [LLMToolParameter(name: "path", type: "string", description: "Path", required: true)]
                 )
-            ])
+            })
         )
 
         let sent = try XCTUnwrap(JSONSerialization.jsonObject(with: sentBody.value) as? [String: Any])
         let tools = try XCTUnwrap(sent["tools"] as? [[String: Any]])
-        let function = try XCTUnwrap(tools.first?["function"] as? [String: Any])
-        XCTAssertEqual(function["name"] as? String, "file_read")
-        XCTAssertEqual(response.toolCalls?.map(\.name), ["file.read"])
+        let names = tools.compactMap { ($0["function"] as? [String: Any])?["name"] as? String }
+        XCTAssertEqual(names, ["file_read", "file_read_"])
+        XCTAssertEqual(response.toolCalls?.map(\.name), ["file_read", "file.read"])
     }
 
     func testCompleteChat_namesOpenRouterWhenTheKeyIsRefused() async {
