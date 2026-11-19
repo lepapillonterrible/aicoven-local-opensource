@@ -1053,7 +1053,12 @@ struct EditProviderKeySheet: View {
                         // been read: reading it would replace what was typed.
                         .disabled(!gatewayIsRead)
                         .task {
-                            gatewayURL = await (try? ProviderAccountService.shared.gatewayAddress(forAccount: account.id)) ?? ""
+                            // Once: read again when the section comes back,
+                            // it would replace what has been typed since.
+                            guard !gatewayIsRead else { return }
+                            let stored = await (try? ProviderAccountService.shared.gatewayAddress(forAccount: account.id)) ?? ""
+                            guard !gatewayIsRead, !Task.isCancelled else { return }
+                            gatewayURL = stored
                             gatewayIsRead = true
                         }
                 }

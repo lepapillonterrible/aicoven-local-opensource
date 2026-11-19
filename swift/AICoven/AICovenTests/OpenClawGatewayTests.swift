@@ -245,6 +245,9 @@ final class OpenClawGatewayTests: XCTestCase {
         for timestamp in [-0.5 as Any, true as Any, -1 as Any, "now" as Any] {
             let socket = ScriptedGatewaySocket()
             socket.push(["type": "event", "event": "connect.challenge", "payload": ["nonce": "n", "ts": timestamp]])
+            // So that taking it for a challenge would not wait for ever
+            // for a welcome: the connect it would send is what is checked.
+            socket.pushText("no welcome")
             do {
                 _ = try await connection(socket).open()
                 XCTFail("Not a challenge: \(timestamp)")
@@ -280,6 +283,11 @@ final class OpenClawGatewayTests: XCTestCase {
         XCTAssertEqual(noVerdict as? OpenClawGatewayError, .unexpectedReply)
         let refusalWithNoReason = try await answer { $0["ok"] = false }
         XCTAssertEqual(refusalWithNoReason as? OpenClawGatewayError, .unexpectedReply)
+        let refusalWithAnEmptyReason = try await answer {
+            $0["ok"] = false
+            $0["error"] = [String: Any]()
+        }
+        XCTAssertEqual(refusalWithAnEmptyReason as? OpenClawGatewayError, .unexpectedReply)
         let noMethods = try await answer { payload(&$0) { $0["features"] = ["events": ["chat"]] } }
         XCTAssertEqual(noMethods as? OpenClawGatewayError, .unexpectedReply, "Protocol 4, but not a welcome")
         let noLimit = try await answer { payload(&$0) { $0["policy"] = ["maxPayload": 0] } }
@@ -388,6 +396,22 @@ final class OpenClawGatewayTests: XCTestCase {
 
         socket.push(["type": "event", "event": "chat", "seq": Int.max, "payload": ["state": "delta"]])
         socket.push(["type": "event", "event": "chat", "seq": 1, "payload": ["state": "delta"]])
+
+        // A number too large to count to ends it as well.
+        let other = ScriptedGatewaySocket()
+        let second = try connection(other)
+        async let openedOther = second.open()
+        await other.welcomeNextConnection(in: self)
+        _ = try await openedOther
+        other.pushText(#"{"type":"event","event":"chat","seq":9223372036854775808,"payload":{"state":"delta"}}"#)
+        do {
+            for try await _ in second.events {
+                XCTFail("An event numbered past counting is not delivered")
+            }
+            XCTFail("The events end with the connection")
+        } catch {
+            XCTAssertEqual(error as? OpenClawGatewayError, .closed)
+        }
 
         var seen = 0
         do {

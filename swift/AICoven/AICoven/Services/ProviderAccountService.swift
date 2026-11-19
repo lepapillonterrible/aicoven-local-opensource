@@ -56,7 +56,15 @@ enum KeychainHelper {
         UserScope.scopedKeychainService("AICovenProviderKeys")
     }
 
-    static func save(key: String, value: String) throws {
+    /// The current account's Keychain service, to keep for work that waits:
+    /// passed back as `service`, what is saved or deleted afterwards is
+    /// that account's, whoever is signed in by then.
+    static var currentService: String {
+        service
+    }
+
+    static func save(key: String, value: String, service: String? = nil) throws {
+        let service = service ?? self.service
         let data = Data(value.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -74,7 +82,8 @@ enum KeychainHelper {
         }
     }
 
-    static func load(key: String) -> String? {
+    static func load(key: String, service: String? = nil) -> String? {
+        let service = service ?? self.service
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -90,7 +99,8 @@ enum KeychainHelper {
         return String(data: data, encoding: .utf8)
     }
 
-    static func delete(key: String) {
+    static func delete(key: String, service: String? = nil) {
+        let service = service ?? self.service
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

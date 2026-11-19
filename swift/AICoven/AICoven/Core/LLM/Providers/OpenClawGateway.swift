@@ -30,7 +30,7 @@ nonisolated enum OpenClawGatewayError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .invalidAddress: "Enter a Gateway address that starts with ws:// on this device, or wss:// anywhere else, with no name, password, path or query in it."
+        case .invalidAddress: "Enter a Gateway address that starts with ws:// on this device, or wss:// anywhere else, with no name, password, path, query or fragment in it."
         case .unexpectedReply: "The address did not answer as an OpenClaw Gateway."
         case .unsupportedProtocol: "This OpenClaw Gateway speaks a version of its protocol AICoven does not."
         case let .refused(code, message): message.isEmpty ? "The OpenClaw Gateway refused: \(code)." : "The OpenClaw Gateway refused: \(message)"
@@ -219,7 +219,9 @@ actor OpenClawGatewayConnection {
         }
         // A refusal is one only if it says what it refused with.
         guard accepted else {
-            guard answer["error"] is [String: Any] else { throw OpenClawGatewayError.unexpectedReply }
+            guard let code = (answer["error"] as? [String: Any])?["code"] as? String, !code.isEmpty else {
+                throw OpenClawGatewayError.unexpectedReply
+            }
             throw Self.refusal(in: answer)
         }
         guard let welcome = answer["payload"] as? [String: Any], welcome["type"] as? String == "hello-ok",
@@ -334,9 +336,11 @@ actor OpenClawGatewayConnection {
                     }
                 case "event":
                     guard let name = object["event"] as? String else { continue }
-                    if let sequence = Self.integer(object["seq"]) {
+                    if let numbered = object["seq"], !(numbered is NSNull) {
                         // A number skipped is an event lost: what follows
-                        // cannot be trusted to be the whole of it.
+                        // cannot be trusted to be the whole of it. So is
+                        // one that is not a number this app can count to.
+                        guard let sequence = Self.integer(numbered) else { throw OpenClawGatewayError.closed }
                         if let lastSequence, lastSequence == .max || sequence != lastSequence + 1 { throw OpenClawGatewayError.closed }
                         lastSequence = sequence
                     }
@@ -396,32 +400,38 @@ nonisolated enum OpenClawGateway {
     ) async throws -> (gateway: OpenClawGatewayConnection, hello: OpenClawGatewayHello) {
         // The Keychain is the current account's. The handshake waits, and
         // the account can change while it does: what is kept or forgotten
-        // afterwards is the account's this began for, or nothing.
-        let account = UserScope.currentUserID
+        // afterwards is in the Keychain of the account this began under.
+        let keychain = KeychainHelper.currentService
         let identity = try OpenClawDeviceIdentity.loadOrCreate()
         let own = token.flatMap { $0.isEmpty ? nil : $0 }
-        let issued = own == nil ? KeychainHelper.load(key: deviceTokenKey(for: address)) : nil
+        let issued = own == nil ? KeychainHelper.load(key: deviceTokenKey(for: address), service: keychain) : nil
         do {
             return try await open(
                 address, identity: identity, token: own ?? issued, isDeviceToken: own == nil && issued != nil,
-                account: account, timeout: timeout, over: socket
+                keychain: keychain, timeout: timeout, over: socket
             )
         } catch OpenClawGatewayError.refused(code: "AUTH_DEVICE_TOKEN_MISMATCH", _) where issued != nil {
             // Forgotten only if it is still the one that was refused: a
-            // newer connection can have been issued another since.
-            if UserScope.currentUserID == account, KeychainHelper.load(key: deviceTokenKey(for: address)) == issued {
-                KeychainHelper.delete(key: deviceTokenKey(for: address))
+            // newer connection can have been issued another since. Looked
+            // at and forgotten in one step, with no other in between.
+            deviceTokens.withLock {
+                if KeychainHelper.load(key: deviceTokenKey(for: address), service: keychain) == issued {
+                    KeychainHelper.delete(key: deviceTokenKey(for: address), service: keychain)
+                }
             }
-            return try await open(address, identity: identity, token: nil, isDeviceToken: false, account: account, timeout: timeout, over: socket)
+            return try await open(address, identity: identity, token: nil, isDeviceToken: false, keychain: keychain, timeout: timeout, over: socket)
         }
     }
+
+    /// Held while an issued token is kept or forgotten.
+    private static let deviceTokens = NSLock()
 
     private static func open(
         _ address: URL,
         identity: OpenClawDeviceIdentity,
         token: String?,
         isDeviceToken: Bool,
-        account: String,
+        keychain: String,
         timeout: Duration,
         over socket: (URL) -> OpenClawSocket
     ) async throws -> (gateway: OpenClawGatewayConnection, hello: OpenClawGatewayHello) {
@@ -442,9 +452,11 @@ nonisolated enum OpenClawGateway {
         defer { givingUp.cancel() }
         do {
             let hello = try await gateway.open()
-            if let issued = hello.deviceToken, UserScope.currentUserID == account {
+            if let issued = hello.deviceToken {
                 do {
-                    try KeychainHelper.save(key: deviceTokenKey(for: address), value: issued)
+                    try deviceTokens.withLock {
+                        try KeychainHelper.save(key: deviceTokenKey(for: address), value: issued, service: keychain)
+                    }
                 } catch {
                     // The connection stands; the next one will have no
                     // issued token to show.
