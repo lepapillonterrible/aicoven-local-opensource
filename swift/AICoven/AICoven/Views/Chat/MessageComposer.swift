@@ -121,8 +121,8 @@ struct MessageComposer: View {
     /// its draft, from the parent.
     var hasReturnedDraft: Bool = false
     var takeReturnedDraft: (() -> ComposerDraft?)?
-    /// Told when the field takes or loses keyboard focus, and when a
-    /// message has been sent or set to wait: approvals are held back while
+    /// Told when the field takes or loses keyboard focus, and when Send
+    /// is pressed with something to send: approvals are held back while
     /// the person composes.
     var onFocusChange: ((Bool) -> Void)?
     var onSent: (() -> Void)?
@@ -504,11 +504,13 @@ struct MessageComposer: View {
         guard canSend else { return }
         let submitted = attachments
         isSubmittingSend = true
+        // Told as Send is pressed, not when the message has been taken:
+        // what is typed while that is waited for is the next message.
+        onSent?()
         Task { @MainActor in
             let accepted = await onSend(submitted)
             isSubmittingSend = false
             guard accepted else { return }
-            onSent?()
             attachFailure = nil
             #if os(macOS)
             macInputHeight = GrowingTextEditor.emptyHeight

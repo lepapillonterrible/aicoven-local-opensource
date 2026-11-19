@@ -1,4 +1,5 @@
 @testable import AICoven
+internal import Combine
 import XCTest
 
 /// Approvals: a tool that changes something asks first and waits; the
@@ -21,12 +22,14 @@ final class ToolApprovalsTests: XCTestCase {
     }
 
     /// Waits until the approvals hold `count` back from the screen.
-    private func held(_ approvals: ToolApprovals, _ count: Int, file: StaticString = #filePath, line: UInt = #line) async {
-        for _ in 0 ..< 10000 {
-            if approvals.held.count >= count { return }
-            await Task.yield()
+    private func held(_ approvals: ToolApprovals, _ count: Int) async {
+        let reached = expectation(description: "\(count) held back")
+        reached.assertForOverFulfill = false
+        let watching = approvals.$held.sink { held in
+            if held.count >= count { reached.fulfill() }
         }
-        XCTFail("The approval was never held", file: file, line: line)
+        await fulfillment(of: [reached], timeout: 10)
+        watching.cancel()
     }
 
     /// Runs what is due, then what that scheduled, until nothing is left.
@@ -170,6 +173,45 @@ final class ToolApprovalsTests: XCTestCase {
         clock += 5
         runScheduled()
         XCTAssertNil(approvals.showing)
+    }
+
+    func testAnApprovalHeldWhoseTurnHasJustStopped_isNotShownByWhatLetsHeldOnesIn() async {
+        // By a message being sent.
+        let sending = makeApprovals()
+        sending.composerFocusChanged(true)
+        sending.noteComposerChanged()
+        let first = approval()
+        let asking = Task { await sending.ask(first) }
+        await held(sending, 1)
+        // The turn stops, and before the queue has been told, a message is
+        // sent: nothing of the stopped turn comes up.
+        asking.cancel()
+        sending.noteSent()
+        XCTAssertNil(sending.showing)
+        XCTAssertEqual(sending.waiting, [])
+        XCTAssertFalse(sending.announceShowing(first.id))
+        let answer = await asking.value
+        XCTAssertEqual(answer, .withdrawn)
+        XCTAssertNil(sending.showing)
+        XCTAssertEqual(sending.askingThreadIDs, [])
+
+        // By the field being left, with another still to come in.
+        let leaving = makeApprovals()
+        leaving.composerFocusChanged(true)
+        leaving.noteComposerChanged()
+        let stoppedOne = approval()
+        let other = approval(in: "thread-2", "Write this file?")
+        let askingStopped = Task { await leaving.ask(stoppedOne) }
+        await held(leaving, 1)
+        let askingOther = Task { await leaving.ask(other) }
+        await held(leaving, 2)
+        askingStopped.cancel()
+        leaving.composerFocusChanged(false)
+        XCTAssertEqual(leaving.showing?.approval, other, "The one whose turn goes on comes in")
+        XCTAssertEqual(leaving.waiting, [])
+        _ = await askingStopped.value
+        askingOther.cancel()
+        _ = await askingOther.value
     }
 
     func testFocusWithoutTyping_orTypingLongAgo_holdsNothingBack() async {

@@ -97,7 +97,7 @@ final class ToolApprovals: ObservableObject {
     /// Asked while the person was composing, and not on screen yet: an
     /// approval does not come up under what is being typed. They come in
     /// when the person sends, pauses, or leaves the composer.
-    private(set) var held: [ToolApproval] = []
+    @Published private(set) var held: [ToolApproval] = []
     /// The threads with a turn waiting on an answer.
     @Published private(set) var askingThreadIDs: Set<String> = []
     /// What each thread's running turn has been asked and has had answered,
@@ -118,6 +118,10 @@ final class ToolApprovals: ObservableObject {
     /// for one never acts on another.
     private var showingGeneration = 0
     private let schedule: Schedule
+    /// The approvals whose turn has stopped, by id, from the moment it
+    /// stops: the queue is told a moment later, and nothing of a stopped
+    /// turn is shown in between.
+    private nonisolated let stopped = StoppedApprovals()
 
     /// How long after the last change to the composer's text the person
     /// still counts as composing.
@@ -174,6 +178,7 @@ final class ToolApprovals: ObservableObject {
                 }
             }
         } onCancel: {
+            stopped.insert(approval.id)
             Task { @MainActor in self.withdraw(approval.id) }
         }
         // An answer counts, and is kept, only if the turn was still there to
@@ -276,8 +281,10 @@ final class ToolApprovals: ObservableObject {
         }
     }
 
-    /// Shows the approval, or puts it behind the one showing.
+    /// Shows the approval, or puts it behind the one showing. Not one
+    /// whose turn has stopped: it leaves unseen when the queue is told.
     private func enqueue(_ approval: ToolApproval) {
+        guard !stopped.contains(approval.id) else { return }
         if showing == nil {
             show(approval)
         } else {
@@ -287,6 +294,7 @@ final class ToolApprovals: ObservableObject {
 
     /// The turn that asked has stopped: its approval leaves unanswered.
     private func withdraw(_ approvalID: String) {
+        stopped.remove(approvalID)
         guard asked[approvalID] != nil else { return }
         settle(approvalID, with: .withdrawn)
         if showing?.approval.id == approvalID, showing?.phase == .asking {
@@ -345,6 +353,8 @@ final class ToolApprovals: ObservableObject {
                 if let id = showing?.approval.id {
                     announced.remove(id)
                 }
+                // Nor is one whose turn has stopped shown next.
+                waiting.removeAll { self.stopped.contains($0.id) }
                 if waiting.isEmpty {
                     showingGeneration += 1
                     showing = nil
@@ -353,6 +363,26 @@ final class ToolApprovals: ObservableObject {
                 }
             }
         }
+    }
+}
+
+/// The ids of approvals whose turn has stopped. Added to from whatever
+/// thread cancels the turn's task, and read on the main actor: under the
+/// lock.
+private final nonisolated class StoppedApprovals: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ids: Set<String> = []
+
+    func insert(_ id: String) {
+        lock.withLock { _ = ids.insert(id) }
+    }
+
+    func remove(_ id: String) {
+        lock.withLock { _ = ids.remove(id) }
+    }
+
+    func contains(_ id: String) -> Bool {
+        lock.withLock { ids.contains(id) }
     }
 }
 
