@@ -354,6 +354,15 @@ final class DatabaseManager {
                 }
             }
 
+            // v11: what is typed in a thread's composer and not sent, kept
+            // encrypted with the thread, so it is there when the thread is
+            // opened again and goes when the thread does.
+            migrator.registerMigration("v11_thread_draft") { db in
+                try db.alter(table: "threads") { t in
+                    t.add(column: "draft_ciphertext", .blob)
+                }
+            }
+
             try migrator.migrate(queue)
             dbQueue = queue
         } catch {
