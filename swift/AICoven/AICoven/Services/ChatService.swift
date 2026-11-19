@@ -179,6 +179,14 @@ actor ChatService {
     /// from ProviderAccountService on each call. Tests can disable this to
     /// keep injected mock clients and routers.
     private let shouldAutoRefreshEnvironment: Bool
+    /// The Hermes agent connected, if one is; injected for tests.
+    private let hermesAgent: @Sendable () -> HermesAgentClient?
+    /// The threads whose latest turn was a Hermes run. What follows a turn
+    /// (the thread's summary, and the memory proposed from it) is made by
+    /// one of the app's own models, and is not made for these: the turn
+    /// went to Hermes, and whichever provider is chosen by the time it ends
+    /// was not given it.
+    private var threadsLastAnsweredByHermes: Set<String> = []
 
     /// Maximum number of prior turns to include when building LLM context.
     private let maxContextMessages = 20
@@ -189,7 +197,8 @@ actor ChatService {
         llmClients: [String: LLMClient],
         threadStore: ThreadStore,
         toolService: ChatToolService,
-        shouldAutoRefreshEnvironment: Bool = true
+        shouldAutoRefreshEnvironment: Bool = true,
+        hermesAgent: @escaping @Sendable () -> HermesAgentClient? = ProviderAccountService.hermesAgent
     ) {
         self.contextBuilder = contextBuilder
         self.modelRouter = modelRouter
@@ -197,6 +206,7 @@ actor ChatService {
         self.threadStore = threadStore
         self.toolService = toolService
         self.shouldAutoRefreshEnvironment = shouldAutoRefreshEnvironment
+        self.hermesAgent = hermesAgent
     }
 
     /// Ensure that we have an up-to-date LLM environment based on the latest
@@ -329,6 +339,20 @@ actor ChatService {
             AppErrorReporter.log(message: "No role override (roleId=\(roleId ?? "nil")); using global provider=\(prefProvider) model=\(prefModel)", context: "ChatService.streamMessage.roleResolution")
             #endif
         }
+
+        // Hermes is an agent, not a model: it runs the turn itself, with its
+        // own tools and memory, and this app follows the run.
+        if prefProvider == "hermes", let agent = hermesAgent() {
+            threadsLastAnsweredByHermes.insert(threadId)
+            let earlier = try await loadMessages(threadId: threadId, limit: Self.hermesHistoryLimit)
+            try await HermesTurn(client: agent, threadID: threadId).run(
+                input: message,
+                history: Self.hermesHistory(from: earlier),
+                report: onStateChange
+            )
+            return
+        }
+        threadsLastAnsweredByHermes.remove(threadId)
 
         let descriptor: ModelDescriptor
         let client: LLMClient
@@ -1233,6 +1257,7 @@ actor ChatService {
     /// configured LLM providers. This runs independently of any one chat turn
     /// and is safe to call opportunistically after new messages are added.
     func updateThreadSummary(threadId: String) async {
+        guard !threadsLastAnsweredByHermes.contains(threadId) else { return }
         // On iOS, skip background summaries when only local models are
         // available. Loading a second MLX model (~1.5 GB) for an optional
         // summary will push past the jetsam memory limit and crash the app.
@@ -1244,9 +1269,12 @@ actor ChatService {
         // Ensure environment is ready before routing summarization calls.
         await ensureEnvironment()
         do {
+            // Checked again after each wait, up to the sending and the
+            // keeping: a Hermes turn can have started in the thread since.
+            guard !threadsLastAnsweredByHermes.contains(threadId) else { return }
             // Use the same history seen by the chat UI.
             let history = try await loadMessages(threadId: threadId, limit: maxContextMessages)
-            guard !history.isEmpty else { return }
+            guard !history.isEmpty, !threadsLastAnsweredByHermes.contains(threadId) else { return }
 
             var messages: [LLMMessage] = []
             messages.append(
@@ -1288,7 +1316,7 @@ actor ChatService {
                 options: options
             )
             let summary = response.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !summary.isEmpty else { return }
+            guard !summary.isEmpty, !threadsLastAnsweredByHermes.contains(threadId) else { return }
 
             try await threadStore.updateSummary(forThreadID: threadId, summary: summary)
 
@@ -1324,7 +1352,15 @@ actor ChatService {
     ///  - llm_provider: "openai" | "anthropic" | "google"
     ///  - openai_model / anthropic_model / gemini_model
     private func resolveProviderAndModel() -> (String, String) {
+        // A choice of Hermes made when Hermes meant its models is moved
+        // first: read as it was, it would be taken for the Hermes agent.
+        ProviderAccountService.convertHermesModelConnectionsIfNeeded()
         let savedProvider = UserDefaults.standard.string(forKey: UserScope.scopedKey("llm_provider"))?.lowercased()
+        // Hermes has no model client to be found among the clients: it is
+        // chosen when it is connected.
+        if savedProvider == "hermes", hermesAgent() != nil {
+            return ("hermes", "")
+        }
 
         // If the saved provider isn't actually configured (e.g. no API key),
         // or if no provider was ever saved, fall back intelligently to what's available.
@@ -1388,6 +1424,23 @@ actor ChatService {
     }
 
     // MARK: - Deployment helpers
+
+    /// How much of the thread a Hermes run is given: Hermes keeps its own
+    /// memory of the session as well.
+    static let hermesHistoryLimit = 40
+
+    /// What was said before the message a Hermes run answers. The message
+    /// itself is stored before the turn starts, so it is the last one
+    /// loaded, and is left out: the run is given it as its input.
+    static func hermesHistory(from stored: [ChatMessage]) -> [HermesAgentClient.Message] {
+        var earlier = stored
+        if earlier.last?.role == "user" {
+            earlier.removeLast()
+        }
+        return earlier
+            .filter { ["user", "assistant"].contains($0.role) && !$0.content.isEmpty }
+            .map { HermesAgentClient.Message(role: $0.role, content: $0.content) }
+    }
 
     /// Returns `true` when the given provider is running locally \u2014 either
     /// because it\u2019s inherently local (MLX, Ollama) or because the user has

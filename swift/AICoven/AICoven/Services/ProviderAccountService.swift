@@ -265,6 +265,40 @@ actor ProviderAccountService {
         return ProviderAccount(from: local)
     }
 
+    /// Create a connection to a Hermes agent: the address of its API server,
+    /// and the key that server was started with, if it was started with one.
+    @discardableResult
+    func createHermesAgentAccount(displayName: String, baseURL: String, apiKey: String?) async throws -> ProviderAccount {
+        var locals = try loadLocalAccounts()
+        let id = UUID().uuidString
+        let local = LocalProviderAccount(
+            id: id,
+            provider: "hermes",
+            displayName: displayName,
+            scopes: ["chat"],
+            defaultModel: nil,
+            baseURL: baseURL,
+            status: "healthy",
+            createdAt: Date()
+        )
+        locals.append(local)
+        // The key first, as for a server: a failed key save leaves no
+        // connection behind, and a failed account save takes its key back out.
+        if let apiKey, !apiKey.isEmpty {
+            try KeychainHelper.save(key: keychainKey(for: id), value: apiKey)
+        }
+        do {
+            try saveLocalAccounts(locals)
+        } catch {
+            KeychainHelper.delete(key: keychainKey(for: id))
+            throw error
+        }
+
+        await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
+
+        return ProviderAccount(from: local)
+    }
+
     /// Create a connection to a server that speaks the OpenAI chat API. The
     /// key is optional: many servers on a person's own machine ask for none.
     @discardableResult
@@ -378,11 +412,17 @@ actor ProviderAccountService {
             throw LocalProviderAccountError.accountNotFound
         }
         let models: [ProviderInitializationStatus.ModelMetadata]
-        do {
-            models = try await fetchRemoteModels(for: account)
-        } catch {
-            AppErrorReporter.log(error: error, context: "ProviderAccountService.getInitializationStatus.fetchRemoteModels")
+        if account.provider.lowercased() == "hermes" {
+            // A Hermes agent has no models to choose among, so the screens
+            // that list a connection's models do not ask it: only Test does.
             models = []
+        } else {
+            do {
+                models = try await fetchRemoteModels(for: account)
+            } catch {
+                AppErrorReporter.log(error: error, context: "ProviderAccountService.getInitializationStatus.fetchRemoteModels")
+                models = []
+            }
         }
         return ProviderInitializationStatus(
             providerAccountId: account.id,
@@ -501,6 +541,10 @@ actor ProviderAccountService {
         for account in locals {
             let providerID = account.provider.lowercased()
             if providerID == "openai_compatible", account.id != compatibleServerID { continue }
+            // A Hermes agent has no models for the router to choose among,
+            // and is not asked for any here: this runs before every turn,
+            // and an agent that is switched off would hold each one up.
+            if providerID == "hermes" { continue }
             let metadata: [ProviderInitializationStatus.ModelMetadata]
             do {
                 metadata = try await fetchRemoteModels(for: account)
@@ -627,6 +671,17 @@ actor ProviderAccountService {
 // MARK: - ProviderAccountService Private Helpers
 
 extension ProviderAccountService {
+    /// The Hermes agent the app runs Hermes turns with: the first one
+    /// connected.
+    static func hermesAgent() -> HermesAgentClient? {
+        guard let account = loadLocalAccountsFromDefaults().first(where: { $0.provider.lowercased() == "hermes" }),
+              let baseURL = account.baseURL.flatMap(LocalProviderDiscoveryService.serverBaseURL(from:)) else {
+            return nil
+        }
+        let key = KeychainHelper.load(key: keychainKey(forAccountId: account.id))
+        return HermesAgentClient(baseURL: baseURL, apiKey: key?.isEmpty == false ? key : nil)
+    }
+
     /// The OpenAI-compatible server chat reaches: the first connected, with
     /// its own key. Both come from the same connection, so one server's key
     /// is never sent to another.
@@ -1018,7 +1073,7 @@ extension ProviderAccountService {
                     contextLength: 128_000
                 )
             }
-        case "openclaw", "openai_compatible":
+        case "openclaw", "openai_compatible", "hermes":
             let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) ?? ""
             let defaultBaseURL = switch provider {
             case "openclaw": "http://localhost:3000"

@@ -339,7 +339,8 @@ struct TurnProgress {
     ) -> (outcome: TurnOutcome, message: ChatMessage, trace: WorkTrace) {
         var trace = trace
         trace.finishedAt = now
-        if stopped, thrown != nil || last?.status != .completed {
+        // Stopped by the person, or by the agent that was running it.
+        if (stopped && (thrown != nil || last?.status != .completed)) || (thrown == nil && last?.status == .cancelled) {
             let partial = MessageAdapter.sanitizeContentForDisplay(partialAnswer).trimmingCharacters(in: .whitespacesAndNewlines)
             let content = partial.isEmpty ? "Stopped before any reply." : "\(partial)\n\n_Stopped here._"
             return (.cancelled, Self.message(in: threadID, role: "assistant", content: content), trace)

@@ -155,6 +155,10 @@ actor StrixSettingsService {
                     defaults.set(model, forKey: UserScope.scopedKey("gemini_model"))
                 case "openrouter", "openai_compatible":
                     defaults.set(model, forKey: UserScope.scopedKey("\(provider)_model"))
+                case "hermes":
+                    // The agent uses the model it is set up with: there is
+                    // none to keep here.
+                    break
                 default:
                     defaults.set(model, forKey: UserScope.scopedKey("openai_model"))
                 }

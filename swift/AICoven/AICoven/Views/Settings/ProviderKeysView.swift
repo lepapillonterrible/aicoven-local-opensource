@@ -228,7 +228,7 @@ struct AddProviderKeySheet: View {
     let onComplete: () -> Void
 
     private static let providers = [
-        "openai", "anthropic", "google", "openrouter", "openai_compatible", "ollama", "openclaw", "mlx",
+        "openai", "anthropic", "google", "openrouter", "openai_compatible", "hermes", "ollama", "openclaw", "mlx",
     ]
 
     #if os(macOS)
@@ -542,6 +542,10 @@ private struct AddProviderKeyStep2View: View {
         selectedProvider == "openclaw"
     }
 
+    private var isHermes: Bool {
+        selectedProvider == "hermes"
+    }
+
     private var isCompatibleServer: Bool {
         selectedProvider == "openai_compatible"
     }
@@ -617,7 +621,7 @@ private struct AddProviderKeyStep2View: View {
         } else {
             Section {
                 Toggle(
-                    isOpenClaw || isCompatibleServer ? "Share my messages with this server" : "Share my messages with \(providerName)",
+                    isOpenClaw || isCompatibleServer ? "Share my messages with this server" : isHermes ? "Share my messages with this Hermes agent" : "Share my messages with \(providerName)",
                     isOn: $acceptedPrivacy
                 )
             } footer: {
@@ -633,6 +637,8 @@ private struct AddProviderKeyStep2View: View {
         switch selectedProvider {
         case "openclaw", "openai_compatible":
             return "Messages and their context go to the server address you enter. Use a server you trust. \(policy)"
+        case "hermes":
+            return "Messages and their context go to the Hermes agent at the address you enter, which works on them with its own tools, memory and model provider. Use an agent you run or trust. \(policy)"
         case "openrouter":
             return "Messages and their context go to OpenRouter, and to the provider of the model you choose, to generate replies. Each has its own privacy policy. \(policy)"
         default:
@@ -653,6 +659,15 @@ private struct AddProviderKeyStep2View: View {
         } else if isOpenClaw {
             Section("Server") {
                 FormAddressField(label: "Address", text: $baseURL, prompt: "http://localhost:3000")
+            }
+        } else if isHermes {
+            Section {
+                FormAddressField(label: "Address", text: $baseURL, prompt: HermesAgentClient.usualAddress)
+            } header: {
+                Text("Hermes agent")
+            } footer: {
+                Text("The address of the Hermes agent's API server, and below, the key it was started with (API_SERVER_KEY), if it has one.")
+                    .font(.aicovenBodySmall)
             }
         }
     }
@@ -791,7 +806,7 @@ private struct AddProviderKeyStep2View: View {
     // MARK: - Save
 
     private var keyPrompt: String {
-        if isOpenClaw || isCompatibleServer { return "Optional" }
+        if isOpenClaw || isCompatibleServer || isHermes { return "Optional" }
         return "Required"
     }
 
@@ -800,7 +815,7 @@ private struct AddProviderKeyStep2View: View {
         if isOllama { return baseURL.isEmpty || selectedOllamaModel.isEmpty }
         if isMLX { return selectedMLXModelID.isEmpty }
         if isCompatibleServer { return selectedServerModel.isEmpty || !acceptedPrivacy }
-        if isOpenClaw { return baseURL.isEmpty || !acceptedPrivacy }
+        if isOpenClaw || isHermes { return baseURL.isEmpty || !acceptedPrivacy }
         return apiKey.isEmpty || !acceptedPrivacy
     }
 
@@ -913,6 +928,17 @@ private struct AddProviderKeyStep2View: View {
                     apiKey: apiKey.isEmpty ? nil : apiKey,
                     defaultModel: nil
                 )
+            } else if isHermes {
+                // As for a server: saved as the address requests go to.
+                guard let agent = LocalProviderDiscoveryService.serverBaseURL(from: baseURL) else {
+                    errorMessage = "Enter the Hermes agent's address, such as \(HermesAgentClient.usualAddress)."
+                    return
+                }
+                _ = try await service.createHermesAgentAccount(
+                    displayName: displayName,
+                    baseURL: agent.absoluteString,
+                    apiKey: apiKey.isEmpty ? nil : apiKey
+                )
             } else {
                 _ = try await service.createProviderAccount(
                     provider: selectedProvider,
@@ -956,7 +982,7 @@ struct EditProviderKeySheet: View {
     }
 
     private var hasAddress: Bool {
-        ["ollama", "openclaw", "openai_compatible"].contains(slug)
+        ["ollama", "openclaw", "hermes", "openai_compatible"].contains(slug)
     }
 
     private var hasKey: Bool {
@@ -967,6 +993,7 @@ struct EditProviderKeySheet: View {
         switch slug {
         case "ollama": "http://localhost:11434"
         case "openclaw": "http://localhost:3000"
+        case "hermes": HermesAgentClient.usualAddress
         default: "http://127.0.0.1:1234"
         }
     }
@@ -1032,10 +1059,12 @@ struct EditProviderKeySheet: View {
         defer { saving = false }
 
         var address = baseURL
-        if slug == "openai_compatible" {
+        if slug == "openai_compatible" || slug == "hermes" {
             // Saved as the address requests go to, as Add saves it.
             guard let server = LocalProviderDiscoveryService.serverBaseURL(from: baseURL) else {
-                errorMessage = "Enter the server's address, such as http://127.0.0.1:1234."
+                errorMessage = slug == "hermes"
+                    ? "Enter the Hermes agent's address, such as \(HermesAgentClient.usualAddress)."
+                    : "Enter the server's address, such as http://127.0.0.1:1234."
                 return
             }
             address = server.absoluteString
