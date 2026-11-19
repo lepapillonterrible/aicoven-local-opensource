@@ -433,7 +433,7 @@ actor ToolExecutionService {
             return slug == serverSlug
         }
 
-        guard var server = matchingServer else {
+        guard let server = matchingServer else {
             return await .error(tool: toolCall.name, message: "MCP server '\(serverSlug)' not found or not connected.")
         }
 
@@ -478,8 +478,7 @@ actor ToolExecutionService {
                 errorType: "mcp_server_changed"
             )
         }
-        server = current
-        let client = mcpClient(server, token)
+        let client = mcpClient(current, token)
 
         do {
             let items = try await client.callTool(name: actionName, arguments: toolCall.args, tool: listed)
@@ -996,7 +995,9 @@ actor ToolExecutionService {
     /// it names one), without the path or anything else of its address,
     /// which can carry a key.
     nonisolated static func shownAddress(of server: MCPServerAccount) -> String {
-        guard let url = URL(string: server.serverUrl), let host = url.host, !host.isEmpty else { return "an address that cannot be read" }
+        guard let url = URL(string: server.serverUrl), let named = url.host, !named.isEmpty else { return "an address that cannot be read" }
+        // An IPv6 address is written between brackets, as in an address.
+        let host = named.contains(":") ? "[\(named)]" : named
         return url.port.map { "\(host):\($0)" } ?? host
     }
 

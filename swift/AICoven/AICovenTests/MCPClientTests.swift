@@ -1073,10 +1073,10 @@ final class MCPToolApprovalTests: XCTestCase {
         XCTAssertEqual(sent.status, "ok")
         XCTAssertEqual(played.asked.last?.header("Mcp-Param-To"), "sam")
 
-        // read_note is no longer listed as only reading (it is not listed
-        // at all now): it was not asked about, so it is not called.
-        let unasked = await relisting.execute(toolCall: ParsedToolCall(name: "mcp.\(slug).read_note", args: [:]), agentType: "test", threadID: "thread-1")
-        XCTAssertEqual(unasked.status, "ok", "Not marked now, so it asks, and here is approved")
+        // read_note is not listed at all now, so it is no longer one that
+        // only reads: it asks like any other, and here is approved.
+        let nowAsked = await relisting.execute(toolCall: ParsedToolCall(name: "mcp.\(slug).read_note", args: [:]), agentType: "test", threadID: "thread-1")
+        XCTAssertEqual(nowAsked.status, "ok")
 
         let (_, quietSlug, quietPlayed) = try await keptServer()
         let person = AskedOfThePerson(answering: .approved)
@@ -1093,6 +1093,7 @@ final class MCPToolApprovalTests: XCTestCase {
         }
         XCTAssertEqual(ToolExecutionService.shownAddress(of: account("https://mcp.zapier.com/api/mcp/s/SECRET/mcp")), "mcp.zapier.com")
         XCTAssertEqual(ToolExecutionService.shownAddress(of: account("http://localhost:3000/mcp")), "localhost:3000")
+        XCTAssertEqual(ToolExecutionService.shownAddress(of: account("http://[::1]:8080/mcp")), "[::1]:8080")
         XCTAssertEqual(ToolExecutionService.shownAddress(of: account("https://user:pass@example.com/x")), "example.com")
         XCTAssertEqual(ToolExecutionService.shownAddress(of: account("not an address")), "an address that cannot be read")
     }
