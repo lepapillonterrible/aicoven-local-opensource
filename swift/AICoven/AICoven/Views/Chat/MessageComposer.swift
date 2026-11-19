@@ -42,9 +42,8 @@ nonisolated enum ComposerRules {
 
     /// Whether something to attach is taken now. Never while an attaching
     /// is under way. What comes back from a chooser is otherwise taken:
-    /// the (+) that opened it was on. What is pasted or dropped is taken
-    /// only while the (+) would be: not while a message is being sent or
-    /// the composer is off.
+    /// the (+) that opened it was on. What is pasted or dropped is not
+    /// taken while a message is being sent or the composer is off.
     static func takesAttachments(isAttaching: Bool, isFromAChooser: Bool, isBusy: Bool, isDisabled: Bool) -> Bool {
         guard !isAttaching else { return false }
         return isFromAChooser || !(isBusy || isDisabled)
