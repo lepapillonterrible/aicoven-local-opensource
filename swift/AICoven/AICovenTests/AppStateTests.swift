@@ -22,6 +22,10 @@ final class AppStateTests: XCTestCase {
     }
 
     func testCreateNewThreadAppendsAndSelectsThread() async throws {
+        // Threads are stored encrypted, so the data must be unlocked.
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        DatabaseManager.shared.configureIfNeeded()
+        await ThreadService.shared.reloadForCurrentUser()
         let state = AppState.shared
 
         // Start from current list; we only assert that a new thread is added and

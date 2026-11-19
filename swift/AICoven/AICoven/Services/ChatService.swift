@@ -180,34 +180,8 @@ actor ChatService {
     /// keep injected mock clients and routers.
     private let shouldAutoRefreshEnvironment: Bool
 
-    /// In-memory local message store keyed by thread ID. This gives us basic
-    /// per-thread history for contextual chat without any backend.
-    private var messageStore: [String: [ChatMessage]] = [:]
     /// Maximum number of prior turns to include when building LLM context.
     private let maxContextMessages = 20
-
-    /// Whether we've attempted to hydrate the in-memory store from disk.
-    private var hasLoadedFromDisk = false
-
-    /// User-scoped on-disk cache location for message history.
-    private var messageStoreURL: URL {
-        let fm = FileManager.default
-        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fm.urls(for: .documentDirectory, in: .userDomainMask).first!
-        let dir = base.appendingPathComponent("AICovenOpen", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        // Use user-scoped filename so each user gets their own message history
-        let filename = UserScope.scopedFilename("messages", extension: "json")
-        return dir.appendingPathComponent(filename, isDirectory: false)
-    }
-
-    /// Reload message store for the current user. Call after user switch.
-    func reloadForCurrentUser() {
-        // Clear in-memory cache
-        messageStore = [:]
-        hasLoadedFromDisk = false
-        // Next call to loadMessages will reload from user-scoped file
-    }
 
     init(
         contextBuilder: ContextBuilder,
@@ -250,64 +224,25 @@ actor ChatService {
         }
     }
 
-    // MARK: - Local message store (memory + disk)
+    // MARK: - Messages (in the thread store)
 
-    /// Append a message to the local in-memory history for its thread and
-    /// persist the updated store to disk.
-    func addLocalMessage(_ message: ChatMessage) {
-        var messages = messageStore[message.threadId] ?? []
-        messages.append(message)
-        messageStore[message.threadId] = messages
-        saveMessageStoreToDisk()
-    }
-
-    /// Ensure the in-memory message store is hydrated from disk at most once.
-    private func ensureLoadedFromDisk() {
-        guard !hasLoadedFromDisk else { return }
-        hasLoadedFromDisk = true
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: messageStoreURL.path) else { return }
+    /// Adds a message to the end of its thread's stored history.
+    func addLocalMessage(_ message: ChatMessage) async {
         do {
-            let data = try Data(contentsOf: messageStoreURL)
-            let decoded = try JSONDecoder().decode([String: [ChatMessage]].self, from: data)
-            messageStore = decoded
+            try await threadStore.appendChatMessage(message)
         } catch {
-            AppErrorReporter.log(error: error, context: "ChatService.ensureLoadedFromDisk")
+            AppErrorReporter.log(error: error, context: "ChatService.addLocalMessage")
         }
     }
 
-    /// Persist the current in-memory message store to disk.
-    private func saveMessageStoreToDisk() {
-        do {
-            let data = try JSONEncoder().encode(messageStore)
-            try data.write(to: messageStoreURL, options: .atomic)
-        } catch {
-            AppErrorReporter.log(error: error, context: "ChatService.saveMessageStoreToDisk")
-        }
-    }
-
-    /// Load messages for a thread
+    /// Load messages for a thread, oldest first.
     /// - Parameters:
     ///   - threadId: The thread ID
     ///   - limit: Maximum number of messages to load
     ///   - before: Load messages before this message ID
     /// - Returns: List of messages
     func loadMessages(threadId: String, limit: Int = 1000, before: String? = nil) async throws -> [ChatMessage] {
-        ensureLoadedFromDisk()
-        let all = messageStore[threadId] ?? []
-        guard !all.isEmpty else { return [] }
-
-        // Messages are stored in ascending order (oldest first). We support
-        // simple pagination using the optional `before` message ID.
-        if let beforeId = before, let idx = all.firstIndex(where: { $0.id == beforeId }) {
-            let end = idx
-            let start = max(0, end - limit)
-            return Array(all[start ..< end])
-        } else {
-            let end = all.count
-            let start = max(0, end - limit)
-            return Array(all[start ..< end])
-        }
+        try await threadStore.loadChatMessages(threadID: threadId, limit: limit, before: before)
     }
 
     /// Send a message and get AI response (non-streaming)

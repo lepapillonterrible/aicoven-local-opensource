@@ -31,6 +31,16 @@ final class ChatServiceSummaryTests: XCTestCase {
         func loadMessages(forThreadID threadID: String, limit: Int?) async throws -> [LocalMessage] {
             fatalError("Not used in tests")
         }
+
+        private var chatMessages: [ChatMessage] = []
+
+        func appendChatMessage(_ message: ChatMessage) async throws {
+            chatMessages.append(message)
+        }
+
+        func loadChatMessages(threadID: String, limit: Int, before: String?) async throws -> [ChatMessage] {
+            Array(chatMessages.filter { $0.threadId == threadID }.suffix(limit))
+        }
     }
 
     private final class MockLLMClient: LLMClient {

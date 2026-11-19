@@ -134,7 +134,7 @@ Tests for core business logic services that orchestrate LLM interactions and dat
 |-------------|-------------|--------|
 | `testUsageService_logsDecodeErrorAndFallsBack` | Tests graceful degradation on corrupted usage data | ✅ |
 | `testPricingUpdateService_logsDecodeErrorAndReturnsEmpty` | Validates pricing service error handling | ✅ |
-| `testThreadService_logsDecodeErrorOnCorruptJSON` | Tests thread service resilience to bad data | ✅ |
+| `testLegacyChatHistory_logsAndSetsAsideAFileItCannotRead` | Tests that an unreadable chat-history file is logged and kept, not deleted | ✅ |
 | `testDatabaseManager_logsErrorOnFailedMigration` | Validates database migration error logging | ✅ |
 
 **Coverage:**
