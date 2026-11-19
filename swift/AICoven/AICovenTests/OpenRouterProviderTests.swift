@@ -9,15 +9,28 @@ final class OpenRouterProviderTests: XCTestCase {
     private let catalog = """
     {"data": [
       {"id": "vendor/no-tools", "name": "No Tools", "context_length": 4096,
-       "supported_parameters": ["temperature"]},
+       "supported_parameters": ["temperature"], "endpoints": ["/api/v1/chat/completions"]},
       {"id": "google/gemini-9", "name": "Gemini 9", "context_length": 1000000,
-       "supported_parameters": ["tools"]},
+       "supported_parameters": ["tools"], "endpoints": ["/api/v1/chat/completions"]},
+      {"id": "google/gemini-9:batch", "name": "Gemini 9 (batch)", "context_length": 1000000,
+       "supported_parameters": ["tools"], "endpoints": ["/api/v1/batches"]},
       {"id": "anthropic/claude-sonnet-9:free", "name": "Sonnet 9 (free)", "context_length": 200000,
-       "supported_parameters": ["tools"]},
+       "supported_parameters": ["tools"], "endpoints": ["/api/v1/chat/completions"]},
       {"id": "anthropic/claude-sonnet-9", "name": "Sonnet 9", "context_length": 200000,
-       "supported_parameters": ["tools", "temperature"]}
+       "supported_parameters": ["tools", "temperature"], "endpoints": ["/api/v1/chat/completions"]}
     ]}
     """.data(using: .utf8)!
+
+    private let account = LocalProviderAccount(
+        id: "openrouter-test",
+        provider: "openrouter",
+        displayName: "OpenRouter",
+        scopes: ["chat"],
+        defaultModel: nil,
+        baseURL: nil,
+        status: "healthy",
+        createdAt: Date()
+    )
 
     override func setUp() {
         super.setUp()
@@ -30,12 +43,13 @@ final class OpenRouterProviderTests: XCTestCase {
         for key in savedKeys {
             UserDefaults.standard.set(savedValues[key], forKey: UserScope.scopedKey(key))
         }
+        KeychainHelper.delete(key: "provider-account-openrouter-test")
         URLProtocol.unregisterClass(MockURLProtocol.self)
         MockURLProtocol.handler = nil
         super.tearDown()
     }
 
-    func testToolModels_dropModelsWithoutToolsAndPutTheDefaultFirst() throws {
+    func testChatModels_dropModelsAChatTurnCannotUseAndPutTheDefaultFirst() throws {
         let models = try ProviderAccountService.openRouterToolModels(from: catalog)
 
         XCTAssertEqual(
@@ -47,16 +61,6 @@ final class OpenRouterProviderTests: XCTestCase {
     }
 
     func testRouting_seesOnlyTheChosenOpenRouterModelAndDownloadsTheCatalogOnce() async throws {
-        let account = LocalProviderAccount(
-            id: "openrouter-test",
-            provider: "openrouter",
-            displayName: "OpenRouter",
-            scopes: ["chat"],
-            defaultModel: nil,
-            baseURL: nil,
-            status: "healthy",
-            createdAt: Date()
-        )
         let defaults = UserDefaults.standard
         try defaults.set(JSONEncoder().encode([account]), forKey: UserScope.scopedKey("provider_accounts.v1"))
         defaults.removeObject(forKey: UserScope.scopedKey("openrouter_model"))
@@ -72,14 +76,41 @@ final class OpenRouterProviderTests: XCTestCase {
             return (response, catalog)
         }
 
-        let withoutAChoice = try await ProviderAccountService.shared.loadAllModelDescriptors()
+        async let first = ProviderAccountService.shared.loadAllModelDescriptors()
+        async let overlapping = ProviderAccountService.shared.loadAllModelDescriptors()
+        let withoutAChoice = try await [first, overlapping]
         defaults.set("google/gemini-9", forKey: UserScope.scopedKey("openrouter_model"))
         let withAChoice = try await ProviderAccountService.shared.loadAllModelDescriptors()
+        defaults.set("vendor/retired", forKey: UserScope.scopedKey("openrouter_model"))
+        let withARetiredChoice = try await ProviderAccountService.shared.loadAllModelDescriptors()
 
-        XCTAssertEqual(withoutAChoice.map(\.modelID), ["anthropic/claude-sonnet-9"])
-        XCTAssertEqual(withoutAChoice.first?.maxContextTokens, 200_000)
+        XCTAssertEqual(withoutAChoice.map { $0.map(\.modelID) }, [["anthropic/claude-sonnet-9"], ["anthropic/claude-sonnet-9"]])
+        XCTAssertEqual(withoutAChoice[0].first?.maxContextTokens, 200_000)
         XCTAssertEqual(withAChoice.map(\.modelID), ["google/gemini-9"])
+        XCTAssertEqual(withARetiredChoice.map(\.modelID), ["vendor/retired"])
         XCTAssertEqual(downloads.count, 1)
+    }
+
+    func testKeyCheck_asksOpenRouterAboutTheStoredKeyAndFailsWhenItIsRefused() async throws {
+        try KeychainHelper.save(key: "provider-account-openrouter-test", value: "STORED_KEY")
+        let status = StatusCode(200)
+        URLProtocol.registerClass(MockURLProtocol.self)
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.absoluteString, "https://openrouter.ai/api/v1/key")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer STORED_KEY")
+            let response = HTTPURLResponse(url: request.url!, statusCode: status.value, httpVersion: nil, headerFields: nil)!
+            return (response, Data("{}".utf8))
+        }
+
+        try await ProviderAccountService.shared.checkOpenRouterKey(accountId: "openrouter-test")
+
+        status.value = 401
+        do {
+            try await ProviderAccountService.shared.checkOpenRouterKey(accountId: "openrouter-test")
+            XCTFail("A refused key must throw")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.hasPrefix("OpenRouter key check HTTP 401"))
+        }
     }
 
     func testCompleteChat_sendsTheKeyToOpenRouterAndReportsItAsTheProvider() async throws {
@@ -98,6 +129,35 @@ final class OpenRouterProviderTests: XCTestCase {
 
         XCTAssertEqual(response.providerID, "openrouter")
         XCTAssertEqual(response.message.content, "Hello")
+    }
+
+    func testCompleteChat_sendsADottedToolNameInFunctionNameFormAndMapsTheCallBack() async throws {
+        let body = """
+        {"choices": [{"message": {"role": "assistant", "content": null, "tool_calls": [
+            {"id": "call_1", "type": "function", "function": {"name": "file_read", "arguments": "{\\"path\\": \\"a.txt\\"}"}}
+         ]}}],
+         "model": "anthropic/claude-sonnet-9"}
+        """.data(using: .utf8)!
+        let sentBody = SentBody()
+        let client = makeClient(statusCode: 200, body: body, sentBody: sentBody)
+
+        let response = try await client.completeChat(
+            messages: [LLMMessage(role: .user, content: "Read a.txt")],
+            model: "anthropic/claude-sonnet-9",
+            options: ChatOptions(tools: [
+                LLMToolDefinition(
+                    name: "file.read",
+                    description: "Read a file",
+                    parameters: [LLMToolParameter(name: "path", type: "string", description: "Path", required: true)]
+                )
+            ])
+        )
+
+        let sent = try XCTUnwrap(JSONSerialization.jsonObject(with: sentBody.value) as? [String: Any])
+        let tools = try XCTUnwrap(sent["tools"] as? [[String: Any]])
+        let function = try XCTUnwrap(tools.first?["function"] as? [String: Any])
+        XCTAssertEqual(function["name"] as? String, "file_read")
+        XCTAssertEqual(response.toolCalls?.map(\.name), ["file.read"])
     }
 
     func testCompleteChat_namesOpenRouterWhenTheKeyIsRefused() async {
@@ -134,12 +194,25 @@ final class OpenRouterProviderTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: UserScope.scopedKey("openai_model")), "gpt-4o")
     }
 
-    private func makeClient(statusCode: Int, body: Data) -> OpenAILLMClient {
+    private func makeClient(statusCode: Int, body: Data, sentBody: SentBody? = nil) -> OpenAILLMClient {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         MockURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.absoluteString, "https://openrouter.ai/api/v1/chat/completions")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer TEST_KEY")
+            // URLProtocol hands a request's body over as a stream.
+            if let sentBody, let stream = request.httpBodyStream {
+                stream.open()
+                var data = Data()
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                while stream.hasBytesAvailable {
+                    let read = stream.read(&buffer, maxLength: buffer.count)
+                    if read <= 0 { break }
+                    data.append(buffer, count: read)
+                }
+                stream.close()
+                sentBody.value = data
+            }
             let response = HTTPURLResponse(url: request.url!, statusCode: statusCode, httpVersion: nil, headerFields: nil)!
             return (response, body)
         }
@@ -153,6 +226,9 @@ final class OpenRouterProviderTests: XCTestCase {
     }
 }
 
+// The three boxes below cross from a URL loading thread to the test. Each is
+// @unchecked Sendable because every read and write of its value holds its lock.
+
 private final class DownloadCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var value = 0
@@ -163,5 +239,29 @@ private final class DownloadCounter: @unchecked Sendable {
 
     func increment() {
         lock.withLock { value += 1 }
+    }
+}
+
+private final class StatusCode: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Int
+
+    init(_ value: Int) {
+        stored = value
+    }
+
+    var value: Int {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
+    }
+}
+
+private final class SentBody: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = Data()
+
+    var value: Data {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
     }
 }

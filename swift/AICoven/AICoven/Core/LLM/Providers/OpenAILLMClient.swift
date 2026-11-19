@@ -116,6 +116,7 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
         }
 
         // Convert LLMToolDefinition → OpenAI native format
+        var wireToOriginalName: [String: String] = [:]
         let toolDefs: [ToolDef]? = options.tools?.isEmpty == false ? options.tools!.map { tool in
             var props: [String: FunctionProperty] = [:]
             var requiredParams: [String] = []
@@ -123,10 +124,16 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
                 props[param.name] = FunctionProperty(type: param.type, description: param.description)
                 if param.required { requiredParams.append(param.name) }
             }
+
+            // Function names must match ^[a-zA-Z0-9_-]{1,64}$, which excludes
+            // the dot in names such as `file.read`.
+            let wireName = tool.name.replacingOccurrences(of: ".", with: "_")
+            wireToOriginalName[wireName] = tool.name
+
             return ToolDef(
                 type: "function",
                 function: FunctionDef(
-                    name: tool.name,
+                    name: wireName,
                     description: tool.description,
                     parameters: FunctionParameters(type: "object", properties: props, required: requiredParams)
                 )
@@ -159,7 +166,7 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
         }
         let decoded = try JSONDecoder().decode(ResponseBody.self, from: data)
         guard let first = decoded.choices.first else {
-            throw NSError(domain: "OpenAILLMClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No choices in response"])
+            throw NSError(domain: "OpenAILLMClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "\(providerName) returned no choices."])
         }
 
         let msg = LLMMessage(role: .assistant, content: first.message.content ?? "")
@@ -173,11 +180,12 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
         var toolCalls: [LLMToolCall]? = nil
         if let nativeCalls = first.message.tool_calls, !nativeCalls.isEmpty {
             toolCalls = nativeCalls.compactMap { tc in
+                let name = wireToOriginalName[tc.function.name] ?? tc.function.name
                 guard let argsData = tc.function.arguments.data(using: .utf8),
                       let argsDict = try? JSONDecoder().decode([String: AnyJSONValue].self, from: argsData) else {
-                    return LLMToolCall(name: tc.function.name, arguments: [:])
+                    return LLMToolCall(name: name, arguments: [:])
                 }
-                return LLMToolCall(name: tc.function.name, arguments: argsDict)
+                return LLMToolCall(name: name, arguments: argsDict)
             }
         }
 

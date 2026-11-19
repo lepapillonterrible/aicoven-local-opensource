@@ -308,6 +308,9 @@ struct ProviderAccountCard: View {
         defer { isTesting = false }
 
         do {
+            if account.provider.lowercased() == "openrouter" {
+                try await ProviderAccountService.shared.checkOpenRouterKey(accountId: account.id)
+            }
             let status = try await ProviderAccountService.shared.getInitializationStatus(accountId: account.id)
             let modelCount = status.modelMetadata.count
             if modelCount > 0 {
