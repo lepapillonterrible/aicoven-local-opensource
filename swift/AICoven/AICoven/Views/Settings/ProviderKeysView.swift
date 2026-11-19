@@ -527,10 +527,12 @@ private struct AddProviderKeyStep2View: View {
         _baseURL = State(initialValue: detected?.baseURL ?? (selectedProvider == "ollama" ? "http://localhost:11434" : ""))
         _serverModels = State(initialValue: detected?.models ?? [])
         _selectedServerModel = State(initialValue: detected?.models.first ?? "")
-        _connectionFailure = State(
-            initialValue: detected?.requiresKey != true ? nil
-                : selectedProvider == "hermes" ? Self.hermesAsksForKey : Self.serverAsksForKey
-        )
+        // What Detect found: a server, or a Hermes agent, that asks for a key.
+        var asksForKey: String?
+        if detected?.requiresKey == true {
+            asksForKey = selectedProvider == "hermes" ? Self.hermesAsksForKey : Self.serverAsksForKey
+        }
+        _connectionFailure = State(initialValue: asksForKey)
         connectsOnOpen = detected != nil && selectedProvider == "ollama"
     }
 
