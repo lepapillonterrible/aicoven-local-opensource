@@ -466,7 +466,10 @@ extension ThreadRepository {
                 .compactMap(\.payloadCiphertext)
         }
 
-        guard !payloads.isEmpty else { return [] }
+        guard !payloads.isEmpty else {
+            try await requireAccount(currentUserId)
+            return []
+        }
         try await requireKey(of: currentUserId)
         let decoder = JSONDecoder()
         var threads: [Thread] = []
@@ -528,7 +531,10 @@ extension ThreadRepository {
                 arguments: [currentUserId, threadID]
             )
         }
-        guard !rows.isEmpty else { return [:] }
+        guard !rows.isEmpty else {
+            try await requireAccount(currentUserId)
+            return [:]
+        }
         try await requireKey(of: currentUserId)
         let decoder = JSONDecoder()
         var traces: [String: WorkTrace] = [:]
@@ -621,7 +627,10 @@ extension ThreadRepository {
                     arguments: [before, threadID, currentUserId]
                 )
             }
-            guard olderThan != nil else { return [] }
+            guard olderThan != nil else {
+                try await requireAccount(currentUserId)
+                return []
+            }
         }
 
         let decoder = JSONDecoder()
@@ -655,10 +664,8 @@ extension ThreadRepository {
             olderThan = oldest["row_order"]
         }
         // However the page was completed, including by a last look that
-        // found nothing more.
-        if !newestFirst.isEmpty {
-            try await requireKey(of: currentUserId)
-        }
+        // found nothing more, and when it is empty.
+        try await requireAccount(currentUserId)
         return newestFirst.reversed()
     }
 
@@ -713,10 +720,17 @@ extension ThreadRepository {
     /// can stay in memory for a moment, and what it opens is not the new
     /// account's to see.
     func requireKey(of userID: String) async throws {
-        guard await MainActor.run(body: { UserScope.currentUserID }) == userID else { throw RepositoryError.accountChanged }
+        try await requireAccount(userID)
         guard await DataEncryptionService.shared.isUnlocked(for: userID) else { throw RepositoryError.dataLocked }
         // Again, because the account can have changed while the key was
         // asked about. Whoever shows what was read checks once more.
+        try await requireAccount(userID)
+    }
+
+    /// Throws unless `userID` is still the current account. A read that
+    /// found nothing to decrypt checks this alone before it returns: it
+    /// used no key, and with nothing stored it reads the same locked or not.
+    private func requireAccount(_ userID: String) async throws {
         guard await MainActor.run(body: { UserScope.currentUserID }) == userID else { throw RepositoryError.accountChanged }
     }
 
