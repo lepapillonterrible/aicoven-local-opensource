@@ -493,6 +493,11 @@ final class GoogleToolsTests: XCTestCase {
             [["deleteSheet": .dictionary(["sheetId": .int(9_007_199_254_740_993)])]]
         )
 
+        // A number too large to be one is neither a cell nor part of a request.
+        XCTAssertNil(GoogleToolArguments.rows(in: ["values": .array([.array([.double(.infinity)])])]))
+        XCTAssertNil(GoogleToolArguments.requests(in: ["requests": .array([.dictionary(["resize": .dictionary(["width": .double(.infinity)])])])]))
+        XCTAssertNil(GoogleToolArguments.requests(in: ["requests": .array([.dictionary(["resize": .double(.nan)])])]))
+
         // Text that is not JSON for a list or an object is not one.
         XCTAssertNil(GoogleToolArguments.requests(in: ["requests": .array([.string("addSheet")])]))
         XCTAssertNil(GoogleToolArguments.requests(in: ["requests": .array([.string("[1, 2]")])]), "A request is an object")

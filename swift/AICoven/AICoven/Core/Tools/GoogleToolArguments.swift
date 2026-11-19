@@ -95,7 +95,9 @@ nonisolated enum GoogleToolArguments {
             guard case let .array(cells) = read(row) else { return nil }
             for cell in cells {
                 switch cell {
-                case .string, .int, .double, .bool, .null: continue
+                case .string, .int, .bool, .null: continue
+                // A number that is none (too large to be one) is no cell.
+                case let .double(number): if !number.isFinite { return nil }
                 case .dictionary, .array: return nil
                 }
             }
@@ -135,6 +137,9 @@ nonisolated enum GoogleToolArguments {
             guard case let .dictionary(members) = read(request), !members.isEmpty else { return nil }
             requests.append(members)
         }
+        // What cannot be written as JSON (a number too large to be one)
+        // cannot be shown to the person or sent: it is no request.
+        guard JSONSerialization.isValidJSONObject(requests.map { $0.mapValues(MCPClient.plain) }) else { return nil }
         return requests
     }
 
