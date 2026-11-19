@@ -77,7 +77,11 @@ final class MessageAttachmentsTests: XCTestCase {
         let image = try XCTUnwrap(large.image)
         XCTAssertEqual(max(image.width, image.height), Int(AttachmentThumbnail.side * 3), "No larger than the thread shows it, at any screen's scale")
         XCTAssertEqual(large.filename, "beach.jpeg", "Quick Look is told what it is opening")
-        XCTAssertEqual(try AttachmentThumbnail.decode(jpeg(width: 20, height: 10), name: "small.jpg").filename, "small.jpg")
+        // A small picture is not drawn up to the thumbnail's size.
+        let small = try AttachmentThumbnail.decode(jpeg(width: 40, height: 30), name: "small.jpg")
+        XCTAssertEqual(small.image?.width, 40)
+        XCTAssertEqual(small.image?.height, 30)
+        XCTAssertEqual(small.filename, "small.jpg")
 
         // Named as a picture, but text: its file row stands.
         let text = AttachmentThumbnail.decode(Data("not a picture".utf8), name: "fake.png")

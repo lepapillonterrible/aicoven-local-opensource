@@ -105,12 +105,14 @@ final class AttachmentPreviewPresenter: ObservableObject {
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let destination = directory.appendingPathComponent(Self.safeFilename(filename))
         do {
-            guard fileManager.createFile(atPath: destination.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
+            // Protected from the moment it exists.
+            var attributes: [FileAttributeKey: Any] = [.posixPermissions: 0o600]
+            #if os(iOS)
+            attributes[.protectionKey] = FileProtectionType.complete
+            #endif
+            guard fileManager.createFile(atPath: destination.path, contents: data, attributes: attributes) else {
                 throw CocoaError(.fileWriteUnknown)
             }
-            #if os(iOS)
-            try fileManager.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: destination.path)
-            #endif
             return destination
         } catch {
             try? fileManager.removeItem(at: directory)

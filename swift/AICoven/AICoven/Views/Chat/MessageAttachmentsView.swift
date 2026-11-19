@@ -12,7 +12,7 @@ struct MessageAttachmentsView: View {
     var body: some View {
         VStack(alignment: alignment, spacing: Spacing.xs) {
             ForEach(attachments) { attachment in
-                AttachmentThumbnail(attachment: attachment)
+                AttachmentThumbnail(attachment: attachment, alignment: alignment)
             }
         }
     }
@@ -23,6 +23,8 @@ struct MessageAttachmentsView: View {
 /// and otherwise, or if it can no longer be read, as its file row.
 struct AttachmentThumbnail: View {
     let attachment: FileAttachmentDetail
+    /// The side of the thread its message is on.
+    var alignment: HorizontalAlignment = .trailing
 
     @State private var thumbnail: AttachmentThumbnailImage?
     @State private var isLoading: Bool
@@ -33,14 +35,15 @@ struct AttachmentThumbnail: View {
     private static let cache = NSCache<NSString, AttachmentThumbnailImage>()
     nonisolated static let side: CGFloat = 220
 
-    init(attachment: FileAttachmentDetail) {
+    init(attachment: FileAttachmentDetail, alignment: HorizontalAlignment = .trailing) {
         self.attachment = attachment
+        self.alignment = alignment
         // A file known not to be a picture is not read to find that out.
         _isLoading = State(initialValue: attachment.mimeType?.hasPrefix("image/") != false)
     }
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: Spacing.xxs) {
+        VStack(alignment: alignment, spacing: Spacing.xxs) {
             Button {
                 Task { await presenter.open(attachmentID: attachment.id, filename: thumbnail?.filename ?? attachment.name) }
             } label: {
@@ -118,8 +121,13 @@ struct AttachmentThumbnail: View {
             return
         }
         let decoded = await Task.detached { Self.decode(data, name: name) }.value
-        // Nothing read as one account is shown or kept for another.
-        guard !Task.isCancelled, UserScope.currentUserID == account else { return }
+        guard !Task.isCancelled else { return }
+        // Nothing read as one account is shown or kept for another: its
+        // file row stands.
+        guard UserScope.currentUserID == account else {
+            isLoading = false
+            return
+        }
         Self.cache.setObject(decoded, forKey: id as NSString)
         thumbnail = decoded
         isLoading = false
@@ -130,12 +138,19 @@ struct AttachmentThumbnail: View {
     nonisolated static func decode(_ data: Data, name: String) -> AttachmentThumbnailImage {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let type = (CGImageSourceGetType(source) as String?).flatMap(UTType.init),
-              type.conforms(to: .image),
-              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                  kCGImageSourceCreateThumbnailFromImageAlways: true,
-                  kCGImageSourceCreateThumbnailWithTransform: true,
-                  kCGImageSourceThumbnailMaxPixelSize: Int(side * 3),
-              ] as CFDictionary) else {
+              type.conforms(to: .image) else {
+            return AttachmentThumbnailImage(image: nil, filename: name)
+        }
+        // No larger than the picture is: a small one is not drawn up to
+        // the thumbnail's size.
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        let largest = Int(side * 3)
+        let ownEdge = max(properties?[kCGImagePropertyPixelWidth] as? Int ?? largest, properties?[kCGImagePropertyPixelHeight] as? Int ?? largest)
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: min(max(ownEdge, 1), largest),
+        ] as CFDictionary) else {
             return AttachmentThumbnailImage(image: nil, filename: name)
         }
         // Quick Look needs an extension to know what it is opening.
