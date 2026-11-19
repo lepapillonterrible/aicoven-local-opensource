@@ -93,8 +93,7 @@ actor ThreadService {
         AppErrorReporter.log(message: "Removing \(testThreads.count) automated test threads", context: "ThreadService.cleanupTestThreads")
         for thread in testThreads {
             do {
-                let attached = try await AttachmentStore.shared.ids(inThread: thread.id, for: thread.userId)
-                try await ThreadRepository.shared.deleteThread(id: thread.id, for: thread.userId)
+                let attached = try await ThreadRepository.shared.deleteThread(id: thread.id, for: thread.userId)
                 await AttachmentStore.shared.deleteFiles(attached, for: thread.userId)
                 personalThreads.removeAll { $0.id == thread.id }
             } catch {
@@ -252,8 +251,7 @@ actor ThreadService {
         }
         // The thread's attachments go with it: their rows with its row,
         // their files once that is gone.
-        let attached = try await AttachmentStore.shared.ids(inThread: threadId, for: userID)
-        try await ThreadRepository.shared.deleteThread(id: threadId, for: userID)
+        let attached = try await ThreadRepository.shared.deleteThread(id: threadId, for: userID)
         await AttachmentStore.shared.deleteFiles(attached, for: userID)
         if isShowing(userID) {
             personalThreads.removeAll { $0.id == threadId }

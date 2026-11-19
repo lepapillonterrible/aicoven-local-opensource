@@ -90,11 +90,16 @@ actor AttachmentStore {
 
         // The row first: it is refused for a thread that is not this
         // account's, and then nothing is written.
-        try await queue.write { db in
-            try db.execute(
-                sql: "INSERT INTO attachments (id, user_id, thread_id, meta_ciphertext, created_at) VALUES (?, ?, ?, ?, ?)",
-                arguments: [detail.id, session.userID, threadID, meta, Date()]
-            )
+        do {
+            try await queue.write { db in
+                try db.execute(
+                    sql: "INSERT INTO attachments (id, user_id, thread_id, meta_ciphertext, created_at) VALUES (?, ?, ?, ?, ?)",
+                    arguments: [detail.id, session.userID, threadID, meta, Date()]
+                )
+            }
+        } catch {
+            Self.log("An attachment's row could not be stored", error)
+            throw Failure.notKept(name: name)
         }
         var file: URL?
         do {
@@ -152,21 +157,27 @@ actor AttachmentStore {
                     sql: "UPDATE attachments SET message_id = ? WHERE id = ? AND user_id = ? AND thread_id = ?",
                     arguments: [messageID, id, userID, threadID]
                 )
+                // One that is no longer there (taken out in another
+                // window as this was sent) is not sent as if it were: the
+                // whole marking is undone with the write.
+                guard db.changesCount == 1 else { throw Failure.missing }
             }
         }
     }
 
     /// Takes back the mark of a message that was not stored after all:
     /// its attachments are unsent again, in the composer they came from.
+    /// Whoever is signed in by now: the message's id is its own, and marks
+    /// nobody else's files. If the mark cannot be taken back, the next
+    /// launch clears what is marked with a message that does not exist.
     func markUnsent(_ ids: [String], markedWith messageID: String) async {
         guard !ids.isEmpty, let queue = await dbQueue() else { return }
-        let userID = await MainActor.run { UserScope.currentUserID }
         do {
             try await queue.write { db in
                 for id in ids {
                     try db.execute(
-                        sql: "UPDATE attachments SET message_id = NULL WHERE id = ? AND user_id = ? AND message_id = ?",
-                        arguments: [id, userID, messageID]
+                        sql: "UPDATE attachments SET message_id = NULL WHERE id = ? AND message_id = ?",
+                        arguments: [id, messageID]
                     )
                 }
             }
@@ -200,9 +211,12 @@ actor AttachmentStore {
 
     /// Clears what earlier runs of the app left behind for this account:
     /// what was attached and never sent (a composer's files are held only
-    /// while the app runs), and any file left without a row. Done once in
-    /// each run; whoever asks waits until it has been done, so no composer
-    /// of the account's is used before.
+    /// while the app runs), what is marked with a message that was never
+    /// stored, and any file left without a row. Tried once in each run;
+    /// whoever asks waits until it has been, so no composer of the
+    /// account's is used before. If it fails it is not tried again in that
+    /// run, when a composer may hold files it would take: what was left
+    /// stays, unused, until the next run.
     func clearLeftovers(for userID: String) async {
         if let underWay = clearing[userID] {
             return await underWay.value
@@ -216,8 +230,12 @@ actor AttachmentStore {
         guard let queue = await dbQueue() else { return }
         do {
             let (unsent, kept) = try await queue.write { db in
-                let unsent = try String.fetchAll(db, sql: "SELECT id FROM attachments WHERE user_id = ? AND message_id IS NULL", arguments: [userID])
-                try db.execute(sql: "DELETE FROM attachments WHERE user_id = ? AND message_id IS NULL", arguments: [userID])
+                let neverSent = """
+                user_id = ? AND (message_id IS NULL
+                    OR NOT EXISTS (SELECT 1 FROM messages WHERE messages.id = attachments.message_id))
+                """
+                let unsent = try String.fetchAll(db, sql: "SELECT id FROM attachments WHERE \(neverSent)", arguments: [userID])
+                try db.execute(sql: "DELETE FROM attachments WHERE \(neverSent)", arguments: [userID])
                 let kept = try Set(String.fetchAll(db, sql: "SELECT id FROM attachments WHERE user_id = ?", arguments: [userID]))
                 return (unsent, kept)
             }
@@ -231,16 +249,6 @@ actor AttachmentStore {
             }
         } catch {
             Self.log("What earlier runs left attached could not be cleared", error)
-        }
-    }
-
-    /// The ids of a thread's attachments, to delete their files once the
-    /// thread, and with it their rows, is gone. Throws if they cannot be
-    /// read: a thread is not deleted without knowing its files.
-    func ids(inThread threadID: String, for userID: String) async throws -> [String] {
-        guard let queue = await dbQueue() else { throw RepositoryError.databaseUnavailable }
-        return try await queue.read { db in
-            try String.fetchAll(db, sql: "SELECT id FROM attachments WHERE thread_id = ? AND user_id = ?", arguments: [threadID, userID])
         }
     }
 
