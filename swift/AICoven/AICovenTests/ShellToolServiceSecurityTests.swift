@@ -7,7 +7,7 @@ final class ShellToolServiceSecurityTests: XCTestCase {
             command: "pwd",
             workingDir: nil,
             timeoutSeconds: 1,
-            approve: { _, _ in true }
+            approve: { _, _ in .approved }
         )
 
         XCTAssertEqual(result.status, "denied")
@@ -20,7 +20,7 @@ final class ShellToolServiceSecurityTests: XCTestCase {
             command: "pwd",
             workingDir: "   ",
             timeoutSeconds: 1,
-            approve: { _, _ in true }
+            approve: { _, _ in .approved }
         )
 
         XCTAssertEqual(result.status, "denied")

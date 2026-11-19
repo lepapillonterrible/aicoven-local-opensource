@@ -181,7 +181,7 @@ actor FileToolService {
         content: String,
         workingDir: String? = nil,
         createDirectories: Bool = true,
-        approve: @Sendable (_ resolvedPath: String, _ replaces: Bool) async -> Bool
+        approve: @Sendable (_ resolvedPath: String, _ replaces: Bool) async -> ApprovalAnswer
     ) async -> ToolExecutionResult {
         let resolvedPath = resolvePath(path, workingDir: workingDir)
 
@@ -212,8 +212,9 @@ actor FileToolService {
         let fileManager = FileManager.default
         let url = URL(fileURLWithPath: resolvedPath)
 
-        guard await approve(resolvedPath, fileManager.fileExists(atPath: resolvedPath)) else {
-            return await .denied(tool: "file.write")
+        let replaces = fileManager.fileExists(atPath: resolvedPath)
+        if let refusal = await ToolExecutionResult.refusal(approve(resolvedPath, replaces), tool: "file.write") {
+            return refusal
         }
 
         // Create parent directories if needed
@@ -230,9 +231,18 @@ actor FileToolService {
             }
         }
 
-        // Write the file
+        // Write the file. What was approved as a new file replaces nothing:
+        // a file can have appeared at the path while the person was asked.
         do {
-            try data.write(to: url)
+            do {
+                try data.write(to: url, options: replaces ? [] : .withoutOverwriting)
+            } catch let error as CocoaError where error.code == .fileWriteFileExists {
+                return await .error(
+                    tool: "file.write",
+                    message: "A file appeared at \(resolvedPath) after the person approved writing a new one there. Nothing was written. Asking again will ask them about replacing it.",
+                    errorType: "file_appeared"
+                )
+            }
             return await .success(
                 tool: "file.write",
                 result: [

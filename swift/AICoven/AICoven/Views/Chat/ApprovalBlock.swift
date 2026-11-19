@@ -17,7 +17,6 @@ struct ApprovalBlock: View {
     let onApprove: () -> Void
     let onDeny: () -> Void
 
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// Open from the start: Approve does exactly what the text says, so the
     /// whole of it is there to read before the button is.
@@ -83,8 +82,14 @@ struct ApprovalBlock: View {
     // MARK: - Actions
 
     private var isCompact: Bool {
+        Self.spansTheWidth
+    }
+
+    /// True on the iPhone, where the block spans the width; on the iPad and
+    /// the Mac it is 262 pt, whatever the window's width.
+    static var spansTheWidth: Bool {
         #if os(iOS)
-        horizontalSizeClass == .compact
+        UIDevice.current.userInterfaceIdiom == .phone
         #else
         false
         #endif
@@ -192,12 +197,12 @@ struct ApprovalBlock: View {
             switch outcome {
             case .approved:
                 Image(systemName: "checkmark").foregroundStyle(Color.aicovenTeal)
-                Text("Approved")
+                Text(outcome.words)
             case .denied:
                 Image(systemName: "xmark").foregroundStyle(Color.aicovenTeal)
-                Text("Denied")
+                Text(outcome.words)
             case .noLongerWaiting:
-                Text("No longer waiting")
+                Text(outcome.words)
             }
         }
         .font(.aicovenBodySmall.weight(.semibold))
@@ -286,6 +291,11 @@ struct ApprovalSpot: View {
             reduceMotion ? .easeOut(duration: 0.5) : .timingCurve(0.2, 0.7, 0.2, 1, duration: 1.1),
             value: approvals.showing?.approval.id
         )
+        .onChange(of: approvals.showing?.approval.id, initial: true) { _, showing in
+            if let showing {
+                approvals.announceShowing(showing)
+            }
+        }
     }
 
     private var comingIn: AnyTransition {

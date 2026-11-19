@@ -263,7 +263,6 @@ struct PersonalChatView: View {
     @ObservedObject private var turns = TurnEngine.shared
     /// What turns, in this thread or another, are waiting to be allowed.
     @ObservedObject private var approvals = ToolApprovals.shared
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     /// The thread this view's state belongs to. The view is reused when the
     /// thread changes, so work that waited checks it before touching state.
     @State private var shownThreadID: String?
@@ -441,8 +440,8 @@ struct PersonalChatView: View {
             // composer, across the width on the iPhone.
             .overlay(alignment: .bottomTrailing) {
                 ApprovalSpot(approvals: approvals)
-                    .frame(maxWidth: horizontalSizeClass == .compact ? .infinity : 262)
-                    .padding(.horizontal, horizontalSizeClass == .compact ? Spacing.md : 18)
+                    .frame(maxWidth: ApprovalBlock.spansTheWidth ? .infinity : 262)
+                    .padding(.horizontal, ApprovalBlock.spansTheWidth ? Spacing.md : 18)
                     .padding(.bottom, Spacing.xs)
             }
 

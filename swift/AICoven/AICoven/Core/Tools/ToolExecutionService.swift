@@ -16,17 +16,17 @@ actor ToolExecutionService {
 
     /// Asks the person before a tool changes something, and waits for the
     /// answer.
-    private let ask: @Sendable (ToolApproval) async -> Bool
+    private let ask: @Sendable (ToolApproval) async -> ApprovalAnswer
 
     /// Default initializer uses the shared ToolService singleton.
     init() {
         toolService = ToolService.shared
-        ask = { await ToolApprovals.shared.ask($0) }
+        ask = Self.askInItsThread
     }
 
     /// Test-friendly initializer that accepts a mock tool service, and an
     /// answer to every approval in place of the person's.
-    init(toolService: any ChatToolService, ask: @escaping @Sendable (ToolApproval) async -> Bool = { _ in false }) {
+    init(toolService: any ChatToolService, ask: @escaping @Sendable (ToolApproval) async -> ApprovalAnswer = { _ in .denied }) {
         self.toolService = toolService
         self.ask = ask
     }
@@ -113,7 +113,7 @@ actor ToolExecutionService {
                 return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'path' and 'content'")
             }
             return await fileService.writeFile(path: path, content: content) { resolvedPath, replaces in
-                await self.approved(in: threadID) { .fileWrite(path: resolvedPath, content: content, replaces: replaces, threadID: $0) }
+                await self.answer(in: threadID) { .fileWrite(path: resolvedPath, content: content, replaces: replaces, threadID: $0) }
             }
 
         case "file.list":
@@ -129,7 +129,7 @@ actor ToolExecutionService {
                 return await .validationError(tool: toolCall.name, message: "Missing required argument: 'command'")
             }
             return await shellService.execute(command: command) { command, directory in
-                await self.approved(in: threadID) { .shell(command: command, directory: directory, threadID: $0) }
+                await self.answer(in: threadID) { .shell(command: command, directory: directory, threadID: $0) }
             }
 
         // --- Web Tools ---
@@ -370,8 +370,8 @@ actor ToolExecutionService {
         let branch = extractString(from: toolCall.args, key: "branch")
         let sha = extractString(from: toolCall.args, key: "sha")
 
-        guard await approved(in: threadID, { .gitHubWriteFile(owner: owner, repo: repo, path: path, branch: branch, message: message, content: content, threadID: $0) }) else {
-            return await .denied(tool: toolCall.name)
+        if let refusal = await ToolExecutionResult.refusal(answer(in: threadID) { .gitHubWriteFile(owner: owner, repo: repo, path: path, branch: branch, message: message, content: content, threadID: $0) }, tool: toolCall.name) {
+            return refusal
         }
 
         do {
@@ -435,8 +435,8 @@ actor ToolExecutionService {
             return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo', 'base_branch', 'new_branch'")
         }
 
-        guard await approved(in: threadID, { .gitHubCreateBranch(owner: owner, repo: repo, newBranch: newBranch, baseBranch: baseBranch, threadID: $0) }) else {
-            return await .denied(tool: toolCall.name)
+        if let refusal = await ToolExecutionResult.refusal(answer(in: threadID) { .gitHubCreateBranch(owner: owner, repo: repo, newBranch: newBranch, baseBranch: baseBranch, threadID: $0) }, tool: toolCall.name) {
+            return refusal
         }
 
         do {
@@ -473,8 +473,8 @@ actor ToolExecutionService {
 
         let body = extractString(from: toolCall.args, key: "body")
 
-        guard await approved(in: threadID, { .gitHubCreatePR(owner: owner, repo: repo, title: title, head: head, base: base, body: body, threadID: $0) }) else {
-            return await .denied(tool: toolCall.name)
+        if let refusal = await ToolExecutionResult.refusal(answer(in: threadID) { .gitHubCreatePR(owner: owner, repo: repo, title: title, head: head, base: base, body: body, threadID: $0) }, tool: toolCall.name) {
+            return refusal
         }
 
         do {
@@ -716,8 +716,8 @@ actor ToolExecutionService {
 
         let mimeType = extractString(from: toolCall.args, key: "mime_type") ?? "text/plain"
 
-        guard await approved(in: threadID, { .driveUpload(name: name, mimeType: mimeType, content: content, threadID: $0) }) else {
-            return await .denied(tool: toolCall.name)
+        if let refusal = await ToolExecutionResult.refusal(answer(in: threadID) { .driveUpload(name: name, mimeType: mimeType, content: content, threadID: $0) }, tool: toolCall.name) {
+            return refusal
         }
 
         do {
@@ -777,8 +777,8 @@ actor ToolExecutionService {
 
         let values = valuesArg.map { row in row.map { String(describing: $0) } }
 
-        guard await approved(in: threadID, { .sheetsWrite(spreadsheetID: spreadsheetId, range: range, values: values, threadID: $0) }) else {
-            return await .denied(tool: toolCall.name)
+        if let refusal = await ToolExecutionResult.refusal(answer(in: threadID) { .sheetsWrite(spreadsheetID: spreadsheetId, range: range, values: values, threadID: $0) }, tool: toolCall.name) {
+            return refusal
         }
 
         do {
@@ -799,19 +799,26 @@ actor ToolExecutionService {
 
     /// Asks the person, in the thread the tool call came from, about what
     /// `describe` says is about to happen, and waits for the answer. Without
-    /// a thread there is nowhere to ask and no one to answer, so the answer
-    /// is no.
-    private func approved(in threadID: String?, _ describe: @Sendable (_ threadID: String) -> ToolApproval) async -> Bool {
-        guard let threadID else { return false }
-        var approval = describe(threadID)
-        if let thread = try? await ThreadService.shared.getThread(threadId: threadID) {
-            approval.threadTitle = thread.title ?? approval.threadTitle
-            if let covenID = thread.covenId {
-                let covens = await (try? CovenService.shared.loadCovens()) ?? []
-                approval.covenName = covens.first { $0.id == covenID }?.name ?? "a coven"
-            }
+    /// a thread there is nowhere to ask and no one to answer.
+    private func answer(in threadID: String?, _ describe: @Sendable (_ threadID: String) -> ToolApproval) async -> ApprovalAnswer {
+        guard let threadID else { return .notAsked }
+        return await ask(describe(threadID))
+    }
+
+    /// Asks in the app's approval spot, naming the thread that asked and
+    /// where it lives. An approval that cannot say which thread it is from
+    /// (the thread has been deleted, or its coven cannot be found) is not
+    /// asked: the person would be answering for somewhere else.
+    static func askInItsThread(_ approval: ToolApproval) async -> ApprovalAnswer {
+        guard let thread = try? await ThreadService.shared.getThread(threadId: approval.threadID) else { return .notAsked }
+        var approval = approval
+        approval.threadTitle = thread.title ?? approval.threadTitle
+        if let covenID = thread.covenId {
+            let covens = await (try? CovenService.shared.loadCovens()) ?? []
+            guard let coven = covens.first(where: { $0.id == covenID }) else { return .notAsked }
+            approval.covenName = coven.name
         }
-        return await ask(approval)
+        return await ToolApprovals.shared.ask(approval)
     }
 
     // MARK: - Configuration Methods

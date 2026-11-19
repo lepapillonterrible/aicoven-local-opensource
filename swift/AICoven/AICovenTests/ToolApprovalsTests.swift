@@ -24,10 +24,12 @@ final class ToolApprovalsTests: XCTestCase {
     }
 
     /// Waits until the approvals have `count` asked and not yet answered.
-    private func asked(_ approvals: ToolApprovals, _ count: Int) async {
-        while (approvals.showing?.phase == .asking ? 1 : 0) + approvals.waiting.count < count {
+    private func asked(_ approvals: ToolApprovals, _ count: Int, file: StaticString = #filePath, line: UInt = #line) async {
+        for _ in 0 ..< 10000 {
+            if (approvals.showing?.phase == .asking ? 1 : 0) + approvals.waiting.count >= count { return }
             await Task.yield()
         }
+        XCTFail("The approval was never asked", file: file, line: line)
     }
 
     // MARK: - The queue
@@ -42,9 +44,9 @@ final class ToolApprovalsTests: XCTestCase {
         XCTAssertEqual(approvals.askingThreadIDs, ["thread-1"])
 
         approvals.answer(first.id, approve: true)
-        let approved = await asking.value
+        let answer = await asking.value
 
-        XCTAssertTrue(approved)
+        XCTAssertEqual(answer, .approved)
         XCTAssertEqual(approvals.showing?.phase, .answered(.approved))
         XCTAssertEqual(approvals.askingThreadIDs, [])
         runScheduled()
@@ -58,9 +60,9 @@ final class ToolApprovalsTests: XCTestCase {
         await asked(approvals, 1)
 
         approvals.answer(first.id, approve: false)
-        let approved = await asking.value
+        let answer = await asking.value
 
-        XCTAssertFalse(approved)
+        XCTAssertEqual(answer, .denied)
         XCTAssertEqual(approvals.showing?.phase, .answered(.denied))
     }
 
@@ -99,7 +101,7 @@ final class ToolApprovalsTests: XCTestCase {
         runScheduled()
 
         let answers = await [askingFirst.value, askingSecond.value, askingThird.value]
-        XCTAssertEqual(answers, [true, true, false])
+        XCTAssertEqual(answers, [.approved, .approved, .denied])
         XCTAssertNil(approvals.showing)
     }
 
@@ -111,9 +113,9 @@ final class ToolApprovalsTests: XCTestCase {
 
         approvals.answer(first.id, approve: false)
         approvals.answer(first.id, approve: true)
-        let approved = await asking.value
+        let answer = await asking.value
 
-        XCTAssertFalse(approved)
+        XCTAssertEqual(answer, .denied)
         XCTAssertEqual(approvals.showing?.phase, .answered(.denied))
     }
 
@@ -130,15 +132,15 @@ final class ToolApprovalsTests: XCTestCase {
 
         // The one waiting behind leaves without being shown.
         askingSecond.cancel()
-        let secondApproved = await askingSecond.value
-        XCTAssertFalse(secondApproved)
+        let secondAnswer = await askingSecond.value
+        XCTAssertEqual(secondAnswer, .withdrawn)
         XCTAssertEqual(approvals.waiting, [])
         XCTAssertEqual(approvals.showing, .init(approval: first, phase: .asking))
 
         // The one showing says so, and can no longer be approved.
         askingFirst.cancel()
-        let firstApproved = await askingFirst.value
-        XCTAssertFalse(firstApproved)
+        let firstAnswer = await askingFirst.value
+        XCTAssertEqual(firstAnswer, .withdrawn)
         XCTAssertEqual(approvals.showing?.phase, .answered(.noLongerWaiting))
         XCTAssertEqual(approvals.askingThreadIDs, [])
         approvals.answer(first.id, approve: true)
@@ -154,15 +156,58 @@ final class ToolApprovalsTests: XCTestCase {
             return await approvals.ask(self.approval())
         }
 
-        let approved = await asking.value
+        let answer = await asking.value
 
-        XCTAssertFalse(approved)
+        XCTAssertEqual(answer, .withdrawn)
         XCTAssertNil(approvals.showing)
         XCTAssertEqual(approvals.askingThreadIDs, [])
     }
 
+    func testApprovePressedAsTheTurnStops_doesNotLetTheToolRun() async {
+        let approvals = makeApprovals()
+        let first = approval()
+        let asking = Task { await approvals.ask(first) }
+        await asked(approvals, 1)
+
+        // Stop, then Approve before the stop has reached the approval.
+        asking.cancel()
+        approvals.answer(first.id, approve: true)
+        let answer = await asking.value
+
+        XCTAssertEqual(answer, .withdrawn)
+    }
+
+    // MARK: - Announcements
+
+    func testAnApproval_isAnnouncedOnceWhenAScreenShowsItAndNotAgainWhenItComesBack() async {
+        let approvals = makeApprovals()
+        let first = approval(in: "thread-1", "First?")
+        let second = approval(in: "thread-2", "Second?")
+        let asking = [first, second].map { approval in Task { await approvals.ask(approval) } }
+        await asked(approvals, 2)
+
+        XCTAssertFalse(approvals.announceShowing(second.id), "Only the one on screen is announced")
+        XCTAssertTrue(approvals.announceShowing(first.id))
+        XCTAssertFalse(approvals.announceShowing(first.id), "A second window showing it says nothing")
+        approvals.showNext()
+        XCTAssertTrue(approvals.announceShowing(second.id))
+        approvals.showNext()
+        XCTAssertFalse(approvals.announceShowing(first.id), "Brought back to the front, it is not said again")
+
+        approvals.answer(first.id, approve: true)
+        XCTAssertFalse(approvals.announceShowing(first.id), "An answered approval is not asked aloud")
+        runScheduled()
+        approvals.answer(second.id, approve: false)
+        for task in asking {
+            _ = await task.value
+        }
+    }
+
     // MARK: - The tools that ask
 
+    // Writing files is tested on the Mac: on the iPhone a test has no
+    // folder the person has granted.
+    #if os(macOS)
     func testWritingAFile_asksWithItsFullPathAndWritesOnlyWhenApproved() async throws {
         let folder = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("approvals-\(UUID().uuidString)")
         addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
@@ -172,7 +217,7 @@ final class ToolApprovalsTests: XCTestCase {
 
         let denying = ToolExecutionService(toolService: ToolService.shared) { approval in
             await asked.note(approval)
-            return false
+            return .denied
         }
         await denying.setWhitelist(for: "chat", tools: ["file.write"])
         let denied = await denying.execute(toolCall: call, agentType: "chat", threadID: "thread-1")
@@ -188,7 +233,7 @@ final class ToolApprovalsTests: XCTestCase {
 
         let approving = ToolExecutionService(toolService: ToolService.shared) { approval in
             await asked.note(approval)
-            return true
+            return .approved
         }
         await approving.setWhitelist(for: "chat", tools: ["file.write"])
         let written = await approving.execute(toolCall: call, agentType: "chat", threadID: "thread-1")
@@ -201,6 +246,26 @@ final class ToolApprovalsTests: XCTestCase {
         XCTAssertEqual(last?.question, "Replace this file?")
     }
 
+    func testAFileThatAppearsWhileThePersonIsAsked_isNotReplacedByAnApprovalOfANewFile() async throws {
+        let folder = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("approvals-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("notes.txt")
+        let call = ParsedToolCall(name: "file.write", args: ["path": AnyJSONValue(file.path), "content": AnyJSONValue("Second")])
+        let service = ToolExecutionService(toolService: ToolService.shared) { approval in
+            XCTAssertEqual(approval.question, "Write this file?")
+            // Another turn writes the same path while this one waits.
+            try? Data("First".utf8).write(to: file)
+            return .approved
+        }
+        await service.setWhitelist(for: "chat", tools: ["file.write"])
+
+        let result = await service.execute(toolCall: call, agentType: "chat", threadID: "thread-1")
+
+        XCTAssertEqual(result.errorType, "file_appeared")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "First")
+    }
+
     func testAWriteWithNoThreadToAskIn_isRefusedWithoutAsking() async {
         let folder = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("approvals-\(UUID().uuidString)")
         let call = ParsedToolCall(
@@ -210,19 +275,19 @@ final class ToolApprovalsTests: XCTestCase {
         let asked = Asked()
         let service = ToolExecutionService(toolService: ToolService.shared) { approval in
             await asked.note(approval)
-            return true
+            return .approved
         }
         await service.setWhitelist(for: "chat", tools: ["file.write"])
 
         let result = await service.execute(toolCall: call, agentType: "chat", threadID: nil)
 
-        XCTAssertEqual(result.errorType, "user_denied")
+        XCTAssertEqual(result.status, "denied")
+        XCTAssertEqual(result.errorType, "permission_denied", "The model is not told the person said no when no one was asked")
         let all = await asked.all
         XCTAssertEqual(all, [])
         XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path))
     }
 
-    #if os(macOS)
     func testAShellCommand_asksWithTheCommandAndItsDirectoryAndRunsOnlyWhenApproved() async throws {
         let folder = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("approvals-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -232,7 +297,7 @@ final class ToolApprovalsTests: XCTestCase {
 
         let denied = await ShellToolService.shared.execute(command: "touch made.txt", workingDir: folder.path) { command, directory in
             await asked.note(.shell(command: command, directory: directory, threadID: "thread-1"))
-            return false
+            return .denied
         }
 
         XCTAssertEqual(denied.errorType, "user_denied")
@@ -240,11 +305,23 @@ final class ToolApprovalsTests: XCTestCase {
         let first = await asked.all.first
         XCTAssertEqual(first?.details.hasPrefix("touch made.txt\nIn "), true)
 
-        let ran = await ShellToolService.shared.execute(command: "touch made.txt", workingDir: folder.path) { _, _ in true }
+        let ran = await ShellToolService.shared.execute(command: "touch made.txt", workingDir: folder.path) { _, _ in .approved }
         XCTAssertEqual(ran.status, "ok")
         XCTAssertTrue(FileManager.default.fileExists(atPath: made.path))
+
+        // A turn stopped while it waited is told so, not that the person said no.
+        let stopped = await ShellToolService.shared.execute(command: "touch other.txt", workingDir: folder.path) { _, _ in .withdrawn }
+        XCTAssertEqual(stopped.errorType, "approval_withdrawn")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("other.txt").path))
     }
     #endif
+
+    func testAnApprovalWhoseThreadCannotBeNamed_isNotAsked() async {
+        let answer = await ToolExecutionService.askInItsThread(approval(in: "no-such-thread-\(UUID().uuidString)"))
+
+        XCTAssertEqual(answer, .notAsked)
+        XCTAssertNil(ToolApprovals.shared.showing)
+    }
 
     func testOnlyAFewCommandsThatReadRunWithoutAsking() {
         for command in ["pwd", "whoami", "date", "git status", "git status --short", "git branch --show-current", " git remote -v "] {
@@ -253,6 +330,7 @@ final class ToolApprovalsTests: XCTestCase {
         for command in [
             "ls", "cat notes.txt", "git push", "git status; rm -rf build", "pwd && touch x", "date > out.txt",
             "git status /etc", "git branch -D main", "pwd | sh", "whoami `id`", "date $(touch x)", "pwd\nrm x", "sudo pwd",
+            "pwd\n", "\npwd", "git status\r\n",
         ] {
             XCTAssertFalse(ShellToolService.isReadOnly(command), command)
         }

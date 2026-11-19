@@ -130,6 +130,30 @@ struct ToolExecutionResult: Codable {
         )
     }
 
+    /// What a tool that asked the person returns when it may not go ahead;
+    /// nil when it was approved. Each says what happened, so the model is
+    /// not told the person said no when no one was asked.
+    static func refusal(_ answer: ApprovalAnswer, tool: String) -> ToolExecutionResult? {
+        switch answer {
+        case .approved:
+            nil
+        case .denied:
+            denied(tool: tool)
+        case .withdrawn:
+            ToolExecutionResult(
+                tool: tool,
+                status: "denied",
+                error: "The turn was stopped before the person answered.",
+                errorType: "approval_withdrawn"
+            )
+        case .notAsked:
+            permissionDenied(
+                tool: tool,
+                message: "This changes something, so the person has to be asked first, and it did not come from a thread they could be asked in."
+            )
+        }
+    }
+
     /// Create a timeout result.
     nonisolated static func timeout(tool: String, timeoutSeconds: Int) -> ToolExecutionResult {
         ToolExecutionResult(

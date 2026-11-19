@@ -46,7 +46,7 @@ actor ShellToolService {
         workingDir: String? = nil,
         env: [String: String]? = nil,
         timeoutSeconds: Int? = nil,
-        approve: @Sendable (_ command: String, _ directory: String) async -> Bool
+        approve: @Sendable (_ command: String, _ directory: String) async -> ApprovalAnswer
     ) async -> ToolExecutionResult {
         let timeout = timeoutSeconds ?? defaultTimeoutSeconds
 
@@ -78,10 +78,9 @@ actor ShellToolService {
             )
         }
 
-        if !Self.isReadOnly(command) {
-            guard await approve(command, normalizedWorkingDir) else {
-                return await .denied(tool: "shell.execute")
-            }
+        if !Self.isReadOnly(command),
+           let refusal = await ToolExecutionResult.refusal(approve(command, normalizedWorkingDir), tool: "shell.execute") {
+            return refusal
         }
 
         // Execute the command
@@ -129,7 +128,9 @@ actor ShellToolService {
 
     /// Whether a command is one of the few that run without asking.
     nonisolated static func isReadOnly(_ command: String) -> Bool {
-        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Spaces and tabs only: a newline anywhere makes it more than one
+        // command.
+        let trimmed = command.trimmingCharacters(in: .whitespaces)
         guard ShellCommandRiskLevel.assess(command: trimmed) == .low else { return false }
         let disallowedFragments = [";", "&&", "||", "|", ">", "<", "`", "$(", "${", "\n", "\r"]
         guard !disallowedFragments.contains(where: { trimmed.contains($0) }) else { return false }

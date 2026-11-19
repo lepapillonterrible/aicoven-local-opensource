@@ -26,6 +26,16 @@ nonisolated struct ToolApproval: Identifiable, Equatable {
     }
 }
 
+/// How asking the person came out.
+nonisolated enum ApprovalAnswer: Equatable {
+    case approved
+    case denied
+    /// The turn that asked was stopped before an answer.
+    case withdrawn
+    /// There was no thread to ask in, so no one was asked.
+    case notAsked
+}
+
 /// The approvals turns are waiting on, and the one spot that shows them: one
 /// at a time, the rest behind it in the order they were asked. A turn asks
 /// and waits; the person's answer, or the turn stopping, ends the wait.
@@ -40,6 +50,15 @@ final class ToolApprovals: ObservableObject {
         case denied
         /// The turn that asked stopped before an answer.
         case noLongerWaiting
+
+        /// What the block says in place of its buttons.
+        var words: String {
+            switch self {
+            case .approved: "Approved"
+            case .denied: "Denied"
+            case .noLongerWaiting: "No longer waiting"
+            }
+        }
     }
 
     enum Phase: Equatable {
@@ -70,7 +89,9 @@ final class ToolApprovals: ObservableObject {
     static let leavingDuration: TimeInterval = 0.9
 
     /// The turns waiting, by approval id.
-    private var asked: [String: CheckedContinuation<Bool, Never>] = [:]
+    private var asked: [String: CheckedContinuation<ApprovalAnswer, Never>] = [:]
+    /// The approvals a screen has shown and VoiceOver has been told of.
+    private var announced: Set<String> = []
     /// Changes whenever a different approval starts showing, so a timer set
     /// for one never acts on another.
     private var showingGeneration = 0
@@ -89,15 +110,15 @@ final class ToolApprovals: ObservableObject {
 
     // MARK: - Asking
 
-    /// Asks the person, and waits for the answer. True only when they
-    /// approved. False when they denied, and when the task that asks is
-    /// cancelled first: a turn that is stopped does not go on to do what it
-    /// was asking about.
-    func ask(_ approval: ToolApproval) async -> Bool {
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
+    /// Asks the person, and waits for the answer. Approved only when they
+    /// approved and the task that asked has not been cancelled: a turn that
+    /// is stopped does not go on to do what it was asking about, even if
+    /// Approve was pressed as it stopped.
+    func ask(_ approval: ToolApproval) async -> ApprovalAnswer {
+        let answer = await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<ApprovalAnswer, Never>) in
                 guard !Task.isCancelled else {
-                    continuation.resume(returning: false)
+                    continuation.resume(returning: .withdrawn)
                     return
                 }
                 asked[approval.id] = continuation
@@ -111,13 +132,26 @@ final class ToolApprovals: ObservableObject {
         } onCancel: {
             Task { @MainActor in self.withdraw(approval.id) }
         }
+        return Task.isCancelled ? .withdrawn : answer
     }
 
     /// The person pressed Approve or Deny on the approval showing.
     func answer(_ approvalID: String, approve: Bool) {
         guard showing?.approval.id == approvalID, showing?.phase == .asking else { return }
-        settle(approvalID, approved: approve)
+        settle(approvalID, with: approve ? .approved : .denied)
         finishShowing(outcome: approve ? .approved : .denied)
+    }
+
+    /// A screen is showing this approval: VoiceOver is told once, however
+    /// many windows show it and however often it comes back to the front.
+    /// The block never takes focus, and the thread that asked may not be the
+    /// one on screen. False when it had been said already.
+    @discardableResult
+    func announceShowing(_ approvalID: String) -> Bool {
+        guard let showing, showing.approval.id == approvalID, showing.phase == .asking, !announced.contains(approvalID) else { return false }
+        announced.insert(approvalID)
+        AccessibilityNotification.Announcement("Needs your OK, from \(showing.approval.threadTitle): \(showing.approval.question)").post()
+        return true
     }
 
     /// "N more waiting": the one showing goes to the back, the next shows.
@@ -132,33 +166,36 @@ final class ToolApprovals: ObservableObject {
     /// The turn that asked has stopped: its approval leaves unanswered.
     private func withdraw(_ approvalID: String) {
         guard asked[approvalID] != nil else { return }
-        settle(approvalID, approved: false)
+        settle(approvalID, with: .withdrawn)
         if showing?.approval.id == approvalID, showing?.phase == .asking {
             finishShowing(outcome: .noLongerWaiting)
         } else {
             waiting.removeAll { $0.id == approvalID }
+            announced.remove(approvalID)
         }
     }
 
     /// Gives the waiting turn its answer, once.
-    private func settle(_ approvalID: String, approved: Bool) {
+    private func settle(_ approvalID: String, with answer: ApprovalAnswer) {
         guard let continuation = asked.removeValue(forKey: approvalID) else { return }
         let stillAsking = Set(([showing?.approval].compactMap(\.self) + waiting).filter { asked[$0.id] != nil }.map(\.threadID))
         askingThreadIDs = stillAsking
-        continuation.resume(returning: approved)
+        continuation.resume(returning: answer)
     }
 
     private func show(_ approval: ToolApproval) {
         showingGeneration += 1
         showing = Showing(approval: approval, phase: .asking)
-        // Said once, whichever thread is on screen: the block never takes
-        // focus, and the thread that asked may not be the one showing.
-        AccessibilityNotification.Announcement("Needs your OK, from \(approval.threadTitle): \(approval.question)").post()
     }
 
     /// Says what happened, leaves, then shows the next.
     private func finishShowing(outcome: Outcome) {
         showing?.phase = .answered(outcome)
+        // An approval VoiceOver was told of is told how it ended: the block
+        // says so for a moment and is gone.
+        if let id = showing?.approval.id, announced.remove(id) != nil {
+            AccessibilityNotification.Announcement(outcome.words).post()
+        }
         let generation = showingGeneration
         schedule(Self.answeredDuration) { [weak self] in
             guard let self, showingGeneration == generation else { return }
