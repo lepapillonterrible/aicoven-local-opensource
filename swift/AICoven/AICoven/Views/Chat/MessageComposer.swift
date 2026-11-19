@@ -151,13 +151,14 @@ struct MessageComposer: View {
             allowedContentTypes: [.item],
             allowsMultipleSelection: true
         ) { result in
-            // Chosen for the thread the chooser was opened in, or not taken.
-            guard choosingFiles != nil else { return }
-            choosingFiles = nil
+            // For the chooser that is open, or not taken: the one a
+            // thread was left with is closed, and returns nothing here.
+            guard let choosing = choosingFiles else { return }
             switch result {
             case let .success(urls):
-                Task { await attach(urls) }
+                Task { await attach(urls, chosenIn: choosing) }
             case let .failure(error):
+                choosingFiles = nil
                 Self.log("The file chooser failed", error)
                 attachFailure = "The file could not be opened."
             }
@@ -363,8 +364,12 @@ struct MessageComposer: View {
     /// Takes the chosen files as attachments. One that cannot be taken is
     /// said above the box; the rest are still taken.
     @MainActor
-    private func attach(_ urls: [URL]) async {
-        guard attachingTask == nil else { return }
+    private func attach(_ urls: [URL], chosenIn choosing: UUID) async {
+        // Checked as the attaching starts, not as the chooser returned: the
+        // composer can have moved to another thread in between, and then
+        // the files are not this thread's.
+        guard choosingFiles == choosing, attachingTask == nil else { return }
+        choosingFiles = nil
         let task = UUID()
         attachingTask = task
         defer { if attachingTask == task { attachingTask = nil } }
@@ -392,12 +397,7 @@ struct MessageComposer: View {
         choosingFiles = choosing
         panel.begin { response in
             let urls = response == .OK ? panel.urls : []
-            Task { @MainActor in
-                // Chosen for the thread the panel was opened in, or not taken.
-                guard choosingFiles == choosing else { return }
-                choosingFiles = nil
-                await attach(urls)
-            }
+            Task { await attach(urls, chosenIn: choosing) }
         }
     }
     #endif
