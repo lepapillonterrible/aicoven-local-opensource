@@ -21,7 +21,7 @@ This repo started as an extraction of the original multi-tenant AICoven app and 
 - Encrypted local context storage (threads, memories, settings) backed by SQLite/GRDB.
 - A "context sandwich" builder that composes system contract, policies, time, memories, history, and the current turn — with device-aware context limits for iPhones.
 - A tools layer (`ToolEnvironment` + `ToolService`) that exposes web search, file/image analysis, and local file generation using only your provider keys, and an `image.generate` tool that makes images with your OpenAI key.
-- An MCP client (`MCPClient`) that connects to remote MCP servers over HTTP/SSE, discovers tools, and executes them — with semantic tool selection via embedding-based matching and a benchmark suite for evaluating local model tool-calling accuracy.
+- An MCP client (`MCPClient`) that connects to remote MCP servers over Streamable HTTP (the current revision of the protocol, and the earlier ones' `initialize` handshake), discovers tools, and executes them — with semantic tool selection via embedding-based matching and a benchmark suite for evaluating local model tool-calling accuracy.
 - Shell command tools with an approval flow, and connected-app integrations (GitHub, Google Drive).
 - StoreKit 2 in-app purchase support with a community edition compile flag.
 
@@ -90,7 +90,7 @@ The local-first client is functional for core workflows but some features are st
 - MLX model catalog with category/tier classification (General, Coding, Mobile), device-aware filtering, and AICoven fine-tuned MCP models
 - MLX on iPhone support (6 GB+ RAM) with automatic memory management (model eviction, GPU cache limits, tool context truncation)
 - Native tool calling for API providers (OpenAI, Anthropic, Gemini) with text-based fallback for local models
-- MCP server integration with tool discovery, execution, caching, SSE transport, and semantic tool selection
+- MCP server integration with tool discovery, execution, caching, Streamable HTTP transport, and semantic tool selection
 - MCP tool-calling benchmark suite for evaluating local model accuracy (`MCPToolCallingBenchmark`)
 - StoreKit 2 in-app purchases for premium features
 - SwiftLint configuration (`.swiftlint.yml`) and CI workflow
@@ -120,7 +120,7 @@ The tools layer is provider-agnostic and designed to work with whatever keys you
 - **Attachment analysis** – Summarization/QA over attached files and images using the best available vision/chat model.
 - **Image generation** (`image.generate`) – A model can make an image with your OpenAI key; it is kept on the device, encrypted, and shown under the reply.
 - **Connected apps** – GitHub repository tools (read/write files, create branches/PRs, search code) and Google Drive file tools (list, read, upload, Sheets read/write), authenticated via user-provided tokens.
-- **MCP server tools** – Any tools exposed by connected [MCP](https://modelcontextprotocol.io) servers (e.g. email via Zapier, calendar, Slack). Tools are discovered automatically via `tools/list`, cached locally, and executed via JSON-RPC over HTTP or SSE. Semantic tool selection uses embedding-based matching when many tools are available.
+- **MCP server tools** – Any tools exposed by connected [MCP](https://modelcontextprotocol.io) servers (e.g. email via Zapier, calendar, Slack). Tools are discovered automatically via `tools/list`, cached locally, and executed via JSON-RPC over Streamable HTTP. Semantic tool selection uses embedding-based matching when many tools are available.
 
 These tools are available both to the autonomous `AgentRunner` and to the interactive chat UI via the enhanced message composer.
 
@@ -133,7 +133,7 @@ These tools are available both to the autonomous `AgentRunner` and to the intera
 | **Google Gemini** | Native function declarations API | ✅ Fully supported |
 | **Ollama** (local) | Text-based (JSON in system prompt) | ⚠️ Works, less reliable |
 | **MLX** (on-device) | Text-based (JSON in system prompt) + pre-execution | ⚠️ Works, less reliable |
-| **MCP servers** | JSON-RPC tool calls (HTTP/SSE) | ✅ Fully supported |
+| **MCP servers** | JSON-RPC tool calls (Streamable HTTP) | ✅ Supported (not the deprecated HTTP+SSE transport) |
 
 API providers (OpenAI, Anthropic, Gemini) use **native tool calling** — tool schemas are sent as structured function declarations and the model returns structured tool calls. This is reliable and well-supported.
 
@@ -250,7 +250,7 @@ AICoven supports the [Model Context Protocol (MCP)](https://modelcontextprotocol
 - For **local models** (MLX, Ollama): `ChatService` uses keyword matching and fuzzy scoring to pre-select the most relevant MCP tool before sending to the model. When many MCP tools are available, **semantic tool selection** via embedding-based cosine similarity narrows the candidate set.
 - MCP tool results are injected into the context sandwich and truncated to fit device memory constraints (4 KB on iPhone, 8 KB on Mac/iPad).
 
-**Supported transports:** SSE (`text/event-stream`) and Streamable HTTP.
+**Supported transport:** Streamable HTTP, with answers as JSON or as a stream of events (`text/event-stream`). The client speaks the current revision of the protocol (2026-07-28) and the earlier ones that start with `initialize`. The deprecated HTTP+SSE transport is not spoken yet; a server's transport setting is not used.
 **Authentication:** None, Bearer token, or API key.
 
 ### MLX vs. Ollama

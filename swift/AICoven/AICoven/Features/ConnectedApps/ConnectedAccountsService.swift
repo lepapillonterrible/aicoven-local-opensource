@@ -208,6 +208,27 @@ actor ConnectedAccountsService {
         }
     }
 
+    /// Keeps a server's freshly listed tools on the server as it is stored
+    /// now, in one step: what is checked is what is written. With
+    /// `unlessListedSince`, nothing is kept if its tools have been listed
+    /// already (a listing that started earlier does not replace a later
+    /// one's). False if the server is gone or was left as it is.
+    @discardableResult
+    func cacheMCPTools(_ tools: [MCPToolDefinition], forServerId id: String, unlessListedSince: Bool = false) async -> Bool {
+        await ensureAccountsLoaded()
+        // Nothing waits between here and the write.
+        guard let index = mcpServersCache?.firstIndex(where: { $0.id == id }), var server = mcpServersCache?[index] else { return false }
+        if unlessListedSince, server.toolsCachedAt != nil { return false }
+        let now = Date()
+        server.cachedTools = tools
+        server.toolsCachedAt = now
+        server.status = .connected
+        server.updatedAt = now
+        mcpServersCache?[index] = server
+        await saveMCPServersToStorage()
+        return true
+    }
+
     /// Delete an MCP server
     func deleteMCPServer(id: String) async throws {
         await deleteMCPToken(forServerId: id)

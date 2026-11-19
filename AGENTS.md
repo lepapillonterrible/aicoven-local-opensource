@@ -150,9 +150,10 @@ This is the local-first backbone intended to replace many backend-oriented servi
   - `ToolExecutionService` routes tool calls including shell commands, connected-app tools (GitHub, Google Drive), and MCP server tools. A tool that changes something (a shell command, a file write, a GitHub or Google write) first asks the person through `ToolApprovals`, which shows one approval at a time beside the thread (`Views/Chat/ApprovalBlock.swift`). An approval asked while the person is composing (the composer has focus and its text changed in the last three seconds, or the on-screen keyboard is up) is held back, and comes in when they send, pause, or leave the composer.
 
 - `Features/MCP/`
-  - `MCPClient` is an actor-based MCP (Model Context Protocol) client that connects to remote servers over HTTP/SSE, discovers tools via `tools/list`, and executes them via `tools/call` using JSON-RPC 2.0.
+  - `MCPClient` is an actor-based MCP (Model Context Protocol) client over Streamable HTTP: it lists a server's tools (`tools/list`, every page) and calls them (`tools/call`), in JSON-RPC 2.0.
+  - It speaks the current revision of the protocol (2026-07-28: no handshake; every request carries its version in `_meta` and in `MCP-Protocol-Version`, with `Mcp-Method`, `Mcp-Name` and `Mcp-Param-*` headers) and falls back to the earlier ones (`initialize`, `notifications/initialized`, `Mcp-Session-Id`, a lost session started anew once). It asks a server which it speaks once (`server/discover`) and remembers for the app's run (`MCPEraCache`). The deprecated HTTP+SSE transport is not spoken; a server's transport setting is not used.
+  - Answers come as JSON or as a stream of events, read up to the answer to the request. A tool's own error (`isError`) is told to the model as such. Of each tool it keeps the name, description, input schema and whether the server marks it read-only (`readOnlyHint`).
   - Supports Bearer token and API key authentication.
-  - Handles both plain JSON and SSE (`text/event-stream`) response formats.
 
 - `Features/ConnectedApps/`
   - `MCPServerAccount` represents a configured MCP server connection (URL, transport type, auth, cached tools).

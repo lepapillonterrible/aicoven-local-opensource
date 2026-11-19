@@ -152,25 +152,25 @@ struct MCPServerManagementView: View {
         do {
             let token = try? await service.getMCPToken(forServerId: server.id)
             let client = MCPClient(server: server, token: token)
-            try await client.connect()
 
             // Discover tools and cache them on the server account
-            let tools = try await client.discoverTools()
-            var updated = server
-            updated.cachedTools = tools
-            updated.toolsCachedAt = Date()
-            updated.status = .connected
-            try await service.updateMCPServer(updated)
+            let tools: [MCPToolDefinition]
+            do {
+                tools = try await client.discoverTools()
+                await client.disconnect()
+            } catch {
+                await client.disconnect()
+                throw error
+            }
+            // Onto the server as it is kept now, not as it was when the test
+            // began: it may have been edited, or removed, meanwhile.
+            await service.cacheMCPTools(tools, forServerId: server.id)
 
             await loadServers()
         } catch {
-            // Suggest switching transport if the connection failed
-            let transportHint = server.transport == .sse
-                ? "\n\nTip: Try removing this server and re-adding it with 'Streamable HTTP' transport."
-                : server.transport == .streamableHttp
-                ? "\n\nTip: Try removing this server and re-adding it with 'SSE' transport."
-                : ""
-            errorMessage = "Connection test failed: \(error.localizedDescription)\(transportHint)"
+            // The client finds out for itself what the server speaks: there
+            // is no other transport setting to suggest.
+            errorMessage = "Connection test failed: \(error.localizedDescription)"
         }
     }
 
@@ -502,15 +502,22 @@ struct AddMCPServerSheet: View {
             Task.detached {
                 let client = MCPClient(server: newAccount, token: tokenToSave)
                 do {
-                    try await client.connect()
-                    let tools = try await client.discoverTools()
-                    var updated = newAccount
-                    updated.cachedTools = tools
-                    updated.toolsCachedAt = Date()
-                    updated.status = .connected
-                    try await service.updateMCPServer(updated)
+                    let tools: [MCPToolDefinition]
+                    do {
+                        tools = try await client.discoverTools()
+                        await client.disconnect()
+                    } catch {
+                        await client.disconnect()
+                        throw error
+                    }
+                    // Only if nothing has listed its tools since (a Test
+                    // run meanwhile is newer than this), and onto the
+                    // server as it is kept now.
+                    await service.cacheMCPTools(tools, forServerId: newAccount.id, unlessListedSince: true)
                 } catch {
-                    print("Initial MCP connection/tool discovery failed: \(error)")
+                    // What failed and its kind, never what a server said.
+                    let failure = error as NSError
+                    AppErrorReporter.log(message: "A new MCP server's tools could not be listed (\(failure.domain) \(failure.code)).", context: "MCPServerManagementView.add")
                 }
             }
 

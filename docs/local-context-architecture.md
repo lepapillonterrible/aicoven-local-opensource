@@ -172,7 +172,7 @@ Some areas remain intentionally flexible or partially implemented so contributor
 
 The app supports the Model Context Protocol (MCP) for connecting external tool servers:
 
-- `MCPClient` (actor) handles JSON-RPC 2.0 over HTTP POST, supporting both plain JSON and SSE response formats.
+- `MCPClient` (actor) handles JSON-RPC 2.0 over Streamable HTTP: the current revision of the protocol, with a fallback to the earlier ones' `initialize` handshake; answers as plain JSON or as a stream of events.
 - `MCPServerAccount` stores per-server configuration (URL, transport, auth type, cached tools) in UserDefaults; auth tokens go to Keychain.
 - Tool discovery via `tools/list` is cached and refreshed on reconnect.
 - `MCPToolEmbeddingCache` computes and caches embedding vectors for tool descriptions, enabling semantic tool selection via cosine similarity when many tools are available.
