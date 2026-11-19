@@ -265,6 +265,11 @@ final class ImageGenerationTests: XCTestCase {
             return XCTFail("Not a size")
         }
         XCTAssertEqual(size.field, "size")
+        XCTAssertEqual(
+            ToolExecutionService.imageRequest(from: ["prompt": .string("A"), "size": AnyJSONValue(NSNull())]),
+            .success(.init(prompt: "A", model: nil, size: "1024x1024", quality: nil)),
+            "Null is how a model writes what it leaves out"
+        )
         // A size that was given must be one: only one left out is the default.
         for given: AnyJSONValue in [.string(""), .string("  "), .int(1024), .string("1024x1024\n")] {
             guard case let .failure(refusal) = ToolExecutionService.imageRequest(from: ["prompt": .string("A"), "size": given]) else {
@@ -283,6 +288,9 @@ final class ImageGenerationTests: XCTestCase {
         // exactly where there is a key.
         let forAnAgentRun = await ContextBuilder.ToolConfig.connected()
         XCTAssertFalse(forAnAgentRun.enabledTools.contains("image.generate"))
+        XCTAssertEqual(PromptTemplates.offeredImageTools(storedKey: "KEY"), ["image.generate"])
+        XCTAssertEqual(PromptTemplates.offeredImageTools(storedKey: ""), [])
+        XCTAssertEqual(PromptTemplates.offeredImageTools(storedKey: nil), [])
         let forAChatTurn = await ContextBuilder.ToolConfig.connected(deliversFiles: true)
         XCTAssertEqual(forAChatTurn.enabledTools.contains("image.generate"), !PromptTemplates.offeredImageTools().isEmpty)
         XCTAssertEqual(forAChatTurn.enabledTools.subtracting(PromptTemplates.imageTools), forAnAgentRun.enabledTools)
@@ -367,6 +375,21 @@ final class ImageGenerationTests: XCTestCase {
 
         let noThread = try await ChatService.shared.executeChatToolCall(call, threadID: nil)
         XCTAssertEqual(noThread.contextBlock, "[Tool Error: image.generate]\nAn image can be made only in a thread.")
+
+        // Made, but its thread went while it was being made: it cannot be
+        // kept, and that is what is said, not that OpenAI failed.
+        let leaving = try await makeThread()
+        let found = await MainActor.run { DatabaseManager.shared.dbQueue }
+        let queue = try XCTUnwrap(found)
+        let picture = try picture(png())
+        let thenGone = service(keeping: Asked()) { _ in
+            try? queue.write { db in try db.execute(sql: "DELETE FROM threads WHERE id = ?", arguments: [leaving]) }
+            return (200, picture)
+        }
+        await ToolExecutionService.shared.setImageService { thenGone }
+        let notKept = try await ChatService.shared.executeChatToolCall(call, threadID: leaving)
+        XCTAssertEqual(notKept.contextBlock, "[Tool Error: image.generate]\nThe image was made but could not be kept on this device.")
+        XCTAssertEqual(notKept.files, [])
 
         // A thread that is not the signed-in account's (a turn that outlived
         // its account): nothing is asked of OpenAI with this account's key.

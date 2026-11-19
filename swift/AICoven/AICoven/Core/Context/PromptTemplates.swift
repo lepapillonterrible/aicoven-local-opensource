@@ -666,8 +666,8 @@ enum PromptTemplates {
     /// The image tools a chat turn is offered now: all of them where a
     /// non-empty OpenAI key is stored, whichever model answers the turn;
     /// none otherwise.
-    static func offeredImageTools() -> Set<String> {
-        guard let key = ProviderAccountService.apiKeyFromKeychain(forProvider: "openai"), !key.isEmpty else { return [] }
+    static func offeredImageTools(storedKey: String? = ProviderAccountService.apiKeyFromKeychain(forProvider: "openai")) -> Set<String> {
+        guard let storedKey, !storedKey.isEmpty else { return [] }
         return imageTools
     }
 

@@ -82,8 +82,9 @@ actor ToolExecutionService {
         if let provider = text("provider"), provider.lowercased() != "openai" {
             return .failure(ImageRequestRefusal(message: "Images are made with OpenAI in this app; '\(provider)' is not available. Leave 'provider' out.", field: "provider"))
         }
-        // A size that was given must read as one: only one left out is
-        // the default.
+        // A size that was given must read as one: only one left out (or
+        // given as null, as models write what they leave out) is the
+        // default.
         let size: String
         if let given = args["size"], !(given.value is NSNull) {
             guard let asked = given.value as? String, ImageGenerationService.isSize(asked) else {
@@ -124,10 +125,20 @@ actor ToolExecutionService {
         }
         // The key is the signed-in account's. A turn can outlive the
         // account it was started as, so the thread must be that account's
-        // before anything is asked with its key.
-        let account = await MainActor.run { UserScope.currentUserID }
-        let service = imageService()
-        guard await ThreadRepository.shared.isThread(threadID, of: account), await MainActor.run(body: { UserScope.currentUserID }) == account else {
+        // before anything is asked with its key. The account and its key
+        // are read together, with nothing between them, so the key is
+        // that account's whatever is signed in a moment later.
+        let keyed = imageService
+        let (account, service) = await MainActor.run { (UserScope.currentUserID, keyed()) }
+        let isTheAccounts: Bool
+        do {
+            isTheAccounts = try await ThreadRepository.shared.isThread(threadID, of: account)
+        } catch {
+            let failure = error as NSError
+            AppErrorReporter.log(message: "A thread's account could not be read (\(failure.domain) \(failure.code)).", context: "ToolExecutionService.generateImage")
+            return .error(tool: toolCall.name, message: "The thread could not be read: no image was made.", errorType: "image_thread_unreadable", isRetryable: true)
+        }
+        guard isTheAccounts else {
             return .error(tool: toolCall.name, message: "This thread is not the signed-in account's: no image was made.", errorType: "image_account_changed")
         }
         guard let service else {
