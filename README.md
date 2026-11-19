@@ -184,7 +184,7 @@ For a complete documentation index, see [`docs/README.md`](docs/README.md).
 3. Select the `AICoven` scheme and your desired destination (iOS simulator or My Mac).
 4. Set a unique bundle identifier and configure signing for your account if needed.
 5. Build & run.
-6. In the app, open Settings → Provider Keys and add your own API keys (e.g. OpenAI, Anthropic, Gemini). The app will then route LLM and embedding calls through those providers.
+6. In the app, open Settings (⌘, on the Mac; the Settings tab on iPhone) → AI connections and add your own API keys (e.g. OpenAI, Anthropic, Gemini). The app will then route LLM and embedding calls through those providers.
 
 ### Using MLX (On-Device Models)
 
@@ -238,7 +238,7 @@ You can run models on your machine with [Ollama](https://ollama.com) — no API 
 
 AICoven supports the [Model Context Protocol (MCP)](https://modelcontextprotocol.io), allowing you to connect external tool servers (e.g. Zapier, custom services) and use their tools directly from chat.
 
-1. In the app, go to **Settings → Connected Apps → MCP Servers**.
+1. In the app, go to **Settings → Connected apps → MCP Servers**.
 2. Tap **Add Server** and enter the server URL and authentication details (Bearer token or API key).
 3. The app will connect and discover available tools via `tools/list`.
 4. Discovered tools are cached locally and automatically included in chat prompts.

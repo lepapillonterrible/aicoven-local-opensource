@@ -101,66 +101,12 @@ struct WorkspaceTab: Identifiable, Equatable {
         )
     }
 
-    /// Create a tab for profile
-    static var profile: WorkspaceTab {
-        WorkspaceTab(
-            id: "profile",
-            type: .profile,
-            title: "Profile"
-        )
-    }
-
-    /// Create a tab for settings
-    static var settings: WorkspaceTab {
-        WorkspaceTab(
-            id: "settings",
-            type: .settings,
-            title: "Settings"
-        )
-    }
-
-    /// Create a tab for provider keys
-    static var providerKeys: WorkspaceTab {
-        WorkspaceTab(
-            id: "provider-keys",
-            type: .providerKeys,
-            title: "Provider Keys"
-        )
-    }
-
-    /// Create a tab for budgets
-    static var budget: WorkspaceTab {
-        WorkspaceTab(
-            id: "budget",
-            type: .budget,
-            title: "Budgets"
-        )
-    }
-
-    /// Create a tab for connected apps
-    static var connectedApps: WorkspaceTab {
-        WorkspaceTab(
-            id: "connected-apps",
-            type: .connectedApps,
-            title: "Connected Apps"
-        )
-    }
-
     /// Create a tab for MCP Servers
     static var mcpServers: WorkspaceTab {
         WorkspaceTab(
             id: "mcp-servers",
             type: .mcpServers,
             title: "MCP Servers"
-        )
-    }
-
-    /// Create a tab for usage dashboard
-    static var usage: WorkspaceTab {
-        WorkspaceTab(
-            id: "usage",
-            type: .usage,
-            title: "Budgets & Usage"
         )
     }
 
@@ -227,30 +173,4 @@ struct WorkspaceTab: Identifiable, Equatable {
         )
     }
 
-    /// Tab for the in-app purchase store
-    static var store: WorkspaceTab {
-        WorkspaceTab(
-            id: "store",
-            type: .store,
-            title: "Upgrade"
-        )
-    }
-
-    /// Tab for Terms of Service
-    static var terms: WorkspaceTab {
-        WorkspaceTab(
-            id: "terms",
-            type: .terms,
-            title: "Terms & Conditions"
-        )
-    }
-
-    /// Tab for Privacy Policy
-    static var privacy: WorkspaceTab {
-        WorkspaceTab(
-            id: "privacy",
-            type: .privacy,
-            title: "Privacy Policy"
-        )
-    }
 }

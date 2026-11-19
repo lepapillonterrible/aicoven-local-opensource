@@ -209,38 +209,6 @@ struct WorkspaceSidebarView: View {
         }
     }
 
-    private func openSidebarTab(_ type: WorkspaceTabType) {
-        if let existingTab = openTabs.first(where: { $0.type == type }) {
-            activeTabId = existingTab.id
-            return
-        }
-
-        let tab: WorkspaceTab
-        switch type {
-        case .profile:
-            tab = .profile
-        case .settings:
-            tab = .settings
-        case .providerKeys:
-            tab = .providerKeys
-        case .budget:
-            tab = .budget
-        case .usage:
-            tab = .usage
-        case .connectedApps:
-            tab = .connectedApps
-        case .terms:
-            tab = .terms
-        case .privacy:
-            tab = .privacy
-        default:
-            return
-        }
-
-        openTabs.append(tab)
-        activeTabId = tab.id
-    }
-
     private func openMemoryTab(covenId: String?) {
         let type = WorkspaceTabType.memoryList(covenId: covenId)
         if let existingTab = openTabs.first(where: { $0.type == type }) {

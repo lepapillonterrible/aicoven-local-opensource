@@ -93,6 +93,17 @@ struct SettingsPaneView: View {
         #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
         #endif
+            .onAppear { trackOpened() }
+    }
+
+    /// The open events the panes' screens sent when they were tabs.
+    private func trackOpened() {
+        switch pane {
+        case .connectedApps: AnalyticsService.shared.trackConnectedAppsOpened()
+        case .usage: AnalyticsService.shared.trackUsageViewed()
+        case .account: AnalyticsService.shared.trackProfileOpened()
+        case .aiConnections, .subscription, .thisMac, .appearance, .about: break
+        }
     }
 
     @ViewBuilder

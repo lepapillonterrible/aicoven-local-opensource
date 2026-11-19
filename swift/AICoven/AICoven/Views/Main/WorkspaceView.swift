@@ -308,19 +308,6 @@ struct WorkspaceContentView: View {
                 onBack: nil
             )
             .id(thread.id)
-        case .profile:
-            EnhancedProfileView()
-        case .settings:
-            EnhancedSettingsView()
-        case .providerKeys:
-            ProviderKeysView()
-        case .budget:
-            BudgetView()
-        case .usage:
-            UsageSettingsView()
-        case .connectedApps:
-            ConnectedAppsView()
-                .environmentObject(StoreService.shared)
         case .mcpServers:
             MCPServerManagementView()
         case let .addRole(covenId):
@@ -376,8 +363,6 @@ struct WorkspaceContentView: View {
                 openTabs: $openTabs,
                 activeTabId: $activeTabId
             )
-        case .terms:
-            TermsOfServiceView()
         default:
             EmptyView()
         }
@@ -385,7 +370,9 @@ struct WorkspaceContentView: View {
 
     /// Open a new tab
     private func openTab(_ type: WorkspaceTabType) {
-        // For settings tabs, only allow one instance
+        if AppState.shared.openSettings(for: type) { return }
+
+        // Only thread tabs may be open more than once
         if case .thread = type {
             // Allow multiple thread tabs
         } else {
@@ -399,18 +386,6 @@ struct WorkspaceContentView: View {
         switch type {
         case let .thread(thread):
             tab = .thread(thread)
-        case .profile:
-            tab = .profile
-        case .settings:
-            tab = .settings
-        case .providerKeys:
-            tab = .providerKeys
-        case .budget:
-            tab = .budget
-        case .usage:
-            tab = .usage
-        case .connectedApps:
-            tab = .connectedApps
         case .mcpServers:
             tab = .mcpServers
         case .personalStrixSettings:
@@ -419,10 +394,6 @@ struct WorkspaceContentView: View {
             tab = WorkspaceTab.memoryList(covenId: covenId)
         case let .memoryProposals(covenId):
             tab = WorkspaceTab.memoryProposals(covenId: covenId)
-        case .store:
-            tab = .store
-        case .terms:
-            tab = .terms
         default:
             return
         }

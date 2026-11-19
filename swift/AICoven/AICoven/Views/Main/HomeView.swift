@@ -5,6 +5,9 @@ struct HomeView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var authService: AuthService
     @ObservedObject private var shellApprovalManager = ShellApprovalManager.shared
+    #if os(macOS)
+    @Environment(\.openSettings) private var openSettingsWindow
+    #endif
 
     private let analytics = AnalyticsService.shared
 
@@ -82,6 +85,11 @@ struct HomeView: View {
             handleDeepLink(target)
             _ = appState.consumeDeepLink()
         }
+        #if os(macOS)
+        .onChange(of: appState.settingsRequests) { _, _ in
+            openSettingsWindow()
+        }
+        #endif
         .sheet(isPresented: $showCreateCoven) {
             // Pass StoreService so CreateCovenSheet can check entitlements
             CreateCovenSheet(onCreated: { _ in
@@ -146,6 +154,8 @@ struct HomeView: View {
     }
 
     private func openPersonalTab(_ type: WorkspaceTabType) {
+        if appState.openSettings(for: type) { return }
+
         if let existingTab = openTabs.first(where: { $0.type == type }) {
             activeTabId = existingTab.id
             return
@@ -153,22 +163,8 @@ struct HomeView: View {
 
         let tab: WorkspaceTab
         switch type {
-        case .profile:
-            tab = .profile
-        case .settings:
-            tab = .settings
-        case .providerKeys:
-            tab = .providerKeys
-        case .budget:
-            tab = .budget
-        case .usage:
-            tab = .usage
-        case .connectedApps:
-            tab = .connectedApps
         case .personalStrixSettings:
             tab = WorkspaceTab.personalStrix
-        case .store:
-            tab = .store
         default:
             return
         }
@@ -287,6 +283,8 @@ struct PersonalWorkspaceView: View {
     }
 
     private func openTab(_ type: WorkspaceTabType) {
+        if AppState.shared.openSettings(for: type) { return }
+
         if let existingTab = openTabs.first(where: { $0.type == type }) {
             activeTabId = existingTab.id
             return
@@ -294,8 +292,6 @@ struct PersonalWorkspaceView: View {
 
         let tab: WorkspaceTab
         switch type {
-        case .connectedApps:
-            tab = .connectedApps
         case .mcpServers:
             tab = .mcpServers
         case let .memoryList(covenId):
@@ -304,16 +300,6 @@ struct PersonalWorkspaceView: View {
             tab = WorkspaceTab.memoryProposals(covenId: covenId)
         case .personalStrixSettings:
             tab = WorkspaceTab.personalStrix
-        case .settings:
-            tab = .settings
-        case .profile:
-            tab = .profile
-        case .usage:
-            tab = .usage
-        case .budget:
-            tab = .budget
-        case .providerKeys:
-            tab = .providerKeys
         default:
             return
         }

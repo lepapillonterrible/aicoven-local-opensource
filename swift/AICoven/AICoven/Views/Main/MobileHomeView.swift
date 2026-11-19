@@ -9,9 +9,9 @@ struct MobileRootView: View {
                     Label("Chats", systemImage: "bubble.left.and.bubble.right.fill")
                 }
 
-            MobileProfileRootView()
+            SettingsWorkspaceView()
                 .tabItem {
-                    Label("Profile", systemImage: "person.crop.circle")
+                    Label("Settings", systemImage: "gearshape")
                 }
         }
         .tint(.aicovenTeal)
@@ -520,63 +520,6 @@ struct MobileCovenChatView: View {
 }
 
 // MARK: - Mobile Profile Root
-
-struct MobileProfileRootView: View {
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                NebulaBackground().ignoresSafeArea()
-                List {
-                    Section("Account") {
-                        NavigationLink(destination: EnhancedProfileView()) {
-                            Label("Profile", systemImage: "person.crop.circle")
-                        }
-                    }
-
-                    Section("Preferences") {
-                        NavigationLink(destination: EnhancedSettingsView()) {
-                            Label("Settings", systemImage: "gearshape")
-                        }
-                        NavigationLink(destination: ProviderKeysView()) {
-                            Label("Provider Keys", systemImage: "key.fill")
-                        }
-                        NavigationLink(destination: UsageSettingsView()) {
-                            Label("Budgets & Usage", systemImage: "chart.bar.xaxis")
-                        }
-                        NavigationLink(destination: StrixSettingsView()) {
-                            Label("Default Agent", systemImage: "sparkles")
-                        }
-                        NavigationLink(destination: ConnectedAppsView().environmentObject(StoreService.shared)) {
-                            Label("Connected Apps", systemImage: "app.connected.to.app.below.fill")
-                        }
-                        NavigationLink(destination: MCPServerManagementView()) {
-                            Label("MCP Servers", systemImage: "server.rack")
-                        }
-                    }
-
-                    Section("Premium") {
-                        NavigationLink(destination: StoreView()) {
-                            Label("Upgrade", systemImage: "sparkles")
-                                .foregroundColor(.aicovenTeal)
-                        }
-                    }
-
-                    Section("Legal") {
-                        NavigationLink(destination: TermsOfServiceView()) {
-                            Label("Terms & Conditions", systemImage: "doc.text")
-                        }
-                        NavigationLink(destination: PrivacyPolicyView()) {
-                            Label("Privacy Policy", systemImage: "hand.raised")
-                        }
-                    }
-                }
-                .scrollContentBackground(.hidden)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .navigationTitle("Profile")
-        }
-    }
-}
 
 #Preview {
     MobileRootView()

@@ -18,6 +18,7 @@ struct SettingsWorkspaceView: View {
     var body: some View {
         content
             .themedColorScheme()
+            .onAppear { AnalyticsService.shared.trackSettingsOpened() }
     }
 
     #if os(macOS)
