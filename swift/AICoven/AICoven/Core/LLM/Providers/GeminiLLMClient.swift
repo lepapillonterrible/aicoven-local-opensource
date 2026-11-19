@@ -137,12 +137,21 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
         }
 
         // Convert LLMToolDefinition → Gemini native format (functionDeclarations).
-        // Gemini doesn't allow dots in function names, so we convert
-        // "file.write" → "file_write" for outbound, and reverse on decode.
+        // A function's name is sent without its dots ("file.write" as
+        // "file_write"), and a call that comes back is given the name it
+        // was declared under. A name's own underscores are kept that way:
+        // "google_docs.update" comes back as itself, not "google.docs.update".
+        var wireToOriginalName: [String: String] = [:]
         let toolsBlock: [ToolsBlock]? = {
             guard let tools = options.tools, !tools.isEmpty else { return nil }
             let declarations = tools.map { tool in
-                let geminiName = tool.name.replacingOccurrences(of: ".", with: "_")
+                // Two names that differ only by a dot and an underscore
+                // get distinct names on the wire.
+                var geminiName = tool.name.replacingOccurrences(of: ".", with: "_")
+                while wireToOriginalName[geminiName] != nil {
+                    geminiName += "_"
+                }
+                wireToOriginalName[geminiName] = tool.name
                 var props: [String: ParamProperty] = [:]
                 var requiredParams: [String] = []
                 for param in tool.parameters {
@@ -233,8 +242,10 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
                 textPieces.append(t)
             }
             if let fc = part.functionCall {
-                // Convert underscores back to dots for our tool naming convention
-                let toolName = fc.name.replacingOccurrences(of: "_", with: ".")
+                // The name the function was declared under. (A name that
+                // was not declared is read the old way, dots for
+                // underscores; the tool loop refuses what it does not know.)
+                let toolName = wireToOriginalName[fc.name] ?? fc.name.replacingOccurrences(of: "_", with: ".")
                 let args = fc.args ?? [:]
                 #if DEBUG
                 AppErrorReporter.log(

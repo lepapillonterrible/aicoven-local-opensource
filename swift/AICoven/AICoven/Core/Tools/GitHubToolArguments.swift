@@ -101,16 +101,4 @@ nonisolated enum GitHubToolArguments {
             nil
         }
     }
-
-    /// The names two tools had before they took the cloud app's. A call
-    /// by an old name is a call of the tool as it is named now.
-    static let renamed: [String: String] = [
-        "github.getPR": "github.getPullRequest",
-        "github.listPRFiles": "github.listPullRequestFiles",
-    ]
-
-    /// The name a tool is offered and allowed under.
-    static func offeredName(of tool: String) -> String {
-        renamed[tool] ?? tool
-    }
 }

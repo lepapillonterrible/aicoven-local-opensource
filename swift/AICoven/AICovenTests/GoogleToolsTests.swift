@@ -145,6 +145,13 @@ final class GoogleToolsTests: XCTestCase {
             let address: String
             let query: [String: String]
             var authorization: String? = "Bearer TEST_TOKEN"
+            /// What was sent with it, as text.
+            var body = ""
+
+            /// What was sent with it, read as JSON.
+            var sent: NSDictionary? {
+                (try? JSONSerialization.jsonObject(with: Data(body.utf8))) as? NSDictionary
+            }
         }
 
         private let lock = NSLock()
@@ -157,11 +164,24 @@ final class GoogleToolsTests: XCTestCase {
         func note(_ request: URLRequest) {
             let components = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }
             let query = Dictionary((components?.queryItems ?? []).map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { first, _ in first })
+            var data = request.httpBody ?? Data()
+            // URLProtocol hands a request's body over as a stream.
+            if let stream = request.httpBodyStream {
+                stream.open()
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }
+                    data.append(buffer, count: count)
+                }
+                stream.close()
+            }
             let noted = Request(
                 method: request.httpMethod ?? "GET",
                 address: (components?.host ?? "") + (components?.percentEncodedPath ?? ""),
                 query: query,
-                authorization: request.value(forHTTPHeaderField: "Authorization")
+                authorization: request.value(forHTTPHeaderField: "Authorization"),
+                body: String(decoding: data, as: UTF8.self)
             )
             lock.withLock { kept.append(noted) }
         }
@@ -377,7 +397,10 @@ final class GoogleToolsTests: XCTestCase {
             ("google_slides.read", "presentation_id", ["presentation_id": AnyJSONValue("abc?x")]),
             ("google_sheets.read", "spreadsheet_id", ["spreadsheet_id": AnyJSONValue("")]),
             ("google_sheets.readValues", "spreadsheet_id", ["spreadsheet_id": AnyJSONValue("abc def"), "range": AnyJSONValue("A1")]),
-            ("google_sheets.writeValues", "spreadsheet_id", ["spreadsheet_id": AnyJSONValue("abc#"), "range": AnyJSONValue("A1"), "values": .array([.array([.string("x")])])]),
+            ("google_sheets.updateValues", "spreadsheet_id", ["spreadsheet_id": AnyJSONValue("abc#"), "range": AnyJSONValue("A1"), "values": .array([.array([.string("x")])])]),
+            ("google_sheets.batchUpdate", "spreadsheet_id", ["spreadsheet_id": AnyJSONValue("a/b"), "requests": .array([.dictionary(["addSheet": .dictionary([:])])])]),
+            ("google_slides.update", "presentation_id", ["requests": .array([.dictionary(["createSlide": .dictionary([:])])])]),
+            ("google_docs.update", "document_id", ["document_id": AnyJSONValue("../x"), "content": AnyJSONValue("x")]),
         ] as [(String, String, [String: AnyJSONValue])] {
             let result = await world.call(tool, args, threadID: "thread")
             XCTAssertEqual(result.errorType, "invalid_parameters", tool)
@@ -399,6 +422,239 @@ final class GoogleToolsTests: XCTestCase {
         func note(_ approval: ToolApproval) {
             approvals.append(approval)
         }
+    }
+
+    // MARK: - Writing, which asks first
+
+    /// A world whose person approves (or not) and is remembered.
+    private func writingWorld(approving: Bool = true, connections: CovenConnections? = nil) async throws -> (World, Seen) {
+        let seen = Seen()
+        let world = try await world(connections: connections, ask: { approval in
+            await seen.note(approval)
+            return approving ? .approved : .denied
+        }, answer: { [self] _ in json(#"{"id": "new1", "name": "plan.txt"}"#) })
+        return (world, seen)
+    }
+
+    func testValuesAreWrittenAsTheyWereGiven_byTheCloudsNameOrTheOldOne() async throws {
+        let (world, seen) = try await writingWorld()
+        defer { world.forget() }
+        let values: AnyJSONValue = .array([.array([.string("Name"), .string("Total")]), .array([.string("Ada"), .int(3)]), .array([.bool(true), .null, .double(1.5)])])
+
+        let written = await world.call("google_sheets.updateValues", ["spreadsheet_id": AnyJSONValue("s1"), "range": AnyJSONValue("My Sheet!A1"), "values": values], threadID: "thread")
+        XCTAssertEqual(written.status, "ok")
+        XCTAssertEqual(written.contextBlock, "[Google Sheets Updated: My Sheet!A1]\nSent 3 rows", "Google's answer here does not say what it wrote")
+        // This app's older name for it, and exactly as written.
+        let old = await world.call("google_sheets.writeValues", ["spreadsheet_id": AnyJSONValue("s1"), "range": AnyJSONValue("A1"), "values": .array([.array([.string("=1+1")])]), "value_input_option": AnyJSONValue("RAW")], threadID: "thread")
+        XCTAssertEqual(old.status, "ok")
+        XCTAssertEqual(old.tool, "google_sheets.updateValues")
+
+        let approvals = await seen.approvals
+        XCTAssertEqual(approvals.map(\.details), [
+            "My Sheet!A1 in spreadsheet s1\n3 rows, entered as if typed (formulas are worked out)\n\nName\tTotal\nAda\t3\nTRUE\t\t1.5",
+            "A1 in spreadsheet s1\n1 row, entered exactly as written\n\n=1+1",
+        ])
+        XCTAssertEqual(world.asked.requests.map(\.method), ["PUT", "PUT"])
+        XCTAssertEqual(world.asked.requests.map(\.address), ["sheets.googleapis.com/v4/spreadsheets/s1/values/My%20Sheet%21A1", "sheets.googleapis.com/v4/spreadsheets/s1/values/A1"])
+        XCTAssertEqual(world.asked.requests.map(\.query), [["valueInputOption": "USER_ENTERED"], ["valueInputOption": "RAW"]])
+        XCTAssertEqual(world.asked.requests.first?.sent?["values"] as? NSArray, [["Name", "Total"], ["Ada", 3], [true, "", 1.5]] as NSArray, "Text as text, a number as a number, an empty cell for null")
+    }
+
+    func testWhatGoogleSaysItWrote_isWhatTheModelIsTold() async throws {
+        let world = try await world(ask: { _ in .approved }, answer: { [self] _ in
+            json(#"{"spreadsheetId": "s1", "updatedRange": "Sheet1!A1:A1", "updatedRows": 1, "updatedColumns": 1, "updatedCells": 1}"#)
+        })
+        defer { world.forget() }
+
+        // Two rows are sent; the second has no cells, so one row is written.
+        let written = await world.call("google_sheets.updateValues", ["spreadsheet_id": AnyJSONValue("s1"), "range": AnyJSONValue("A1"), "values": .array([.array([.string("x")]), .array([])])], threadID: "thread")
+
+        XCTAssertEqual(written.contextBlock, "[Google Sheets Updated: Sheet1!A1:A1]\nWrote 1 row (1 cell)")
+        XCTAssertEqual(written.result?["updated_rows"]?.value as? Int, 1)
+    }
+
+    func testAListGivenAsJSONInText_isReadAsWhatItSays() {
+        // As a model writes it when it has been told a list holds text.
+        XCTAssertEqual(
+            GoogleToolArguments.requests(in: ["requests": .array([.string(#"{"addSheet": {"properties": {"title": "Summary"}}}"#), .dictionary(["createSlide": .dictionary([:])])])]),
+            [["addSheet": .dictionary(["properties": .dictionary(["title": .string("Summary")])])], ["createSlide": .dictionary([:])]]
+        )
+        XCTAssertEqual(GoogleToolArguments.requests(in: ["requests": .string(#" [{"createSlide": {}}]"#)]), [["createSlide": .dictionary([:])]])
+        XCTAssertEqual(
+            GoogleToolArguments.rows(in: ["values": .array([.string(#"["Name", "Total"]"#), .array([.string("Ada"), .int(3)])])]),
+            [[.string("Name"), .string("Total")], [.string("Ada"), .int(3)]]
+        )
+        XCTAssertEqual(GoogleToolArguments.rows(in: ["values": .string(#"[["a", 1], [true, null]]"#)]), [[.string("a"), .int(1)], [.bool(true), .null]])
+
+        // A whole number is read exactly, however large; one with a fraction stays one.
+        XCTAssertEqual(GoogleToolArguments.rows(in: ["values": .string("[[9007199254740993, -9223372036854775808, 1.5, 3.0]]")]), [[.int(9_007_199_254_740_993), .int(Int.min), .double(1.5), .double(3.0)]])
+        XCTAssertEqual(
+            GoogleToolArguments.requests(in: ["requests": .array([.string(#"{"deleteSheet": {"sheetId": 9007199254740993}}"#)])]),
+            [["deleteSheet": .dictionary(["sheetId": .int(9_007_199_254_740_993)])]]
+        )
+
+        // A number too large to be one is neither a cell nor part of a request.
+        XCTAssertNil(GoogleToolArguments.rows(in: ["values": .array([.array([.double(.infinity)])])]))
+        XCTAssertNil(GoogleToolArguments.requests(in: ["requests": .array([.dictionary(["resize": .dictionary(["width": .double(.infinity)])])])]))
+        XCTAssertNil(GoogleToolArguments.requests(in: ["requests": .array([.dictionary(["resize": .double(.nan)])])]))
+
+        // Text that is not JSON for a list or an object is not one.
+        XCTAssertNil(GoogleToolArguments.requests(in: ["requests": .array([.string("addSheet")])]))
+        XCTAssertNil(GoogleToolArguments.requests(in: ["requests": .array([.string("[1, 2]")])]), "A request is an object")
+        XCTAssertNil(GoogleToolArguments.requests(in: ["requests": .string(#"{"createSlide": {}}"#)]), "Requests are a list")
+        XCTAssertNil(GoogleToolArguments.requests(in: ["requests": .string("[{")]))
+        XCTAssertNil(GoogleToolArguments.rows(in: ["values": .array([.string("a,b")])]))
+        XCTAssertNil(GoogleToolArguments.rows(in: ["values": .string(#"{"a": 1}"#)]))
+        // A cell that is text stays text, whatever it looks like.
+        XCTAssertEqual(GoogleToolArguments.rows(in: ["values": .array([.array([.string("[1]"), .string("{}")])])]), [[.string("[1]"), .string("{}")]])
+    }
+
+    func testValuesThatAreNotRowsOfCells_orAnOptionGoogleDoesNotHave_areNotAskedAbout() async throws {
+        let (world, seen) = try await writingWorld()
+        defer { world.forget() }
+
+        for values in [.string("a,b"), .array([]), .array([.string("a")]), .array([.array([.dictionary([:])])]), .array([.array([.array([])])]), .null] as [AnyJSONValue] {
+            let refused = await world.call("google_sheets.updateValues", ["spreadsheet_id": AnyJSONValue("s1"), "range": AnyJSONValue("A1"), "values": values], threadID: "thread")
+            XCTAssertEqual(refused.field, "values", "\(values)")
+        }
+        let option = await world.call("google_sheets.updateValues", ["spreadsheet_id": AnyJSONValue("s1"), "range": AnyJSONValue("A1"), "values": .array([.array([.int(1)])]), "value_input_option": AnyJSONValue("FORMULA")], threadID: "thread")
+        XCTAssertEqual(option.field, "value_input_option")
+
+        XCTAssertEqual(world.asked.requests, [])
+        let approvals = await seen.approvals
+        XCTAssertEqual(approvals.count, 0)
+    }
+
+    func testASheetOrADeckIsChangedWithGooglesOwnRequests_shownAsTheyAreSent() async throws {
+        let (world, seen) = try await writingWorld()
+        defer { world.forget() }
+        let addSheet: AnyJSONValue = .array([.dictionary(["addSheet": .dictionary(["properties": .dictionary(["title": .string("Summary")])])])])
+        let slides: AnyJSONValue = .array([.dictionary(["createSlide": .dictionary([:])]), .dictionary(["deleteObject": .dictionary(["objectId": .string("p2")])])])
+
+        let sheet = await world.call("google_sheets.batchUpdate", ["spreadsheet_id": AnyJSONValue("s1"), "requests": addSheet], threadID: "thread")
+        XCTAssertEqual(sheet.contextBlock, "[Google Spreadsheet Changed: s1]\n1 change made.")
+        let deck = await world.call("google_slides.update", ["presentation_id": AnyJSONValue("deck1"), "requests": slides], threadID: "thread")
+        XCTAssertEqual(deck.contextBlock, "[Google Presentation Changed: deck1]\n2 changes made.")
+
+        let approvals = await seen.approvals
+        XCTAssertEqual(approvals.map(\.question), ["Change this Google Sheet?", "Change this Google Slides presentation?"])
+        XCTAssertEqual(approvals.first?.details.hasPrefix("Spreadsheet s1\n1 change, as Google is asked to make it:\n\n"), true)
+        XCTAssertEqual(approvals.first?.details.contains("\"title\" : \"Summary\""), true)
+        XCTAssertEqual(world.asked.requests.map(\.method), ["POST", "POST"])
+        XCTAssertEqual(world.asked.requests.map(\.address), ["sheets.googleapis.com/v4/spreadsheets/s1:batchUpdate", "slides.googleapis.com/v1/presentations/deck1:batchUpdate"])
+        XCTAssertEqual(world.asked.requests.first?.sent, ["requests": [["addSheet": ["properties": ["title": "Summary"]]]]] as NSDictionary)
+        XCTAssertEqual(world.asked.requests.last?.sent, ["requests": [["createSlide": [:] as [String: Any]], ["deleteObject": ["objectId": "p2"]]]] as NSDictionary)
+
+        // Requests that are not a list of objects are told so; no one is asked.
+        for requests in [.array([]), .array([.int(1)]), .array([.dictionary([:])]), .dictionary(["addSheet": .dictionary([:])]), .string("addSheet"), .null] as [AnyJSONValue] {
+            let refused = await world.call("google_sheets.batchUpdate", ["spreadsheet_id": AnyJSONValue("s1"), "requests": requests], threadID: "thread")
+            XCTAssertEqual(refused.field, "requests", "\(requests)")
+            let refusedDeck = await world.call("google_slides.update", ["presentation_id": AnyJSONValue("deck1"), "requests": requests], threadID: "thread")
+            XCTAssertEqual(refusedDeck.field, "requests", "\(requests)")
+        }
+        let after = await seen.approvals
+        XCTAssertEqual(after.count, 2)
+        XCTAssertEqual(world.asked.requests.count, 2)
+    }
+
+    func testTextIsAddedToADocumentAtTheEndOrAtAPosition_orItIsChangedWithRequests() async throws {
+        let (world, seen) = try await writingWorld()
+        defer { world.forget() }
+
+        let atEnd = await world.call("google_docs.update", ["document_id": AnyJSONValue("doc1"), "content": AnyJSONValue("Next steps"), "requests": .null], threadID: "thread")
+        XCTAssertEqual(atEnd.contextBlock, "[Google Document Changed: doc1]\n1 change made.")
+        _ = await world.call("google_docs.update", ["document_id": AnyJSONValue("doc1"), "content": AnyJSONValue("Title\n"), "index": AnyJSONValue(1)], threadID: "thread")
+        _ = await world.call("google_docs.update", ["document_id": AnyJSONValue("doc1"), "content": AnyJSONValue("ignored"), "requests": .array([.dictionary(["deleteContentRange": .dictionary(["range": .dictionary(["startIndex": .int(1), "endIndex": .int(5)])])])])], threadID: "thread")
+
+        let approvals = await seen.approvals
+        XCTAssertEqual(approvals.map(\.question), ["Add this text to the Google Doc?", "Add this text to the Google Doc?", "Change this Google Doc?"])
+        XCTAssertEqual(approvals[0].details.hasPrefix("Document doc1\nAt the end · "), true)
+        XCTAssertEqual(approvals[1].details.hasPrefix("Document doc1\nAt position 1 · "), true)
+        XCTAssertEqual(approvals[2].details.contains("deleteContentRange"), true, "Requests, where they are given, are what is asked and shown")
+        XCTAssertEqual(approvals[2].details.contains("ignored"), false)
+
+        XCTAssertEqual(Set(world.asked.requests.map(\.address)), ["docs.googleapis.com/v1/documents/doc1:batchUpdate"])
+        XCTAssertEqual(world.asked.requests[0].sent, ["requests": [["insertText": ["text": "Next steps", "endOfSegmentLocation": [:] as [String: Any]]]]] as NSDictionary)
+        XCTAssertEqual(world.asked.requests[1].sent, ["requests": [["insertText": ["text": "Title\n", "location": ["index": 1]]]]] as NSDictionary)
+        XCTAssertEqual(world.asked.requests[2].sent, ["requests": [["deleteContentRange": ["range": ["startIndex": 1, "endIndex": 5]]]]] as NSDictionary)
+
+        // Neither text nor requests; a position that is none; requests that are none.
+        let nothing = await world.call("google_docs.update", ["document_id": AnyJSONValue("doc1")], threadID: "thread")
+        XCTAssertEqual(nothing.field, "content")
+        let empty = await world.call("google_docs.update", ["document_id": AnyJSONValue("doc1"), "content": AnyJSONValue("")], threadID: "thread")
+        XCTAssertEqual(empty.field, "content")
+        for index in [AnyJSONValue(0), AnyJSONValue(-2), AnyJSONValue("start"), AnyJSONValue(1.5)] {
+            let refused = await world.call("google_docs.update", ["document_id": AnyJSONValue("doc1"), "content": AnyJSONValue("x"), "index": index], threadID: "thread")
+            XCTAssertEqual(refused.field, "index", "\(index)")
+        }
+        let badRequests = await world.call("google_docs.update", ["document_id": AnyJSONValue("doc1"), "content": AnyJSONValue("x"), "requests": .array([])], threadID: "thread")
+        XCTAssertEqual(badRequests.field, "requests", "Requests that are there and are none are not made up for with the text")
+        let after = await seen.approvals
+        XCTAssertEqual(after.count, 3)
+        XCTAssertEqual(world.asked.requests.count, 3)
+    }
+
+    func testAnUploadCanNameItsFolders_andADeniedChangeSendsNothing() async throws {
+        let (world, seen) = try await writingWorld()
+        defer { world.forget() }
+
+        let uploaded = await world.call("google_drive.uploadFile", ["name": AnyJSONValue("plan.txt"), "content": AnyJSONValue("Plan"), "parents": .array([.string("folder1")])], threadID: "thread")
+        XCTAssertEqual(uploaded.status, "ok")
+        XCTAssertEqual(world.asked.requests.first?.body.contains(#""parents":["folder1"]"#), true)
+        let approvals = await seen.approvals
+        XCTAssertEqual(approvals.first?.details.hasPrefix("plan.txt\nIn folder folder1\ntext/plain · "), true)
+        for parents in [.string("folder1"), .array([.string("../x")]), .array([.int(1)])] as [AnyJSONValue] {
+            let refused = await world.call("google_drive.uploadFile", ["name": AnyJSONValue("plan.txt"), "content": AnyJSONValue("Plan"), "parents": parents], threadID: "thread")
+            XCTAssertEqual(refused.field, "parents", "\(parents)")
+        }
+        XCTAssertEqual(world.asked.requests.count, 1)
+
+        let (denying, _) = try await writingWorld(approving: false)
+        defer { denying.forget() }
+        for (tool, args) in changes {
+            let denied = await denying.call(tool, args, threadID: "thread")
+            XCTAssertEqual(denied.status, "denied", tool)
+            // With no thread there is no one to ask.
+            let nowhere = await denying.call(tool, args)
+            XCTAssertNotEqual(nowhere.status, "ok", tool)
+        }
+        XCTAssertEqual(denying.asked.requests, [])
+    }
+
+    /// One call of each tool that changes something in Google.
+    private var changes: [(String, [String: AnyJSONValue])] {
+        [
+            ("google_sheets.updateValues", ["spreadsheet_id": AnyJSONValue("s1"), "range": AnyJSONValue("A1"), "values": .array([.array([.int(1)])])]),
+            ("google_sheets.batchUpdate", ["spreadsheet_id": AnyJSONValue("s1"), "requests": .array([.dictionary(["addSheet": .dictionary([:])])])]),
+            ("google_slides.update", ["presentation_id": AnyJSONValue("deck1"), "requests": .array([.dictionary(["createSlide": .dictionary([:])])])]),
+            ("google_docs.update", ["document_id": AnyJSONValue("doc1"), "content": AnyJSONValue("x")]),
+            ("google_drive.uploadFile", ["name": AnyJSONValue("plan.txt"), "content": AnyJSONValue("Plan")]),
+        ]
+    }
+
+    func testACovenThatLetsGoogleBeReadOnly_isRefusedEveryChange_andNoOneIsAsked() async throws {
+        let (world, seen) = try await writingWorld(connections: CovenConnections(apps: ["google_drive": .readOnly]))
+        defer { world.forget() }
+
+        for (tool, args) in changes {
+            XCTAssertTrue(CovenConnectionRules.isWriteTool(tool), tool)
+            XCTAssertTrue(PromptTemplates.googleDriveTools.contains(tool), tool)
+            XCTAssertNotNil(PromptTemplates.toolDefinitions.first { $0.name == tool }, "\(tool) is described to models")
+            let refused = await world.call(tool, args, threadID: "thread")
+            XCTAssertEqual(refused.errorType, "connection_read_only", tool)
+        }
+        // By its old name too.
+        let old = await world.call("google_sheets.writeValues", changes[0].1, threadID: "thread")
+        XCTAssertEqual(old.errorType, "connection_read_only")
+        XCTAssertFalse(PromptTemplates.googleDriveTools.contains("google_sheets.writeValues"))
+        XCTAssertEqual(ToolNames.offeredName(of: "google_sheets.writeValues"), "google_sheets.updateValues")
+        // What a read-only coven is offered has none of them.
+        let offered = CovenConnectionRules.offered(tools: PromptTemplates.googleDriveTools, servers: [], in: CovenConnections(apps: ["google_drive": .readOnly])).tools
+        XCTAssertEqual(offered, ["google_drive.listFiles", "google_drive.readFile", "google_docs.read", "google_slides.read", "google_sheets.read", "google_sheets.readValues"])
+
+        XCTAssertEqual(world.asked.requests, [])
+        let approvals = await seen.approvals
+        XCTAssertEqual(approvals.count, 0)
     }
 
     // MARK: - Who may use them

@@ -119,7 +119,8 @@ nonisolated enum CovenConnectionRules {
         "github.createBranch", "github.create_branch",
         "github.createPR", "github.create_pr",
         "google_drive.uploadFile", "google_drive.upload_file",
-        "google_sheets.writeValues", "google_sheets.write_values",
+        "google_sheets.updateValues", "google_sheets.writeValues", "google_sheets.write_values",
+        "google_sheets.batchUpdate", "google_docs.update", "google_slides.update",
     ]
 
     static func isWriteTool(_ tool: String) -> Bool {

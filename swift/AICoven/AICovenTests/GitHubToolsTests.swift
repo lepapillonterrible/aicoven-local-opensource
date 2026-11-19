@@ -66,10 +66,10 @@ final class GitHubToolsTests: XCTestCase {
     }
 
     func testTwoToolsAreCalledByTheCloudsNames_andTheirOldNamesAreThoseTools() {
-        XCTAssertEqual(GitHubToolArguments.offeredName(of: "github.getPR"), "github.getPullRequest")
-        XCTAssertEqual(GitHubToolArguments.offeredName(of: "github.listPRFiles"), "github.listPullRequestFiles")
-        XCTAssertEqual(GitHubToolArguments.offeredName(of: "github.readFile"), "github.readFile")
-        XCTAssertEqual(GitHubToolArguments.offeredName(of: "file.read"), "file.read")
+        XCTAssertEqual(ToolNames.offeredName(of: "github.getPR"), "github.getPullRequest")
+        XCTAssertEqual(ToolNames.offeredName(of: "github.listPRFiles"), "github.listPullRequestFiles")
+        XCTAssertEqual(ToolNames.offeredName(of: "github.readFile"), "github.readFile")
+        XCTAssertEqual(ToolNames.offeredName(of: "file.read"), "file.read")
 
         for tool in ["github.getRepo", "github.getPullRequest", "github.listPullRequestFiles"] {
             XCTAssertTrue(PromptTemplates.githubTools.contains(tool))

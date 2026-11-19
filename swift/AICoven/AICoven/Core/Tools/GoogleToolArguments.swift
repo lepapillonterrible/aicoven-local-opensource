@@ -52,6 +52,110 @@ nonisolated enum GoogleToolArguments {
         return .leftOut
     }
 
+    /// What was given as text that is JSON, read as the JSON. Some
+    /// models (those told a list holds text) write a list, or each thing
+    /// in it, as JSON in text; it is read as what it says. Anything else
+    /// is itself.
+    private static func read(_ value: AnyJSONValue) -> AnyJSONValue {
+        guard case let .string(text) = value,
+              let first = text.first(where: { !$0.isWhitespace }), first == "[" || first == "{",
+              let json = try? JSONSerialization.jsonObject(with: Data(text.utf8)) else { return value }
+        return jsonValue(json)
+    }
+
+    /// What `JSONSerialization` read, as a value: true and false as
+    /// themselves and not as 1 and 0, a whole number as a whole number.
+    private static func jsonValue(_ json: Any) -> AnyJSONValue {
+        switch json {
+        case let text as String:
+            return .string(text)
+        case let number as NSNumber:
+            if CFGetTypeID(number) == CFBooleanGetTypeID() { return .bool(number.boolValue) }
+            // A whole number as it was read, without a turn through a
+            // floating-point one, which cannot hold every whole number.
+            if !CFNumberIsFloatType(number), let whole = Int(exactly: number) { return .int(whole) }
+            return .double(number.doubleValue)
+        case let members as [String: Any]:
+            return .dictionary(members.mapValues(jsonValue))
+        case let elements as [Any]:
+            return .array(elements.map(jsonValue))
+        default:
+            return .null
+        }
+    }
+
+    /// The rows a call gives to write (`values`): rows of cells, each
+    /// cell text, a number or true/false, or null for an empty one. Nil
+    /// if it is not that, or has no rows. (The rows, or a row, may be
+    /// given as JSON in text.)
+    static func rows(in args: [String: AnyJSONValue]) -> [[AnyJSONValue]]? {
+        guard let values = args["values"], case let .array(given) = read(values), !given.isEmpty else { return nil }
+        var rows: [[AnyJSONValue]] = []
+        for row in given {
+            guard case let .array(cells) = read(row) else { return nil }
+            for cell in cells {
+                switch cell {
+                case .string, .int, .bool, .null: continue
+                // A number that is none (too large to be one) is no cell.
+                case let .double(number): if !number.isFinite { return nil }
+                case .dictionary, .array: return nil
+                }
+            }
+            rows.append(cells)
+        }
+        return rows
+    }
+
+    /// A cell as the person is shown it before it is written.
+    static func shown(_ cell: AnyJSONValue) -> String {
+        switch cell {
+        case let .string(text): text
+        case let .int(number): String(number)
+        case let .double(number): String(number)
+        case let .bool(flag): flag ? "TRUE" : "FALSE"
+        case .null, .dictionary, .array: ""
+        }
+    }
+
+    /// How Google is to take what is written (`value_input_option`): as
+    /// if typed (formulas and dates worked out), which is what it is when
+    /// left out, or exactly as written. Nil for anything else.
+    static func valueInputOption(in args: [String: AnyJSONValue]) -> String? {
+        guard let given = args["value_input_option"], !(given.value is NSNull) else { return "USER_ENTERED" }
+        guard let option = given.value as? String, ["USER_ENTERED", "RAW"].contains(option) else { return nil }
+        return option
+    }
+
+    /// The changes a call asks Google to make (`requests`), in Google's
+    /// own form for the kind of file: one or more objects. Nil if it is
+    /// not that. (The requests, or a request, may be given as JSON in
+    /// text.)
+    static func requests(in args: [String: AnyJSONValue]) -> [[String: AnyJSONValue]]? {
+        guard let asked = args["requests"], case let .array(given) = read(asked), !given.isEmpty else { return nil }
+        var requests: [[String: AnyJSONValue]] = []
+        for request in given {
+            guard case let .dictionary(members) = read(request), !members.isEmpty else { return nil }
+            requests.append(members)
+        }
+        // What cannot be written as JSON (a number too large to be one)
+        // cannot be shown to the person or sent: it is no request.
+        guard JSONSerialization.isValidJSONObject(requests.map { $0.mapValues(MCPClient.plain) }) else { return nil }
+        return requests
+    }
+
+    /// The folders a call asks a file to be put in (`parents`): none when
+    /// left out, or ids. Nil if it is anything else.
+    static func folders(in args: [String: AnyJSONValue]) -> [String]? {
+        guard let given = args["parents"], !(given.value is NSNull) else { return [] }
+        guard case let .array(ids) = given else { return nil }
+        var folders: [String] = []
+        for id in ids {
+            guard case let .string(folder) = id, isID(folder) else { return nil }
+            folders.append(folder)
+        }
+        return folders
+    }
+
     /// What a call is told when it names no id that reads as one.
     static func idMissing(_ key: String) -> String {
         "Missing or unreadable '\(key)'. Give the id as Google gives it (google_drive.listFiles tells each file's id)."

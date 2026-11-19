@@ -432,22 +432,82 @@ nonisolated extension ToolApproval {
         )
     }
 
-    static func driveUpload(name: String, mimeType: String, content: String, threadID: String) -> ToolApproval {
-        ToolApproval(
+    static func driveUpload(name: String, mimeType: String, content: String, folders: [String] = [], threadID: String) -> ToolApproval {
+        let place = folders.isEmpty ? "" : "\nIn \(folders.count == 1 ? "folder" : "folders") \(folders.joined(separator: ", "))"
+        return ToolApproval(
             threadID: threadID,
             question: "Upload this file to Google Drive?",
-            details: "\(name)\n\(mimeType) · \(size(of: content))\n\n\(shown(content))",
+            details: "\(name)\(place)\n\(mimeType) · \(size(of: content))\n\n\(shown(content))",
             toolName: "google_drive.uploadFile"
         )
     }
 
-    static func sheetsWrite(spreadsheetID: String, range: String, values: [[String]], threadID: String) -> ToolApproval {
+    /// Writing cells of a spreadsheet. `asTyped` says how Google takes
+    /// them: as if typed (a cell that starts with "=" becomes a formula),
+    /// or exactly as written.
+    static func sheetsWrite(spreadsheetID: String, range: String, values: [[String]], asTyped: Bool = true, threadID: String) -> ToolApproval {
         let rows = values.map { $0.joined(separator: "\t") }.joined(separator: "\n")
         return ToolApproval(
             threadID: threadID,
             question: "Write to this Google Sheet?",
-            details: "\(range) in spreadsheet \(spreadsheetID)\n\(values.count) \(values.count == 1 ? "row" : "rows")\n\n\(shown(rows))",
-            toolName: "google_sheets.writeValues"
+            details: "\(range) in spreadsheet \(spreadsheetID)\n\(values.count) \(values.count == 1 ? "row" : "rows"), \(asTyped ? "entered as if typed (formulas are worked out)" : "entered exactly as written")\n\n\(shown(rows))",
+            toolName: "google_sheets.updateValues"
+        )
+    }
+
+    /// Adding text to a Google Doc: where, and all of it up to the limit.
+    static func docsAddText(documentID: String, text: String, index: Int?, threadID: String) -> ToolApproval {
+        ToolApproval(
+            threadID: threadID,
+            question: "Add this text to the Google Doc?",
+            details: "Document \(documentID)\n\(index.map { "At position \($0)" } ?? "At the end") · \(size(of: text))\n\n\(shown(text))",
+            toolName: "google_docs.update"
+        )
+    }
+
+    /// The kinds of Google file a model can ask to be changed in Google's
+    /// own form of requests.
+    enum GoogleFile {
+        case document, spreadsheet, presentation
+
+        var question: String {
+            switch self {
+            case .document: "Change this Google Doc?"
+            case .spreadsheet: "Change this Google Sheet?"
+            case .presentation: "Change this Google Slides presentation?"
+            }
+        }
+
+        var named: String {
+            switch self {
+            case .document: "Document"
+            case .spreadsheet: "Spreadsheet"
+            case .presentation: "Presentation"
+            }
+        }
+
+        var toolName: String {
+            switch self {
+            case .document: "google_docs.update"
+            case .spreadsheet: "google_sheets.batchUpdate"
+            case .presentation: "google_slides.update"
+            }
+        }
+    }
+
+    /// Changes to a Google file in Google's own form: which file, how
+    /// many changes, and the requests as they will be sent, in full up to
+    /// the limit.
+    static func googleRequests(_ file: GoogleFile, id: String, requests: [[String: AnyJSONValue]], threadID: String) -> ToolApproval {
+        var asked = "The requests cannot be shown."
+        if let data = try? JSONSerialization.data(withJSONObject: requests.map { $0.mapValues(MCPClient.plain) }, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) {
+            asked = shown(String(decoding: data, as: UTF8.self))
+        }
+        return ToolApproval(
+            threadID: threadID,
+            question: file.question,
+            details: "\(file.named) \(id)\n\(requests.count) \(requests.count == 1 ? "change" : "changes"), as Google is asked to make \(requests.count == 1 ? "it" : "them"):\n\n\(asked)",
+            toolName: file.toolName
         )
     }
 

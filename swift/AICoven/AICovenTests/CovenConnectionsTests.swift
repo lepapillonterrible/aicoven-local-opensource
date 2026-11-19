@@ -24,7 +24,7 @@ final class CovenConnectionsTests: XCTestCase {
             XCTAssertNil(CovenConnectionRules.app(of: tool), tool)
         }
 
-        for tool in ["github.writeFile", "github.write_file", "github.createBranch", "github.create_branch", "github.createPR", "github.create_pr", "google_drive.uploadFile", "google_drive.upload_file", "google_sheets.writeValues", "google_sheets.write_values"] {
+        for tool in ["github.writeFile", "github.write_file", "github.createBranch", "github.create_branch", "github.createPR", "github.create_pr", "google_drive.uploadFile", "google_drive.upload_file", "google_sheets.writeValues", "google_sheets.write_values", "google_sheets.updateValues", "google_sheets.batchUpdate", "google_docs.update", "google_slides.update"] {
             XCTAssertTrue(CovenConnectionRules.isWriteTool(tool), tool)
         }
         for tool in ["github.readFile", "github.listRepos", "github.searchCode", "github.getRepo", "github.getPullRequest", "github.listPullRequestFiles", "google_drive.listFiles", "google_drive.readFile", "google_sheets.readValues", "file.write"] {

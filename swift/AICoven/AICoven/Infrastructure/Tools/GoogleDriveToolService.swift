@@ -167,14 +167,14 @@ actor GoogleDriveToolService {
         name: String,
         mimeType: String,
         content: Data,
-        parentFolderId: String? = nil
+        parentFolderIds: [String] = []
     ) async throws -> DriveFile {
         // Build multipart upload
         let boundary = "================AICovenDriveBoundary=="
 
         var metadata: [String: Any] = ["name": name, "mimeType": mimeType]
-        if let parentFolderId {
-            metadata["parents"] = [parentFolderId]
+        if !parentFolderIds.isEmpty {
+            metadata["parents"] = parentFolderIds
         }
 
         let metadataJson = try JSONSerialization.data(withJSONObject: metadata)
@@ -342,12 +342,13 @@ actor GoogleDriveToolService {
         }
     }
 
-    /// Write values to a spreadsheet range
+    /// Write values to a spreadsheet range. A cell is text, a number or
+    /// true/false, as JSON has them.
     func writeSpreadsheetValues(
         accountId: String,
         spreadsheetId: String,
         range: String,
-        values: [[String]],
+        values: [[Any]],
         inputOption: String = "USER_ENTERED"
     ) async throws -> [String: Any] {
         let url = try Self.address("sheets.googleapis.com", ["v4", "spreadsheets", spreadsheetId, "values", range])
@@ -378,6 +379,44 @@ actor GoogleDriveToolService {
         }
 
         return json
+    }
+
+    /// Asks Google to make changes to a file, in its own form for the kind
+    /// of file (`:batchUpdate`).
+    private func batchUpdate(_ address: URL, requests: [[String: Any]], accountId: String) async throws -> [String: Any] {
+        let bodyData = try JSONSerialization.data(withJSONObject: ["requests": requests])
+
+        let (data, response) = try await request(
+            method: "POST",
+            url: address,
+            accountId: accountId,
+            body: bodyData
+        )
+
+        if response.statusCode != 200 {
+            throw parseError(statusCode: response.statusCode, data: data)
+        }
+
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw GoogleDriveError.invalidResponse
+        }
+
+        return json
+    }
+
+    /// Change a Google Doc with Docs API requests.
+    func updateDocument(accountId: String, documentId: String, requests: [[String: Any]]) async throws -> [String: Any] {
+        try await batchUpdate(Self.address("docs.googleapis.com", ["v1", "documents", documentId], verb: ":batchUpdate"), requests: requests, accountId: accountId)
+    }
+
+    /// Change a spreadsheet with Sheets API requests.
+    func batchUpdateSpreadsheet(accountId: String, spreadsheetId: String, requests: [[String: Any]]) async throws -> [String: Any] {
+        try await batchUpdate(Self.address("sheets.googleapis.com", ["v4", "spreadsheets", spreadsheetId], verb: ":batchUpdate"), requests: requests, accountId: accountId)
+    }
+
+    /// Change a presentation with Slides API requests.
+    func updatePresentation(accountId: String, presentationId: String, requests: [[String: Any]]) async throws -> [String: Any] {
+        try await batchUpdate(Self.address("slides.googleapis.com", ["v1", "presentations", presentationId], verb: ":batchUpdate"), requests: requests, accountId: accountId)
     }
 
     /// Append values to a spreadsheet
