@@ -43,7 +43,7 @@ struct RichMessageBubble: View {
 
                 // Attachments
                 if let atts = message.attachments, !atts.isEmpty {
-                    AttachmentsListView(attachments: atts, compact: true)
+                    MessageAttachmentsView(attachments: atts, alignment: isUser ? .trailing : .leading)
                 }
 
                 // Generated files (e.g., from file.generate)

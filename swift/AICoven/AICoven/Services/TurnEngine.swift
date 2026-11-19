@@ -320,7 +320,7 @@ final class TurnEngine: ObservableObject {
         }
         // Made now, not when it was typed: it is stored after the reply it
         // waited for.
-        let userMessage = TurnProgress.message(in: threadID, role: "user", content: next.userText)
+        let userMessage = TurnProgress.userMessage(in: threadID, text: next.userText, attachments: next.attachments)
         // It stays among the waiting until its turn has started, so the
         // thread never shows it as neither waiting nor sent; from here it
         // is on its way, and is no longer edited or removed.
@@ -634,6 +634,11 @@ struct TurnProgress {
             isEncrypted: false,
             keyFingerprint: nil
         )
+    }
+
+    /// The person's message, with what it keeps of the files sent with it.
+    static func userMessage(in threadID: String, text: String, attachments: [FileAttachmentDetail]) -> ChatMessage {
+        message(in: threadID, role: "user", content: text, metadata: FileAttachmentDetail.messageMetadata(for: attachments))
     }
 
     /// The status line's text while a tool runs.
