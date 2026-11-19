@@ -830,7 +830,9 @@ extension ProviderAccountService {
               settings.provider?.lowercased() == "hermes" else { return }
         settings.provider = isConverted ? "openai_compatible" : nil
         settings.model = isConverted ? model : nil
-        settings.providerAccountId = isConverted ? settings.providerAccountId : nil
+        if !isConverted {
+            settings.providerAccountId = nil
+        }
         try defaults.set(JSONEncoder().encode(settings), forKey: settingsKey)
     }
 
