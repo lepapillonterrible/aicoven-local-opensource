@@ -436,7 +436,7 @@ final class MCPClientTests: XCTestCase {
             XCTFail("It speaks the old transport")
         } catch {
             XCTAssertEqual(error as? MCPClientError, .oldTransport)
-            XCTAssertEqual(error.localizedDescription, "This MCP server speaks only the older SSE transport, which this app does not speak yet.")
+            XCTAssertEqual(error.localizedDescription, "No MCP server answered at this address. Check the URL. A server that speaks only the older SSE transport is not supported yet.")
         }
     }
 
@@ -682,6 +682,65 @@ final class MCPClientTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? MCPClientError, .unsupportedVersion(supported: ["[token]"]))
         }
+    }
+
+    func testATokenLongerThanWhatIsQuoted_isTakenOutWholeBeforeAnythingIsCut() async throws {
+        let eras = MCPEraCache()
+        eras.note(.modern, for: "https://mcp.example.com/mcp")
+        let token = String(repeating: "k", count: 30) + String(repeating: "Z", count: 34)
+
+        let typed = modernServer(call: .result(#"{"resultType":"\#(token)"}"#))
+        do {
+            _ = try await client(typed, eras: eras, token: token, auth: .bearer).callTool(name: "get_weather", arguments: [:])
+            XCTFail("Not a result type")
+        } catch {
+            XCTAssertEqual(error as? MCPClientError, .invalidResponse("result type [token]"))
+        }
+
+        // The token lies across where the message is cut.
+        let lead = String(repeating: "x", count: 280)
+        let spanning = modernServer(call: .error(-32603, lead + token + " was refused", status: 500))
+        do {
+            _ = try await client(spanning, eras: eras, token: token, auth: .bearer).callTool(name: "get_weather", arguments: [:])
+            XCTFail("It failed")
+        } catch let MCPClientError.serverError(_, message) {
+            XCTAssertEqual(message, String((lead + "[token] was refused").prefix(300)))
+            XCTAssertFalse(message.contains("kkkk"), "No part of the token is left by the cut")
+        }
+
+        let kinded = modernServer(call: .result(#"{"resultType":"complete","content":[{"type":"\#(String(repeating: "t", count: 50) + token)"}]}"#))
+        let pieces = try await client(kinded, eras: eras, token: token, auth: .bearer).callTool(name: "get_weather", arguments: [:])
+        XCTAssertFalse(pieces.map(\.shown).joined().contains("kkkk"))
+    }
+
+    func testAClientUsedAgainAfterItsSessionWasEnded_greetsTheServerAgain() async throws {
+        let server = legacyServer()
+        let eras = MCPEraCache()
+        let client = client(server, eras: eras)
+        _ = try await client.discoverTools()
+        await client.disconnect()
+
+        let content = try await client.callTool(name: "get_weather", arguments: [:])
+
+        XCTAssertEqual(content.map(\.shown), ["Rain"])
+        XCTAssertEqual(
+            server.methods,
+            ["server/discover", "initialize", "notifications/initialized", "tools/list", "DELETE", "initialize", "notifications/initialized", "tools/call"]
+        )
+        XCTAssertEqual(server.asked.last?.header("Mcp-Session-Id"), "session-2")
+    }
+
+    func testACurrentServerThatDoesNotListItsVersionsAsVersions_hasNotAnswered() async {
+        let eras = MCPEraCache()
+        let odd = ScriptedMCPServer { _, _ in .result(#"{"resultType":"complete","supportedVersions":"2026-07-28"}"#) }
+        do {
+            _ = try await client(odd, eras: eras).discoverTools()
+            XCTFail("Not a list of versions")
+        } catch {
+            XCTAssertEqual(error as? MCPClientError, .invalidResponse("supported versions"))
+        }
+        XCTAssertEqual(odd.methods, ["server/discover"])
+        XCTAssertNil(eras.era(of: "https://mcp.example.com/mcp"))
     }
 
     func testAToolThatAnswersOnlyWithStructuredContent_mayLeaveItsContentOut() async throws {

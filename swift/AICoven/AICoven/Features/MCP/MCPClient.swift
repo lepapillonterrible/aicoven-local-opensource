@@ -16,7 +16,8 @@ enum MCPClientError: LocalizedError, Equatable {
     case invalidResponse(String)
     /// It speaks only versions of the protocol this app does not.
     case unsupportedVersion(supported: [String])
-    /// It speaks only the older HTTP+SSE transport.
+    /// Nothing at its address answers as an MCP server does: a wrong
+    /// address, or a server of the older HTTP+SSE transport only.
     case oldTransport
     /// It asked the person for input mid-call, which this app cannot give.
     case needsInput
@@ -38,7 +39,7 @@ enum MCPClientError: LocalizedError, Equatable {
             supported.isEmpty
                 ? "This MCP server speaks a version of the protocol this app does not."
                 : "This MCP server speaks versions of the protocol this app does not: \(supported.prefix(6).joined(separator: ", "))."
-        case .oldTransport: "This MCP server speaks only the older SSE transport, which this app does not speak yet."
+        case .oldTransport: "No MCP server answered at this address. Check the URL. A server that speaks only the older SSE transport is not supported yet."
         case .needsInput: "The MCP server asked for input this app cannot give."
         case .tooLarge: "The MCP server's answer is too large to read."
         case let .toolFailed(what): what
@@ -90,6 +91,11 @@ actor MCPClient {
     static let largestAnswer = 16 * 1024 * 1024
     /// The most pages of a tool list that are followed.
     static let mostPages = 100
+    /// The most characters given on of a server's error message, and of
+    /// anything else of its own an error quotes (a result's type, a
+    /// version, a piece's kind).
+    static let mostOfAMessage = 300
+    static let mostOfAKind = 60
 
     let server: MCPServerAccount
     let token: String?
@@ -162,7 +168,7 @@ actor MCPClient {
         let response = try Self.decode(MCPCallToolResponse.self, from: result)
         // Nothing of what a server answers is given on with this
         // connection's token in it: not a piece's text, nor its kind.
-        var content = response.content.map { MCPContentItem(type: withoutToken($0.type), text: $0.text.map(withoutToken)) }
+        var content = response.content.map { MCPContentItem(type: String(withoutToken($0.type).prefix(Self.mostOfAKind)), text: $0.text.map(withoutToken)) }
         // A tool that answers only with structured content is still read.
         if !content.contains(where: { $0.text?.isEmpty == false }), let structured = response.structuredContent,
            let data = try? JSONSerialization.data(withJSONObject: Self.plain(structured), options: [.fragmentsAllowed, .sortedKeys]) {
@@ -179,6 +185,9 @@ actor MCPClient {
     /// otherwise.
     func disconnect() async {
         await endSession()
+        // A client used again after this greets the server again.
+        era = nil
+        legacyVersion = nil
     }
 
     /// Tells the server its session is over, if it gave one, and forgets
@@ -194,7 +203,10 @@ actor MCPClient {
             request.setValue(legacyVersion, forHTTPHeaderField: "MCP-Protocol-Version")
         }
         authorize(&request)
-        _ = try? await session.data(for: request)
+        // In a task of its own: a turn that was stopped still ends the
+        // session it had, which a cancelled task would not send.
+        let session = session
+        await Task.detached { _ = try? await session.data(for: request) }.value
     }
 
     // MARK: - Requests
@@ -253,7 +265,16 @@ actor MCPClient {
         guard reply.status != 401, reply.status != 403, reply.status < 500 else { throw MCPClientError.refused(status: reply.status) }
         if (200 ..< 300).contains(reply.status), reply.error == nil, reply.message?["result"] != nil {
             let result = try result(of: reply)
-            let supported = result["supportedVersions"] as? [String] ?? [Self.modernVersion]
+            // A server that does not say is taken to speak this version; one
+            // that says something that is not a list of versions has not
+            // answered as the protocol has it.
+            let supported: [String]
+            if let said = result["supportedVersions"] {
+                guard let versions = said as? [String] else { throw MCPClientError.invalidResponse("supported versions") }
+                supported = versions
+            } else {
+                supported = [Self.modernVersion]
+            }
             guard supported.contains(Self.modernVersion) else { throw MCPClientError.unsupportedVersion(supported: supported) }
             return
         }
@@ -329,7 +350,7 @@ actor MCPClient {
         switch type as? String {
         case "complete": return
         case "input_required": throw MCPClientError.needsInput
-        case let other?: throw MCPClientError.invalidResponse("result type \(other.prefix(40))")
+        case let other?: throw MCPClientError.invalidResponse("result type \(other)")
         case nil: throw MCPClientError.invalidResponse("result type")
         }
     }
@@ -340,12 +361,15 @@ actor MCPClient {
         return text.replacingOccurrences(of: token, with: "[token]")
     }
 
-    /// An error without the token in anything it quotes of the server.
+    /// An error as it leaves the client: without the token in anything it
+    /// quotes of the server, and with no more of what the server said
+    /// than is worth saying. The token is taken out of the whole text
+    /// before any of it is cut, so no part of one is left by the cut.
     private func withoutToken(_ error: MCPClientError) -> MCPClientError {
         switch error {
-        case let .serverError(code, message): .serverError(code: code, message: withoutToken(message))
-        case let .invalidResponse(what): .invalidResponse(withoutToken(what))
-        case let .unsupportedVersion(supported): .unsupportedVersion(supported: supported.map(withoutToken))
+        case let .serverError(code, message): .serverError(code: code, message: String(withoutToken(message).prefix(Self.mostOfAMessage)))
+        case let .invalidResponse(what): .invalidResponse(String(withoutToken(what).prefix(Self.mostOfAKind)))
+        case let .unsupportedVersion(supported): .unsupportedVersion(supported: supported.prefix(6).map { String(withoutToken($0).prefix(Self.mostOfAKind)) })
         case let .toolFailed(what): .toolFailed(withoutToken(what))
         case .invalidURL, .notReached, .refused, .oldTransport, .needsInput, .tooLarge: error
         }
@@ -362,7 +386,7 @@ actor MCPClient {
 
         var error: (code: Int, message: String, supported: [String])? {
             guard let error = message?["error"] as? [String: Any] else { return nil }
-            let said = (error["message"] as? String).map { String($0.prefix(300)) } ?? "The server reported an error."
+            let said = error["message"] as? String ?? "The server reported an error."
             let supported = (error["data"] as? [String: Any])?["supported"] as? [String] ?? []
             return (error["code"] as? Int ?? 0, said, supported)
         }
