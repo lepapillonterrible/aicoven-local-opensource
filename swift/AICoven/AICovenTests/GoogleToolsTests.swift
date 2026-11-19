@@ -71,6 +71,15 @@ final class GoogleToolsTests: XCTestCase {
         XCTAssertEqual(GoogleWorkspaceText.text(ofDocument: document), "Hello, world\nName\tTwo lines\nAda\t\nContents\nThe end\n")
         XCTAssertEqual(GoogleWorkspaceText.title(of: document), "Plan")
         XCTAssertEqual(GoogleWorkspaceText.text(ofDocument: [:]), "")
+
+        // Text in a table in a cell of a table, however deep, is still the document's text.
+        var content: [[String: Any]] = [["paragraph": ["elements": [["textRun": ["content": "Deep down\n"]]]]]]
+        for level in 0 ..< 20 {
+            content = level.isMultiple(of: 2)
+                ? [["table": ["tableRows": [["tableCells": [["content": content]]]]]]]
+                : [["tableOfContents": ["content": content]]]
+        }
+        XCTAssertEqual(GoogleWorkspaceText.text(ofDocument: ["body": ["content": content]]).trimmingCharacters(in: .whitespacesAndNewlines), "Deep down")
         XCTAssertNil(GoogleWorkspaceText.title(of: ["title": ""]))
     }
 
