@@ -51,6 +51,10 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertNil(engine.running[threadID])
         XCTAssertEqual(engine.endings[threadID]?.messages, [messages[1]])
         XCTAssertEqual(engine.endings[threadID]?.stored, true)
+        // The work behind the reply is kept with it.
+        let traces = try await ThreadRepository.shared.loadWorkTraces(threadID: threadID)
+        XCTAssertEqual(traces[messages[1].id], engine.endings[threadID]?.trace)
+        XCTAssertNotNil(engine.endings[threadID]?.trace.finishedAt)
     }
 
     func testATurn_thatFailsStoresWhatWentWrongAndIsRecordedAsFailed() async throws {

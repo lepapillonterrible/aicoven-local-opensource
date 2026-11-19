@@ -15,10 +15,12 @@ import Foundation
 final class TurnEngine: ObservableObject {
     static let shared = TurnEngine(chat: .shared)
 
-    /// What a running turn is doing, for the thread's loader.
+    /// What a running turn is doing, for the thread's status line.
     struct Activity: Equatable {
         let turnID: String
         var message: String
+        /// The work so far, for Details.
+        var trace: WorkTrace
         /// True from the moment the person asks to stop until the turn has
         /// in fact ended.
         var isStopping = false
@@ -42,6 +44,8 @@ final class TurnEngine: ObservableObject {
     struct Ending: Equatable {
         let turnID: String
         let outcome: TurnOutcome
+        /// The work behind the ending's first message.
+        let trace: WorkTrace
         /// The reply or what went wrong, followed, if that could not be
         /// stored, by a line saying so.
         let messages: [ChatMessage]
@@ -58,7 +62,7 @@ final class TurnEngine: ObservableObject {
     /// An ending that could not be stored, by thread id. It is stored
     /// before the thread's next turn starts, so no later turn is stored
     /// ahead of it, and no later ending takes its place.
-    private var unstored: [String: (turnID: String, outcome: TurnOutcome, message: ChatMessage)] = [:]
+    private var unstored: [String: (turnID: String, outcome: TurnOutcome, message: ChatMessage, trace: WorkTrace)] = [:]
 
     /// The task running each thread's reply, which Stop cancels.
     private var replies: [String: Task<Error?, Never>] = [:]
@@ -92,7 +96,7 @@ final class TurnEngine: ObservableObject {
         guard running[threadID] == nil else { throw TurnError.alreadyRunning }
         let turnID = UUID().uuidString
         // Marked before anything waits, so a second send cannot start too.
-        running[threadID] = Activity(turnID: turnID, message: TurnProgress.startingMessage)
+        running[threadID] = Activity(turnID: turnID, message: TurnProgress.startingMessage, trace: WorkTrace(startedAt: Date()))
         do {
             try await storeWaitingEnding(threadID: threadID)
             try await store.beginTurn(id: turnID, userMessage: userMessage)
@@ -159,13 +163,13 @@ final class TurnEngine: ObservableObject {
     /// is one. Throws if it still cannot be.
     private func storeWaitingEnding(threadID: String) async throws {
         guard let waiting = unstored[threadID] else { return }
-        let stored = try await store.endTurn(id: waiting.turnID, outcome: waiting.outcome, message: waiting.message)
+        let stored = try await store.endTurn(id: waiting.turnID, outcome: waiting.outcome, message: waiting.message, trace: waiting.trace)
         // Another call can have stored it while this one waited; then there
         // is nothing left to do, whatever this call's own answer.
         guard unstored[threadID]?.turnID == waiting.turnID else { return }
         guard stored else { throw TurnError.endingNotStored }
         unstored[threadID] = nil
-        endings[threadID] = Ending(turnID: waiting.turnID, outcome: waiting.outcome, messages: [waiting.message], stored: true)
+        endings[threadID] = Ending(turnID: waiting.turnID, outcome: waiting.outcome, trace: waiting.trace, messages: [waiting.message], stored: true)
     }
 
     private func run(
@@ -202,13 +206,17 @@ final class TurnEngine: ObservableObject {
             reply.cancel()
         }
 
-        var progress = TurnProgress(agentName: agentName)
+        var progress = TurnProgress(agentName: agentName, startedAt: running[threadID]?.trace.startedAt ?? Date())
         for await state in states {
             progress.note(state)
-            // Most reports leave the line as it is; the thread redraws only
-            // when it changes. A stopping turn keeps saying so.
+            // Most reports leave the line and the trace as they are; the
+            // thread redraws only when one changes. A stopping turn keeps
+            // saying so.
             if running[threadID]?.isStopping == false, running[threadID]?.message != progress.activity {
                 running[threadID]?.message = progress.activity
+            }
+            if running[threadID]?.trace != progress.trace {
+                running[threadID]?.trace = progress.trace
             }
         }
         let thrown = await reply.value
@@ -217,23 +225,23 @@ final class TurnEngine: ObservableObject {
         let ending = progress.ending(in: threadID, thrown: thrown, stopped: running[threadID]?.isStopping == true)
 
         do {
-            guard try await store.endTurn(id: turnID, outcome: ending.outcome, message: ending.message) else {
+            guard try await store.endTurn(id: turnID, outcome: ending.outcome, message: ending.message, trace: ending.trace) else {
                 throw TurnError.endingNotStored
             }
-            endings[threadID] = Ending(turnID: turnID, outcome: ending.outcome, messages: [ending.message], stored: true)
+            endings[threadID] = Ending(turnID: turnID, outcome: ending.outcome, trace: ending.trace, messages: [ending.message], stored: true)
         } catch {
             // The reply exists and the thread shows it, with why it may not
             // be there later. It is tried again before the thread's next
             // turn; if the app closes first, the turn is still recorded as
             // running, and the next launch says no reply was saved.
             AppErrorReporter.log(error: error, context: "TurnEngine.endTurn")
-            unstored[threadID] = (turnID, ending.outcome, ending.message)
+            unstored[threadID] = (turnID, ending.outcome, ending.message, ending.trace)
             let notice = TurnProgress.message(
                 in: threadID,
                 role: "assistant",
                 content: "AICoven couldn't save this reply yet. It will try again when you send your next message here; if the app closes first, the reply is lost. \(error.localizedDescription)"
             )
-            endings[threadID] = Ending(turnID: turnID, outcome: ending.outcome, messages: [ending.message, notice], stored: false)
+            endings[threadID] = Ending(turnID: turnID, outcome: ending.outcome, trace: ending.trace, messages: [ending.message, notice], stored: false)
         }
         running[threadID] = nil
         settling.remove(turnID)
@@ -255,20 +263,24 @@ struct TurnProgress {
     static let interruptedNotice = "No reply to this message was saved. Send it again to get an answer."
 
     let agentName: String?
-    /// The loader's line.
+    /// The status line's text.
     private(set) var activity = TurnProgress.startingMessage
+    /// The work so far.
+    private(set) var trace: WorkTrace
     private var thoughts: [String] = []
     private var usedTools = false
     private var last: TurnState?
     /// What had been answered so far, while the answer was arriving.
     private var partialAnswer = ""
 
-    init(agentName: String?) {
+    init(agentName: String?, startedAt: Date = Date()) {
         self.agentName = agentName
+        trace = WorkTrace(startedAt: startedAt)
     }
 
-    mutating func note(_ state: TurnState) {
+    mutating func note(_ state: TurnState, at now: Date = Date()) {
         last = state
+        trace.note(state, at: now)
         switch state.phase {
         case .starting, .planning, .modelAttempt:
             let thought = state.scratchpad.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -293,21 +305,28 @@ struct TurnProgress {
     /// failure the chat service reported, or the error it threw. A turn the
     /// person stopped ends as stopped, with what had been answered so far,
     /// unless the reply had already arrived in full: then it ends with it.
-    func ending(in threadID: String, thrown: Error?, stopped: Bool = false) -> (outcome: TurnOutcome, message: ChatMessage) {
+    func ending(
+        in threadID: String,
+        thrown: Error?,
+        stopped: Bool = false,
+        at now: Date = Date()
+    ) -> (outcome: TurnOutcome, message: ChatMessage, trace: WorkTrace) {
+        var trace = trace
+        trace.finishedAt = now
         if stopped, thrown != nil || last?.status != .completed {
             let partial = MessageAdapter.sanitizeContentForDisplay(partialAnswer).trimmingCharacters(in: .whitespacesAndNewlines)
             let content = partial.isEmpty ? "Stopped before any reply." : "\(partial)\n\n_Stopped here._"
-            return (.cancelled, Self.message(in: threadID, role: "assistant", content: content))
+            return (.cancelled, Self.message(in: threadID, role: "assistant", content: content), trace)
         }
         if let thrown {
             let text = "I ran into an error while contacting your provider: \(thrown.localizedDescription)"
-            return (.failed, Self.message(in: threadID, role: "assistant", content: text))
+            return (.failed, Self.message(in: threadID, role: "assistant", content: text), trace)
         }
         // The chat service's last report is its outcome: the answer, or what
         // went wrong.
         let answer = last?.answer ?? ""
         guard last?.status != .failed else {
-            return (.failed, Self.message(in: threadID, role: "assistant", content: answer))
+            return (.failed, Self.message(in: threadID, role: "assistant", content: answer), trace)
         }
 
         var metadata: [String: AnyJSONValue] = [:]
@@ -319,7 +338,7 @@ struct TurnProgress {
             metadata["role_name"] = AnyJSONValue(agentName)
         }
         let content = MessageAdapter.sanitizeContentForDisplay(answer)
-        return (.completed, Self.message(in: threadID, role: "assistant", content: content, metadata: metadata))
+        return (.completed, Self.message(in: threadID, role: "assistant", content: content, metadata: metadata), trace)
     }
 
     static func message(in threadID: String, role: String, content: String, metadata: [String: AnyJSONValue]? = nil) -> ChatMessage {
@@ -336,7 +355,7 @@ struct TurnProgress {
         )
     }
 
-    /// The loader's line while a tool runs.
+    /// The status line's text while a tool runs.
     static func toolActivity(for toolName: String) -> String {
         let known: [(prefix: String, activity: String)] = [
             ("web.search", "Using web.search to look up information on the web…"),

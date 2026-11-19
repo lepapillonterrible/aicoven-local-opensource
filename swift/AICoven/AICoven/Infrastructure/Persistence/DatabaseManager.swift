@@ -336,6 +336,14 @@ final class DatabaseManager {
                 """)
             }
 
+            // v9: the work behind a turn's answer (its tools and reasoning,
+            // with their times), kept encrypted with the turn.
+            migrator.registerMigration("v9_turn_trace") { db in
+                try db.alter(table: "turns") { t in
+                    t.add(column: "trace_ciphertext", .blob)
+                }
+            }
+
             try migrator.migrate(queue)
             dbQueue = queue
         } catch {

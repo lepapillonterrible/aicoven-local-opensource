@@ -400,7 +400,7 @@ enum TurnOutcome: String {
 /// What storing a message does to a turn, in the same write.
 private enum TurnChange {
     case begin(id: String)
-    case end(id: String, outcome: TurnOutcome)
+    case end(id: String, outcome: TurnOutcome, trace: WorkTrace?)
 }
 
 /// The account a write is for and the data key it starts under, which is
@@ -511,8 +511,36 @@ extension ThreadRepository {
     /// current account's running turn, nothing is stored, its state stands,
     /// and the answer is false.
     @discardableResult
-    func endTurn(id: String, outcome: TurnOutcome, message: ChatMessage) async throws -> Bool {
-        try await storeInOrder(message, turn: .end(id: id, outcome: outcome))
+    func endTurn(id: String, outcome: TurnOutcome, message: ChatMessage, trace: WorkTrace? = nil) async throws -> Bool {
+        try await storeInOrder(message, turn: .end(id: id, outcome: outcome, trace: trace))
+    }
+
+    /// The work traces of a thread's ended turns, by the id of the message
+    /// each turn ended with.
+    func loadWorkTraces(threadID: String) async throws -> [String: WorkTrace] {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let currentUserId = await MainActor.run { UserScope.currentUserID }
+
+        let rows: [Row] = try await dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: "SELECT message_id, trace_ciphertext FROM turns WHERE user_id = ? AND thread_id = ? AND message_id IS NOT NULL AND trace_ciphertext IS NOT NULL",
+                arguments: [currentUserId, threadID]
+            )
+        }
+        guard !rows.isEmpty else { return [:] }
+        try await requireKey(of: currentUserId)
+        let decoder = JSONDecoder()
+        var traces: [String: WorkTrace] = [:]
+        for row in rows {
+            let messageID: String = row["message_id"]
+            let ciphertext: Data = row["trace_ciphertext"]
+            if let trace = try await open(WorkTrace.self, ciphertext, purpose: "turn_trace", with: decoder) {
+                traces[messageID] = trace
+            }
+        }
+        try await requireKey(of: currentUserId)
+        return traces
     }
 
     /// The ids of the current account's turns in a thread that are still
@@ -546,8 +574,13 @@ extension ThreadRepository {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         let session = try await beginWrite()
         let record = try await Self.record(for: message, userId: session.userID)
+        var traceCiphertext: Data?
+        if case let .end(_, _, trace?) = turn {
+            traceCiphertext = try await DataEncryptionService.shared.encrypt(JSONEncoder().encode(trace), purpose: "turn_trace")
+        }
         try await confirm(session)
 
+        let storedTrace = traceCiphertext
         return try await dbQueue.write { db in
             switch turn {
             case nil:
@@ -557,10 +590,10 @@ extension ThreadRepository {
                     sql: "INSERT INTO turns (id, user_id, thread_id, status, started_at) VALUES (?, ?, ?, ?, ?)",
                     arguments: [id, session.userID, message.threadId, TurnOutcome.running.rawValue, Date()]
                 )
-            case let .end(id, outcome):
+            case let .end(id, outcome, _):
                 try db.execute(
-                    sql: "UPDATE turns SET status = ?, finished_at = ?, message_id = ? WHERE id = ? AND user_id = ? AND status = ?",
-                    arguments: [outcome.rawValue, Date(), message.id, id, session.userID, TurnOutcome.running.rawValue]
+                    sql: "UPDATE turns SET status = ?, finished_at = ?, message_id = ?, trace_ciphertext = ? WHERE id = ? AND user_id = ? AND status = ?",
+                    arguments: [outcome.rawValue, Date(), message.id, storedTrace, id, session.userID, TurnOutcome.running.rawValue]
                 )
                 guard db.changesCount > 0 else { return false }
             }
