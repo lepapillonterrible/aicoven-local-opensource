@@ -107,7 +107,7 @@ struct FigmaTokenSheet: View {
                                 .accessibilityLabel("Checking the token")
                         } else {
                             Button(isReplacing ? "Save" : "Connect") {
-                                checking = Task { await save() }
+                                check()
                             }
                             .disabled(token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
@@ -121,16 +121,25 @@ struct FigmaTokenSheet: View {
         .onDisappear { checking?.cancel() }
     }
 
-    private func save() async {
+    /// Starts the check of the token, once: pressing again while one is
+    /// under way starts no other, so the one under way stays the one that
+    /// closing the sheet calls off.
+    private func check() {
         guard !saving else { return }
         saving = true
         errorMessage = nil
+        checking = Task { await save() }
+    }
+
+    private func save() async {
         defer { saving = false }
         do {
             _ = try await ConnectedAccountsService.shared.connectFigma(token: token, replacing: request.replacing?.id)
             token = ""
+            // The token was kept: the list is told, whether or not the
+            // sheet was closed in that same instant.
             onConnected()
-            dismiss()
+            if !Task.isCancelled { dismiss() }
         } catch {
             // Called off: the sheet is gone, and has nothing to say.
             if Task.isCancelled || error is CancellationError { return }

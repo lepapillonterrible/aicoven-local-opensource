@@ -233,8 +233,10 @@ actor ConnectedAccountsService {
         // asked, with nothing more waited for; and only if the person has
         // not called it off (the sheet was closed), given another token,
         // or disconnected Figma meanwhile.
+        let sameOwner = await ensureAccountsLoaded() == owner
+        // Nothing waits from here to the end.
         try Task.checkCancellation()
-        guard await ensureAccountsLoaded() == owner, attempt == figmaChanges else { throw FigmaTokenRefusal.changed }
+        guard sameOwner, attempt == figmaChanges else { throw FigmaTokenRefusal.changed }
 
         let bundle = OAuthTokenBundle(accessToken: token, refreshToken: nil, tokenType: "X-Figma-Token", expiresAt: nil, scopes: [])
         let now = Date()

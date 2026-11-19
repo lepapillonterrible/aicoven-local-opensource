@@ -128,9 +128,22 @@ final class FigmaConnectionTests: XCTestCase {
     private final class Who: @unchecked Sendable {
         private let lock = NSLock()
         private var signedIn = "a"
+        private var asksUntilCalledOff: Int?
 
+        /// Who is signed in. (Where a test says so, the task that asks for
+        /// the nth time from now is called off as it asks.)
         var id: String {
-            lock.withLock { signedIn }
+            let callOff: Bool = lock.withLock {
+                guard let left = asksUntilCalledOff else { return false }
+                asksUntilCalledOff = left > 1 ? left - 1 : nil
+                return left == 1
+            }
+            if callOff { withUnsafeCurrentTask { $0?.cancel() } }
+            return lock.withLock { signedIn }
+        }
+
+        func callOffTheTaskThatAsks(nth: Int) {
+            lock.withLock { asksUntilCalledOff = nth }
         }
 
         func signIn(_ id: String) {
@@ -377,7 +390,22 @@ final class FigmaConnectionTests: XCTestCase {
             XCTAssertTrue(error is CancellationError)
         }
 
-        let accounts = await world.service.getAllAccounts()
+        var accounts = await world.service.getAllAccounts()
+        XCTAssertEqual(accounts.count, 0)
+        XCTAssertEqual(world.kept(), [:])
+
+        // Called off later still: after Figma answered, while the service
+        // asks once more who is signed in (its second ask), which is the
+        // last thing it waits for.
+        world.who.callOffTheTaskThatAsks(nth: 2)
+        let late = Task { try await world.service.connectFigma(token: "figd_one") }
+        do {
+            _ = try await late.value
+            XCTFail("The check was called off")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        accounts = await world.service.getAllAccounts()
         XCTAssertEqual(accounts.count, 0)
         XCTAssertEqual(world.kept(), [:])
     }
