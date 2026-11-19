@@ -168,3 +168,28 @@ jobs:
           else
             echo "No XCTest targets configured in test plan; skipping tests."
           fi
+
+      - name: Show the crash report (diagnostic)
+        if: failure()
+        run: |
+          # The newest crash report of the app under test, with its stacks.
+          REPORT=$(ls -t ~/Library/Logs/DiagnosticReports/*.ips 2>/dev/null | head -1)
+          if [[ -n "$REPORT" ]]; then
+            echo "Crash report: $REPORT"
+            python3 - "$REPORT" <<'PY'
+          import json, sys
+          text = open(sys.argv[1]).read()
+          head, _, body = text.partition("\n")
+          report = json.loads(body)
+          print(json.loads(head).get("app_name"), report.get("exception"))
+          images = report.get("usedImages", [])
+          for thread in report.get("threads", []):
+              if not thread.get("triggered"):
+                  continue
+              for frame in thread.get("frames", [])[:60]:
+                  image = images[frame["imageIndex"]].get("name", "?") if frame.get("imageIndex", -1) < len(images) else "?"
+                  print(f'{image:32} {frame.get("symbol", "?")} + {frame.get("symbolLocation", 0)}')
+          PY
+          else
+            echo "No crash report found."
+          fi
