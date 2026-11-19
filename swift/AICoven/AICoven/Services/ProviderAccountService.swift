@@ -729,8 +729,11 @@ extension ProviderAccountService {
                 let accounts = try JSONDecoder().decode([LocalProviderAccount].self, from: data)
                 let alias = defaults.string(forKey: UserScope.scopedKey("hermes_model"))
                 let isHermes: (LocalProviderAccount) -> Bool = { ["hermes", "together"].contains($0.provider.lowercased()) }
-                let hadServer = accounts.contains { $0.provider.lowercased() == "openai_compatible" }
-                let converted = accounts.filter(isHermes).map { account -> LocalProviderAccount in
+                let existingServer = accounts.first { $0.provider.lowercased() == "openai_compatible" }
+                var convertedIDs: Set<String> = []
+                var converted = accounts.map { account -> LocalProviderAccount in
+                    guard isHermes(account) else { return account }
+                    convertedIDs.insert(account.id)
                     let ownAddress = account.baseURL.flatMap { $0.isEmpty ? nil : $0 }
                     let address = ownAddress ?? togetherAddress
                     let named = account.defaultModel ?? alias ?? "hermes-3"
@@ -748,15 +751,29 @@ extension ProviderAccountService {
                         createdAt: account.createdAt
                     )
                 }
-                if let first = converted.first {
-                    // The server in use is the first one listed, so the
-                    // converted ones go after the rest: a server connected
-                    // before this keeps its place, and its model.
-                    try defaults.set(JSONEncoder().encode(accounts.filter { !isHermes($0) } + converted), forKey: storageKey)
-                    if !hadServer, let model = first.defaultModel {
-                        defaults.set(model, forKey: UserScope.scopedKey("openai_compatible_model"))
+                if !convertedIDs.isEmpty {
+                    // Each stays where it was listed, so what comes first
+                    // among the other providers does not change. The server
+                    // in use is the first one listed, though, so a converted
+                    // connection listed before a server connected earlier
+                    // goes just after it: that server keeps its place.
+                    if let existingServer, let place = converted.firstIndex(where: { $0.id == existingServer.id }) {
+                        let ahead = converted[..<place].filter { convertedIDs.contains($0.id) }
+                        converted.removeAll { account in ahead.contains { $0.id == account.id } }
+                        let after = converted.firstIndex { $0.id == existingServer.id }.map { $0 + 1 } ?? converted.endIndex
+                        converted.insert(contentsOf: ahead, at: after)
                     }
-                    moveChosenProviderOffHermes(to: hadServer ? nil : first.defaultModel)
+                    try defaults.set(JSONEncoder().encode(converted), forKey: storageKey)
+                    // The model in use is the server in use's: the earlier
+                    // server's own where there is one, else the converted
+                    // connection's.
+                    let modelKey = UserScope.scopedKey("openai_compatible_model")
+                    let inUse = existingServer ?? converted.first { convertedIDs.contains($0.id) }
+                    let model = (existingServer == nil ? nil : defaults.string(forKey: modelKey)) ?? inUse?.defaultModel
+                    if existingServer == nil, let model {
+                        defaults.set(model, forKey: modelKey)
+                    }
+                    moveChosenProviderOffHermes(to: model)
                 }
                 defaults.removeObject(forKey: UserScope.scopedKey("hermes_base_url"))
                 defaults.removeObject(forKey: UserScope.scopedKey("hermes_model"))
@@ -786,8 +803,8 @@ extension ProviderAccountService {
         return known[alias.lowercased()] ?? alias
     }
 
-    /// Where Hermes was the provider chosen for replies, the server it
-    /// became is; with `model` when that server is the one in use.
+    /// Where Hermes was the provider chosen for replies, an OpenAI-compatible
+    /// server is, with `model`: the model of the server in use.
     private static func moveChosenProviderOffHermes(to model: String?) {
         let defaults = UserDefaults.standard
         if defaults.string(forKey: UserScope.scopedKey("llm_provider"))?.lowercased() == "hermes" {

@@ -97,10 +97,37 @@ final class HermesModelConnectionsTests: XCTestCase {
         ProviderAccountService.convertHermesModelConnectionsIfNeeded()
 
         let accounts = try stored()
-        XCTAssertEqual(accounts.map(\.id), ["server", "claude", "hermes-test"], "The converted connection is listed after the rest")
+        XCTAssertEqual(accounts.map(\.id), ["server", "hermes-test", "claude"], "The converted connection goes just after the earlier server")
         XCTAssertEqual(ProviderAccountService.openAICompatibleServer()?.baseURL.absoluteString, "http://127.0.0.1:1234")
         XCTAssertEqual(defaults.string(forKey: UserScope.scopedKey("openai_compatible_model")), "qwen")
         XCTAssertEqual(defaults.string(forKey: UserScope.scopedKey("llm_provider")), "openai_compatible")
+    }
+
+    func testAConvertedConnection_staysWhereItWasListedAmongTheOtherProviders() throws {
+        try store([
+            account("hermes-test", provider: "hermes", baseURL: "http://127.0.0.1:8080", model: "local-hermes"),
+            account("ollama", provider: "ollama", model: "qwen"),
+        ])
+
+        ProviderAccountService.convertHermesModelConnectionsIfNeeded()
+
+        XCTAssertEqual(try stored().map(\.id), ["hermes-test", "ollama"], "What comes first among the providers does not change")
+    }
+
+    func testWhereHermesWasChosenAndAServerWasConnectedBefore_thatServersOwnModelIsChosen() async throws {
+        try store([
+            account("hermes-test", provider: "hermes"),
+            account("ollama", provider: "ollama", model: "qwen"),
+            account("server", provider: "openai_compatible", baseURL: "http://127.0.0.1:1234", model: "llama"),
+        ])
+        try defaults.set(JSONEncoder().encode(LocalStrixSettings(provider: "hermes")), forKey: UserScope.scopedKey("strix_settings.v1"))
+
+        let settings = try await StrixSettingsService.shared.loadPersonalStrix()
+
+        XCTAssertEqual(try stored().map(\.id), ["ollama", "server", "hermes-test"])
+        XCTAssertEqual(settings.provider, "openai_compatible")
+        XCTAssertEqual(settings.model, "llama", "Not the first connection's model, and not the converted one's")
+        XCTAssertEqual(defaults.string(forKey: UserScope.scopedKey("openai_compatible_model")), "llama")
     }
 
     func testATogetherAddressGivenInFull_stillGetsTheModelNameTogetherKnows() throws {
