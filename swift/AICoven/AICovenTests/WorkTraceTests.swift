@@ -65,6 +65,19 @@ final class WorkTraceTests: XCTestCase {
         XCTAssertEqual(WorkTraceView.kindLabel(failed, turnFinished: true), "Tool · failed · 3 seconds")
     }
 
+    func testATraceStoredBeforeTurnsKeptApprovals_stillLoadsAndHasNone() throws {
+        let encoder = JSONEncoder()
+        var trace = WorkTrace(startedAt: start, finishedAt: start.addingTimeInterval(9), reasoning: ["Looking it up"])
+        trace.approvals = [WorkTrace.Approval(id: "a", subject: "git push", approved: true)]
+        XCTAssertEqual(try JSONDecoder().decode(WorkTrace.self, from: encoder.encode(trace)), trace)
+
+        var stored = try XCTUnwrap(JSONSerialization.jsonObject(with: encoder.encode(trace)) as? [String: Any])
+        stored["approvals"] = nil
+        let earlier = try JSONDecoder().decode(WorkTrace.self, from: JSONSerialization.data(withJSONObject: stored))
+        XCTAssertEqual(earlier.approvals, [])
+        XCTAssertEqual(earlier.reasoning, ["Looking it up"])
+    }
+
     func testTrace_isStoredWithItsTurnAndLoadedByTheReplyItEndedWith() async throws {
         await DataEncryptionService.shared.unlockForTestingEphemeral()
         DatabaseManager.shared.configureIfNeeded()

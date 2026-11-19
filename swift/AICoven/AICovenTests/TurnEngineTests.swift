@@ -134,6 +134,73 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertEqual(statuses?.contains("running"), false)
     }
 
+    // MARK: - Approvals
+
+    func testATurn_keepsTheAnswersItWasGivenAndTheNextTurnStartsWithNone() async throws {
+        let approvals = ToolApprovals { _, action in action() }
+        let engine = makeEngine(provider: provider, approvals: approvals)
+        // An answer left by a turn that never ended here.
+        let stale = ToolApproval(threadID: threadID, question: "Run this command?", details: "rm old", toolName: "shell.execute")
+        let leaving = Task { await approvals.ask(stale) }
+        while approvals.showing == nil {
+            await Task.yield()
+        }
+        approvals.answer(stale.id, approve: true)
+        _ = await leaving.value
+
+        try await engine.start(with: question("Push it"), context: "Push it", roleID: nil, agentName: nil, attachments: nil)
+        XCTAssertNil(approvals.answered[threadID], "A turn starts with no answers")
+        let asked = ToolApproval(threadID: threadID, question: "Run this command?", details: "git push\nIn /tmp", toolName: "shell.execute")
+        let asking = Task { await approvals.ask(asked) }
+        while approvals.showing?.approval.id != asked.id {
+            await Task.yield()
+        }
+        approvals.answer(asked.id, approve: false)
+        _ = await asking.value
+        // What the approvals still hold at the moment the ending is there to
+        // show: the thread shows the lines from one or the other, with no gap.
+        var heldWhenEnded: [WorkTrace.Approval]?
+        let watching = engine.$endings.sink { [threadID] endings in
+            if endings[threadID] != nil, heldWhenEnded == nil {
+                heldWhenEnded = approvals.answered[threadID]
+            }
+        }
+        provider.release()
+        await finished(engine)
+        watching.cancel()
+
+        let kept = [WorkTrace.Approval(id: asked.id, subject: "git push", approved: false)]
+        XCTAssertEqual(heldWhenEnded, kept)
+        XCTAssertEqual(engine.endings[threadID]?.trace.approvals, kept)
+        XCTAssertNil(approvals.answered[threadID], "The turn took its answers with it")
+        let reply = try XCTUnwrap(engine.endings[threadID]?.messages.first)
+        let stored = try await ThreadRepository.shared.loadWorkTraces(threadID: threadID)
+        XCTAssertEqual(stored[reply.id]?.approvals, kept)
+    }
+
+    func testATurnWhoseEndingCannotBeStored_keepsItsAnswersWithIt() async throws {
+        let approvals = ToolApprovals { _, action in action() }
+        let engine = makeEngine(provider: provider, approvals: approvals)
+        try await engine.start(with: question("Push it"), context: "Push it", roleID: nil, agentName: nil, attachments: nil)
+        let asked = ToolApproval(threadID: threadID, question: "Run this command?", details: "git push\nIn /tmp", toolName: "shell.execute")
+        let asking = Task { await approvals.ask(asked) }
+        while approvals.showing?.approval.id != asked.id {
+            await Task.yield()
+        }
+        approvals.answer(asked.id, approve: true)
+        _ = await asking.value
+
+        // Locked while the turn runs: its ending cannot be encrypted.
+        await DataEncryptionService.shared.lock()
+        provider.release()
+        await finished(engine)
+
+        let unsaved = try XCTUnwrap(engine.endings[threadID])
+        XCTAssertFalse(unsaved.stored)
+        XCTAssertEqual(unsaved.trace.approvals, [WorkTrace.Approval(id: asked.id, subject: "git push", approved: true)])
+        XCTAssertNil(approvals.answered[threadID])
+    }
+
     // MARK: - Details and announcements
 
     func testDetails_followsItsOwnTurnAndNotTheNextOneInTheThread() async throws {
@@ -430,7 +497,7 @@ final class TurnEngineTests: XCTestCase {
         makeEngine(provider: provider)
     }
 
-    private func makeEngine(provider: LLMClient) -> TurnEngine {
+    private func makeEngine(provider: LLMClient, approvals: ToolApprovals = .shared) -> TurnEngine {
         let model = ModelDescriptor(
             providerID: "test-provider", modelID: "test-model", maxContextTokens: 4096,
             supportsTools: false, supportsEmbeddings: false, costClass: .cheap
@@ -442,7 +509,7 @@ final class TurnEngineTests: XCTestCase {
             threadStore: ThreadRepository.shared,
             toolService: NoTools(),
             shouldAutoRefreshEnvironment: false
-        ))
+        ), approvals: approvals)
     }
 
     /// Waits until the engine has no turn running in the thread.
