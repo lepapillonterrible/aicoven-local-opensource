@@ -181,7 +181,9 @@ final class ToolApprovals: ObservableObject {
     func announceShowing(_ approvalID: String) -> Bool {
         guard let showing, showing.approval.id == approvalID, showing.phase == .asking, !announced.contains(approvalID) else { return false }
         announced.insert(approvalID)
-        AccessibilityNotification.Announcement("Needs your OK, from \(showing.approval.threadTitle): \(showing.approval.question)").post()
+        // What can only be denied is not waiting for an OK.
+        let needs = showing.approval.canApprove ? "Needs your OK" : "Can only be denied"
+        AccessibilityNotification.Announcement("\(needs), from \(showing.approval.threadTitle): \(showing.approval.question)").post()
         return true
     }
 

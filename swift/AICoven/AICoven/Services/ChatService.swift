@@ -1292,7 +1292,7 @@ actor ChatService {
         await ensureEnvironment()
         do {
             // Checked again after each wait, up to the sending and the
-            // keeping: a Hermes turn can have started in the thread since.
+            // keeping: an agent's turn can have started in the thread since.
             guard !threadsLastAnsweredByAnAgent.contains(threadId) else { return }
             // Use the same history seen by the chat UI.
             let history = try await loadMessages(threadId: threadId, limit: maxContextMessages)
@@ -1472,7 +1472,8 @@ actor ChatService {
     /// memory of the session as well.
     static let hermesHistoryLimit = 40
 
-    /// What was said before the message a Hermes run answers. The message
+    /// What was said before the message an agent's run answers (a Hermes
+    /// run, or an OpenClaw run through its Gateway). The message
     /// itself is stored before the turn starts, so it is the last one
     /// loaded, and is left out: the run is given it as its input.
     static func hermesHistory(from stored: [ChatMessage]) -> [HermesAgentClient.Message] {

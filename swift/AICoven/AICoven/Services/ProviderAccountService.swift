@@ -747,12 +747,23 @@ extension ProviderAccountService {
     /// the first OpenClaw connection, if it names one, with that
     /// connection's token.
     static func openClawGateway() -> (address: URL, token: String?)? {
+        guard let (account, address) = openClawConnectionWithGateway() else { return nil }
+        let token = KeychainHelper.load(key: keychainKey(forAccountId: account.id))
+        return (address, token?.isEmpty == false ? token : nil)
+    }
+
+    /// Whether OpenClaw runs its turns itself: its connection names its
+    /// Gateway. Reads no secret.
+    static var openClawRunsItsTurns: Bool {
+        openClawConnectionWithGateway() != nil
+    }
+
+    private static func openClawConnectionWithGateway() -> (account: LocalProviderAccount, address: URL)? {
         guard let account = loadLocalAccountsFromDefaults().first(where: { $0.provider.lowercased() == "openclaw" }),
               let address = account.gatewayURL.flatMap(OpenClawGatewayConnection.address) else {
             return nil
         }
-        let token = KeychainHelper.load(key: keychainKey(forAccountId: account.id))
-        return (address, token?.isEmpty == false ? token : nil)
+        return (account, address)
     }
 
     /// The OpenAI-compatible server chat reaches: the first connected, with

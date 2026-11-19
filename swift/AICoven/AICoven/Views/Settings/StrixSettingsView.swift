@@ -283,7 +283,9 @@ struct StrixSettingsView: View {
                                                     } else {
                                                         let subtitle = switch option.0 {
                                                         case "mlx": "On-device via Apple Silicon"
-                                                        case "openclaw": "OpenAI-compatible self-hosted proxy"
+                                                        case "openclaw": ProviderAccountService.openClawRunsItsTurns
+                                                            ? "Runs the turn itself, through its Gateway"
+                                                            : "OpenAI-compatible self-hosted proxy"
                                                         case "hermes": "Runs the turn itself, with its own tools and memory"
                                                         default: "Running locally"
                                                         }

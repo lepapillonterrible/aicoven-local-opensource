@@ -442,6 +442,43 @@ final class OpenClawGatewayTests: XCTestCase {
         XCTAssertEqual(seen, 1)
     }
 
+    func testARequestAskedWithoutWaiting_isSentBeforeWhatIsAskedNextWhoeverStopsWaiting() async throws {
+        let socket = ScriptedGatewaySocket()
+        let gateway = try connection(socket)
+        async let opened = gateway.open()
+        await socket.welcomeNextConnection(in: self)
+        _ = try await opened
+
+        // Asked from a task that is already stopped, and never waited for.
+        let asking = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            _ = try await gateway.ask("chat.send", ["idempotencyKey": "r1"])
+        }
+        try await asking.value
+        let stopping = Task { try await gateway.call("chat.abort", ["runId": "r1"]) }
+        await fulfillment(of: [socket.expectSent(3)], timeout: 10)
+
+        XCTAssertEqual(socket.sent.dropFirst().map { $0["method"] as? String }, ["chat.send", "chat.abort"])
+        await gateway.close()
+        _ = try? await stopping.value
+
+        // And its answer is its one value.
+        let second = ScriptedGatewaySocket()
+        let other = try connection(second)
+        async let reopened = other.open()
+        await second.welcomeNextConnection(in: self)
+        _ = try await reopened
+        let answer = try await other.ask("chat.send", ["idempotencyKey": "r2"])
+        await fulfillment(of: [second.expectSent(2)], timeout: 10)
+        second.push(["type": "res", "id": second.sent[1]["id"] ?? "", "ok": true, "payload": ["runId": "r2"]])
+        var answers: [String] = []
+        for try await payload in answer {
+            answers.append(String(decoding: payload, as: UTF8.self))
+        }
+        XCTAssertEqual(answers, [#"{"runId":"r2"}"#])
+        await other.close()
+    }
+
     func testRequests_reachTheGatewayInTheOrderAskedAndAStoppedOneStopsWaiting() async throws {
         let socket = ScriptedGatewaySocket()
         let gateway = try connection(socket)

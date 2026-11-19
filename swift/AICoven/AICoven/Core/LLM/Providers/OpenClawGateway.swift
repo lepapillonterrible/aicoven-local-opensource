@@ -154,7 +154,8 @@ actor OpenClawGatewayConnection {
     private let clientVersion: String
 
     private var nextID = 0
-    private var waiting: [String: CheckedContinuation<Data, Error>] = [:]
+    /// Where the answer to each request still unanswered goes, by its id.
+    private var waiting: [String: AsyncThrowingStream<Data, Error>.Continuation] = [:]
     private var maxPayload = OpenClawGatewayConnection.firstFrameLimit
     private var lastSequence: Int?
     private var reading: Task<Void, Never>?
@@ -271,39 +272,60 @@ actor OpenClawGatewayConnection {
 
     /// Sends a request and waits for its answer: the answer's payload, as
     /// JSON. Throws what the Gateway refused with, or `closed` if the
-    /// connection ended first.
+    /// connection ended first. A request whose asker stops waiting before
+    /// it is sent is not sent.
     nonisolated func call(_ method: String, _ params: [String: Any]) async throws -> Data {
         try await call(method, paramsJSON: JSONSerialization.data(withJSONObject: params))
     }
 
+    /// Asks without waiting for the answer. When this returns the request
+    /// has its place among those asked, after every one asked before it,
+    /// and it is sent whatever becomes of whoever asked: what is asked
+    /// next reaches the Gateway after it. The answer is the one value of
+    /// what is returned, which ends, throwing, where `call` would throw.
+    nonisolated func ask(_ method: String, _ params: [String: Any]) async throws -> AsyncThrowingStream<Data, Error> {
+        try await ask(method, paramsJSON: JSONSerialization.data(withJSONObject: params)).answer
+    }
+
     private func call(_ method: String, paramsJSON: Data) async throws -> Data {
+        let (id, answer) = try ask(method, paramsJSON: paramsJSON)
+        if let answered = try await Self.first(of: answer) { return answered }
+        // Whoever asked has stopped waiting: the request, if it has not
+        // been sent, is not, and the answer, if it comes, is dropped.
+        waiting.removeValue(forKey: id)
+        throw CancellationError()
+    }
+
+    private func ask(_ method: String, paramsJSON: Data) throws -> (id: String, answer: AsyncThrowingStream<Data, Error>) {
         if let ended { throw ended }
         let id = newID()
         let params = try JSONSerialization.jsonObject(with: paramsJSON)
         let text = try Self.text(["type": "req", "id": id, "method": method, "params": params], limit: maxPayload)
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                waiting[id] = continuation
-                // One at a time, in the order asked: a request sent after
-                // another reaches the Gateway after it.
-                let previous = lastSend
-                lastSend = Task {
-                    await previous?.value
-                    // Nothing more is sent once the connection has ended,
-                    // which has already answered whoever was waiting.
-                    guard ended == nil, waiting[id] != nil else { return }
-                    do {
-                        try await socket.send(text)
-                    } catch {
-                        self.fail(id, with: error)
-                    }
-                }
+        let (answer, answering) = AsyncThrowingStream<Data, Error>.makeStream()
+        waiting[id] = answering
+        // One at a time, in the order asked: a request sent after another
+        // reaches the Gateway after it.
+        let previous = lastSend
+        lastSend = Task {
+            await previous?.value
+            // Nothing more is sent once the connection has ended, which
+            // has already answered whoever was waiting.
+            guard ended == nil, waiting[id] != nil else { return }
+            do {
+                try await socket.send(text)
+            } catch {
+                self.fail(id, with: error)
             }
-        } onCancel: {
-            // Whoever asked has stopped waiting; the answer, if it comes,
-            // is dropped.
-            Task { await self.fail(id, with: CancellationError()) }
         }
+        return (id, answer)
+    }
+
+    /// The answer, or nil if whoever waits for it was stopped first.
+    private nonisolated static func first(of answer: AsyncThrowingStream<Data, Error>) async throws -> Data? {
+        for try await answered in answer {
+            return answered
+        }
+        return nil
     }
 
     func close() {
@@ -318,7 +340,7 @@ actor OpenClawGatewayConnection {
     }
 
     private func fail(_ id: String, with error: Error) {
-        waiting.removeValue(forKey: id)?.resume(throwing: error)
+        waiting.removeValue(forKey: id)?.finish(throwing: error)
     }
 
     private func send(_ object: [String: Any]) async throws {
@@ -360,12 +382,13 @@ actor OpenClawGatewayConnection {
                 let object = try await frame(socket.receive())
                 switch object["type"] as? String {
                 case "res":
-                    guard let id = object["id"] as? String, let continuation = waiting.removeValue(forKey: id) else { continue }
+                    guard let id = object["id"] as? String, let answering = waiting.removeValue(forKey: id) else { continue }
                     if object["ok"] as? Bool == true {
                         let payload = object["payload"] ?? [String: Any]()
-                        continuation.resume(returning: (try? JSONSerialization.data(withJSONObject: payload)) ?? Data("{}".utf8))
+                        answering.yield((try? JSONSerialization.data(withJSONObject: payload)) ?? Data("{}".utf8))
+                        answering.finish()
                     } else {
-                        continuation.resume(throwing: Self.refusal(in: object))
+                        answering.finish(throwing: Self.refusal(in: object))
                     }
                 case "event":
                     guard let name = object["event"] as? String else { continue }
@@ -396,8 +419,8 @@ actor OpenClawGatewayConnection {
         eventsIn.finish(throwing: error)
         let asked = waiting
         waiting = [:]
-        for continuation in asked.values {
-            continuation.resume(throwing: OpenClawGatewayError.closed)
+        for answering in asked.values {
+            answering.finish(throwing: OpenClawGatewayError.closed)
         }
     }
 }

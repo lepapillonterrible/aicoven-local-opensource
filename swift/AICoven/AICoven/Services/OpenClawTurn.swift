@@ -81,15 +81,26 @@ nonisolated struct OpenClawTurn {
         // stopped before the Gateway answers can still stop the run.
         var runID = UUID().uuidString
         try Task.checkCancellation()
+        // Asked without waiting. If it cannot be asked, no run began; once
+        // it is, the request has its place and is sent whatever becomes of
+        // the turn, so the stop that follows it is of a run the Gateway
+        // was asked for.
+        let answer = try await gateway.ask("chat.send", ["sessionKey": sessionKey, "message": message, "idempotencyKey": runID])
         do {
             let sent: [String: Any]
             do {
-                let answered = try await send(message, as: runID, in: sessionKey, through: gateway)
+                var answered: Data?
+                for try await payload in answer {
+                    answered = payload
+                    break
+                }
+                // No answer and no failure: the turn was stopped as it waited.
+                guard let answered else { throw CancellationError() }
                 // An answer that says nothing of the run leaves it named
                 // as it was asked for.
                 sent = (try? Self.object(answered)) ?? [:]
             } catch let error as OpenClawGatewayError where error != .closed {
-                // The Gateway refused the run, or it was not sent: no run began.
+                // The Gateway refused the run: none began.
                 throw error
             } catch is CancellationError {
                 throw CancellationError()
@@ -150,28 +161,6 @@ nonisolated struct OpenClawTurn {
             }
             throw error
         }
-    }
-
-    /// Asks the Gateway to start the run, and waits for its answer. Asked
-    /// from a task of its own, which stopping the turn does not stop: once
-    /// asked for, the request is sent, so the stop that follows it is of a
-    /// run the Gateway was asked for. A stopped turn no longer waits for
-    /// the answer.
-    private func send(_ message: String, as runID: String, in sessionKey: String, through gateway: OpenClawGatewayConnection) async throws -> Data {
-        let (answers, answer) = AsyncThrowingStream<Data, Error>.makeStream()
-        Task {
-            do {
-                try await answer.yield(gateway.call("chat.send", ["sessionKey": sessionKey, "message": message, "idempotencyKey": runID]))
-                answer.finish()
-            } catch {
-                answer.finish(throwing: error)
-            }
-        }
-        for try await answered in answers {
-            return answered
-        }
-        // Ended with no answer: the turn was stopped while it waited.
-        throw CancellationError()
     }
 
     /// Tells the Gateway to stop a run. The run is OpenClaw's own: it goes
@@ -247,7 +236,8 @@ nonisolated struct OpenClawTurn {
     /// the question, and nothing is answered.
     private func answering(_ approval: [String: Any], id: String, through gateway: OpenClawGatewayConnection) -> Task<Void, Never> {
         let presentation = approval["presentation"] as? [String: Any] ?? [:]
-        let kind = presentation["kind"] as? String ?? "exec"
+        // A command's, where the Gateway does not say: as the question is put.
+        let kind = (presentation["kind"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "exec"
         let question = ToolApproval.openClaw(presentation, threadID: threadID)
         return Task { [ask] in
             let decision: String
