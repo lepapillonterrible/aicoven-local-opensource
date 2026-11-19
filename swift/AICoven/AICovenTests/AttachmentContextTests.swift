@@ -120,6 +120,11 @@ final class AttachmentContextTests: XCTestCase {
         )
         XCTAssertEqual(AttachmentContext.text(ofPDF: data, longest: 33), "First page\nSecond page\nThird page", "Whole at the limit")
         XCTAssertEqual(try AttachmentContext.text(ofPDF: pdf(pages: ["Only page", "", ""]), longest: 9), "Only page", "Pages with no text after it do not make it cut")
+        XCTAssertEqual(
+            try AttachmentContext.text(ofPDF: pdf(pages: ["", "One", "", "", "Two", ""])),
+            "One\n\n\nTwo",
+            "Pages with no text between pages keep their lines; those around the whole do not"
+        )
     }
 
     func testAPDFWithNoText_isSaidToHaveNone() throws {

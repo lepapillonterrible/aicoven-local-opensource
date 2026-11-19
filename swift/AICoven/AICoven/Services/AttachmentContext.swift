@@ -79,19 +79,28 @@ nonisolated enum AttachmentContext {
     /// password); nil if these bytes are not a PDF that can be opened.
     static func text(ofPDF data: Data, longest: Int = longestText) -> String? {
         guard let document = PDFDocument(data: data) else { return nil }
+        // What was read, without the white space it ends with, and how
+        // many characters that is. Reading goes on until it is over the
+        // limit, so that text is only whole when every page was read.
         var text = ""
-        // What `text` holds apart from the white space it ends with, which
-        // is not given: reading goes on until that is over the limit, so
-        // that text is only whole when every page was read.
         var length = 0
+        // The white space read since, given only if more text follows it.
+        var gap = ""
         for index in 0 ..< document.pageCount {
             guard length <= longest, !Task.isCancelled else { break }
             let page = (document.page(at: index)?.string ?? "") + "\n"
+            let body = page.dropLast(page.reversed().prefix(while: \.isWhitespace).count)
+            guard !body.isEmpty else {
+                gap += page
+                continue
+            }
             // Nothing is kept of the white space a document starts with.
-            text += text.isEmpty ? String(page.drop(while: \.isWhitespace)) : page
-            length = text.count - text.reversed().prefix(while: \.isWhitespace).count
+            let kept = text.isEmpty ? String(body.drop(while: \.isWhitespace)) : gap + body
+            text += kept
+            length += kept.count
+            gap = String(page[body.endIndex...])
         }
-        return cut(String(text.prefix(length)), at: longest)
+        return cut(text, at: longest)
     }
 
     /// `text`, or its first `longest` characters and the mark that it was cut.
