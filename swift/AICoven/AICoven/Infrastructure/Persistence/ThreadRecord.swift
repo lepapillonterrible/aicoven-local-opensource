@@ -819,6 +819,32 @@ extension ThreadRepository {
         }
     }
 
+    /// The coven a thread of `userID`'s is in, read from the thread as it
+    /// is stored and from nothing else: nil for a thread in none (a
+    /// personal thread, or one kept without a chat thread's stored form,
+    /// which is an agent run's own). Throws if `userID` has no such
+    /// thread, the data is locked or changes hands, or the thread's stored
+    /// form cannot be read.
+    func covenID(ofThread threadID: String, for userID: String) async throws -> String? {
+        guard let queue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let stored = try await queue.read { db in
+            try ThreadRecord
+                .filter(ThreadRecord.Columns.id == threadID)
+                .filter(ThreadRecord.Columns.userId == userID)
+                .fetchOne(db)
+        }
+        guard let stored else { throw ThreadLookupError.noSuchThread }
+        // Nothing of the account's is said, not even that a thread has no
+        // coven, while its data is locked or another account's key is here.
+        try await requireKey(of: userID)
+        guard let payload = stored.payloadCiphertext else { return nil }
+        guard let thread = try await open(Thread.self, payload, purpose: "chat_thread", with: JSONDecoder()) else {
+            throw ThreadLookupError.unreadable
+        }
+        try await requireKey(of: userID)
+        return thread.covenId
+    }
+
     /// Whether the thread is this account's, as the database has it.
     /// Throws where that cannot be read.
     func isThread(_ threadID: String, of userID: String) async throws -> Bool {
@@ -907,6 +933,12 @@ extension ThreadRepository {
 // MARK: - Protocol conformances
 
 extension ThreadRepository: ThreadStore {}
+
+/// Why one thread could not be looked up.
+enum ThreadLookupError: Error {
+    case noSuchThread
+    case unreadable
+}
 
 enum RepositoryError: Error {
     case databaseUnavailable

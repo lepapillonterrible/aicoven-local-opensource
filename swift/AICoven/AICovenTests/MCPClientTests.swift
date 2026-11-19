@@ -862,6 +862,11 @@ private final class OSAllocatedUnfairLockBox: @unchecked Sendable {
             return value
         }
     }
+
+    /// The value as it is.
+    func peek() -> Int {
+        lock.withLock { value }
+    }
 }
 
 /// What the person was asked, and the answer the test gives.
@@ -923,8 +928,10 @@ final class MCPToolApprovalTests: XCTestCase {
         return (stored, name.lowercased().replacingOccurrences(of: " ", with: "_"), played)
     }
 
-    private func executor(asking person: AskedOfThePerson, playing played: ScriptedMCPServer, tools: Set<String>) async -> ToolExecutionService {
-        let executor = ToolExecutionService(toolService: NoChatTools(), ask: { await person.ask($0) })
+    private func executor(
+        asking person: AskedOfThePerson, playing played: ScriptedMCPServer, tools: Set<String>, connections: CovenConnections? = nil
+    ) async -> ToolExecutionService {
+        let executor = ToolExecutionService(toolService: NoChatTools(), ask: { await person.ask($0) }, covenConnections: { _ in connections })
         let session = played.session()
         await executor.setMCPClient { MCPClient(server: $0, token: $1, session: session, eras: MCPEraCache()) }
         await executor.setWhitelist(for: "test", tools: tools)
@@ -1085,6 +1092,122 @@ final class MCPToolApprovalTests: XCTestCase {
         let asked = await person.approvals
         XCTAssertEqual(asked, [], "Still marked as only reading: used unasked")
         XCTAssertEqual(quietPlayed.methods, ["server/discover", "tools/call"])
+    }
+
+    // MARK: - As the thread's coven lets
+
+    func testAServerNotOnInTheCoven_isNotUsed_andOneOnToReadGivesOnlyWhatItMarksAsReadOnly() async throws {
+        let (account, slug, played) = try await keptServer()
+        let tools: Set = ["mcp.\(slug).read_note", "mcp.\(slug).send_note"]
+        let read = ParsedToolCall(name: "mcp.\(slug).read_note", args: [:])
+        let send = ParsedToolCall(name: "mcp.\(slug).send_note", args: [:])
+
+        // Not on: neither tool, no one asked, nothing sent.
+        let person = AskedOfThePerson(answering: .approved)
+        let off = await executor(asking: person, playing: played, tools: tools, connections: CovenConnections(mcpServers: ["another": .readWrite]))
+        for call in [read, send] {
+            let result = await off.execute(toolCall: call, agentType: "test", threadID: "thread-1")
+            XCTAssertEqual(result.status, "error")
+            XCTAssertEqual(result.errorType, "connection_not_on")
+            XCTAssertTrue(result.error?.hasPrefix("\(account.name) is not turned on in this coven") ?? false)
+        }
+        // On to read: the tool it marks as read-only is used; the other is
+        // refused without asking.
+        let reading = await executor(asking: person, playing: played, tools: tools, connections: CovenConnections(mcpServers: [account.id: .readOnly]))
+        let refused = await reading.execute(toolCall: send, agentType: "test", threadID: "thread-1")
+        XCTAssertEqual(refused.errorType, "connection_read_only")
+        var asked = await person.approvals
+        XCTAssertEqual(asked, [])
+        XCTAssertEqual(played.methods, [], "Nothing was sent for any of these")
+        let looked = await reading.execute(toolCall: read, agentType: "test", threadID: "thread-1")
+        XCTAssertEqual(looked.status, "ok")
+
+        // On to read and make changes: the other tool asks, then runs.
+        let writing = await executor(asking: person, playing: played, tools: tools, connections: CovenConnections(mcpServers: [account.id: .readWrite]))
+        let sent = await writing.execute(toolCall: send, agentType: "test", threadID: "thread-1")
+        XCTAssertEqual(sent.status, "ok")
+        asked = await person.approvals
+        XCTAssertEqual(asked.count, 1, "A change still asks first")
+
+        // With no thread there is no coven to say.
+        let unthreaded = await off.execute(toolCall: read, agentType: "test", threadID: nil)
+        XCTAssertEqual(unthreaded.status, "ok")
+    }
+
+    func testACovenSwitchedToReadOnlyOrOffWhileTheToolWaited_isNotWrittenToThoughApproved() async throws {
+        for after in [CovenConnections.Access.readOnly, nil] {
+            let (account, slug, played) = try await keptServer()
+            // What the coven lets, changed by the person while they decide.
+            let choice = OSAllocatedUnfairLockBox(0)
+            let executor = ToolExecutionService(
+                toolService: NoChatTools(),
+                ask: { _ in
+                    _ = choice.next()
+                    return .approved
+                },
+                covenConnections: { _ in
+                    choice.peek() == 0
+                        ? CovenConnections(mcpServers: [account.id: .readWrite])
+                        : CovenConnections(mcpServers: after.map { [account.id: $0] } ?? [:])
+                }
+            )
+            let session = played.session()
+            await executor.setMCPClient { MCPClient(server: $0, token: $1, session: session, eras: MCPEraCache()) }
+            await executor.setWhitelist(for: "test", tools: ["mcp.\(slug).send_note"])
+
+            let result = await executor.execute(toolCall: ParsedToolCall(name: "mcp.\(slug).send_note", args: [:]), agentType: "test", threadID: "thread-1")
+
+            XCTAssertEqual(result.status, "error")
+            XCTAssertEqual(result.errorType, after == nil ? "connection_not_on" : "connection_read_only")
+            XCTAssertEqual(played.methods, [], "Nothing is sent")
+        }
+    }
+
+    func testAConnectedAppsTool_isRefusedAsTheCovenSays_beforeAnythingElse() async {
+        let person = AskedOfThePerson(answering: .approved)
+        let played = ScriptedMCPServer { _, _ in .status(500) }
+        let tools: Set = ["github.readFile", "github.createPR", "google_drive.listFiles"]
+        let executor = await executor(asking: person, playing: played, tools: tools, connections: CovenConnections(apps: ["github": .readOnly]))
+
+        let write = await executor.execute(toolCall: ParsedToolCall(name: "github.createPR", args: [:]), agentType: "test", threadID: "thread-1")
+        XCTAssertEqual(write.errorType, "connection_read_only")
+        XCTAssertTrue(write.error?.hasPrefix("GitHub is on to read only in this coven") ?? false)
+
+        let google = await executor.execute(toolCall: ParsedToolCall(name: "google_drive.listFiles", args: [:]), agentType: "test", threadID: "thread-1")
+        XCTAssertEqual(google.errorType, "connection_not_on")
+        XCTAssertTrue(google.error?.hasPrefix("Google Drive is not turned on in this coven") ?? false)
+
+        // Reading is let through to the tool itself (which here has no
+        // GitHub connection to read with).
+        let read = await executor.execute(toolCall: ParsedToolCall(name: "github.readFile", args: [:]), agentType: "test", threadID: "thread-1")
+        XCTAssertFalse(["connection_read_only", "connection_not_on"].contains(read.errorType ?? ""))
+        let asked = await person.approvals
+        XCTAssertEqual(asked, [])
+    }
+
+    func testATurnIsOfferedOnlyTheServersItsCovenHasOn() async throws {
+        let (account, slug, _) = try await keptServer()
+        let read = "mcp.\(slug).read_note"
+        let send = "mcp.\(slug).send_note"
+
+        let everything = await ContextBuilder.ToolConfig.connected()
+        XCTAssertTrue(everything.enabledTools.isSuperset(of: [read, send]), "With no choice made, as before")
+
+        let off = await ContextBuilder.ToolConfig.connected(connections: CovenConnections())
+        XCTAssertTrue(off.enabledTools.isDisjoint(with: [read, send]))
+        XCTAssertFalse(off.mcpServers.contains { $0.id == account.id })
+        XCTAssertTrue(off.enabledTools.isSuperset(of: PromptTemplates.basicChatTools), "What is no connection's is offered all the same")
+
+        let reading = await ContextBuilder.ToolConfig.connected(connections: CovenConnections(mcpServers: [account.id: .readOnly]))
+        XCTAssertTrue(reading.enabledTools.contains(read))
+        XCTAssertFalse(reading.enabledTools.contains(send))
+        XCTAssertEqual(reading.mcpServers.first { $0.id == account.id }?.cachedTools?.map(\.name), ["read_note"])
+
+        let local = await ContextBuilder.ToolConfig.mlxTools(connections: CovenConnections(mcpServers: [account.id: .readOnly]))
+        XCTAssertTrue(local.enabledTools.contains(read))
+        XCTAssertFalse(local.enabledTools.contains(send))
+        let localOff = await ContextBuilder.ToolConfig.mlxTools(connections: CovenConnections())
+        XCTAssertTrue(localOff.enabledTools.isDisjoint(with: [read, send]))
     }
 
     func testWhereAServerIs_isShownByItsHostOnly() {

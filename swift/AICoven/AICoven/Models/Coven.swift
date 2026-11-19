@@ -66,11 +66,39 @@ struct CovenSettings: Codable, Hashable {
     let defaultMemoryPolicy: [String: String]?
     let budgetCaps: [String: Double]?
     let autoRouteEnabled: Bool?
+    /// Which connections the coven's agents may use. Nil until the coven
+    /// has made a choice: until then everything connected is used.
+    let connections: CovenConnections?
 
     enum CodingKeys: String, CodingKey {
         case defaultMemoryPolicy = "default_memory_policy"
         case budgetCaps = "budget_caps"
         case autoRouteEnabled = "auto_route_enabled"
+        case connections
+    }
+
+    init(
+        defaultMemoryPolicy: [String: String]? = nil,
+        budgetCaps: [String: Double]? = nil,
+        autoRouteEnabled: Bool? = nil,
+        connections: CovenConnections? = nil
+    ) {
+        self.defaultMemoryPolicy = defaultMemoryPolicy
+        self.budgetCaps = budgetCaps
+        self.autoRouteEnabled = autoRouteEnabled
+        self.connections = connections
+    }
+
+    /// As stored. A choice of connections that cannot be read does not
+    /// hide the other settings: it reads here as none, and is refused
+    /// where it matters (`CovenRepository.connections(ofCoven:for:)`, which
+    /// reads what is stored and grants nothing of what it cannot read).
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        defaultMemoryPolicy = try container.decodeIfPresent([String: String].self, forKey: .defaultMemoryPolicy)
+        budgetCaps = try container.decodeIfPresent([String: Double].self, forKey: .budgetCaps)
+        autoRouteEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoRouteEnabled)
+        connections = try? container.decodeIfPresent(CovenConnections.self, forKey: .connections)
     }
 }
 
