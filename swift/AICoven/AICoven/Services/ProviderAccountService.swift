@@ -129,7 +129,15 @@ actor ProviderAccountService {
     /// rebuilds the model list, so one download is reused for 15 minutes from
     /// its start, by callers that arrive while it runs too. A failed download
     /// is not kept.
-    private var openRouterCatalog: (startedAt: Date, download: Task<[ProviderInitializationStatus.ModelMetadata], Error>)?
+    private var openRouterCatalog: (startedAt: Date, download: Task<OpenRouterCatalog, Error>)?
+
+    /// What is kept of OpenRouter's catalog: the models a chat turn can
+    /// use, and every model it lists as taking pictures, whether or not it
+    /// is one of those.
+    struct OpenRouterCatalog {
+        let chatModels: [ProviderInitializationStatus.ModelMetadata]
+        let imageModels: Set<String>
+    }
 
     #if DEBUG
     /// Drops the kept catalog, so a test downloads the one it scripts.
@@ -598,8 +606,8 @@ actor ProviderAccountService {
 
     /// What chat chooses a model from: the models the router picks among,
     /// and, by provider, every model the provider's own list says takes
-    /// pictures (OpenRouter's whole catalog, of which the router is given
-    /// one model).
+    /// pictures (for OpenRouter, every such model in its catalog, of which
+    /// the router is given one model).
     struct ModelCatalog {
         var routed: [ModelDescriptor] = []
         var imageModels: [String: Set<String>] = [:]
@@ -639,9 +647,10 @@ actor ProviderAccountService {
                 metadata = []
             }
 
-            let seeing = metadata.filter { $0.takesImages == true }.map(\.id)
-            if !seeing.isEmpty {
-                imageModels[providerID, default: []].formUnion(seeing)
+            // Every model the catalog just read lists as taking pictures,
+            // those a chat turn is not offered included.
+            if providerID == "openrouter", let seeing = try? await openRouterCatalog?.download.value.imageModels {
+                imageModels[providerID] = seeing
             }
 
             // The router picks by a coarse cost class, which cannot rank
@@ -1223,7 +1232,7 @@ extension ProviderAccountService {
             }
         case "openrouter":
             if let cached = openRouterCatalog, Date().timeIntervalSince(cached.startedAt) < 15 * 60 {
-                return try await cached.download.value
+                return try await cached.download.value.chatModels
             }
             let download = Task {
                 var request = URLRequest(url: OpenAILLMClient.openRouterBaseURL.appendingPathComponent("models"))
@@ -1232,11 +1241,14 @@ extension ProviderAccountService {
                 if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
                     throw Self.sanitizedHTTPError(provider: "OpenRouter", statusCode: http.statusCode)
                 }
-                return try Self.openRouterToolModels(from: data)
+                return try OpenRouterCatalog(
+                    chatModels: Self.openRouterToolModels(from: data),
+                    imageModels: Self.openRouterImageModels(from: data)
+                )
             }
             openRouterCatalog = (Date(), download)
             do {
-                return try await download.value
+                return try await download.value.chatModels
             } catch {
                 if openRouterCatalog?.download == download {
                     openRouterCatalog = nil
@@ -1328,6 +1340,28 @@ extension ProviderAccountService {
             }
         }
         return models
+    }
+
+    /// Every model in OpenRouter's catalog that lists `image` among what it
+    /// takes in, whether or not a chat turn is offered it.
+    static func openRouterImageModels(from data: Data) throws -> Set<String> {
+        struct Catalog: Decodable {
+            struct Model: Decodable {
+                let id: String
+                let architecture: Architecture?
+            }
+
+            struct Architecture: Decodable {
+                let input_modalities: [String]?
+            }
+
+            let data: [Model]
+        }
+        return try Set(
+            JSONDecoder().decode(Catalog.self, from: data).data
+                .filter { $0.architecture?.input_modalities?.contains("image") == true }
+                .map(\.id)
+        )
     }
 
     /// Heuristic filter to decide whether a model ID represents a chat model

@@ -100,7 +100,9 @@ final class OpenRouterProviderTests: XCTestCase {
           {"id": "vendor/sees", "name": "Sees", "context_length": 1000, "supported_parameters": ["tools"],
            "endpoints": ["/api/v1/chat/completions"], "architecture": {"input_modalities": ["text", "image"]}},
           {"id": "vendor/reads", "name": "Reads", "context_length": 1000, "supported_parameters": ["tools"],
-           "endpoints": ["/api/v1/chat/completions"], "architecture": {"input_modalities": ["text"]}}
+           "endpoints": ["/api/v1/chat/completions"], "architecture": {"input_modalities": ["text"]}},
+          {"id": "vendor/sees-without-tools", "name": "Sees, no tools", "context_length": 1000, "supported_parameters": ["temperature"],
+           "endpoints": ["/api/v1/chat/completions"], "architecture": {"input_modalities": ["image", "text"]}}
         ]}
         """.utf8)
         URLProtocol.registerClass(MockURLProtocol.self)
@@ -112,7 +114,11 @@ final class OpenRouterProviderTests: XCTestCase {
         let reading = try await ProviderAccountService.shared.loadModelCatalog()
         XCTAssertEqual(reading.routed.map(\.modelID), ["vendor/reads"])
         XCTAssertEqual(reading.routed.first?.takesImages, false)
-        XCTAssertEqual(reading.imageModels, ["openrouter": ["vendor/sees"]], "Known though the router is not given it")
+        XCTAssertEqual(
+            reading.imageModels, ["openrouter": ["vendor/sees", "vendor/sees-without-tools"]],
+            "Known though the router is not given them, one that a chat turn is not offered included"
+        )
+        XCTAssertEqual(try ProviderAccountService.openRouterToolModels(from: listed).map(\.id), ["vendor/sees", "vendor/reads"])
 
         defaults.set("vendor/sees", forKey: UserScope.scopedKey("openrouter_model"))
         let seeing = try await ProviderAccountService.shared.loadModelCatalog()
