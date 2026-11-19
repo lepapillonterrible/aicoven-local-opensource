@@ -290,6 +290,43 @@ actor GitHubToolService {
         return result
     }
 
+    /// The sha of the file at a path, which GitHub asks for before it
+    /// replaces a file; nil if there is no file there. A folder at the path
+    /// is an error: it cannot be written as a file.
+    func shaOfFile(
+        accountId: String,
+        owner: String,
+        repo: String,
+        path: String,
+        ref: String? = nil
+    ) async throws -> String? {
+        var params: [String: String] = [:]
+        if let ref { params["ref"] = ref }
+
+        let (data, response) = try await request(
+            method: "GET",
+            steps: ["repos", owner, repo, "contents"] + Self.steps(of: path),
+            accountId: accountId,
+            queryParams: params.isEmpty ? nil : params
+        )
+
+        if response.statusCode == 404 {
+            return nil
+        }
+        if response.statusCode != 200 {
+            throw parseError(statusCode: response.statusCode, data: data, context: path)
+        }
+
+        let found = try JSONSerialization.jsonObject(with: data)
+        if found is [Any] {
+            throw GitHubError.validationError(message: "'\(path)' is a folder, not a file.")
+        }
+        guard let file = found as? [String: Any], let sha = file["sha"] as? String, !sha.isEmpty else {
+            throw GitHubError.invalidResponse
+        }
+        return sha
+    }
+
     /// Get file info including SHA (for updates)
     func getFileInfo(
         accountId: String,

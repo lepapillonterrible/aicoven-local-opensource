@@ -627,10 +627,12 @@ final class ToolApprovalsTests: XCTestCase {
         let long = String(repeating: "a", count: ToolApproval.shownTextLimit + 5)
 
         let commit = ToolApproval.gitHubWriteFile(
-            owner: "octo", repo: "site", path: "README.md", branch: nil, message: "Update", content: long, threadID: "t"
+            owner: "octo", repo: "site", path: "README.md", branch: nil, message: "Update", content: long, replaces: true, threadID: "t"
         )
         XCTAssertEqual(commit.question, "Commit this file to GitHub?")
-        XCTAssertTrue(commit.details.hasPrefix("README.md in octo/site, on the default branch\nCommit message: Update\n"))
+        XCTAssertTrue(commit.details.hasPrefix("README.md in octo/site, on the default branch\nCommit message: Update\nReplaces the file that is there · "))
+        let new = ToolApproval.gitHubWriteFile(owner: "octo", repo: "site", path: "NEW.md", branch: "docs", message: "Add", content: "hi", replaces: false, threadID: "t")
+        XCTAssertTrue(new.details.hasPrefix("NEW.md in octo/site, on docs\nCommit message: Add\nA new file · "))
         XCTAssertTrue(commit.details.hasSuffix("… and 5 more characters"), "A long file shows its start and how much more there is")
 
         let branch = ToolApproval.gitHubCreateBranch(owner: "octo", repo: "site", newBranch: "fix", baseBranch: "main", threadID: "t")

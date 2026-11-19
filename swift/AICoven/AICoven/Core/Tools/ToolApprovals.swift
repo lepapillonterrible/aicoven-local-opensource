@@ -402,12 +402,12 @@ nonisolated extension ToolApproval {
     }
 
     static func gitHubWriteFile(
-        owner: String, repo: String, path: String, branch: String?, message: String, content: String, threadID: String
+        owner: String, repo: String, path: String, branch: String?, message: String, content: String, replaces: Bool, threadID: String
     ) -> ToolApproval {
         ToolApproval(
             threadID: threadID,
             question: "Commit this file to GitHub?",
-            details: "\(path) in \(owner)/\(repo), on \(branch ?? "the default branch")\nCommit message: \(message)\n\(size(of: content))\n\n\(shown(content))",
+            details: "\(path) in \(owner)/\(repo), on \(branch ?? "the default branch")\nCommit message: \(message)\n\(replaces ? "Replaces the file that is there" : "A new file") · \(size(of: content))\n\n\(shown(content))",
             toolName: "github.writeFile"
         )
     }

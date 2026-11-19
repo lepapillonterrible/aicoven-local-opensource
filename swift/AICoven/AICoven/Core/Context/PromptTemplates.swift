@@ -155,16 +155,16 @@ enum PromptTemplates {
         ),
         ToolDefinition(
             name: "github.writeFile",
-            description: "Create or update a file in a GitHub repository.",
+            description: "Create a file in a GitHub repository, or replace the one at that path.",
             parameters: [
                 ToolParameter(name: "repo", type: "string", description: "Repository as \"owner/name\"", required: true),
                 ToolParameter(name: "path", type: "string", description: "File path", required: true),
                 ToolParameter(name: "content", type: "string", description: "File content", required: true),
-                ToolParameter(name: "message", type: "string", description: "Commit message", required: true),
-                ToolParameter(name: "branch", type: "string", description: "Target branch", required: false),
-                ToolParameter(name: "sha", type: "string", description: "SHA of file being replaced (for updates)", required: false)
+                ToolParameter(name: "commit_message", type: "string", description: "Commit message", required: true),
+                ToolParameter(name: "branch", type: "string", description: "Branch to commit to (the default branch if left out)", required: false),
+                ToolParameter(name: "sha", type: "string", description: "SHA of the file being replaced (looked up if left out)", required: false)
             ],
-            example: "{\"tool\": \"github.writeFile\", \"input\": {\"repo\": \"user/project\", \"path\": \"README.md\", \"content\": \"Title\", \"message\": \"Update readme\"}, \"reason\": \"Update documentation\"}"
+            example: "{\"tool\": \"github.writeFile\", \"input\": {\"repo\": \"user/project\", \"path\": \"README.md\", \"content\": \"Title\", \"commit_message\": \"Update readme\"}, \"reason\": \"Update documentation\"}"
         ),
         ToolDefinition(
             name: "github.listFiles",
@@ -181,10 +181,10 @@ enum PromptTemplates {
             description: "Create a new branch from an existing branch.",
             parameters: [
                 ToolParameter(name: "repo", type: "string", description: "Repository as \"owner/name\"", required: true),
-                ToolParameter(name: "base_branch", type: "string", description: "Branch to create from", required: true),
+                ToolParameter(name: "base_ref", type: "string", description: "Branch to create from", required: true),
                 ToolParameter(name: "new_branch", type: "string", description: "Name for new branch", required: true)
             ],
-            example: #"{"tool": "github.createBranch", "input": {"repo": "user/project", "base_branch": "main", "new_branch": "feature/new"}, "reason": "Create feature branch"}"#
+            example: #"{"tool": "github.createBranch", "input": {"repo": "user/project", "base_ref": "main", "new_branch": "feature/new"}, "reason": "Create feature branch"}"#
         ),
         ToolDefinition(
             name: "github.createPR",

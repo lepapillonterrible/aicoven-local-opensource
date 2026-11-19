@@ -627,17 +627,36 @@ actor ToolExecutionService {
         guard let repository = GitHubToolArguments.repository(in: toolCall.args) else {
             return await .validationError(tool: toolCall.name, message: GitHubToolArguments.repositoryMissing, field: "repo")
         }
+        // The commit message as the cloud app names it, or as this app did.
         guard let path = extractString(from: toolCall.args, key: "path"),
               let content = extractString(from: toolCall.args, key: "content"),
-              let message = extractString(from: toolCall.args, key: "message") else {
-            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'path', 'content', 'message'")
+              let message = extractString(from: toolCall.args, key: "commit_message") ?? extractString(from: toolCall.args, key: "message") else {
+            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'path', 'content', 'commit_message'")
+        }
+        // A path that would not be sent is refused before anything is
+        // looked up or anyone is asked.
+        guard Self.isAPathWithinARepository(path) else {
+            return await .validationError(tool: toolCall.name, message: "'path' is not the path of a file in the repository.", field: "path")
         }
         let (owner, repo) = (repository.owner, repository.name)
 
-        let branch = extractString(from: toolCall.args, key: "branch")
-        let sha = extractString(from: toolCall.args, key: "sha")
+        let branch = Self.given(extractString(from: toolCall.args, key: "branch"))
+        var sha = Self.given(extractString(from: toolCall.args, key: "sha"))
 
-        if let refusal = await refusal(ofAppChange: toolCall, in: threadID, { .gitHubWriteFile(owner: owner, repo: repo, path: path, branch: branch, message: message, content: content, threadID: $0) }) {
+        // GitHub replaces a file only when told the sha of the one that
+        // is there. Where the call names none, it is looked up, as the
+        // cloud app does; the person is then asked knowing whether a file
+        // is replaced.
+        if sha == nil {
+            do {
+                sha = try await githubService.shaOfFile(accountId: account.id, owner: owner, repo: repo, path: path, ref: branch)
+            } catch {
+                return await .error(tool: toolCall.name, message: "Could not look at '\(path)' before writing it: \(error.localizedDescription)")
+            }
+        }
+        let replaces = sha != nil
+
+        if let refusal = await refusal(ofAppChange: toolCall, in: threadID, { .gitHubWriteFile(owner: owner, repo: repo, path: path, branch: branch, message: message, content: content, replaces: replaces, threadID: $0) }) {
             return refusal
         }
 
@@ -652,8 +671,8 @@ actor ToolExecutionService {
                 branch: branch,
                 sha: sha
             )
-            let block = "[GitHub File Written: \(owner)/\(repo)/\(path)]\nCommit message: \(message)"
-            return await .success(tool: toolCall.name, result: ["path": AnyJSONValue(path)], contextBlock: block)
+            let block = "[GitHub File Written: \(owner)/\(repo)/\(path)]\n\(replaces ? "Replaced the file that was there." : "A new file.")\nCommit message: \(message)"
+            return await .success(tool: toolCall.name, result: ["path": AnyJSONValue(path), "replaced": AnyJSONValue(replaces)], contextBlock: block)
         } catch {
             return await .error(tool: toolCall.name, message: error.localizedDescription)
         }
@@ -737,9 +756,20 @@ actor ToolExecutionService {
         guard let repository = GitHubToolArguments.repository(in: toolCall.args) else {
             return await .validationError(tool: toolCall.name, message: GitHubToolArguments.repositoryMissing, field: "repo")
         }
-        guard let baseBranch = extractString(from: toolCall.args, key: "base_branch") ?? extractString(from: toolCall.args, key: "baseBranch"),
-              let newBranch = extractString(from: toolCall.args, key: "new_branch") ?? extractString(from: toolCall.args, key: "newBranch") else {
-            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'base_branch', 'new_branch'")
+        // The branches as the cloud app names them (`base_ref`,
+        // `new_branch`), or as it and this app also take them.
+        let args = toolCall.args
+        guard let baseBranch = extractString(from: args, key: "base_ref") ?? extractString(from: args, key: "base_branch") ?? extractString(from: args, key: "baseBranch"),
+              let newBranch = extractString(from: args, key: "new_branch") ?? extractString(from: args, key: "branch") ?? extractString(from: args, key: "newBranch") else {
+            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'base_ref', 'new_branch'")
+        }
+        // A branch's name goes into the address asked of GitHub: one that
+        // would not be sent is refused before anyone is asked.
+        guard Self.isAPathWithinARepository(baseBranch) else {
+            return await .validationError(tool: toolCall.name, message: "'base_ref' is not the name of a branch.", field: "base_ref")
+        }
+        guard Self.isAPathWithinARepository(newBranch) else {
+            return await .validationError(tool: toolCall.name, message: "'new_branch' is not the name of a branch.", field: "new_branch")
         }
         let (owner, repo) = (repository.owner, repository.name)
 
@@ -1234,6 +1264,19 @@ actor ToolExecutionService {
 
         // Missing whitelist means no tool is allowed (deny by default).
         return false
+    }
+
+    /// Whether this is a path GitHub is asked about as it stands: it has
+    /// steps, and none is empty, "." or "..". (A branch's name is one too.)
+    nonisolated static func isAPathWithinARepository(_ path: String) -> Bool {
+        let steps = GitHubToolService.steps(of: path)
+        return !steps.isEmpty && GitHubToolService.path(of: steps) != nil
+    }
+
+    /// An optional argument that says something: one given as "" is one
+    /// left out.
+    nonisolated static func given(_ text: String?) -> String? {
+        text?.isEmpty == false ? text : nil
     }
 
     /// Helper to extract typed values from JSON args
