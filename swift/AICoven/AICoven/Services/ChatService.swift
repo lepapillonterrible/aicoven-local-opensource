@@ -465,8 +465,8 @@ actor ChatService {
         var streamedAnswer = false
 
         // Local models (MLX, Ollama) get a shorter, more assertive prompt.
-        // OpenClaw and Hermes are treated as local when pointing at a
-        // localhost / private-network endpoint.
+        // OpenClaw, Hermes and OpenAI-compatible servers are treated as local
+        // when pointing at a localhost / private-network endpoint.
         let isLocalModel = isLocalDeployment(providerID: descriptor.providerID)
         let toolConfig: ContextBuilder.ToolConfig = isLocalModel
             ? await .mlxTools()
@@ -1441,18 +1441,18 @@ actor ChatService {
     /// Returns `true` when the given provider is running locally \u2014 either
     /// because it\u2019s inherently local (MLX, Ollama) or because the user has
     /// configured a localhost/private-network base URL for a hybrid provider
-    /// (OpenClaw, Hermes). This is used throughout ChatService to decide
+    /// (OpenClaw, Hermes, an OpenAI-compatible server). This is used throughout ChatService to decide
     /// prompt length, tool pre-execution strategy, and background summary
     /// eligibility.
     private func isLocalDeployment(providerID: String) -> Bool {
         switch providerID {
         case "mlx", "ollama":
             return true
-        case "openclaw":
+        case "openclaw", "openai_compatible":
             if let client = llmClients[providerID] as? OpenClawLLMClient {
                 return client.isLocalEndpoint
             }
-            return true // Default assumption: OpenClaw is typically local
+            return true // Default assumption: these servers are typically local
         case "hermes":
             if let client = llmClients[providerID] as? HermesLLMClient {
                 return client.isLocalEndpoint

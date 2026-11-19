@@ -62,6 +62,17 @@ enum LLMConfiguration {
             result["openclaw"] = OpenClawLLMClient(baseURL: openClawBaseURL, apiKey: openClawKey)
         }
 
+        // Any other server that speaks the OpenAI chat API (LM Studio, vLLM,
+        // llama.cpp): an address, and a key only if the server asks for one.
+        if let server = ProviderAccountService.openAICompatibleServer() {
+            result["openai_compatible"] = OpenClawLLMClient(
+                baseURL: server.baseURL,
+                apiKey: server.apiKey,
+                providerID: "openai_compatible",
+                providerName: "OpenAI-compatible server"
+            )
+        }
+
         // Hermes: Nous Research Hermes models via Together AI or self-hosted
         let hermesKey = ProviderAccountService.apiKeyFromKeychain(forProvider: "hermes")
             ?? ProcessInfo.processInfo.environment["HERMES_API_KEY"]

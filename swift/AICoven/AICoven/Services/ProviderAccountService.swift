@@ -301,6 +301,45 @@ actor ProviderAccountService {
         return ProviderAccount(from: local)
     }
 
+    /// Create a connection to a server that speaks the OpenAI chat API. The
+    /// key is optional: many servers on a person's own machine ask for none.
+    @discardableResult
+    func createOpenAICompatibleAccount(
+        displayName: String,
+        baseURL: String,
+        apiKey: String?,
+        defaultModel: String?
+    ) async throws -> ProviderAccount {
+        var locals = try loadLocalAccounts()
+        let id = UUID().uuidString
+        let local = LocalProviderAccount(
+            id: id,
+            provider: "openai_compatible",
+            displayName: displayName,
+            scopes: ["chat"],
+            defaultModel: defaultModel,
+            baseURL: baseURL,
+            status: "healthy",
+            createdAt: Date()
+        )
+        locals.append(local)
+        // The key first: a failed key save then leaves no connection behind,
+        // and a failed account save takes its key back out.
+        if let apiKey, !apiKey.isEmpty {
+            try KeychainHelper.save(key: keychainKey(for: id), value: apiKey)
+        }
+        do {
+            try saveLocalAccounts(locals)
+        } catch {
+            KeychainHelper.delete(key: keychainKey(for: id))
+            throw error
+        }
+
+        await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
+
+        return ProviderAccount(from: local)
+    }
+
     /// Update an existing provider account's display name and/or API key.
     func updateProviderAccount(
         id: String,
@@ -491,14 +530,22 @@ actor ProviderAccountService {
         let locals = try loadLocalAccounts()
         var descriptors: [ModelDescriptor] = []
 
+        // Chat reaches one OpenAI-compatible server, the first connected, so
+        // only its models are offered.
+        let compatibleServerID = locals.first { $0.provider.lowercased() == "openai_compatible" }?.id
+
         for account in locals {
             let providerID = account.provider.lowercased()
+            if providerID == "openai_compatible", account.id != compatibleServerID { continue }
             let metadata: [ProviderInitializationStatus.ModelMetadata]
             do {
                 metadata = try await fetchRemoteModels(for: account)
             } catch {
                 AppErrorReporter.log(error: error, context: "ProviderAccountService.loadAllModelDescriptors.fetchRemoteModels.\(providerID)")
-                continue
+                // A server's model list can fail while it still answers
+                // chat, so its chosen model stays on offer below.
+                guard providerID == "openai_compatible" else { continue }
+                metadata = []
             }
 
             // The router picks by a coarse cost class, which cannot rank
@@ -512,6 +559,23 @@ actor ProviderAccountService {
                         id: chosen,
                         name: chosen,
                         provider: "openrouter",
+                        contextLength: nil
+                    )]
+                } else {
+                    routed = Array(metadata.prefix(1))
+                }
+            }
+            // A server's models cannot be ranked by cost class either, so the
+            // router sees one: the model chosen in Strix settings, else the
+            // one chosen when the server was connected, else the first listed.
+            if providerID == "openai_compatible" {
+                let chosen = UserDefaults.standard.string(forKey: UserScope.scopedKey("openai_compatible_model"))
+                    ?? account.defaultModel
+                if let chosen {
+                    routed = [metadata.first { $0.id == chosen } ?? ProviderInitializationStatus.ModelMetadata(
+                        id: chosen,
+                        name: chosen,
+                        provider: "openai_compatible",
                         contextLength: nil
                     )]
                 } else {
@@ -599,6 +663,18 @@ actor ProviderAccountService {
 // MARK: - ProviderAccountService Private Helpers
 
 extension ProviderAccountService {
+    /// The OpenAI-compatible server chat reaches: the first connected, with
+    /// its own key. Both come from the same connection, so one server's key
+    /// is never sent to another.
+    static func openAICompatibleServer() -> (baseURL: URL, apiKey: String?)? {
+        guard let account = loadLocalAccountsFromDefaults().first(where: { $0.provider.lowercased() == "openai_compatible" }),
+              let baseURL = account.baseURL.flatMap(URL.init(string:)), baseURL.host != nil else {
+            return nil
+        }
+        let key = KeychainHelper.load(key: keychainKey(forAccountId: account.id))
+        return (baseURL, key?.isEmpty == false ? key : nil)
+    }
+
     /// Resolve the first configured API key for a provider from Keychain using
     /// user-scoped account metadata. This intentionally bypasses UserDefaults
     /// secret mirrors; UserDefaults may only contain non-secret metadata.
@@ -717,6 +793,8 @@ extension ProviderAccountService {
             defaults.removeObject(forKey: UserScope.scopedKey("openclaw_base_url"))
         case "hermes":
             defaults.removeObject(forKey: UserScope.scopedKey("hermes_base_url"))
+        case "openai_compatible":
+            defaults.removeObject(forKey: UserScope.scopedKey("openai_compatible_model"))
         default:
             break
         }
@@ -841,10 +919,14 @@ extension ProviderAccountService {
                     contextLength: 128_000
                 )
             }
-        case "openclaw", "hermes":
+        case "openclaw", "hermes", "openai_compatible":
             let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) ?? ""
-            let baseURLStr = account.baseURL ?? (provider == "openclaw" ? "http://localhost:3000" : "https://api.together.xyz")
-            guard let url = URL(string: baseURLStr)?.appendingPathComponent("v1/models") else {
+            let defaultBaseURL = switch provider {
+            case "openclaw": "http://localhost:3000"
+            case "hermes": "https://api.together.xyz"
+            default: ""
+            }
+            guard let url = URL(string: account.baseURL ?? defaultBaseURL)?.appendingPathComponent("v1/models"), url.host != nil else {
                 throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid base URL for \(provider)"])
             }
             struct OpenAIListResponse: Decodable { struct Item: Decodable { let id: String }
@@ -858,7 +940,7 @@ extension ProviderAccountService {
             request.setValue("application/json", forHTTPHeaderField: "Accept")
             let (data, response) = try await URLSession.shared.data(for: request)
             if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-                throw Self.sanitizedHTTPError(provider: provider, statusCode: http.statusCode)
+                throw Self.sanitizedHTTPError(provider: provider == "openai_compatible" ? "Server" : provider, statusCode: http.statusCode)
             }
             let decoded = try JSONDecoder().decode(OpenAIListResponse.self, from: data)
             let chatOnly = decoded.data

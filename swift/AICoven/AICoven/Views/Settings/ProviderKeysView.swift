@@ -227,11 +227,33 @@ struct AddProviderKeySheet: View {
     @Environment(\.dismiss) private var dismiss
     let onComplete: () -> Void
 
-    private static let providers = ["openai", "anthropic", "google", "openrouter", "hermes", "ollama", "openclaw", "mlx"]
+    private static let providers = [
+        "openai", "anthropic", "google", "openrouter", "openai_compatible", "hermes", "ollama", "openclaw", "mlx",
+    ]
+
+    #if os(macOS)
+    @State private var detectedServers: [DetectedLocalProvider] = []
+    @State private var isDetecting = false
+    @State private var hasDetected = false
+    /// Servers found at an address the person typed.
+    @State private var namedServers: [DetectedLocalProvider] = []
+    @State private var typedAddress = ""
+    @State private var typedAddressFailure: String?
+    @State private var isCheckingAddress = false
+    /// The found server whose form is open.
+    @State private var chosenServer: DetectedLocalProvider?
+    /// False once the list is covered by a form or the sheet has closed, so
+    /// a check that finishes then says nothing over another screen.
+    @State private var listIsShowing = false
+    #endif
 
     var body: some View {
         NavigationStack {
             SettingsForm {
+                #if os(macOS)
+                detectSection
+                #endif
+
                 Section("Provider") {
                     ForEach(Self.providers, id: \.self) { provider in
                         NavigationLink {
@@ -260,9 +282,163 @@ struct AddProviderKeySheet: View {
                     Button("Cancel") { dismiss() }
                 }
             }
+            #if os(macOS)
+            .onAppear { listIsShowing = true }
+            .onDisappear { listIsShowing = false }
+            .navigationDestination(item: $chosenServer) { server in
+                AddProviderKeyStep2View(
+                    selectedProvider: server.provider,
+                    detected: server,
+                    onComplete: onComplete,
+                    dismissSheet: { dismiss() }
+                )
+            }
+            #endif
         }
         .aiConnectionSheet()
     }
+
+    #if os(macOS)
+    /// Servers on this Mac: Detect asks the usual ports, and Check asks an
+    /// address the person types. Choosing one opens its form filled in.
+    private var detectSection: some View {
+        Section {
+            Button {
+                Task { await detect() }
+            } label: {
+                HStack(spacing: Spacing.xs) {
+                    Text("Detect Servers")
+                    if isDetecting {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+            }
+            .disabled(isDetecting)
+
+            ForEach(foundServers) { server in
+                Button {
+                    chosenServer = server
+                } label: {
+                    HStack(spacing: Spacing.sm) {
+                        ProviderLogoBadge(assetName: providerLogoAssetName(slug: server.provider), size: 24)
+                        VStack(alignment: .leading, spacing: Spacing.xxxs) {
+                            Text(server.displayName)
+                            Text(Self.subtitle(for: server))
+                                .font(.aicovenBodySmall)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.aicovenBodySmall)
+                            .foregroundStyle(.tertiary)
+                            .accessibilityHidden(true)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Connect")
+            }
+            if hasDetected, !isDetecting, detectedServers.isEmpty {
+                Text("No server answered on the usual ports.")
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: Spacing.sm) {
+                TextField(
+                    "Port or address",
+                    text: $typedAddress,
+                    prompt: Text(LocalProviderDiscoveryService.ManualEntryCopy.placeholder)
+                )
+                .autocorrectionDisabled()
+                .onSubmit { Task { await checkTypedAddress() } }
+                Button {
+                    Task { await checkTypedAddress() }
+                } label: {
+                    HStack(spacing: Spacing.xs) {
+                        Text("Check")
+                        if isCheckingAddress {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                    }
+                }
+                .disabled(isCheckingAddress || typedAddress.isEmpty)
+            }
+            if let typedAddressFailure {
+                FormErrorRow(message: typedAddressFailure)
+            }
+        } header: {
+            Text("On this Mac")
+        } footer: {
+            Text("Detect asks the usual ports of LM Studio and Ollama on this Mac. For a server on another port, or another machine, enter its port or address.")
+                .font(.aicovenBodySmall)
+        }
+    }
+
+    /// Detected servers, then the ones at typed addresses that Detect did
+    /// not also find.
+    private var foundServers: [DetectedLocalProvider] {
+        detectedServers + namedServers.filter { named in !detectedServers.contains { $0.id == named.id } }
+    }
+
+    private static func subtitle(for server: DetectedLocalProvider) -> String {
+        let address = server.baseURL.replacingOccurrences(of: "http://", with: "")
+        if server.requiresKey { return "\(address) · asks for an API key" }
+        if server.provider == "ollama" { return address }
+        return "\(address) · \(server.models.count == 1 ? "1 model" : "\(server.models.count) models")"
+    }
+
+    private func detect() async {
+        isDetecting = true
+        defer { isDetecting = false }
+        detectedServers = await LocalProviderDiscoveryService().discover()
+        hasDetected = true
+        guard listIsShowing else { return }
+        announce(
+            detectedServers.isEmpty
+                ? "No server answered on the usual ports."
+                : "Found \(detectedServers.map(\.displayName).formatted(.list(type: .and)))."
+        )
+    }
+
+    private func checkTypedAddress() async {
+        // Return in the field reaches here while a check runs; one at a time.
+        guard !isCheckingAddress else { return }
+        let typed = typedAddress
+        typedAddressFailure = nil
+        guard let address = LocalProviderDiscoveryService.serverBaseURL(from: typed) else {
+            typedAddressFailure = LocalProviderDiscoveryService.ManualEntryCopy.invalidInput
+            announce(LocalProviderDiscoveryService.ManualEntryCopy.invalidInput)
+            return
+        }
+        isCheckingAddress = true
+        defer { isCheckingAddress = false }
+
+        let discovery = LocalProviderDiscoveryService()
+        // A known tool's usual port names the server; anything else is an
+        // OpenAI-compatible server at its address.
+        let known = discovery.knownEndpoint(at: address)
+        let shownAddress = address.absoluteString.replacingOccurrences(of: "http://", with: "")
+        let found = await discovery.probe(
+            address,
+            provider: known?.provider ?? "openai_compatible",
+            displayName: known?.displayName ?? shownAddress
+        )
+        // The answer is for the address that was checked.
+        guard typed == typedAddress else { return }
+        guard let found else {
+            let failure = LocalProviderDiscoveryService.ManualEntryCopy.noResponse(at: shownAddress)
+            typedAddressFailure = failure
+            if listIsShowing { announce(failure) }
+            return
+        }
+        namedServers.removeAll { $0.id == found.id }
+        namedServers.append(found)
+        typedAddress = ""
+        if listIsShowing { announce("Found \(found.displayName).") }
+    }
+    #endif
 }
 
 private extension View {
@@ -273,6 +449,12 @@ private extension View {
         #if os(macOS)
             .frame(minWidth: 480, idealWidth: 520, minHeight: 360, idealHeight: 520)
         #endif
+    }
+
+    /// Says a finished check's result to VoiceOver, whose focus stays on
+    /// the control that started it.
+    func announce(_ message: String) {
+        AccessibilityNotification.Announcement(message).post()
     }
 
     func inlineNavigationTitle() -> some View {
@@ -311,17 +493,41 @@ private struct AddProviderKeyStep2View: View {
     @State private var isLoadingModels = false
     @State private var ollamaModels: [OllamaLLMClient.OllamaModel] = []
     @State private var selectedOllamaModel = ""
-    @State private var ollamaConnectionFailure: String?
+    /// The models an OpenAI-compatible server listed, and the one chosen.
+    @State private var serverModels: [String]
+    @State private var selectedServerModel: String
+    /// Why Connect found no models to choose from.
+    @State private var connectionFailure: String?
     @State private var selectedMLXModelID = ""
     @State private var acceptedPrivacy = false
+    /// False once the form is left, so a Connect that finishes then says
+    /// nothing over another screen.
+    @State private var formIsShowing = false
+    /// True when the form opened on a detected Ollama server, whose models
+    /// it lists at once.
+    private let connectsOnOpen: Bool
 
-    init(selectedProvider: String, onComplete: @escaping () -> Void, dismissSheet: @escaping () -> Void) {
+    private static let serverAsksForKey = "This server asks for an API key. Enter it below, then Connect."
+
+    /// `detected` fills the form from a server Detect found, so connecting
+    /// it needs nothing typed unless the server asks for a key.
+    init(
+        selectedProvider: String,
+        detected: DetectedLocalProvider? = nil,
+        onComplete: @escaping () -> Void,
+        dismissSheet: @escaping () -> Void
+    ) {
         self.selectedProvider = selectedProvider
         self.onComplete = onComplete
         self.dismissSheet = dismissSheet
-        // Named after the provider; the person can rename it here.
-        _displayName = State(initialValue: providerDisplayName(slug: selectedProvider))
-        _baseURL = State(initialValue: selectedProvider == "ollama" ? "http://localhost:11434" : "")
+        // Named after the provider, or the detected server; the person can
+        // rename it here.
+        _displayName = State(initialValue: detected?.displayName ?? providerDisplayName(slug: selectedProvider))
+        _baseURL = State(initialValue: detected?.baseURL ?? (selectedProvider == "ollama" ? "http://localhost:11434" : ""))
+        _serverModels = State(initialValue: detected?.models ?? [])
+        _selectedServerModel = State(initialValue: detected?.models.first ?? "")
+        _connectionFailure = State(initialValue: detected?.requiresKey == true ? Self.serverAsksForKey : nil)
+        connectsOnOpen = detected != nil && selectedProvider == "ollama"
     }
 
     private var isOllama: Bool {
@@ -338,6 +544,10 @@ private struct AddProviderKeyStep2View: View {
 
     private var isHermes: Bool {
         selectedProvider == "hermes"
+    }
+
+    private var isCompatibleServer: Bool {
+        selectedProvider == "openai_compatible"
     }
 
     private var providerName: String {
@@ -369,6 +579,11 @@ private struct AddProviderKeyStep2View: View {
         }
         .navigationTitle(providerName)
         .inlineNavigationTitle()
+        .onAppear { formIsShowing = true }
+        .onDisappear { formIsShowing = false }
+        .task {
+            if connectsOnOpen { await connectToOllama() }
+        }
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 if saving {
@@ -405,7 +620,10 @@ private struct AddProviderKeyStep2View: View {
             }
         } else {
             Section {
-                Toggle(isOpenClaw || isHermes ? "Share my messages with this server" : "Share my messages with \(providerName)", isOn: $acceptedPrivacy)
+                Toggle(
+                    isOpenClaw || isHermes || isCompatibleServer ? "Share my messages with this server" : "Share my messages with \(providerName)",
+                    isOn: $acceptedPrivacy
+                )
             } footer: {
                 // Built as a key so the policy link is a link.
                 Text(LocalizedStringKey(privacyFooter))
@@ -417,7 +635,7 @@ private struct AddProviderKeyStep2View: View {
     private var privacyFooter: String {
         let policy = "AICoven does not store or read them on its servers. [Privacy Policy](https://aicoven.ai/privacy)"
         switch selectedProvider {
-        case "openclaw":
+        case "openclaw", "openai_compatible":
             return "Messages and their context go to the server address you enter. Use a server you trust. \(policy)"
         case "hermes":
             return "Messages and their context go to the server address you enter, or to Together AI when you enter none. \(policy)"
@@ -436,6 +654,8 @@ private struct AddProviderKeyStep2View: View {
             ollamaSections
         } else if isMLX {
             mlxSection
+        } else if isCompatibleServer {
+            compatibleServerSections
         } else if isOpenClaw {
             Section("Server") {
                 FormAddressField(label: "Address", text: $baseURL, prompt: "http://localhost:3000")
@@ -460,7 +680,7 @@ private struct AddProviderKeyStep2View: View {
                 .onChange(of: baseURL) { _, _ in
                     ollamaModels = []
                     selectedOllamaModel = ""
-                    ollamaConnectionFailure = nil
+                    connectionFailure = nil
                 }
             Button {
                 Task { await connectToOllama() }
@@ -474,8 +694,8 @@ private struct AddProviderKeyStep2View: View {
                 }
             }
             .disabled(isLoadingModels || baseURL.isEmpty)
-            if let ollamaConnectionFailure {
-                FormErrorRow(message: ollamaConnectionFailure)
+            if let connectionFailure {
+                FormErrorRow(message: connectionFailure)
             }
         } header: {
             Text("Server")
@@ -490,6 +710,49 @@ private struct AddProviderKeyStep2View: View {
                     ForEach(ollamaModels) { model in
                         Text(model.formattedSize.map { "\(model.name) (\($0))" } ?? model.name)
                             .tag(model.name)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var compatibleServerSections: some View {
+        Section {
+            FormAddressField(label: "Address", text: $baseURL, prompt: "http://127.0.0.1:1234")
+                // The listed models belong to the address they came from.
+                .onChange(of: baseURL) { _, _ in
+                    serverModels = []
+                    selectedServerModel = ""
+                    connectionFailure = nil
+                }
+            Button {
+                Task { await connectToServer() }
+            } label: {
+                HStack(spacing: Spacing.xs) {
+                    Text("Connect")
+                    if isLoadingModels {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+            }
+            .disabled(isLoadingModels || baseURL.isEmpty)
+            if let connectionFailure {
+                FormErrorRow(message: connectionFailure)
+            }
+        } header: {
+            Text("Server")
+        } footer: {
+            Text("Any server that speaks the OpenAI chat API, such as LM Studio, vLLM or llama.cpp. Connect lists its models; a server that asks for a key needs it entered below first.")
+                .font(.aicovenBodySmall)
+        }
+
+        if !serverModels.isEmpty {
+            Section {
+                Picker("Model", selection: $selectedServerModel) {
+                    ForEach(serverModels, id: \.self) { model in
+                        Text(model).tag(model)
                     }
                 }
             }
@@ -543,7 +806,7 @@ private struct AddProviderKeyStep2View: View {
     // MARK: - Save
 
     private var keyPrompt: String {
-        if isOpenClaw { return "Optional" }
+        if isOpenClaw || isCompatibleServer { return "Optional" }
         if isHermes { return "Needed for Together AI" }
         return "Required"
     }
@@ -552,6 +815,7 @@ private struct AddProviderKeyStep2View: View {
         if displayName.isEmpty { return true }
         if isOllama { return baseURL.isEmpty || selectedOllamaModel.isEmpty }
         if isMLX { return selectedMLXModelID.isEmpty }
+        if isCompatibleServer { return selectedServerModel.isEmpty || !acceptedPrivacy }
         if isOpenClaw { return baseURL.isEmpty || !acceptedPrivacy }
         if isHermes { return (apiKey.isEmpty && baseURL.isEmpty) || !acceptedPrivacy }
         return apiKey.isEmpty || !acceptedPrivacy
@@ -562,7 +826,7 @@ private struct AddProviderKeyStep2View: View {
     private func connectToOllama() async {
         let address = baseURL
         isLoadingModels = true
-        ollamaConnectionFailure = nil
+        connectionFailure = nil
         defer { isLoadingModels = false }
 
         var models: [OllamaLLMClient.OllamaModel] = []
@@ -587,9 +851,51 @@ private struct AddProviderKeyStep2View: View {
 
         guard address == baseURL else { return }
         ollamaModels = models
-        ollamaConnectionFailure = failure
+        connectionFailure = failure
         if !models.contains(where: { $0.name == selectedOllamaModel }) {
             selectedOllamaModel = models.first?.name ?? ""
+        }
+        if formIsShowing {
+            announce(failure ?? (models.count == 1 ? "1 model listed." : "\(models.count) models listed."))
+        }
+    }
+
+    /// Lists the models of the server at the address in the field, with the
+    /// key in the form if there is one. An answer for an address or a key
+    /// the form no longer holds is dropped.
+    private func connectToServer() async {
+        let address = baseURL
+        let key = apiKey
+        isLoadingModels = true
+        connectionFailure = nil
+        defer { isLoadingModels = false }
+
+        var models: [String] = []
+        var failure: String?
+        if let server = LocalProviderDiscoveryService.serverBaseURL(from: address) {
+            switch await LocalProviderDiscoveryService().models(at: server, apiKey: key) {
+            case let .success(data):
+                models = LocalProviderDiscoveryService.parseModelIds(from: data)
+                if models.isEmpty {
+                    failure = "Connected, but the server listed no models. Load one in the server first."
+                }
+            case .unauthorized:
+                failure = key.isEmpty ? Self.serverAsksForKey : "The server refused this API key."
+            case .unavailable:
+                failure = "Nothing answered at \(address). Check the server is running and serves the OpenAI API."
+            }
+        } else {
+            failure = "Enter the server's address, such as http://127.0.0.1:1234."
+        }
+
+        guard address == baseURL, key == apiKey else { return }
+        serverModels = models
+        connectionFailure = failure
+        if !models.contains(selectedServerModel) {
+            selectedServerModel = models.first ?? ""
+        }
+        if formIsShowing {
+            announce(failure ?? (models.count == 1 ? "1 model listed." : "\(models.count) models listed."))
         }
     }
 
@@ -604,6 +910,19 @@ private struct AddProviderKeyStep2View: View {
                 _ = try await service.createOllamaAccount(displayName: displayName, baseURL: baseURL, defaultModel: selectedOllamaModel)
             } else if isMLX {
                 _ = try await service.createMLXAccount(displayName: displayName, modelID: selectedMLXModelID)
+            } else if isCompatibleServer {
+                // Saved as the address requests go to, whatever form it was
+                // typed in. Connect listed models from it, so it is one.
+                guard let server = LocalProviderDiscoveryService.serverBaseURL(from: baseURL) else {
+                    errorMessage = "Enter the server's address, such as http://127.0.0.1:1234."
+                    return
+                }
+                _ = try await service.createOpenAICompatibleAccount(
+                    displayName: displayName,
+                    baseURL: server.absoluteString,
+                    apiKey: apiKey.isEmpty ? nil : apiKey,
+                    defaultModel: selectedServerModel
+                )
             } else if isOpenClaw {
                 _ = try await service.createOpenClawAccount(
                     displayName: displayName,
@@ -661,7 +980,7 @@ struct EditProviderKeySheet: View {
     }
 
     private var hasAddress: Bool {
-        ["ollama", "openclaw", "hermes"].contains(slug)
+        ["ollama", "openclaw", "hermes", "openai_compatible"].contains(slug)
     }
 
     private var hasKey: Bool {
@@ -672,6 +991,7 @@ struct EditProviderKeySheet: View {
         switch slug {
         case "ollama": "http://localhost:11434"
         case "openclaw": "http://localhost:3000"
+        case "openai_compatible": "http://127.0.0.1:1234"
         default: "Together AI"
         }
     }
@@ -736,12 +1056,22 @@ struct EditProviderKeySheet: View {
         errorMessage = nil
         defer { saving = false }
 
+        var address = baseURL
+        if slug == "openai_compatible" {
+            // Saved as the address requests go to, as Add saves it.
+            guard let server = LocalProviderDiscoveryService.serverBaseURL(from: baseURL) else {
+                errorMessage = "Enter the server's address, such as http://127.0.0.1:1234."
+                return
+            }
+            address = server.absoluteString
+        }
+
         do {
             try await ProviderAccountService.shared.updateProviderAccount(
                 id: account.id,
                 displayName: displayName,
                 apiKey: apiKey.isEmpty ? nil : apiKey,
-                baseURL: hasAddress ? baseURL : nil
+                baseURL: hasAddress ? address : nil
             )
             onComplete()
             dismiss()
