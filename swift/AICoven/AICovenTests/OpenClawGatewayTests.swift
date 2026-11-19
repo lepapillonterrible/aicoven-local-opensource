@@ -329,6 +329,126 @@ final class OpenClawGatewayTests: XCTestCase {
         }
     }
 
+    // MARK: - A connection for one piece of work
+
+    func testATokenTheGatewayIssues_isKeptAndShownNextTimeAndForgottenWhenItIsNoLongerTaken() async throws {
+        let address = try XCTUnwrap(OpenClawGatewayConnection.address("ws://127.0.0.1:\(Int.random(in: 20000 ... 60000))"))
+        let tokenKey = "openclaw-gateway-device-token.\(address.absoluteString)"
+        addTeardownBlock { KeychainHelper.delete(key: tokenKey) }
+
+        // The first connection has no token; the Gateway issues one.
+        let first = ScriptedGatewaySocket()
+        async let opened = OpenClawGateway.hello(at: address, token: nil, over: { _ in first })
+        await first.welcomeNextConnection(deviceToken: "ISSUED", in: self)
+        let hello = try await opened
+        XCTAssertNil(hello.missing)
+        XCTAssertNil((first.sent.first?["params"] as? [String: Any])?["auth"])
+        XCTAssertTrue(first.isClosed, "The connection is closed once it has answered")
+        XCTAssertEqual(KeychainHelper.load(key: tokenKey), "ISSUED")
+
+        // The next shows it. The Gateway no longer takes it, so it is
+        // forgotten and the connection made once more without it.
+        let refused = ScriptedGatewaySocket()
+        let retried = ScriptedGatewaySocket()
+        let sockets = Sockets([refused, retried])
+        async let again = OpenClawGateway.hello(at: address, token: nil, over: { _ in sockets.next() })
+        refused.push(ScriptedGatewaySocket.challenge)
+        await fulfillment(of: [refused.expectSent(1)], timeout: 10)
+        XCTAssertEqual((refused.sent.first?["params"] as? [String: Any])?["auth"] as? [String: String], ["deviceToken": "ISSUED"])
+        refused.push([
+            "type": "res", "id": refused.sent.first?["id"] as? String ?? "", "ok": false,
+            "error": ["code": "UNAUTHORIZED", "message": "token mismatch", "details": ["code": "AUTH_DEVICE_TOKEN_MISMATCH"]],
+        ])
+        await retried.welcomeNextConnection(in: self)
+        _ = try await again
+        XCTAssertNil((retried.sent.first?["params"] as? [String: Any])?["auth"])
+        XCTAssertNil(KeychainHelper.load(key: tokenKey))
+
+        // A connection with its own token shows that, and no issued one.
+        let own = ScriptedGatewaySocket()
+        async let withOwn = OpenClawGateway.hello(at: address, token: "MINE", over: { _ in own })
+        await own.welcomeNextConnection(in: self)
+        _ = try await withOwn
+        XCTAssertEqual((own.sent.first?["params"] as? [String: Any])?["auth"] as? [String: String], ["token": "MINE"])
+    }
+
+    // MARK: - The stored connection
+
+    func testAnOpenClawConnection_keepsItsGatewayAddressAndIsTestedAtItsGateway() async throws {
+        let defaults = UserDefaults.standard
+        let keys = ["provider_accounts.v1", "hermes_model_connections_converted.v1", "openclaw_base_url"].map(UserScope.scopedKey)
+        let saved = keys.map { defaults.object(forKey: $0) }
+        addTeardownBlock {
+            for (key, value) in zip(keys, saved) {
+                UserDefaults.standard.set(value, forKey: key)
+            }
+        }
+        defaults.removeObject(forKey: keys[0])
+        defaults.set(true, forKey: keys[1])
+        let service = ProviderAccountService.shared
+        let asked = AskedGateways()
+        await service.askGateways { address, token in
+            await asked.note(address, token)
+            return await asked.hello
+        }
+        addTeardownBlock {
+            await service.askGateways { try await OpenClawGateway.hello(at: $0, token: $1) }
+        }
+
+        let account = try await service.createOpenClawAccount(
+            displayName: "My OpenClaw", baseURL: "http://127.0.0.1:1", apiKey: "TOKEN", defaultModel: nil, gatewayURL: "ws://127.0.0.1:18789"
+        )
+        addTeardownBlock { try? await service.deleteProviderAccount(id: account.id) }
+        let stored = try await service.gatewayAddress(forAccount: account.id)
+        XCTAssertEqual(stored, "ws://127.0.0.1:18789")
+
+        // Tested at the Gateway, with the connection's token; the server
+        // address answering or not does not decide it.
+        let models = try await service.testConnection(accountId: account.id)
+        XCTAssertEqual(models, 0)
+        let calls = await asked.calls
+        XCTAssertEqual(calls.map(\.address), ["ws://127.0.0.1:18789"])
+        XCTAssertEqual(calls.map(\.token), ["TOKEN"])
+        let healthy = try await service.loadProviderAccounts().first { $0.id == account.id }
+        XCTAssertEqual(healthy?.status, "healthy")
+        let kept = try await service.gatewayAddress(forAccount: account.id)
+        XCTAssertEqual(kept, "ws://127.0.0.1:18789", "Recording the outcome keeps the Gateway address")
+
+        // A Gateway that lacks what a turn needs fails the test, saying what.
+        await asked.offer(methods: ["chat.send"])
+        do {
+            _ = try await service.testConnection(accountId: account.id)
+            XCTFail("A Gateway a turn cannot run on does not pass")
+        } catch {
+            XCTAssertEqual(error as? OpenClawGatewayError, .notSupported("sessions.messages.subscribe"))
+        }
+        let unhealthy = try await service.loadProviderAccounts().first { $0.id == account.id }
+        XCTAssertEqual(unhealthy?.status, "unhealthy")
+
+        // Renaming keeps the Gateway; an empty address takes it off.
+        try await service.updateProviderAccount(id: account.id, displayName: "Renamed")
+        let afterRename = try await service.gatewayAddress(forAccount: account.id)
+        XCTAssertEqual(afterRename, "ws://127.0.0.1:18789")
+        try await service.updateProviderAccount(id: account.id, gatewayURL: "")
+        let afterClear = try await service.gatewayAddress(forAccount: account.id)
+        XCTAssertNil(afterClear)
+    }
+
+    func testAConnectionStoredBeforeGateways_stillLoadsAndHasNone() throws {
+        let before = Data(#"[{"id":"a","provider":"openclaw","displayName":"OpenClaw","scopes":["chat"],"baseURL":"http://localhost:3000","status":"healthy","createdAt":0}]"#.utf8)
+        let accounts = try JSONDecoder().decode([LocalProviderAccount].self, from: before)
+        XCTAssertEqual(accounts.first?.baseURL, "http://localhost:3000")
+        XCTAssertNil(accounts.first?.gatewayURL)
+    }
+
+    @MainActor
+    func testTheGatewayFieldSavesAnAddressAGatewayMayBeReachedAtOrNone() {
+        XCTAssertEqual(OpenClawGatewayField.addressToSave("  "), "")
+        XCTAssertEqual(OpenClawGatewayField.addressToSave(" ws://127.0.0.1:18789 "), "ws://127.0.0.1:18789")
+        XCTAssertNil(OpenClawGatewayField.addressToSave("ws://gateway.example.com:18789"))
+        XCTAssertNil(OpenClawGatewayField.addressToSave("http://127.0.0.1:18789"))
+    }
+
     // MARK: - Addresses
 
     func testAGatewayAddress_isPlainOnlyOnThisMachineAndCarriesNothingElse() {
@@ -349,5 +469,40 @@ final class OpenClawGatewayTests: XCTestCase {
             base64 += "="
         }
         return Data(base64Encoded: base64)
+    }
+}
+
+/// Hands out sockets in turn, to a connection that is made more than once.
+private final class Sockets: @unchecked Sendable {
+    private let lock = NSLock()
+    private var left: [ScriptedGatewaySocket]
+
+    init(_ sockets: [ScriptedGatewaySocket]) {
+        left = sockets
+    }
+
+    func next() -> ScriptedGatewaySocket {
+        lock.withLock { left.isEmpty ? ScriptedGatewaySocket() : left.removeFirst() }
+    }
+}
+
+/// The Gateways a test's connections were tested at, and what they offer.
+private actor AskedGateways {
+    private(set) var calls: [(address: String, token: String?)] = []
+    private var methods = OpenClawGatewayHello.methodsNeeded
+
+    var hello: OpenClawGatewayHello {
+        OpenClawGatewayHello(
+            methods: Set(methods), events: ["chat", "session.approval"],
+            scopes: Set(OpenClawGatewayConnection.scopes), maxPayload: 1024, deviceToken: nil
+        )
+    }
+
+    func note(_ address: URL, _ token: String?) {
+        calls.append((address.absoluteString, token))
+    }
+
+    func offer(methods: [String]) {
+        self.methods = methods
     }
 }

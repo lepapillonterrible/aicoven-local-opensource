@@ -487,6 +487,8 @@ private struct AddProviderKeyStep2View: View {
 
     @State private var displayName: String
     @State private var apiKey = ""
+    /// An OpenClaw connection's Gateway address; empty for none.
+    @State private var gatewayURL = ""
     @State private var baseURL: String
     @State private var saving = false
     @State private var errorMessage: String?
@@ -666,6 +668,7 @@ private struct AddProviderKeyStep2View: View {
             Section("Server") {
                 FormAddressField(label: "Address", text: $baseURL, prompt: "http://localhost:3000")
             }
+            OpenClawGatewayField(address: $gatewayURL)
         } else if isHermes {
             Section {
                 FormAddressField(label: "Address", text: $baseURL, prompt: HermesAgentClient.usualAddress)
@@ -934,11 +937,16 @@ private struct AddProviderKeyStep2View: View {
                     defaultModel: selectedServerModel
                 )
             } else if isOpenClaw {
+                guard let gateway = OpenClawGatewayField.addressToSave(gatewayURL) else {
+                    errorMessage = OpenClawGatewayError.invalidAddress.localizedDescription
+                    return
+                }
                 _ = try await service.createOpenClawAccount(
                     displayName: displayName,
                     baseURL: baseURL,
                     apiKey: apiKey.isEmpty ? nil : apiKey,
-                    defaultModel: nil
+                    defaultModel: nil,
+                    gatewayURL: gateway
                 )
             } else if isHermes {
                 // As for a server: saved as the address requests go to.
@@ -979,6 +987,10 @@ struct EditProviderKeySheet: View {
     @State private var displayName: String
     @State private var apiKey = ""
     @State private var baseURL: String
+    /// An OpenClaw connection's Gateway address, read when the sheet opens.
+    /// Until it has been read, saving leaves the stored one as it is.
+    @State private var gatewayURL = ""
+    @State private var gatewayIsRead = false
     @State private var saving = false
     @State private var errorMessage: String?
 
@@ -1034,6 +1046,13 @@ struct EditProviderKeySheet: View {
                         FormAddressField(label: "Address", text: $baseURL, prompt: addressPrompt)
                     }
                 }
+                if slug == "openclaw" {
+                    OpenClawGatewayField(address: $gatewayURL)
+                        .task {
+                            gatewayURL = await (try? ProviderAccountService.shared.gatewayAddress(forAccount: account.id)) ?? ""
+                            gatewayIsRead = true
+                        }
+                }
 
                 if hasKey {
                     Section {
@@ -1082,12 +1101,23 @@ struct EditProviderKeySheet: View {
             address = server.absoluteString
         }
 
+        var gateway: String?
+        if slug == "openclaw", gatewayIsRead {
+            // Empty takes the Gateway off the connection.
+            guard let checked = OpenClawGatewayField.addressToSave(gatewayURL) else {
+                errorMessage = OpenClawGatewayError.invalidAddress.localizedDescription
+                return
+            }
+            gateway = checked
+        }
+
         do {
             try await ProviderAccountService.shared.updateProviderAccount(
                 id: account.id,
                 displayName: displayName,
                 apiKey: apiKey.isEmpty ? nil : apiKey,
-                baseURL: hasAddress ? address : nil
+                baseURL: hasAddress ? address : nil,
+                gatewayURL: gateway
             )
             onComplete()
             dismiss()
@@ -1212,5 +1242,31 @@ struct SecondaryButtonStyle: ButtonStyle {
             .background(Color.aicovenGlass)
             .cornerRadius(BorderRadius.md)
             .opacity(configuration.isPressed ? 0.7 : 1.0)
+    }
+}
+
+/// The Gateway address of an OpenClaw connection: where its turns run when
+/// it has one. Without it the connection speaks the OpenAI chat API at its
+/// server address.
+struct OpenClawGatewayField: View {
+    @Binding var address: String
+
+    var body: some View {
+        Section {
+            FormAddressField(label: "Gateway", text: $address, prompt: "ws://127.0.0.1:18789")
+        } header: {
+            Text("Gateway (optional)")
+        } footer: {
+            Text("With its Gateway address, OpenClaw runs each turn itself, with its own tools, and asks here before it acts. On this Mac the address starts with ws://; anywhere else it must be secure and start with wss://.")
+                .font(.aicovenBodySmall)
+        }
+    }
+
+    /// The address as it is saved: empty for none, the address itself when
+    /// it is one a Gateway may be reached at, and nil when it is not.
+    static func addressToSave(_ typed: String) -> String? {
+        let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        return OpenClawGatewayConnection.address(trimmed)?.absoluteString
     }
 }

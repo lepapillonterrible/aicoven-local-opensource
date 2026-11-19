@@ -18,6 +18,10 @@ struct LocalProviderAccount: Codable {
     let baseURL: String?
     let status: String
     let createdAt: Date
+    /// For an OpenClaw connection, the address of its native Gateway, if it
+    /// has one: turns then run through the Gateway. Not there, the
+    /// connection speaks the OpenAI chat API at `baseURL` alone.
+    var gatewayURL: String?
 }
 
 extension ProviderAccount {
@@ -117,6 +121,15 @@ actor ProviderAccountService {
     /// its start, by callers that arrive while it runs too. A failed download
     /// is not kept.
     private var openRouterCatalog: (startedAt: Date, download: Task<[ProviderInitializationStatus.ModelMetadata], Error>)?
+
+    /// Asks a Gateway what it offers; stood in for by tests.
+    private var gatewayHello: @Sendable (URL, String?) async throws -> OpenClawGatewayHello = { address, token in
+        try await OpenClawGateway.hello(at: address, token: token)
+    }
+
+    func askGateways(with hello: @escaping @Sendable (URL, String?) async throws -> OpenClawGatewayHello) {
+        gatewayHello = hello
+    }
 
     private init() {}
 
@@ -235,7 +248,8 @@ actor ProviderAccountService {
         displayName: String,
         baseURL: String,
         apiKey: String?,
-        defaultModel: String?
+        defaultModel: String?,
+        gatewayURL: String? = nil
     ) async throws -> ProviderAccount {
         var locals = try loadLocalAccounts()
         let now = Date()
@@ -248,7 +262,8 @@ actor ProviderAccountService {
             defaultModel: defaultModel,
             baseURL: baseURL,
             status: "healthy",
-            createdAt: now
+            createdAt: now,
+            gatewayURL: gatewayURL.flatMap { $0.isEmpty ? nil : $0 }
         )
         locals.append(local)
         try saveLocalAccounts(locals)
@@ -263,6 +278,11 @@ actor ProviderAccountService {
         await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
 
         return ProviderAccount(from: local)
+    }
+
+    /// The Gateway address stored with a connection, if it has one.
+    func gatewayAddress(forAccount id: String) throws -> String? {
+        try loadLocalAccounts().first { $0.id == id }?.gatewayURL
     }
 
     /// Create a connection to a Hermes agent: the address of its API server,
@@ -344,7 +364,8 @@ actor ProviderAccountService {
         displayName: String? = nil,
         apiKey: String? = nil,
         baseURL: String? = nil,
-        defaultModel: String? = nil
+        defaultModel: String? = nil,
+        gatewayURL: String? = nil
     ) async throws {
         var locals = try loadLocalAccounts()
         guard let index = locals.firstIndex(where: { $0.id == id }) else {
@@ -360,7 +381,9 @@ actor ProviderAccountService {
             // An empty address clears it, and the provider's own applies again.
             baseURL: baseURL.map { $0.isEmpty ? nil : $0 } ?? old.baseURL,
             status: old.status,
-            createdAt: old.createdAt
+            createdAt: old.createdAt,
+            // As for the address: not given leaves it, empty clears it.
+            gatewayURL: gatewayURL.map { $0.isEmpty ? nil : $0 } ?? old.gatewayURL
         )
         locals[index] = updated
         try saveLocalAccounts(locals)
@@ -465,7 +488,17 @@ actor ProviderAccountService {
             if account.provider.lowercased() == "openrouter" {
                 try await checkOpenRouterKey(accountId: accountId)
             }
-            outcome = try await .success(fetchRemoteModels(for: account).count)
+            if let gateway = account.gatewayURL {
+                // A connection with a Gateway is tested at its Gateway,
+                // where its turns run: that it answers as one, takes this
+                // device and the token, and offers what a turn needs.
+                guard let address = OpenClawGatewayConnection.address(gateway) else { throw OpenClawGatewayError.invalidAddress }
+                let hello = try await gatewayHello(address, testedKey)
+                if let missing = hello.missing { throw OpenClawGatewayError.notSupported(missing) }
+                outcome = await .success((try? fetchRemoteModels(for: account).count) ?? 0)
+            } else {
+                outcome = try await .success(fetchRemoteModels(for: account).count)
+            }
         } catch {
             outcome = .failure(error)
         }
@@ -476,6 +509,7 @@ actor ProviderAccountService {
         var locals = try loadLocalAccounts()
         if let index = locals.firstIndex(where: { $0.id == accountId }),
            locals[index].baseURL == account.baseURL,
+           locals[index].gatewayURL == account.gatewayURL,
            KeychainHelper.load(key: keychainKey(for: accountId)) == testedKey {
             let current = locals[index]
             locals[index] = LocalProviderAccount(
@@ -486,7 +520,8 @@ actor ProviderAccountService {
                 defaultModel: current.defaultModel,
                 baseURL: current.baseURL,
                 status: (try? outcome.get()) == nil ? "unhealthy" : "healthy",
-                createdAt: current.createdAt
+                createdAt: current.createdAt,
+                gatewayURL: current.gatewayURL
             )
             try saveLocalAccounts(locals)
         }

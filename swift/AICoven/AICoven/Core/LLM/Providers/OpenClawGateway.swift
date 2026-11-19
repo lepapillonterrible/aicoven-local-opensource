@@ -348,6 +348,83 @@ actor OpenClawGatewayConnection {
     }
 }
 
+/// Reaching a Gateway for one piece of work: a connection is opened for it
+/// and closed after it, as the cloud app does.
+nonisolated enum OpenClawGateway {
+    /// How long a Gateway has to complete the handshake.
+    static let handshakeTimeout: Duration = .seconds(10)
+
+    /// Connects, completes the handshake and closes: what the Gateway
+    /// offers. `token` is the connection's own; with none, a token the
+    /// Gateway issued this device earlier is shown, if there is one.
+    static func hello(
+        at address: URL,
+        token: String?,
+        over socket: @Sendable (URL) -> OpenClawSocket = { OpenClawWebSocket(url: $0) }
+    ) async throws -> OpenClawGatewayHello {
+        let connection = try await open(address, token: token, over: socket)
+        await connection.gateway.close()
+        return connection.hello
+    }
+
+    /// An open connection and what the Gateway said of itself. A token the
+    /// Gateway issues this device is kept for next time; one it no longer
+    /// takes is forgotten, and the connection tried once more without it.
+    static func open(
+        _ address: URL,
+        token: String?,
+        over socket: @Sendable (URL) -> OpenClawSocket = { OpenClawWebSocket(url: $0) }
+    ) async throws -> (gateway: OpenClawGatewayConnection, hello: OpenClawGatewayHello) {
+        let identity = try OpenClawDeviceIdentity.loadOrCreate()
+        let own = token.flatMap { $0.isEmpty ? nil : $0 }
+        let issued = own == nil ? KeychainHelper.load(key: deviceTokenKey(for: address)) : nil
+        do {
+            return try await open(address, identity: identity, token: own ?? issued, isDeviceToken: own == nil && issued != nil, over: socket)
+        } catch OpenClawGatewayError.refused(code: "AUTH_DEVICE_TOKEN_MISMATCH", _) where issued != nil {
+            KeychainHelper.delete(key: deviceTokenKey(for: address))
+            return try await open(address, identity: identity, token: nil, isDeviceToken: false, over: socket)
+        }
+    }
+
+    private static func open(
+        _ address: URL,
+        identity: OpenClawDeviceIdentity,
+        token: String?,
+        isDeviceToken: Bool,
+        over socket: (URL) -> OpenClawSocket
+    ) async throws -> (gateway: OpenClawGatewayConnection, hello: OpenClawGatewayHello) {
+        let transport = socket(address)
+        let gateway = OpenClawGatewayConnection(
+            socket: transport,
+            identity: identity,
+            token: token,
+            isDeviceToken: isDeviceToken,
+            clientVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1"
+        )
+        // An address that takes the connection and says nothing would hold
+        // this for ever: closing the socket ends the wait.
+        let timeout = Task {
+            try await Task.sleep(for: handshakeTimeout)
+            transport.close()
+        }
+        defer { timeout.cancel() }
+        do {
+            let hello = try await gateway.open()
+            if let issued = hello.deviceToken {
+                try? KeychainHelper.save(key: deviceTokenKey(for: address), value: issued)
+            }
+            return (gateway, hello)
+        } catch {
+            await gateway.close()
+            throw error
+        }
+    }
+
+    private static func deviceTokenKey(for address: URL) -> String {
+        "openclaw-gateway-device-token.\(address.absoluteString)"
+    }
+}
+
 /// A web socket to a Gateway.
 final nonisolated class OpenClawWebSocket: OpenClawSocket, @unchecked Sendable {
     private let task: URLSessionWebSocketTask
