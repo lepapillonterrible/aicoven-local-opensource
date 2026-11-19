@@ -172,9 +172,13 @@ final class ToolApprovalsTests: XCTestCase {
         // Stop, then Approve before the stop has reached the approval.
         asking.cancel()
         approvals.answer(first.id, approve: true)
+        XCTAssertEqual(approvals.showing?.phase, .answered(.approved))
         let answer = await asking.value
 
         XCTAssertEqual(answer, .withdrawn)
+        XCTAssertEqual(approvals.showing?.phase, .answered(.noLongerWaiting), "The block says what in fact happened")
+        runScheduled()
+        XCTAssertNil(approvals.showing)
     }
 
     // MARK: - Announcements

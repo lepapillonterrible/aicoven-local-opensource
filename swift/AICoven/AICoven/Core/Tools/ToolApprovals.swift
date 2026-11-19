@@ -132,7 +132,12 @@ final class ToolApprovals: ObservableObject {
         } onCancel: {
             Task { @MainActor in self.withdraw(approval.id) }
         }
-        return Task.isCancelled ? .withdrawn : answer
+        // An answer counts only if the turn was still there to take it.
+        guard !Task.isCancelled else {
+            sayNoLongerWaiting(approval.id)
+            return .withdrawn
+        }
+        return answer
     }
 
     /// The person pressed Approve or Deny on the approval showing.
@@ -175,6 +180,18 @@ final class ToolApprovals: ObservableObject {
         }
     }
 
+    /// Approve or Deny was pressed as the turn stopped, and the block said
+    /// so: the turn did not take the answer, and the block says that
+    /// instead.
+    private func sayNoLongerWaiting(_ approvalID: String) {
+        guard showing?.approval.id == approvalID, showing?.phase != .asking,
+              showing?.phase != .answered(.noLongerWaiting), showing?.phase != .leaving(.noLongerWaiting) else { return }
+        showing?.phase = .answered(.noLongerWaiting)
+        if announced.contains(approvalID) {
+            AccessibilityNotification.Announcement(Outcome.noLongerWaiting.words).post()
+        }
+    }
+
     /// Gives the waiting turn its answer, once.
     private func settle(_ approvalID: String, with answer: ApprovalAnswer) {
         guard let continuation = asked.removeValue(forKey: approvalID) else { return }
@@ -193,15 +210,21 @@ final class ToolApprovals: ObservableObject {
         showing?.phase = .answered(outcome)
         // An approval VoiceOver was told of is told how it ended: the block
         // says so for a moment and is gone.
-        if let id = showing?.approval.id, announced.remove(id) != nil {
+        if let id = showing?.approval.id, announced.contains(id) {
             AccessibilityNotification.Announcement(outcome.words).post()
         }
         let generation = showingGeneration
         schedule(Self.answeredDuration) { [weak self] in
             guard let self, showingGeneration == generation else { return }
-            showing?.phase = .leaving(outcome)
+            // What it says by now, which a turn that stopped can have changed.
+            if case let .answered(said) = showing?.phase {
+                showing?.phase = .leaving(said)
+            }
             schedule(Self.leavingDuration) { [weak self] in
                 guard let self, showingGeneration == generation else { return }
+                if let id = showing?.approval.id {
+                    announced.remove(id)
+                }
                 if waiting.isEmpty {
                     showingGeneration += 1
                     showing = nil
