@@ -630,7 +630,7 @@ actor ToolExecutionService {
         // The commit message as the cloud app names it, or as this app did.
         guard let path = extractString(from: toolCall.args, key: "path"),
               let content = extractString(from: toolCall.args, key: "content"),
-              let message = extractString(from: toolCall.args, key: "commit_message") ?? extractString(from: toolCall.args, key: "message") else {
+              let message = Self.given(extractString(from: toolCall.args, key: "commit_message")) ?? Self.given(extractString(from: toolCall.args, key: "message")) else {
             return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'path', 'content', 'commit_message'")
         }
         // A path that would not be sent is refused before anything is
@@ -646,8 +646,9 @@ actor ToolExecutionService {
         // GitHub replaces a file only when told the sha of the one that
         // is there. Where the call names none, it is looked up, as the
         // cloud app does; the person is then asked knowing whether a file
-        // is replaced.
-        if sha == nil {
+        // is replaced. (With no thread there is no one to ask, and the
+        // write is refused below without looking.)
+        if sha == nil, threadID != nil {
             do {
                 sha = try await githubService.shaOfFile(accountId: account.id, owner: owner, repo: repo, path: path, ref: branch)
             } catch {

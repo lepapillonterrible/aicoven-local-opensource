@@ -377,6 +377,13 @@ final class GitHubToolsTests: XCTestCase {
             XCTAssertEqual(refused.errorType, "invalid_parameters", path)
             XCTAssertEqual(refused.field, "path", path)
         }
+        // An empty commit message is none, and the other name is then read.
+        let empty = await refusing.call("github.writeFile", ["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue("a.md"), "content": AnyJSONValue("x"), "commit_message": AnyJSONValue("")], threadID: "thread")
+        XCTAssertEqual(empty.error, "Missing required arguments: 'path', 'content', 'commit_message'")
+        // With no thread there is no one to ask: nothing is looked up.
+        let nowhere = await refusing.call("github.writeFile", ["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue("a.md"), "content": AnyJSONValue("x"), "commit_message": AnyJSONValue(""), "message": AnyJSONValue("Add")])
+        XCTAssertNotEqual(nowhere.status, "ok")
+        XCTAssertNotEqual(nowhere.errorType, "invalid_parameters", "The other name's message was read")
         // No commit message by either name.
         let unsaid = await refusing.call("github.writeFile", ["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue("a.md"), "content": AnyJSONValue("x")], threadID: "thread")
         XCTAssertEqual(unsaid.error, "Missing required arguments: 'path', 'content', 'commit_message'")
