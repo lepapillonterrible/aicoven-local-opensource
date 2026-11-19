@@ -1,16 +1,6 @@
 internal import Combine
 import Foundation
 
-/// What the AI connections list asks of the account store.
-protocol ProviderAccountManaging: Sendable {
-    func loadProviderAccounts() async throws -> [ProviderAccount]
-    func deleteProviderAccount(id: String) async throws
-    @discardableResult
-    func testConnection(accountId: String) async throws -> Int
-}
-
-extension ProviderAccountService: ProviderAccountManaging {}
-
 /// Where an account's Test button is: at rest, testing, or showing how the
 /// last test went.
 enum ProviderAccountTestActionState: Equatable {
@@ -44,17 +34,13 @@ final class ProviderKeysViewModel: ObservableObject {
 
     /// Counts account loads; only the newest applies its result.
     private var loadGeneration = 0
-    private let service: ProviderAccountManaging
+    private let service = ProviderAccountService.shared
     /// How long a test's tick or cross shows before its button reads Test
     /// again.
     private let testResultDisplayDuration: Duration
     private var testResultClearTasks: [String: Task<Void, Never>] = [:]
 
-    init(
-        service: ProviderAccountManaging = ProviderAccountService.shared,
-        testResultDisplayDuration: Duration = .seconds(2)
-    ) {
-        self.service = service
+    init(testResultDisplayDuration: Duration = .seconds(2)) {
         self.testResultDisplayDuration = testResultDisplayDuration
     }
 

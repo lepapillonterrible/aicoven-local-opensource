@@ -320,7 +320,8 @@ actor ProviderAccountService {
             displayName: displayName ?? old.displayName,
             scopes: old.scopes,
             defaultModel: defaultModel ?? old.defaultModel,
-            baseURL: baseURL ?? old.baseURL,
+            // An empty address clears it, and the provider's own applies again.
+            baseURL: baseURL.map { $0.isEmpty ? nil : $0 } ?? old.baseURL,
             status: old.status,
             createdAt: old.createdAt
         )
@@ -415,6 +416,7 @@ actor ProviderAccountService {
         guard let account = try loadLocalAccounts().first(where: { $0.id == accountId }) else {
             throw LocalProviderAccountError.accountNotFound
         }
+        let testedKey = KeychainHelper.load(key: keychainKey(for: accountId))
         let outcome: Result<Int, Error>
         do {
             if account.provider.lowercased() == "openrouter" {
@@ -425,9 +427,13 @@ actor ProviderAccountService {
             outcome = .failure(error)
         }
         // Read again: the account may have been edited or deleted while the
-        // provider answered.
+        // provider answered. The outcome is about the address and key that
+        // were tested, so it is recorded only if they are still the ones
+        // stored.
         var locals = try loadLocalAccounts()
-        if let index = locals.firstIndex(where: { $0.id == accountId }) {
+        if let index = locals.firstIndex(where: { $0.id == accountId }),
+           locals[index].baseURL == account.baseURL,
+           KeychainHelper.load(key: keychainKey(for: accountId)) == testedKey {
             let current = locals[index]
             locals[index] = LocalProviderAccount(
                 id: current.id,

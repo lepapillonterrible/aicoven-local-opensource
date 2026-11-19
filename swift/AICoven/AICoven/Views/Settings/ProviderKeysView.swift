@@ -344,10 +344,6 @@ private struct AddProviderKeyStep2View: View {
         providerDisplayName(slug: selectedProvider)
     }
 
-    private var trimmedName: String {
-        displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     var body: some View {
         SettingsForm {
             privacySection
@@ -460,6 +456,12 @@ private struct AddProviderKeyStep2View: View {
     private var ollamaSections: some View {
         Section {
             FormAddressField(label: "Address", text: $baseURL, prompt: "http://localhost:11434")
+                // The listed models belong to the address they came from.
+                .onChange(of: baseURL) { _, _ in
+                    ollamaModels = []
+                    selectedOllamaModel = ""
+                    ollamaConnectionFailure = nil
+                }
             Button {
                 Task { await connectToOllama() }
             } label: {
@@ -498,7 +500,7 @@ private struct AddProviderKeyStep2View: View {
     private var mlxSection: some View {
         if MLXModelManager.isSupported {
             Section {
-                ForEach(MLXModelManager.defaultCatalog) { model in
+                ForEach(MLXModelManager.shared.deviceFilteredCatalog) { model in
                     Button {
                         selectedMLXModelID = model.id
                     } label: {
@@ -533,7 +535,7 @@ private struct AddProviderKeyStep2View: View {
             }
         } else {
             Section {
-                FormErrorRow(message: "MLX needs Apple silicon (M1 or newer). This device can't run it.")
+                FormErrorRow(message: "This device can't run MLX models.")
             }
         }
     }
@@ -547,7 +549,7 @@ private struct AddProviderKeyStep2View: View {
     }
 
     private var saveDisabled: Bool {
-        if trimmedName.isEmpty { return true }
+        if displayName.isEmpty { return true }
         if isOllama { return baseURL.isEmpty || selectedOllamaModel.isEmpty }
         if isMLX { return selectedMLXModelID.isEmpty }
         if isOpenClaw { return baseURL.isEmpty || !acceptedPrivacy }
@@ -555,28 +557,39 @@ private struct AddProviderKeyStep2View: View {
         return apiKey.isEmpty || !acceptedPrivacy
     }
 
+    /// Lists the models at the address in the field. An answer for an
+    /// address the field no longer holds is dropped.
     private func connectToOllama() async {
+        let address = baseURL
         isLoadingModels = true
         ollamaConnectionFailure = nil
         defer { isLoadingModels = false }
 
-        let client = OllamaLLMClient(baseURL: URL(string: baseURL) ?? OllamaLLMClient.defaultBaseURL)
-        guard await client.testConnection() else {
-            ollamaModels = []
-            ollamaConnectionFailure = "Can't reach \(baseURL). Is Ollama running?"
-            return
+        var models: [OllamaLLMClient.OllamaModel] = []
+        var failure: String?
+        if let url = URL(string: address), url.host != nil {
+            let client = OllamaLLMClient(baseURL: url)
+            if await client.testConnection() {
+                do {
+                    models = try await client.discoverModels()
+                    if models.isEmpty {
+                        failure = "Connected, but this server has no models. Pull one with Ollama first."
+                    }
+                } catch {
+                    failure = "Connected, but couldn't list models: \(error.localizedDescription)"
+                }
+            } else {
+                failure = "Can't reach \(address). Is Ollama running?"
+            }
+        } else {
+            failure = "Enter the server's address, such as http://localhost:11434."
         }
-        do {
-            ollamaModels = try await client.discoverModels()
-            if !ollamaModels.contains(where: { $0.name == selectedOllamaModel }) {
-                selectedOllamaModel = ollamaModels.first?.name ?? ""
-            }
-            if ollamaModels.isEmpty {
-                ollamaConnectionFailure = "Connected, but this server has no models. Pull one with Ollama first."
-            }
-        } catch {
-            ollamaModels = []
-            ollamaConnectionFailure = "Connected, but couldn't list models: \(error.localizedDescription)"
+
+        guard address == baseURL else { return }
+        ollamaModels = models
+        ollamaConnectionFailure = failure
+        if !models.contains(where: { $0.name == selectedOllamaModel }) {
+            selectedOllamaModel = models.first?.name ?? ""
         }
     }
 
@@ -588,19 +601,19 @@ private struct AddProviderKeyStep2View: View {
         let service = ProviderAccountService.shared
         do {
             if isOllama {
-                _ = try await service.createOllamaAccount(displayName: trimmedName, baseURL: baseURL, defaultModel: selectedOllamaModel)
+                _ = try await service.createOllamaAccount(displayName: displayName, baseURL: baseURL, defaultModel: selectedOllamaModel)
             } else if isMLX {
-                _ = try await service.createMLXAccount(displayName: trimmedName, modelID: selectedMLXModelID)
+                _ = try await service.createMLXAccount(displayName: displayName, modelID: selectedMLXModelID)
             } else if isOpenClaw {
                 _ = try await service.createOpenClawAccount(
-                    displayName: trimmedName,
+                    displayName: displayName,
                     baseURL: baseURL,
                     apiKey: apiKey.isEmpty ? nil : apiKey,
                     defaultModel: nil
                 )
             } else if isHermes {
                 _ = try await service.createHermesAccount(
-                    displayName: trimmedName,
+                    displayName: displayName,
                     apiKey: apiKey.isEmpty ? nil : apiKey,
                     baseURL: baseURL.isEmpty ? nil : baseURL,
                     defaultModel: nil
@@ -608,7 +621,7 @@ private struct AddProviderKeyStep2View: View {
             } else {
                 _ = try await service.createProviderAccount(
                     provider: selectedProvider,
-                    displayName: trimmedName,
+                    displayName: displayName,
                     apiKey: apiKey,
                     scopes: ["chat"],
                     defaultModel: nil
@@ -655,8 +668,9 @@ struct EditProviderKeySheet: View {
         !account.isLocalProvider
     }
 
-    private var trimmedName: String {
-        displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Hermes has an address of its own to fall back on; these two do not.
+    private var needsAddress: Bool {
+        slug == "ollama" || slug == "openclaw"
     }
 
     private var addressPrompt: String {
@@ -715,7 +729,7 @@ struct EditProviderKeySheet: View {
                     Button("Save") {
                         Task { await saveChanges() }
                     }
-                    .disabled(saving || trimmedName.isEmpty)
+                    .disabled(saving || displayName.isEmpty || (needsAddress && baseURL.isEmpty))
                 }
             }
         }
@@ -730,7 +744,7 @@ struct EditProviderKeySheet: View {
         do {
             try await ProviderAccountService.shared.updateProviderAccount(
                 id: account.id,
-                displayName: trimmedName,
+                displayName: displayName,
                 apiKey: apiKey.isEmpty ? nil : apiKey,
                 baseURL: hasAddress ? baseURL : nil
             )

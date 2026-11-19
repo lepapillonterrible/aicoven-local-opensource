@@ -1,181 +1,185 @@
 @testable import AICoven
+internal import Combine
 import XCTest
 
+/// The AI connections list and the account store behind it, against the
+/// real store with the provider's answers stubbed.
 @MainActor
 final class AIConnectionsTests: XCTestCase {
-    private let accountsKey = "provider_accounts.v1"
+    private let accountsKey = UserScope.scopedKey("provider_accounts.v1")
+    private let hermesAddressKey = UserScope.scopedKey("hermes_base_url")
     private var savedAccounts: Any?
+    private var savedHermesAddress: Any?
+    private let service = ProviderAccountService.shared
+    private let status = HTTPStatus(200)
 
     override func setUp() {
         super.setUp()
-        savedAccounts = UserDefaults.standard.object(forKey: UserScope.scopedKey(accountsKey))
+        savedAccounts = UserDefaults.standard.object(forKey: accountsKey)
+        savedHermesAddress = UserDefaults.standard.object(forKey: hermesAddressKey)
+        let status = status
+        URLProtocol.registerClass(MockURLProtocol.self)
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: status.value, httpVersion: nil, headerFields: nil)!
+            return (response, Data(#"{"data": [{"id": "gpt-9"}, {"id": "gpt-9-mini"}]}"#.utf8))
+        }
     }
 
     override func tearDown() {
-        UserDefaults.standard.set(savedAccounts, forKey: UserScope.scopedKey(accountsKey))
+        UserDefaults.standard.set(savedAccounts, forKey: accountsKey)
+        UserDefaults.standard.set(savedHermesAddress, forKey: hermesAddressKey)
         KeychainHelper.delete(key: "provider-account-openai-test")
         URLProtocol.unregisterClass(MockURLProtocol.self)
         MockURLProtocol.handler = nil
         super.tearDown()
     }
 
-    // MARK: - The service's Test
+    // MARK: - The store
 
     func testTest_failsOnARefusedKeyAndRecordsTheOutcomeAsTheStatus() async throws {
-        let stored = LocalProviderAccount(
-            id: "openai-test",
-            provider: "openai",
-            displayName: "OpenAI",
-            scopes: ["chat"],
-            defaultModel: nil,
-            baseURL: nil,
-            status: "healthy",
-            createdAt: Date()
-        )
-        try UserDefaults.standard.set(JSONEncoder().encode([stored]), forKey: UserScope.scopedKey(accountsKey))
-        try KeychainHelper.save(key: "provider-account-openai-test", value: "STORED_KEY")
-        let status = HTTPStatus(401)
-        URLProtocol.registerClass(MockURLProtocol.self)
-        MockURLProtocol.handler = { request in
-            let response = HTTPURLResponse(url: request.url!, statusCode: status.value, httpVersion: nil, headerFields: nil)!
-            return (response, Data(#"{"data": [{"id": "gpt-9"}, {"id": "gpt-9-mini"}]}"#.utf8))
-        }
-        let service = ProviderAccountService.shared
+        try store([openAIAccount()], key: "STORED_KEY")
 
+        status.value = 401
         do {
             try await service.testConnection(accountId: "openai-test")
             XCTFail("A refused key must fail the test")
         } catch {
             XCTAssertTrue(error.localizedDescription.hasPrefix("OpenAI models HTTP 401"))
         }
-        let afterRefusal = try await service.loadProviderAccounts().first { $0.id == "openai-test" }
+        let afterRefusal = try await service.loadProviderAccounts().first
         XCTAssertEqual(afterRefusal?.status, "unhealthy")
 
         status.value = 200
         let models = try await service.testConnection(accountId: "openai-test")
-        let afterSuccess = try await service.loadProviderAccounts().first { $0.id == "openai-test" }
+        let afterSuccess = try await service.loadProviderAccounts().first
         XCTAssertEqual(models, 2)
         XCTAssertEqual(afterSuccess?.status, "healthy")
     }
 
+    func testTest_doesNotRecordAnOutcomeForAKeyReplacedWhileTheProviderAnswered() async throws {
+        try store([openAIAccount()], key: "STORED_KEY")
+        MockURLProtocol.handler = { request in
+            // The person saves another key before the old one is refused.
+            try KeychainHelper.save(key: "provider-account-openai-test", value: "NEW_KEY")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!
+            return (response, Data("{}".utf8))
+        }
+
+        _ = try? await service.testConnection(accountId: "openai-test")
+
+        let account = try await service.loadProviderAccounts().first
+        XCTAssertEqual(account?.status, "healthy")
+    }
+
+    func testEdit_anEmptyAddressClearsTheStoredOne() async throws {
+        let hermes = LocalProviderAccount(
+            id: "hermes-test",
+            provider: "hermes",
+            displayName: "Hermes",
+            scopes: ["chat"],
+            defaultModel: nil,
+            baseURL: "http://localhost:8642",
+            status: "healthy",
+            createdAt: Date()
+        )
+        try store([hermes])
+
+        try await service.updateProviderAccount(id: "hermes-test", displayName: "Renamed")
+        let renamed = try await service.loadProviderAccounts().first
+        XCTAssertEqual(renamed?.baseURL, "http://localhost:8642")
+
+        try await service.updateProviderAccount(id: "hermes-test", baseURL: "")
+        let cleared = try await service.loadProviderAccounts().first
+        XCTAssertEqual(cleared?.displayName, "Renamed")
+        XCTAssertNil(cleared?.baseURL)
+    }
+
     // MARK: - The list
 
-    func testTest_showsTheFailureThenReturnsToRest() async {
-        let store = FakeAccounts(accounts: [account("a")])
-        await store.failTests(with: "The key was refused")
-        let viewModel = ProviderKeysViewModel(service: store, testResultDisplayDuration: .milliseconds(20))
+    func testTest_showsTheFailureThenReturnsToRest() async throws {
+        try store([openAIAccount()], key: "STORED_KEY")
+        status.value = 401
+        let viewModel = ProviderKeysViewModel(testResultDisplayDuration: .milliseconds(20))
         await viewModel.loadProviderAccounts()
-        let listed = viewModel.providerAccounts[0]
+        let listed = try XCTUnwrap(viewModel.providerAccounts.first)
 
         await viewModel.testConnection(for: listed)
 
-        XCTAssertEqual(viewModel.testActionState(for: listed), .failure(message: "The key was refused"))
-        try? await Task.sleep(for: .milliseconds(200))
-        XCTAssertEqual(viewModel.testActionState(for: listed), .idle)
+        guard case let .failure(message) = viewModel.testActionState(for: listed) else {
+            return XCTFail("The test must show its failure")
+        }
+        XCTAssertTrue(message.hasPrefix("OpenAI models HTTP 401"))
+        XCTAssertEqual(viewModel.providerAccounts.first?.status, "unhealthy")
+
+        let atRest = expectation(description: "The button reads Test again")
+        let watching = viewModel.$testActionStates.sink { states in
+            if states[listed.id] == nil { atRest.fulfill() }
+        }
+        await fulfillment(of: [atRest], timeout: 5)
+        watching.cancel()
     }
 
-    func testTest_saysHowManyModelsAndReloadsTheStatusItRecorded() async {
-        let store = FakeAccounts(accounts: [account("a", status: "unhealthy")])
-        let viewModel = ProviderKeysViewModel(service: store)
+    func testTest_saysHowManyModelsAndShowsTheStatusItRecorded() async throws {
+        try store([openAIAccount(status: "unhealthy")], key: "STORED_KEY")
+        let viewModel = ProviderKeysViewModel()
         await viewModel.loadProviderAccounts()
+        let listed = try XCTUnwrap(viewModel.providerAccounts.first)
 
-        await viewModel.testConnection(for: viewModel.providerAccounts[0])
+        await viewModel.testConnection(for: listed)
 
-        XCTAssertEqual(viewModel.testActionState(for: viewModel.providerAccounts[0]), .success(message: "Connected. 3 models."))
-        XCTAssertEqual(viewModel.providerAccounts[0].status, "healthy")
+        XCTAssertEqual(viewModel.testActionState(for: listed), .success(message: "Connected. 2 models."))
+        XCTAssertEqual(viewModel.providerAccounts.first?.status, "healthy")
     }
 
-    func testDelete_removesTheAccountAndAFailedDeleteKeepsItAndSaysWhy() async {
-        let store = FakeAccounts(accounts: [account("a"), account("b")])
-        let viewModel = ProviderKeysViewModel(service: store)
+    func testDelete_removesTheAccountAndAFailedDeleteSaysWhy() async throws {
+        try store([openAIAccount()], key: "STORED_KEY")
+        let viewModel = ProviderKeysViewModel()
         await viewModel.loadProviderAccounts()
+        let listed = try XCTUnwrap(viewModel.providerAccounts.first)
 
-        await viewModel.deleteAccount(viewModel.providerAccounts[0])
-        XCTAssertEqual(viewModel.providerAccounts.map(\.id), ["b"])
+        await viewModel.deleteAccount(listed)
+        XCTAssertTrue(viewModel.providerAccounts.isEmpty)
         XCTAssertNil(viewModel.lastErrorMessage)
+        XCTAssertNil(KeychainHelper.load(key: "provider-account-openai-test"))
 
-        await store.failDeletes(with: "The disk is full")
-        await viewModel.deleteAccount(viewModel.providerAccounts[0])
-        XCTAssertEqual(viewModel.providerAccounts.map(\.id), ["b"])
-        XCTAssertEqual(viewModel.lastErrorMessage, "The disk is full")
+        // It is gone, so deleting it again fails.
+        await viewModel.deleteAccount(listed)
+        XCTAssertNotNil(viewModel.lastErrorMessage)
     }
 
     func testDeleteMessage_saysAnOpenRouterKeyStaysActiveAtOpenRouter() {
-        XCTAssertFalse(ProviderKeysViewModel.deleteMessage(for: account("a")).contains("OpenRouter"))
-        XCTAssertTrue(
-            ProviderKeysViewModel.deleteMessage(for: account("b", provider: "openrouter"))
-                .contains("stays active in your OpenRouter account")
-        )
+        let openAI = ProviderAccount(from: openAIAccount())
+        let openRouter = ProviderAccount(from: openAIAccount(provider: "openrouter"))
+
+        XCTAssertFalse(ProviderKeysViewModel.deleteMessage(for: openAI).contains("OpenRouter"))
+        XCTAssertTrue(ProviderKeysViewModel.deleteMessage(for: openRouter).contains("stays active in your OpenRouter account"))
     }
 
-    private func account(_ id: String, provider: String = "openai", status: String = "healthy") -> ProviderAccount {
-        ProviderAccount(from: LocalProviderAccount(
-            id: id,
+    // MARK: - Helpers
+
+    private func openAIAccount(provider: String = "openai", status: String = "healthy") -> LocalProviderAccount {
+        LocalProviderAccount(
+            id: "openai-test",
             provider: provider,
-            displayName: id,
+            displayName: "OpenAI",
             scopes: ["chat"],
             defaultModel: nil,
             baseURL: nil,
             status: status,
-            createdAt: Date(timeIntervalSince1970: 0)
-        ))
-    }
-}
-
-/// An account store in memory. A test that passes records "healthy", as the
-/// real one does.
-private actor FakeAccounts: ProviderAccountManaging {
-    private var accounts: [ProviderAccount]
-    private var testFailure: String?
-    private var deleteFailure: String?
-
-    init(accounts: [ProviderAccount]) {
-        self.accounts = accounts
+            createdAt: Date()
+        )
     }
 
-    func failTests(with message: String) {
-        testFailure = message
-    }
-
-    func failDeletes(with message: String) {
-        deleteFailure = message
-    }
-
-    func loadProviderAccounts() async throws -> [ProviderAccount] {
-        accounts
-    }
-
-    func deleteProviderAccount(id: String) async throws {
-        if let deleteFailure { throw Failure(message: deleteFailure) }
-        accounts.removeAll { $0.id == id }
-    }
-
-    func testConnection(accountId: String) async throws -> Int {
-        if let testFailure { throw Failure(message: testFailure) }
-        accounts = accounts.map { account in
-            guard account.id == accountId else { return account }
-            return ProviderAccount(from: LocalProviderAccount(
-                id: account.id,
-                provider: account.provider,
-                displayName: account.displayName,
-                scopes: account.scopes,
-                defaultModel: account.defaultModel,
-                baseURL: account.baseURL,
-                status: "healthy",
-                createdAt: Date(timeIntervalSince1970: 0)
-            ))
-        }
-        return 3
-    }
-
-    private struct Failure: LocalizedError {
-        let message: String
-        var errorDescription: String? {
-            message
+    private func store(_ accounts: [LocalProviderAccount], key: String? = nil) throws {
+        try UserDefaults.standard.set(JSONEncoder().encode(accounts), forKey: accountsKey)
+        if let key {
+            try KeychainHelper.save(key: "provider-account-openai-test", value: key)
         }
     }
 }
 
+/// The status the stubbed provider answers with. The URL loading system
+/// reads it on its own thread, so every access takes the lock.
 private final class HTTPStatus: @unchecked Sendable {
     private let lock = NSLock()
     private var stored: Int
