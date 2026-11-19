@@ -584,7 +584,11 @@ private struct AddProviderKeyStep2View: View {
                             .fontWeight(.semibold)
                             .foregroundColor(.aicovenTextPrimary)
 
-                        Text("\(providerDisplayName) — subject to their privacy policy. AICoven does not store or access your message content on its servers.")
+                        Text(
+                            selectedProvider == "openrouter"
+                                ? "OpenRouter, and the provider of the model you choose, to which OpenRouter passes your content. Each is subject to its own privacy policy. AICoven does not store or access your message content on its servers."
+                                : "\(providerDisplayName) — subject to their privacy policy. AICoven does not store or access your message content on its servers."
+                        )
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextSecondary)
                     }
