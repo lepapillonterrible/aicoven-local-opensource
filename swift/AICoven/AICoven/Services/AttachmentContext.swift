@@ -16,33 +16,60 @@ nonisolated enum AttachmentContext {
     static let pictureNote = "(A picture. You are not shown it.)"
     static let pdfWithoutTextNote = "(A PDF with no text that could be read)"
 
+    /// What a turn is given of its message's attachments: the text that
+    /// goes after the message, and the pictures that go with it.
+    struct Read: Equatable {
+        var text = ""
+        var pictures: [LLMImage] = []
+    }
+
     /// What goes after the message for these attachments, in their order;
-    /// empty when there are none. Each is read with `read` and worked on
-    /// off the caller's actor. One that cannot be read is said so by name,
-    /// and the others are still read.
+    /// empty when there are none. For a turn that is given no pictures: a
+    /// Hermes run, an OpenClaw run.
     @concurrent
     static func block(
         for attachments: [FileAttachmentDetail],
         longestText: Int = longestText,
         read: @Sendable (FileAttachmentDetail) async throws -> Data = bytes(of:)
     ) async -> String {
-        var parts: [String] = []
+        await self.read(for: attachments, longestText: longestText, showsPictures: false, read: read).text
+    }
+
+    /// What a turn is given of these attachments, in their order. Each is
+    /// read with `read` and worked on off the caller's actor. One that
+    /// cannot be read is said so by name, and the others are still read.
+    /// Where the turn's model can see pictures (`showsPictures`), a picture
+    /// is given as a picture, made ready for a model, and nothing is said
+    /// of it in the text; one that cannot be made ready is named with a
+    /// note like any other file.
+    @concurrent
+    static func read(
+        for attachments: [FileAttachmentDetail],
+        longestText: Int = longestText,
+        showsPictures: Bool,
+        read: @Sendable (FileAttachmentDetail) async throws -> Data = bytes(of:)
+    ) async -> Read {
+        var result = Read()
         for attachment in attachments {
             // A turn that was stopped is not read for.
             guard !Task.isCancelled else { break }
             let name = plainName(attachment.name)
             do {
                 let data = try await read(attachment)
-                parts.append(part(named: name, body(of: data, mimeType: attachment.mimeType, longestText: longestText)))
+                if showsPictures, attachment.mimeType?.hasPrefix("image/") == true, let picture = AttachmentImage.forModel(data) {
+                    result.pictures.append(LLMImage(data: picture, mimeType: "image/jpeg"))
+                } else {
+                    result.text += part(named: name, body(of: data, mimeType: attachment.mimeType, longestText: longestText))
+                }
             } catch AttachmentStore.Failure.missing {
-                parts.append("\n\n[Attachment: \(name) not found]\n")
+                result.text += "\n\n[Attachment: \(name) not found]\n"
             } catch {
                 let failure = error as NSError
-                AppErrorReporter.log(message: "An attachment could not be read (\(failure.domain) \(failure.code)).", context: "AttachmentContext.block")
-                parts.append("\n\n[Attachment: \(name) failed to process]\n")
+                AppErrorReporter.log(message: "An attachment could not be read (\(failure.domain) \(failure.code)).", context: "AttachmentContext.read")
+                result.text += "\n\n[Attachment: \(name) failed to process]\n"
             }
         }
-        return parts.joined()
+        return result
     }
 
     /// An attachment's bytes: from the app's own store, or, for one that

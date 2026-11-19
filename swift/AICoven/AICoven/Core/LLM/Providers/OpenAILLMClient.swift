@@ -43,9 +43,41 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
     // MARK: - LLMClient
 
     func completeChat(messages: [LLMMessage], model: String, options: ChatOptions) async throws -> LLMChatResponse {
+        // A message's content is its text, or, when pictures go with it,
+        // parts: the text and then each picture as a data URL.
+        struct ImageURL: Encodable {
+            let url: String
+        }
+        struct ContentPart: Encodable {
+            let type: String
+            var text: String?
+            var image_url: ImageURL?
+        }
         struct RequestMessage: Encodable {
             let role: String
             let content: String
+            var images: [LLMImage] = []
+
+            enum CodingKeys: String, CodingKey {
+                case role
+                case content
+            }
+
+            func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(role, forKey: .role)
+                guard !images.isEmpty else {
+                    try container.encode(content, forKey: .content)
+                    return
+                }
+                let pictures = images.map {
+                    ContentPart(type: "image_url", image_url: ImageURL(url: "data:\($0.mimeType);base64,\($0.data.base64EncodedString())"))
+                }
+                // A message that is only pictures has no text part: an
+                // empty one is refused.
+                let text = content.isEmpty ? [] : [ContentPart(type: "text", text: content)]
+                try container.encode(text + pictures, forKey: .content)
+            }
         }
         // Native tool calling structures (OpenAI format)
         struct FunctionProperty: Encodable {
@@ -112,7 +144,7 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
 
         let reqMessages = messages.map { msg in
-            RequestMessage(role: msg.role.rawValue, content: msg.content)
+            RequestMessage(role: msg.role.rawValue, content: msg.content, images: msg.images)
         }
 
         // Convert LLMToolDefinition → OpenAI native format

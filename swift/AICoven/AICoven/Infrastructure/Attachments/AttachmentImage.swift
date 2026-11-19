@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -78,6 +79,72 @@ nonisolated enum AttachmentImage {
             width: image.width,
             height: image.height
         )
+    }
+
+    // MARK: - For a model
+
+    /// The most bytes a picture sent to a model has: under the 5 MB a
+    /// provider takes of one once it is written as base64.
+    static let largestForModel = 3_500_000
+
+    /// The sizes (longest edge, in pixels) and JPEG qualities a picture is
+    /// tried at for a model, until one is small enough to send.
+    static let triesForModel: [(edge: Int, quality: Double)] = [(4096, 0.85), (3072, 0.8), (2048, 0.8), (1568, 0.7), (1024, 0.6)]
+
+    /// A picture as a model is sent it: its first frame, upright, on white
+    /// where it can be seen through, with nothing of what was written into
+    /// the file beside the picture, as a JPEG no longer than 4096 pixels on
+    /// its longest edge and no larger than `largest` bytes (made smaller
+    /// until it is). nil if the bytes are not a picture that can be drawn,
+    /// or it cannot be made small enough.
+    static func forModel(_ data: Data, largest: Int = largestForModel) -> Data? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let type = (CGImageSourceGetType(source) as String?).flatMap(UTType.init),
+              type.conforms(to: .image), CGImageSourceGetCount(source) > 0 else {
+            return nil
+        }
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        let sourceEdge = max(properties?[kCGImagePropertyPixelWidth] as? Int ?? longestEdge, properties?[kCGImagePropertyPixelHeight] as? Int ?? longestEdge)
+        for attempt in triesForModel {
+            // A turn that was stopped is not worked for.
+            guard !Task.isCancelled else { return nil }
+            // Never drawn larger than it is.
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: min(max(sourceEdge, 1), attempt.edge),
+                kCGImageSourceShouldCacheImmediately: true,
+            ]
+            guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary),
+                  let flat = onWhite(image) else {
+                return nil
+            }
+            let output = NSMutableData()
+            guard let destination = CGImageDestinationCreateWithData(output, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+            CGImageDestinationAddImage(destination, flat, [kCGImageDestinationLossyCompressionQuality: attempt.quality] as CFDictionary)
+            guard CGImageDestinationFinalize(destination) else { return nil }
+            if output.length <= largest {
+                return output as Data
+            }
+        }
+        return nil
+    }
+
+    /// The picture drawn on white, with no alpha channel: a JPEG has none,
+    /// and what could be seen through would otherwise come out black.
+    private static func onWhite(_ image: CGImage) -> CGImage? {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                  data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
+                  space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+              ) else {
+            return nil
+        }
+        let whole = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        context.setFillColor(red: 1, green: 1, blue: 1, alpha: 1)
+        context.fill(whole)
+        context.draw(image, in: whole)
+        return context.makeImage()
     }
 
     /// The kind of file a name says it is.

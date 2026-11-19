@@ -387,7 +387,8 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
                 let merged = last.content + "\n\n" + msg.content
                 result[result.count - 1] = LLMMessage(
                     role: last.role,
-                    content: merged
+                    content: merged,
+                    images: last.images + msg.images
                 )
             } else {
                 result.append(msg)
