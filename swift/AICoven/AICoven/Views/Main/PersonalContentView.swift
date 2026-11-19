@@ -367,6 +367,9 @@ struct PersonalChatView: View {
                                     // has in fact ended.
                                     Button(runningTurn.isStopping ? "Stopping…" : "Stop") {
                                         turns.stop(threadID: thread.id)
+                                        // Said once: with Command-period,
+                                        // VoiceOver's focus can be elsewhere.
+                                        AccessibilityNotification.Announcement("Stopping").post()
                                     }
                                     .buttonStyle(.bordered)
                                     .controlSize(.small)
@@ -422,8 +425,11 @@ struct PersonalChatView: View {
                 }
                 // A turn ended here: its ending goes at the end of the
                 // thread at once, before anything else can be sent.
-                .onChange(of: turns.endings[thread.id]) { _, _ in
+                .onChange(of: turns.endings[thread.id]) { _, ending in
                     showLastEnding()
+                    if ending?.outcome == .cancelled {
+                        AccessibilityNotification.Announcement("Stopped").post()
+                    }
                 }
                 .onAppear {
                     if let lastMessage = enhancedMessages.last {

@@ -1102,6 +1102,9 @@ actor ChatService {
                             )
                         }
                     }
+                    // A cancelled stream can end without an error; what
+                    // arrived by then is not the whole answer.
+                    try Task.checkCancellation()
                     // Mark streaming final answer so we skip the post-loop emission.
                     finalText = accumulated
                     streamedAnswer = true
@@ -1697,6 +1700,8 @@ extension ChatService {
     /// plus an optional context block that can be fed back into the context sandwich.
     /// This enhanced version routes through the central ToolExecutionService for all tools.
     nonisolated func executeChatToolCall(_ call: ChatToolInvocation) async throws -> (summary: String, contextBlock: String?) {
+        // A stopped turn starts no tool.
+        try Task.checkCancellation()
         // Convert ChatToolInvocation to ParsedToolCall for ToolExecutionService
         var args: [String: AnyJSONValue] = [:]
         if let input = call.input {

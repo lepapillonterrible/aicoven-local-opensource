@@ -156,13 +156,46 @@ final class TurnEngineTests: XCTestCase {
 
         let messages = try await ChatService.shared.loadMessages(threadId: threadID)
         XCTAssertEqual(messages.map(\.content), ["A long one", "Stopped before any reply."])
-        XCTAssertEqual(messages.last?.metadata?["stopped"], AnyJSONValue(true))
+        XCTAssertEqual(engine.endings[threadID]?.outcome, .cancelled)
         let turn = try await storedTurn()
         XCTAssertEqual(turn?.status, "cancelled")
         // Another send starts once the stopped turn is over.
         provider.release()
         try await engine.start(with: question("Next"), context: "Next", roleID: nil, agentName: nil, attachments: nil)
         await finished(engine)
+    }
+
+    func testStop_keepsWhatAStreamedAnswerHadSaidAndDoesNotCallItComplete() async throws {
+        let firstPart = expectation(description: "The answer has started to arrive")
+        let engine = makeEngine(provider: StreamingProvider(firstPartSent: firstPart))
+        // A request the reply loop answers without tools, so the answer is
+        // streamed.
+        try await engine.start(with: question("Tell me about dragons"), context: "Tell me about dragons", roleID: nil, agentName: nil, attachments: nil)
+        await fulfillment(of: [firstPart], timeout: 10)
+
+        engine.stop(threadID: threadID)
+        await finished(engine)
+
+        // The stream ended without an error when it was cancelled, as an
+        // on-device model's does; that is not a finished answer.
+        let messages = try await ChatService.shared.loadMessages(threadId: threadID)
+        XCTAssertEqual(messages.last?.content, "Once upon a\n\n_Stopped here._")
+        let turn = try await storedTurn()
+        XCTAssertEqual(turn?.status, "cancelled")
+    }
+
+    func testStop_startsNoToolOnceTheTurnIsStopped() async {
+        let stopped = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await ChatService.shared.executeChatToolCall(ChatToolInvocation(tool: "current_time", input: nil, reason: nil))
+        }
+
+        do {
+            _ = try await stopped.value
+            XCTFail("A stopped turn must not start a tool")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
     }
 
     func testStop_doesNothingWhereNoTurnRuns() {
@@ -293,6 +326,10 @@ final class TurnEngineTests: XCTestCase {
     }
 
     private func makeEngine() -> TurnEngine {
+        makeEngine(provider: provider)
+    }
+
+    private func makeEngine(provider: LLMClient) -> TurnEngine {
         let model = ModelDescriptor(
             providerID: "test-provider", modelID: "test-model", maxContextTokens: 4096,
             supportsTools: false, supportsEmbeddings: false, costClass: .cheap
@@ -322,6 +359,39 @@ final class TurnEngineTests: XCTestCase {
             try Row.fetchOne(db, sql: "SELECT status, message_id FROM turns WHERE thread_id = ?", arguments: [threadID])
                 .map { ($0["status"], $0["message_id"]) }
         }
+    }
+}
+
+/// A provider that streams the start of an answer and then nothing more;
+/// when its consumer is cancelled the stream ends without an error.
+private final class StreamingProvider: StreamingLLMClient, @unchecked Sendable {
+    /// Fulfilled once, from the stream's task; XCTestExpectation is safe to
+    /// fulfil from any thread.
+    private let firstPartSent: XCTestExpectation
+
+    init(firstPartSent: XCTestExpectation) {
+        self.firstPartSent = firstPartSent
+    }
+
+    func streamChat(messages _: [LLMMessage], model _: String, options _: ChatOptions) -> AsyncThrowingStream<LLMStreamDelta, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.onTermination = { _ in continuation.finish() }
+            continuation.yield(LLMStreamDelta(text: "Once upon a"))
+            firstPartSent.fulfill()
+        }
+    }
+
+    func completeChat(messages _: [LLMMessage], model: String, options _: ChatOptions) async throws -> LLMChatResponse {
+        LLMChatResponse(
+            message: LLMMessage(role: .assistant, content: "Once upon a time, the end."),
+            providerID: "test-provider",
+            modelID: model,
+            usage: nil
+        )
+    }
+
+    func embed(texts: [String], model _: String) async throws -> [[Float]] {
+        Array(repeating: [0, 0, 0], count: texts.count)
     }
 }
 

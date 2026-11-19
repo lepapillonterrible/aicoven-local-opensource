@@ -40,6 +40,7 @@ final class TurnEngine: ObservableObject {
     /// How a thread's last turn ended, for the thread to show.
     struct Ending: Equatable {
         let turnID: String
+        let outcome: TurnOutcome
         /// The reply or what went wrong, followed, if that could not be
         /// stored, by a line saying so.
         let messages: [ChatMessage]
@@ -157,7 +158,7 @@ final class TurnEngine: ObservableObject {
         guard unstored[threadID]?.turnID == waiting.turnID else { return }
         guard stored else { throw TurnError.endingNotStored }
         unstored[threadID] = nil
-        endings[threadID] = Ending(turnID: waiting.turnID, messages: [waiting.message], stored: true)
+        endings[threadID] = Ending(turnID: waiting.turnID, outcome: waiting.outcome, messages: [waiting.message], stored: true)
     }
 
     private func run(
@@ -211,7 +212,7 @@ final class TurnEngine: ObservableObject {
             guard try await store.endTurn(id: turnID, outcome: ending.outcome, message: ending.message) else {
                 throw TurnError.endingNotStored
             }
-            endings[threadID] = Ending(turnID: turnID, messages: [ending.message], stored: true)
+            endings[threadID] = Ending(turnID: turnID, outcome: ending.outcome, messages: [ending.message], stored: true)
         } catch {
             // The reply exists and the thread shows it, with why it may not
             // be there later. It is tried again before the thread's next
@@ -224,7 +225,7 @@ final class TurnEngine: ObservableObject {
                 role: "assistant",
                 content: "AICoven couldn't save this reply yet. It will try again when you send your next message here; if the app closes first, the reply is lost. \(error.localizedDescription)"
             )
-            endings[threadID] = Ending(turnID: turnID, messages: [ending.message, notice], stored: false)
+            endings[threadID] = Ending(turnID: turnID, outcome: ending.outcome, messages: [ending.message, notice], stored: false)
         }
         running[threadID] = nil
         if ending.outcome == .completed {
@@ -283,7 +284,7 @@ struct TurnProgress {
         if stopped, thrown != nil || last?.status != .completed {
             let partial = MessageAdapter.sanitizeContentForDisplay(partialAnswer).trimmingCharacters(in: .whitespacesAndNewlines)
             let content = partial.isEmpty ? "Stopped before any reply." : "\(partial)\n\n_Stopped here._"
-            return (.cancelled, Self.message(in: threadID, role: "assistant", content: content, metadata: ["stopped": AnyJSONValue(true)]))
+            return (.cancelled, Self.message(in: threadID, role: "assistant", content: content))
         }
         if let thrown {
             let text = "I ran into an error while contacting your provider: \(thrown.localizedDescription)"
