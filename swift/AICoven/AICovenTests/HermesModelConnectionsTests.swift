@@ -10,21 +10,23 @@ final class HermesModelConnectionsTests: XCTestCase {
         "openai_compatible_model", "llm_provider", "strix_settings.v1",
     ]
 
+    /// What the keys held before a test, put back after it.
+    private var saved: [String: Any] = [:]
+
     override func setUp() {
         super.setUp()
-        clear()
+        for key in keys {
+            saved[key] = defaults.object(forKey: UserScope.scopedKey(key))
+            defaults.removeObject(forKey: UserScope.scopedKey(key))
+        }
     }
 
     override func tearDown() {
-        clear()
+        for key in keys {
+            defaults.set(saved[key], forKey: UserScope.scopedKey(key))
+        }
         KeychainHelper.delete(key: "provider-account-hermes-test")
         super.tearDown()
-    }
-
-    private func clear() {
-        for key in keys {
-            defaults.removeObject(forKey: UserScope.scopedKey(key))
-        }
     }
 
     private func account(_ id: String, provider: String, baseURL: String? = nil, model: String? = nil) -> LocalProviderAccount {
@@ -173,6 +175,50 @@ final class HermesModelConnectionsTests: XCTestCase {
         _ = ProviderAccountService.openAICompatibleServer()
 
         XCTAssertEqual(try stored().map(\.provider), ["hermes"])
+    }
+
+    func testAChoiceOfHermesLeftBehindWithNoConnection_isClearedSoItCannotComeToMeanTheAgent() throws {
+        try store([account("claude", provider: "anthropic")])
+        defaults.set("hermes", forKey: UserScope.scopedKey("llm_provider"))
+        try defaults.set(
+            JSONEncoder().encode(LocalStrixSettings(systemPrompt: "Be brief", model: "hermes-3", provider: "hermes")),
+            forKey: UserScope.scopedKey("strix_settings.v1")
+        )
+
+        ProviderAccountService.convertHermesModelConnectionsIfNeeded()
+
+        XCTAssertNil(defaults.string(forKey: UserScope.scopedKey("llm_provider")))
+        let settingsData = try XCTUnwrap(defaults.data(forKey: UserScope.scopedKey("strix_settings.v1")))
+        let settings = try JSONDecoder().decode(LocalStrixSettings.self, from: settingsData)
+        XCTAssertNil(settings.provider)
+        XCTAssertNil(settings.model)
+        XCTAssertEqual(settings.systemPrompt, "Be brief", "The rest of the settings are kept")
+    }
+
+    func testAChoiceOfHermesWithNoConnectionsStoredAtAll_isClearedToo() {
+        defaults.set("hermes", forKey: UserScope.scopedKey("llm_provider"))
+
+        ProviderAccountService.convertHermesModelConnectionsIfNeeded()
+
+        XCTAssertNil(defaults.string(forKey: UserScope.scopedKey("llm_provider")))
+        XCTAssertNil(defaults.data(forKey: UserScope.scopedKey("provider_accounts.v1")), "Nothing is stored where nothing was")
+    }
+
+    func testConnectionsThatCannotBeRead_areLeftAndTriedAgain() throws {
+        let unreadable = Data("not the connections".utf8)
+        defaults.set(unreadable, forKey: UserScope.scopedKey("provider_accounts.v1"))
+        defaults.set("hermes", forKey: UserScope.scopedKey("llm_provider"))
+
+        ProviderAccountService.convertHermesModelConnectionsIfNeeded()
+
+        XCTAssertEqual(defaults.data(forKey: UserScope.scopedKey("provider_accounts.v1")), unreadable)
+        XCTAssertEqual(defaults.string(forKey: UserScope.scopedKey("llm_provider")), "hermes", "Nothing is changed")
+
+        // Readable the next time: converted then.
+        try store([account("hermes-test", provider: "hermes", baseURL: "http://127.0.0.1:8080")])
+        ProviderAccountService.convertHermesModelConnectionsIfNeeded()
+        XCTAssertEqual(try stored().first?.provider, "openai_compatible")
+        XCTAssertEqual(defaults.string(forKey: UserScope.scopedKey("llm_provider")), "openai_compatible")
     }
 
     func testReadingTheConnections_convertsFirst() throws {

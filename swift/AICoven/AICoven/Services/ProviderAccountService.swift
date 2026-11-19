@@ -721,12 +721,12 @@ extension ProviderAccountService {
             let doneKey = UserScope.scopedKey("hermes_model_connections_converted.v1")
             guard !defaults.bool(forKey: doneKey) else { return }
             let storageKey = UserScope.scopedKey("provider_accounts.v1")
-            guard let data = defaults.data(forKey: storageKey) else {
-                defaults.set(true, forKey: doneKey)
-                return
-            }
             do {
-                let accounts = try JSONDecoder().decode([LocalProviderAccount].self, from: data)
+                // No connections stored is none to convert; a choice of
+                // Hermes can still have been left behind.
+                let accounts = try defaults.data(forKey: storageKey).map {
+                    try JSONDecoder().decode([LocalProviderAccount].self, from: $0)
+                } ?? []
                 let alias = defaults.string(forKey: UserScope.scopedKey("hermes_model"))
                 let isHermes: (LocalProviderAccount) -> Bool = { ["hermes", "together"].contains($0.provider.lowercased()) }
                 let existingServer = accounts.first { $0.provider.lowercased() == "openai_compatible" }
@@ -751,6 +751,15 @@ extension ProviderAccountService {
                         createdAt: account.createdAt
                     )
                 }
+                // The model in use is the server in use's: the earlier
+                // server's own where there is one, else the converted
+                // connection's.
+                let modelKey = UserScope.scopedKey("openai_compatible_model")
+                let inUse = existingServer ?? converted.first { convertedIDs.contains($0.id) }
+                let model = (existingServer == nil ? nil : defaults.string(forKey: modelKey)) ?? inUse?.defaultModel
+                // First, so that a failure after it leaves the connections
+                // to be converted again, to the same end.
+                try moveChosenProviderOffHermes(toServerWith: convertedIDs.isEmpty ? nil : model, isConverted: !convertedIDs.isEmpty)
                 if !convertedIDs.isEmpty {
                     // Each stays where it was listed, so what comes first
                     // among the other providers does not change. The server
@@ -764,16 +773,9 @@ extension ProviderAccountService {
                         converted.insert(contentsOf: ahead, at: after)
                     }
                     try defaults.set(JSONEncoder().encode(converted), forKey: storageKey)
-                    // The model in use is the server in use's: the earlier
-                    // server's own where there is one, else the converted
-                    // connection's.
-                    let modelKey = UserScope.scopedKey("openai_compatible_model")
-                    let inUse = existingServer ?? converted.first { convertedIDs.contains($0.id) }
-                    let model = (existingServer == nil ? nil : defaults.string(forKey: modelKey)) ?? inUse?.defaultModel
                     if existingServer == nil, let model {
                         defaults.set(model, forKey: modelKey)
                     }
-                    moveChosenProviderOffHermes(to: model)
                 }
                 defaults.removeObject(forKey: UserScope.scopedKey("hermes_base_url"))
                 defaults.removeObject(forKey: UserScope.scopedKey("hermes_model"))
@@ -803,22 +805,33 @@ extension ProviderAccountService {
         return known[alias.lowercased()] ?? alias
     }
 
-    /// Where Hermes was the provider chosen for replies, an OpenAI-compatible
-    /// server is, with `model`: the model of the server in use.
-    private static func moveChosenProviderOffHermes(to model: String?) {
+    /// Hermes stops being the provider chosen for replies, wherever that
+    /// is stored. Where a connection was converted, the server is chosen in
+    /// its place, with the model of the server in use. Where none was (the
+    /// Hermes connection had been removed and the choice left behind),
+    /// nothing is chosen, and the app falls back as it does for any
+    /// provider that is not connected: left as it was, the choice would
+    /// come to mean the Hermes agent.
+    private static func moveChosenProviderOffHermes(toServerWith model: String?, isConverted: Bool) throws {
         let defaults = UserDefaults.standard
-        if defaults.string(forKey: UserScope.scopedKey("llm_provider"))?.lowercased() == "hermes" {
-            defaults.set("openai_compatible", forKey: UserScope.scopedKey("llm_provider"))
+        let providerKey = UserScope.scopedKey("llm_provider")
+        if defaults.string(forKey: providerKey)?.lowercased() == "hermes" {
+            if isConverted {
+                defaults.set("openai_compatible", forKey: providerKey)
+            } else {
+                defaults.removeObject(forKey: providerKey)
+            }
         }
         let settingsKey = UserScope.scopedKey("strix_settings.v1")
+        // Settings that cannot be read name no provider to anything that
+        // reads them, and are replaced the next time they are saved.
         guard let data = defaults.data(forKey: settingsKey),
               var settings = try? JSONDecoder().decode(LocalStrixSettings.self, from: data),
               settings.provider?.lowercased() == "hermes" else { return }
-        settings.provider = "openai_compatible"
-        settings.model = model ?? defaults.string(forKey: UserScope.scopedKey("openai_compatible_model"))
-        if let updated = try? JSONEncoder().encode(settings) {
-            defaults.set(updated, forKey: settingsKey)
-        }
+        settings.provider = isConverted ? "openai_compatible" : nil
+        settings.model = isConverted ? model : nil
+        settings.providerAccountId = isConverted ? settings.providerAccountId : nil
+        try defaults.set(JSONEncoder().encode(settings), forKey: settingsKey)
     }
 
     private static func sanitizedHTTPError(provider: String, statusCode: Int) -> NSError {
