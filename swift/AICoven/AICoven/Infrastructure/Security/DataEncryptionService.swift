@@ -43,8 +43,16 @@ actor DataEncryptionService {
 
     /// Cached in-memory data-encryption key (K_data) for the current session.
     private var cachedDataKey: SymmetricKey? {
-        didSet { keyEpoch += 1 }
+        didSet {
+            keyEpoch += 1
+            // The key is put in memory by the unlock that just read the
+            // current account's own key material.
+            keyOwnerID = cachedDataKey == nil ? nil : UserScope.currentUserID
+        }
     }
+
+    /// The account whose data key is in memory; `nil` while locked.
+    private var keyOwnerID: String?
 
     /// Counts every change of the data key in memory: each unlock and each
     /// lock. A write that encrypts and then stores compares it before and
@@ -52,9 +60,11 @@ actor DataEncryptionService {
     /// unlocked for another.
     private(set) var keyEpoch = 0
 
-    /// Whether the data key is in memory.
-    var isUnlocked: Bool {
-        cachedDataKey != nil
+    /// Whether the data key in memory is the account `userID`'s. After a
+    /// switch to another account, the first one's key can still be here for
+    /// a moment; it must not be used for the second's data.
+    func isUnlocked(for userID: String) -> Bool {
+        cachedDataKey != nil && keyOwnerID == userID
     }
 
     private init() {}

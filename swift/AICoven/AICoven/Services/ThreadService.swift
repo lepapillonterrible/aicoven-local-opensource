@@ -14,6 +14,9 @@ actor ThreadService {
     private var loadedUserID: String?
     /// The last change to the threads, which the next one waits for.
     private var lastChange: Task<Void, Never>?
+    /// Counts resets of the list, so a load that began before one is not
+    /// kept after it.
+    private var resets = 0
 
     private init() {}
 
@@ -22,6 +25,7 @@ actor ThreadService {
     func reloadForCurrentUser() {
         personalThreads = []
         loadedUserID = nil
+        resets += 1
     }
 
     /// Loads the current account's threads from the database. While the
@@ -29,15 +33,18 @@ actor ThreadService {
     /// later call.
     private func ensureLoaded() async throws {
         let userID = UserScope.currentUserID
-        guard await DataEncryptionService.shared.isUnlocked else {
-            personalThreads = []
-            loadedUserID = nil
+        guard await DataEncryptionService.shared.isUnlocked(for: userID) else {
+            reloadForCurrentUser()
             throw RepositoryError.dataLocked
         }
         guard loadedUserID != userID else { return }
+        let resetsAtStart = resets
         let threads = try await ThreadRepository.shared.loadChatThreads()
-        // The account can change while the database answers.
-        guard UserScope.currentUserID == userID, loadedUserID != userID else { return }
+        // The data can be locked, the list reset, or the account changed
+        // while the database answers; what was read is then not kept.
+        guard await DataEncryptionService.shared.isUnlocked(for: userID) else { throw RepositoryError.dataLocked }
+        guard UserScope.currentUserID == userID, resets == resetsAtStart else { throw RepositoryError.accountChanged }
+        guard loadedUserID != userID else { return }
         personalThreads = threads.sorted { $0.createdAt < $1.createdAt }
         loadedUserID = userID
         await cleanupTestThreads()
@@ -48,6 +55,13 @@ actor ThreadService {
     /// list, so one account's thread never lands in another's.
     private func isShowing(_ userID: String) -> Bool {
         UserScope.currentUserID == userID && loadedUserID == userID
+    }
+
+    /// Throws unless `userID`, the account a change was asked under, is
+    /// still the current one. A change can wait its turn behind another,
+    /// and must not then be made for whoever signed in meanwhile.
+    private func requireCurrent(_ userID: String) throws {
+        guard UserScope.currentUserID == userID else { throw RepositoryError.accountChanged }
     }
 
     /// Runs one change to the threads at a time, in the order asked. Each
@@ -74,7 +88,7 @@ actor ThreadService {
         AppErrorReporter.log(message: "Removing \(testThreads.count) automated test threads", context: "ThreadService.cleanupTestThreads")
         for thread in testThreads {
             do {
-                try await ThreadRepository.shared.deleteThread(id: thread.id)
+                try await ThreadRepository.shared.deleteThread(id: thread.id, for: thread.userId)
                 personalThreads.removeAll { $0.id == thread.id }
             } catch {
                 AppErrorReporter.log(error: error, context: "ThreadService.cleanupTestThreads")
@@ -100,14 +114,15 @@ actor ThreadService {
     ///   - agentId: AI agent/role ID (optional)
     /// - Returns: The created thread
     func createThread(title: String? = nil, covenId: String? = nil, agentId: String? = nil, agentName: String? = nil) async throws -> Thread {
-        try await oneAtATime { service in
-            try await service.create(title: title, covenId: covenId, agentId: agentId, agentName: agentName)
+        let userID = UserScope.currentUserID
+        return try await oneAtATime { service in
+            try await service.create(title: title, covenId: covenId, agentId: agentId, agentName: agentName, for: userID)
         }
     }
 
-    private func create(title: String?, covenId: String?, agentId: String?, agentName: String?) async throws -> Thread {
+    private func create(title: String?, covenId: String?, agentId: String?, agentName: String?, for userID: String) async throws -> Thread {
+        try requireCurrent(userID)
         try await ensureLoaded()
-        let userID = UserScope.currentUserID
         let now = Date()
         let thread = await Thread(
             id: UUID().uuidString,
@@ -129,10 +144,12 @@ actor ThreadService {
         guard isShowing(userID) else { return thread }
         personalThreads.append(thread)
 
-        await AnalyticsService.shared.trackThreadCreated(covenId: covenId, agentId: agentId)
         await MainActor.run {
+            // Checked where it is posted, with no wait in between.
+            guard UserScope.currentUserID == userID else { return }
             NotificationCenter.default.post(name: .didCreateThread, object: nil, userInfo: ["thread": thread])
         }
+        await AnalyticsService.shared.trackThreadCreated(covenId: covenId, agentId: agentId)
         return thread
     }
 
@@ -168,16 +185,26 @@ actor ThreadService {
         isPinned: Bool? = nil,
         isArchived: Bool? = nil
     ) async throws -> Thread {
-        try await oneAtATime { service in
-            try await service.update(threadId: threadId, title: title, agentId: agentId, isPinned: isPinned, isArchived: isArchived)
+        let userID = UserScope.currentUserID
+        return try await oneAtATime { service in
+            try await service.update(
+                threadId: threadId, title: title, agentId: agentId, isPinned: isPinned, isArchived: isArchived, for: userID
+            )
         }
     }
 
-    private func update(threadId: String, title: String?, agentId: String?, isPinned: Bool?, isArchived: Bool?) async throws -> Thread {
+    private func update(
+        threadId: String,
+        title: String?,
+        agentId: String?,
+        isPinned: Bool?,
+        isArchived: Bool?,
+        for userID: String
+    ) async throws -> Thread {
+        try requireCurrent(userID)
         // Throws the same sanitized not-found error as a lookup does, rather
         // than logging opaque IDs.
         let thread = try await getThread(threadId: threadId)
-        let userID = UserScope.currentUserID
         let updated = Thread(
             id: thread.id,
             userId: thread.userId,
@@ -203,19 +230,20 @@ actor ThreadService {
     /// Delete a thread, and with it its messages.
     /// - Parameter threadId: The thread ID
     func deleteThread(threadId: String) async throws {
+        let userID = UserScope.currentUserID
         try await oneAtATime { service in
-            try await service.delete(threadId: threadId)
+            try await service.delete(threadId: threadId, for: userID)
         }
     }
 
-    private func delete(threadId: String) async throws {
+    private func delete(threadId: String, for userID: String) async throws {
+        try requireCurrent(userID)
         try await ensureLoaded()
         guard personalThreads.contains(where: { $0.id == threadId }) else {
             AppErrorReporter.log(message: "Ignoring delete for unknown thread", context: "ThreadService.deleteThread")
             return
         }
-        let userID = UserScope.currentUserID
-        try await ThreadRepository.shared.deleteThread(id: threadId)
+        try await ThreadRepository.shared.deleteThread(id: threadId, for: userID)
         if isShowing(userID) {
             personalThreads.removeAll { $0.id == threadId }
         }

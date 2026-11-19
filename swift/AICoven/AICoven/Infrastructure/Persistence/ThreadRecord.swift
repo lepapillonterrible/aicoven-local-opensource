@@ -283,7 +283,7 @@ actor ThreadRepository {
     /// the summary.
     func updateSummary(forThreadID threadID: String, summary: String?) async throws {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-        let session = await beginWrite()
+        let session = try await beginWrite()
 
         let ciphertext: Data?
         if let summary {
@@ -382,9 +382,9 @@ actor ThreadRepository {
 
 // MARK: - Chat history
 
-/// The account and data key a write starts under. A write encrypts and then
-/// stores, and waits in between; the account, or the key in memory, can
-/// change while it does.
+/// The account a write is for and the data key it starts under, which is
+/// that account's. A write encrypts and then stores, and waits in between;
+/// the account, or the key in memory, can change while it does.
 struct WriteSession {
     let userID: String
     let keyEpoch: Int
@@ -396,9 +396,15 @@ struct WriteSession {
 /// Reading or adding to the history first moves in whatever earlier builds
 /// left in files.
 extension ThreadRepository {
-    func beginWrite() async -> WriteSession {
+    /// Begins a write for the current account. Throws while the data key in
+    /// memory is not that account's.
+    func beginWrite() async throws -> WriteSession {
         let userID = await MainActor.run { UserScope.currentUserID }
-        return await WriteSession(userID: userID, keyEpoch: DataEncryptionService.shared.keyEpoch)
+        let keyEpoch = await DataEncryptionService.shared.keyEpoch
+        guard await DataEncryptionService.shared.isUnlocked(for: userID) else { throw RepositoryError.dataLocked }
+        // The key that was just seen to be this account's is the one counted.
+        guard await DataEncryptionService.shared.keyEpoch == keyEpoch else { throw RepositoryError.accountChanged }
+        return WriteSession(userID: userID, keyEpoch: keyEpoch)
     }
 
     /// Throws unless the account and the data key are still the ones the
@@ -411,10 +417,12 @@ extension ThreadRepository {
         }
     }
 
-    /// Saves a thread, new or changed.
+    /// Saves a thread, new or changed. Throws if the thread is not the
+    /// current account's.
     func saveThread(_ thread: Thread) async throws {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-        let session = await beginWrite()
+        let session = try await beginWrite()
+        guard thread.userId == session.userID else { throw RepositoryError.accountChanged }
         let payload = try await DataEncryptionService.shared.encrypt(JSONEncoder().encode(thread), purpose: "chat_thread")
         try await confirm(session)
 
@@ -440,22 +448,21 @@ extension ThreadRepository {
         var threads: [Thread] = []
         threads.reserveCapacity(payloads.count)
         for payload in payloads {
-            if let thread = try await Self.open(Thread.self, payload, purpose: "chat_thread") {
+            if let thread = try await Self.open(Thread.self, payload, purpose: "chat_thread", for: currentUserId) {
                 threads.append(thread)
             }
         }
         return threads
     }
 
-    /// Deletes a thread of the current user's, and with it its messages.
-    func deleteThread(id: String) async throws {
+    /// Deletes a thread of the account `userID`'s, and with it its messages.
+    func deleteThread(id: String, for userID: String) async throws {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-        let currentUserId = await MainActor.run { UserScope.currentUserID }
 
         try await dbQueue.write { db in
             _ = try ThreadRecord
                 .filter(ThreadRecord.Columns.id == id)
-                .filter(ThreadRecord.Columns.userId == currentUserId)
+                .filter(ThreadRecord.Columns.userId == userID)
                 .deleteAll(db)
         }
     }
@@ -464,7 +471,7 @@ extension ThreadRepository {
     func appendChatMessage(_ message: ChatMessage) async throws {
         try await LegacyChatHistoryImport.shared.importIfNeeded()
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-        let session = await beginWrite()
+        let session = try await beginWrite()
         let record = try await Self.record(for: message, userId: session.userID)
         try await confirm(session)
 
@@ -512,7 +519,7 @@ extension ThreadRepository {
             }
             for row in rows {
                 let ciphertext: Data = row["content_ciphertext"]
-                if let message = try await Self.open(ChatMessage.self, ciphertext, purpose: "chat_message") {
+                if let message = try await Self.open(ChatMessage.self, ciphertext, purpose: "chat_message", for: currentUserId) {
                     newestFirst.append(message)
                 }
             }
@@ -528,7 +535,7 @@ extension ThreadRepository {
     /// if `userID` is not, or stops being, the current account.
     func importChatHistory(threads: [Thread], messages: [String: [ChatMessage]], userID: String) async throws {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-        let session = await beginWrite()
+        let session = try await beginWrite()
         guard session.userID == userID else { throw RepositoryError.accountChanged }
 
         var entries: [(thread: Thread, payload: Data, messages: [MessageRecord])] = []
@@ -558,11 +565,18 @@ extension ThreadRepository {
         }
     }
 
-    /// Decrypts and decodes one stored record. `nil`, and logged, when this
-    /// record cannot be read with the current key or is not what it should
-    /// be: one unreadable record must not hide the rest. While the data is
-    /// locked nothing can be read, and that is thrown.
-    private static func open<Value: Decodable>(_ type: Value.Type, _ ciphertext: Data, purpose: String) async throws -> Value? {
+    /// Decrypts and decodes one of the account `userID`'s stored records.
+    /// `nil`, and logged, when this record cannot be read with the account's
+    /// key or is not what it should be: one unreadable record must not hide
+    /// the rest. While the key in memory is not that account's, nothing of
+    /// its can be read, and that is thrown.
+    private static func open<Value: Decodable>(
+        _ type: Value.Type,
+        _ ciphertext: Data,
+        purpose: String,
+        for userID: String
+    ) async throws -> Value? {
+        guard await DataEncryptionService.shared.isUnlocked(for: userID) else { throw RepositoryError.dataLocked }
         do {
             let plaintext = try await DataEncryptionService.shared.decrypt(ciphertext, purpose: purpose)
             return try JSONDecoder().decode(type, from: plaintext)

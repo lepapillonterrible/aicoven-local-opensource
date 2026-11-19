@@ -31,7 +31,7 @@ final class ChatHistoryStoreTests: XCTestCase {
 
     override func tearDown() async throws {
         for id in created {
-            try? await repository.deleteThread(id: id)
+            try? await repository.deleteThread(id: id, for: UserScope.currentUserID)
         }
         await service.reloadForCurrentUser()
         await DataEncryptionService.shared.lock()
@@ -95,6 +95,19 @@ final class ChatHistoryStoreTests: XCTestCase {
 
         XCTAssertTrue(loaded.contains { $0.id == readable.id })
         XCTAssertFalse(loaded.contains { $0.id == unreadable.id })
+    }
+
+    func testAThreadOfAnotherAccount_isNotStoredUnderThisOne() async throws {
+        let theirs = thread(id: "not-mine-\(UUID().uuidString)", userId: "another-user", title: "Theirs")
+
+        do {
+            try await repository.saveThread(theirs)
+            XCTFail("A thread is stored only for the account it belongs to")
+        } catch {
+            XCTAssertEqual(error as? RepositoryError, .accountChanged)
+        }
+        let row = try await storedRow(threadID: theirs.id)
+        XCTAssertNil(row)
     }
 
     func testChangesStartedTogether_allLandAndNoneBringsBackADeletedThread() async throws {
