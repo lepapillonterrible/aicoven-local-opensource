@@ -41,7 +41,9 @@ final class OpenAICompatibleServerTests: XCTestCase {
 
         let found = await LocalProviderDiscoveryService(transport: transport).discover()
 
-        XCTAssertEqual(found.map(\.provider), ["openai_compatible", "ollama"])
+        // A server on Ollama's port that wants a key is not Ollama, whose
+        // form has no key field.
+        XCTAssertEqual(found.map(\.provider), ["openai_compatible", "openai_compatible"])
         XCTAssertEqual(found.map(\.displayName), ["LM Studio", "Ollama"])
         XCTAssertEqual(found.map(\.baseURL), ["http://127.0.0.1:1234", "http://127.0.0.1:11434"])
         XCTAssertEqual(found.map(\.models), [["qwen-9", "phi-9"], []])
@@ -91,6 +93,7 @@ final class OpenAICompatibleServerTests: XCTestCase {
         XCTAssertNil(address("https://"))
         XCTAssertNil(address("somewhere"))
         XCTAssertNil(address("http://localhost:70000"))
+        XCTAssertEqual(address("https://name:secret@models.example.com:8443/v1"), "https://models.example.com:8443")
     }
 
     func testProbe_followsARedirectOnlyWithinTheServerItAsked() {
@@ -178,6 +181,34 @@ final class OpenAICompatibleServerTests: XCTestCase {
         XCTAssertEqual(offered.map(\.modelID), ["phi-9"])
     }
 
+    func testOpenClawsEnvironmentKey_goesToOpenClawAndNeverToAnotherServer() async throws {
+        setenv("OPENCLAW_API_KEY", "OPENCLAW_ENV_KEY", 1)
+        defer { unsetenv("OPENCLAW_API_KEY") }
+        let body = Data(#"{"choices": [{"message": {"role": "assistant", "content": "Hi"}}]}"#.utf8)
+        let sentKeys = SentKeys()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        MockURLProtocol.handler = { request in
+            sentKeys.record(request.value(forHTTPHeaderField: "Authorization"))
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, body)
+        }
+        let address = try XCTUnwrap(URL(string: "http://127.0.0.1:1234"))
+        let messages = [LLMMessage(role: .user, content: "Hi")]
+        let options = ChatOptions(temperature: 0.3, maxTokens: nil, stream: false)
+
+        let openClaw = OpenClawLLMClient(baseURL: address, urlSession: URLSession(configuration: config))
+        _ = try await openClaw.completeChat(messages: messages, model: "m", options: options)
+        let server = OpenClawLLMClient(
+            baseURL: address,
+            providerID: "openai_compatible",
+            providerName: "OpenAI-compatible server",
+            urlSession: URLSession(configuration: config)
+        )
+        _ = try await server.completeChat(messages: messages, model: "m", options: options)
+
+        XCTAssertEqual(sentKeys.all, ["Bearer OPENCLAW_ENV_KEY", nil])
+    }
+
     func testReply_isReportedAsTheServersNotOpenClaws() async throws {
         let body = Data(#"{"choices": [{"message": {"role": "assistant", "content": "Hi"}}], "model": "qwen-9"}"#.utf8)
         let config = URLSessionConfiguration.ephemeral
@@ -203,6 +234,21 @@ final class OpenAICompatibleServerTests: XCTestCase {
 
         XCTAssertEqual(reply.providerID, "openai_compatible")
         XCTAssertEqual(reply.message.content, "Hi")
+    }
+}
+
+/// The Authorization header of each request, in order. The URL loading
+/// system records from its own thread, so every access takes the lock.
+private final class SentKeys: @unchecked Sendable {
+    private let lock = NSLock()
+    private var keys: [String?] = []
+
+    func record(_ key: String?) {
+        lock.withLock { keys.append(key) }
+    }
+
+    var all: [String?] {
+        lock.withLock { keys }
     }
 }
 

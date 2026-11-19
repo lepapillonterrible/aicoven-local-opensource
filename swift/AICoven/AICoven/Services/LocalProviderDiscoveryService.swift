@@ -180,6 +180,9 @@ nonisolated struct LocalProviderDiscoveryService {
         case .unavailable:
             return nil
         }
+        // Ollama asks for no key, and its form has no field for one: a
+        // server on its port that wants a key is something else in front.
+        let provider = requiresKey && provider == "ollama" ? "openai_compatible" : provider
         return DetectedLocalProvider(
             id: "\(provider)-\(baseURL.absoluteString)",
             provider: provider,
@@ -296,6 +299,10 @@ nonisolated struct LocalProviderDiscoveryService {
         components.path = path
         components.query = nil
         components.fragment = nil
+        // A name and password in the address would be saved with it, outside
+        // the Keychain. The API key field is where a secret goes.
+        components.user = nil
+        components.password = nil
         return components.url
     }
 

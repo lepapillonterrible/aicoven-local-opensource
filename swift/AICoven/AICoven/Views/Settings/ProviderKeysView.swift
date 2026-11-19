@@ -912,11 +912,11 @@ private struct AddProviderKeyStep2View: View {
                 _ = try await service.createMLXAccount(displayName: displayName, modelID: selectedMLXModelID)
             } else if isCompatibleServer {
                 // Saved as the address requests go to, whatever form it was
-                // typed in.
-                let server = LocalProviderDiscoveryService.serverBaseURL(from: baseURL)?.absoluteString ?? baseURL
+                // typed in. Connect listed models from it, so it is one.
+                guard let server = LocalProviderDiscoveryService.serverBaseURL(from: baseURL) else { return }
                 _ = try await service.createOpenAICompatibleAccount(
                     displayName: displayName,
-                    baseURL: server,
+                    baseURL: server.absoluteString,
                     apiKey: apiKey.isEmpty ? nil : apiKey,
                     defaultModel: selectedServerModel
                 )
