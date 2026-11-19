@@ -105,7 +105,8 @@ final class AttachmentPreviewPresenter: ObservableObject {
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let destination = directory.appendingPathComponent(Self.safeFilename(filename))
         do {
-            // Protected from the moment it exists.
+            // Readable by this user only from the moment it exists, and on
+            // iOS under the device's complete file protection.
             var attributes: [FileAttributeKey: Any] = [.posixPermissions: 0o600]
             #if os(iOS)
             attributes[.protectionKey] = FileProtectionType.complete
