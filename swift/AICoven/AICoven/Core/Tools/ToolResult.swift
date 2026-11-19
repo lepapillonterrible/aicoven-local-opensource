@@ -149,7 +149,7 @@ struct ToolExecutionResult: Codable {
         case .notAsked:
             permissionDenied(
                 tool: tool,
-                message: "This changes something, so the person has to be asked first, and it did not come from a thread they could be asked in."
+                message: "This changes something, so the person has to be asked first, and the thread to ask them in could not be found."
             )
         }
     }

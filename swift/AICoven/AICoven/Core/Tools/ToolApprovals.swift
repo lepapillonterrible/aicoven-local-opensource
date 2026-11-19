@@ -184,8 +184,9 @@ final class ToolApprovals: ObservableObject {
     /// so: the turn did not take the answer, and the block says that
     /// instead.
     private func sayNoLongerWaiting(_ approvalID: String) {
-        guard showing?.approval.id == approvalID, showing?.phase != .asking,
-              showing?.phase != .answered(.noLongerWaiting), showing?.phase != .leaving(.noLongerWaiting) else { return }
+        // A block already on its way out is left to go.
+        guard showing?.approval.id == approvalID,
+              showing?.phase == .answered(.approved) || showing?.phase == .answered(.denied) else { return }
         showing?.phase = .answered(.noLongerWaiting)
         if announced.contains(approvalID) {
             AccessibilityNotification.Announcement(Outcome.noLongerWaiting.words).post()

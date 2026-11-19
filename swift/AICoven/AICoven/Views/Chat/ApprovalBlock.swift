@@ -1,9 +1,10 @@
 import SwiftUI
 
 /// The approval block: which thread asked and where, the question, exactly
-/// what will happen, then Approve, Deny, and Details, which closes and opens
-/// the text in place. After an answer it says what happened instead of the
-/// buttons.
+/// what will happen, then Approve, Deny, and Details, which shows the tool's
+/// name in place. What will happen is always there whole, scrolling when it
+/// is long: Approve does exactly what it says. After an answer the block
+/// says what happened instead of the buttons.
 ///
 /// The caller sets the width: 262 pt beside the thread on the Mac and iPad,
 /// the full width on the iPhone, where Approve and Deny are two 44 pt halves
@@ -18,9 +19,7 @@ struct ApprovalBlock: View {
     let onDeny: () -> Void
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    /// Open from the start: Approve does exactly what the text says, so the
-    /// whole of it is there to read before the button is.
-    @State private var showsDetails = true
+    @State private var showsDetails = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -36,20 +35,15 @@ struct ApprovalBlock: View {
                 .foregroundStyle(Color.aicovenTextPrimary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if showsDetails {
-                // The text as it is when it fits, else scrolling in that height.
-                ViewThatFits(in: .vertical) {
-                    detailsText
-                    ScrollView { detailsText }
-                }
-                .frame(maxHeight: maxTextHeight)
-                // Only as tall as the text, up to that height.
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 3)
-            } else {
+            // The text as it is when it fits, else scrolling in that height.
+            ViewThatFits(in: .vertical) {
                 detailsText
-                    .padding(.top, 3)
+                ScrollView { detailsText }
             }
+            .frame(maxHeight: maxTextHeight)
+            // Only as tall as the text, up to that height.
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 3)
 
             if showsDetails, phase == .asking {
                 Divider()
@@ -151,7 +145,6 @@ struct ApprovalBlock: View {
         Text(approval.details)
             .font(.aicovenBodySmall)
             .foregroundStyle(Color.aicovenTextSecondary)
-            .lineLimit(showsDetails ? nil : 1)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)

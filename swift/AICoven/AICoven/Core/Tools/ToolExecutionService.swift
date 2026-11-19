@@ -807,16 +807,24 @@ actor ToolExecutionService {
 
     /// Asks in the app's approval spot, naming the thread that asked and
     /// where it lives. An approval that cannot say which thread it is from
-    /// (the thread has been deleted, or its coven cannot be found) is not
-    /// asked: the person would be answering for somewhere else.
+    /// (the thread has been deleted, its coven is gone, or either could not
+    /// be read) is not asked: the person would be answering for somewhere
+    /// else. Why is logged.
     static func askInItsThread(_ approval: ToolApproval) async -> ApprovalAnswer {
-        guard let thread = try? await ThreadService.shared.getThread(threadId: approval.threadID) else { return .notAsked }
         var approval = approval
-        approval.threadTitle = thread.title ?? approval.threadTitle
-        if let covenID = thread.covenId {
-            let covens = await (try? CovenService.shared.loadCovens()) ?? []
-            guard let coven = covens.first(where: { $0.id == covenID }) else { return .notAsked }
-            approval.covenName = coven.name
+        do {
+            let thread = try await ThreadService.shared.getThread(threadId: approval.threadID)
+            approval.threadTitle = thread.title ?? approval.threadTitle
+            if let covenID = thread.covenId {
+                guard let coven = try await CovenService.shared.loadCovens().first(where: { $0.id == covenID }) else {
+                    AppErrorReporter.log(message: "An approval's coven was not found", context: "ToolExecutionService.askInItsThread")
+                    return .notAsked
+                }
+                approval.covenName = coven.name
+            }
+        } catch {
+            AppErrorReporter.log(error: error, context: "ToolExecutionService.askInItsThread")
+            return .notAsked
         }
         return await ToolApprovals.shared.ask(approval)
     }
