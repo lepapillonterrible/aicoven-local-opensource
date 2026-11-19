@@ -93,7 +93,7 @@ struct OnboardingFlowView: View {
                 // No-op for now; the standard flow persists the new key.
             }
         }
-        .preferredColorScheme(.dark)
+        .themedColorScheme()
         .onAppear {
             AnalyticsService.shared.track(
                 event: "onboarding_started",

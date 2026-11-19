@@ -8,7 +8,7 @@ struct SettingsWorkspaceView: View {
     /// The last request for a legal page, which About opens on.
     @State private var request: WorkspaceTabType?
     /// The pane on screen, kept on this Mac: Settings reopens on it, and
-    /// stays on it when a theme or typography change rebuilds this view.
+    /// stays on it when a typography change rebuilds this view.
     @AppStorage("settings.pane") private var selectedPaneID = SettingsPane.aiConnections.rawValue
     /// Counts requests for a legal page, so a repeated one opens the page
     /// afresh. Other requests only select their pane, and leave what is
