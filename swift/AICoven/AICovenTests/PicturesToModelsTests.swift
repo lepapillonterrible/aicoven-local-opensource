@@ -161,11 +161,17 @@ final class PicturesToModelsTests: XCTestCase {
     }
 
     func testAPictureThatMoves_isSentAsItsFirstFrame() throws {
+        // Its first frame all red, its second all blue.
         let output = NSMutableData()
         let destination = try XCTUnwrap(CGImageDestinationCreateWithData(output, UTType.gif.identifier as CFString, 2, nil))
-        for _ in 0 ..< 2 {
-            let frame = try read(photo(width: 16, height: 12, type: .png)).image
-            CGImageDestinationAddImage(destination, frame, nil)
+        for colour in [CGColor(red: 1, green: 0, blue: 0, alpha: 1), CGColor(red: 0, green: 0, blue: 1, alpha: 1)] {
+            let context = try XCTUnwrap(CGContext(
+                data: nil, width: 16, height: 12, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+            ))
+            context.setFillColor(colour)
+            context.fill(CGRect(x: 0, y: 0, width: 16, height: 12))
+            try CGImageDestinationAddImage(destination, XCTUnwrap(context.makeImage()), nil)
         }
         XCTAssertTrue(CGImageDestinationFinalize(destination))
         XCTAssertEqual(try read(output as Data).frames, 2)
@@ -175,6 +181,9 @@ final class PicturesToModelsTests: XCTestCase {
         XCTAssertEqual(sent.type, UTType.jpeg.identifier)
         XCTAssertEqual(sent.frames, 1)
         XCTAssertEqual([sent.width, sent.height], [16, 12])
+        let pixel = try firstPixel(of: sent.image)
+        XCTAssertGreaterThan(pixel[0], 200, "Red, as its first frame is")
+        XCTAssertLessThan(pixel[2], 60, "Not blue, as its second is")
     }
 
     func testAPictureTooLargeToSend_isMadeSmallerUntilItIsNot_orNotSentAtAll() throws {
@@ -250,6 +259,14 @@ final class PicturesToModelsTests: XCTestCase {
         XCTAssertFalse(known.takesImages, "Not unless it is said to")
         let router = HeuristicModelRouter(availableModels: [known])
         XCTAssertEqual(router.findExact(providerID: "anthropic", modelID: "claude-new")?.takesImages, true)
+
+        // A model chosen by name that the router is not given to pick from
+        // (a role's OpenRouter model) is known by what the catalog says.
+        let chosen = ModelDescriptor(providerID: "openrouter", modelID: "vendor/chosen", maxContextTokens: 1000, supportsTools: true, supportsEmbeddings: false, costClass: .cheap)
+        let withCatalog = HeuristicModelRouter(availableModels: [chosen], imageModels: ["openrouter": ["vendor/sees"]])
+        XCTAssertEqual(withCatalog.findExact(providerID: "openrouter", modelID: "vendor/sees")?.takesImages, true)
+        XCTAssertEqual(withCatalog.findExact(providerID: "openrouter", modelID: "vendor/reads")?.takesImages, false)
+        XCTAssertEqual(withCatalog.findExact(providerID: "openrouter", modelID: "vendor/chosen")?.takesImages, false, "The one it was given, as it was given")
 
         let catalog = Data("""
         {"data": [
@@ -421,6 +438,15 @@ final class PicturesToModelsTests: XCTestCase {
         XCTAssertEqual(shown.images.map(\.mimeType), ["image/jpeg"])
         let sent = try read(XCTUnwrap(shown.images.first?.data))
         XCTAssertEqual([sent.width, sent.height], [64, 48])
+
+        // A turn that goes straight to its answer, with no tool step, is
+        // sent the picture too.
+        let answering = SeeingModel()
+        try await chat(with: answering, provider: "openai", takesImages: true)
+            .streamMessage(threadId: threadID, message: "Explain this", attachments: [cat], onStateChange: { _ in })
+        let explained = try XCTUnwrap(answering.lastUserMessage)
+        XCTAssertTrue(explained.content.hasPrefix("Explain this\n\nIMPORTANT: You must now answer the user directly"), "The request for the final answer")
+        XCTAssertEqual(explained.images.count, 1)
 
         let reading = SeeingModel()
         try await chat(with: reading, provider: "openai", takesImages: false)

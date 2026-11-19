@@ -117,9 +117,14 @@ public extension ModelRouter {
 /// Conforms to Sendable since it only holds immutable data after init.
 public final class HeuristicModelRouter: ModelRouter, @unchecked Sendable {
     private let availableModels: [ModelDescriptor]
+    /// By provider, the models its own list says take pictures, whether or
+    /// not they are among `availableModels`: a model chosen by name (a
+    /// role's) may be one the router is not given to pick from.
+    private let imageModels: [String: Set<String>]
 
-    public init(availableModels: [ModelDescriptor]) {
+    public init(availableModels: [ModelDescriptor], imageModels: [String: Set<String>] = [:]) {
         self.availableModels = availableModels
+        self.imageModels = imageModels
     }
 
     public func fallbackModel(for providerID: String) -> String? {
@@ -141,7 +146,10 @@ public final class HeuristicModelRouter: ModelRouter, @unchecked Sendable {
                 supportsTools: true,
                 supportsEmbeddings: false,
                 costClass: .expensive,
-                takesImages: ModelDescriptor.takesImages(providerID: providerID, modelID: modelID)
+                takesImages: ModelDescriptor.takesImages(
+                    providerID: providerID, modelID: modelID,
+                    listed: imageModels[providerID]?.contains(modelID)
+                )
             )
         }
         return nil

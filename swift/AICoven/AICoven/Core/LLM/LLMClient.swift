@@ -1,7 +1,5 @@
 import Foundation
 
-/// Represents a single chat message in the core LLM interface.
-/// Conforms to Sendable since all properties are value types.
 /// A picture given to a model with a message: its bytes as they are sent,
 /// and the kind of picture they are.
 public struct LLMImage: Sendable, Equatable {
@@ -14,6 +12,8 @@ public struct LLMImage: Sendable, Equatable {
     }
 }
 
+/// Represents a single chat message in the core LLM interface.
+/// Conforms to Sendable since all properties are value types.
 public struct LLMMessage: Sendable {
     public enum Role: String, Sendable {
         case system

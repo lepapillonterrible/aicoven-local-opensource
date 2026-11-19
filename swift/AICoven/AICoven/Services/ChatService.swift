@@ -231,11 +231,11 @@ actor ChatService {
         do {
             // Build dynamic model descriptors from live ListModels responses for
             // all configured provider accounts.
-            let allDescriptors = try await ProviderAccountService.shared.loadAllModelDescriptors()
+            let catalog = try await ProviderAccountService.shared.loadModelCatalog()
             // Only keep descriptors for providers we actually have clients for.
             let allowed = Set(llmClients.keys)
-            let models = allDescriptors.filter { allowed.contains($0.providerID) }
-            modelRouter = HeuristicModelRouter(availableModels: models)
+            let models = catalog.routed.filter { allowed.contains($0.providerID) }
+            modelRouter = HeuristicModelRouter(availableModels: models, imageModels: catalog.imageModels)
         } catch {
             AppErrorReporter.log(error: error, context: "ChatService.ensureEnvironment.loadModelDescriptors")
             modelRouter = HeuristicModelRouter(availableModels: [])

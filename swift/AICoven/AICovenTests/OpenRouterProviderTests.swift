@@ -91,6 +91,36 @@ final class OpenRouterProviderTests: XCTestCase {
         XCTAssertEqual(downloads.count, 1)
     }
 
+    func testTheCatalog_saysWhichOpenRouterModelsTakePictures_alsoOfThoseTheRouterIsNotGiven() async throws {
+        let defaults = UserDefaults.standard
+        try defaults.set(JSONEncoder().encode([account]), forKey: UserScope.scopedKey("provider_accounts.v1"))
+        defaults.set("vendor/reads", forKey: UserScope.scopedKey("openrouter_model"))
+        let listed = Data("""
+        {"data": [
+          {"id": "vendor/sees", "name": "Sees", "context_length": 1000, "supported_parameters": ["tools"],
+           "endpoints": ["/api/v1/chat/completions"], "architecture": {"input_modalities": ["text", "image"]}},
+          {"id": "vendor/reads", "name": "Reads", "context_length": 1000, "supported_parameters": ["tools"],
+           "endpoints": ["/api/v1/chat/completions"], "architecture": {"input_modalities": ["text"]}}
+        ]}
+        """.utf8)
+        URLProtocol.registerClass(MockURLProtocol.self)
+        MockURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, listed)
+        }
+        await ProviderAccountService.shared.forgetOpenRouterCatalog()
+
+        let reading = try await ProviderAccountService.shared.loadModelCatalog()
+        XCTAssertEqual(reading.routed.map(\.modelID), ["vendor/reads"])
+        XCTAssertEqual(reading.routed.first?.takesImages, false)
+        XCTAssertEqual(reading.imageModels, ["openrouter": ["vendor/sees"]], "Known though the router is not given it")
+
+        defaults.set("vendor/sees", forKey: UserScope.scopedKey("openrouter_model"))
+        let seeing = try await ProviderAccountService.shared.loadModelCatalog()
+        XCTAssertEqual(seeing.routed.map(\.modelID), ["vendor/sees"])
+        XCTAssertEqual(seeing.routed.first?.takesImages, true)
+        await ProviderAccountService.shared.forgetOpenRouterCatalog()
+    }
+
     func testKeyCheck_asksOpenRouterAboutTheStoredKeyAndFailsWhenItIsRefused() async throws {
         try KeychainHelper.save(key: "provider-account-openrouter-test", value: "STORED_KEY")
         let status = StatusCode(200)

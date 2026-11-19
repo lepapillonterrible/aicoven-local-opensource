@@ -131,6 +131,13 @@ actor ProviderAccountService {
     /// is not kept.
     private var openRouterCatalog: (startedAt: Date, download: Task<[ProviderInitializationStatus.ModelMetadata], Error>)?
 
+    #if DEBUG
+    /// Drops the kept catalog, so a test downloads the one it scripts.
+    func forgetOpenRouterCatalog() {
+        openRouterCatalog = nil
+    }
+    #endif
+
     /// Asks a Gateway what it offers; stood in for by tests.
     private var gatewayHello: @Sendable (URL, String?) async throws -> OpenClawGatewayHello = { address, token in
         try await OpenClawGateway.hello(at: address, token: token)
@@ -589,11 +596,26 @@ actor ProviderAccountService {
         }
     }
 
+    /// What chat chooses a model from: the models the router picks among,
+    /// and, by provider, every model the provider's own list says takes
+    /// pictures (OpenRouter's whole catalog, of which the router is given
+    /// one model).
+    struct ModelCatalog {
+        var routed: [ModelDescriptor] = []
+        var imageModels: [String: Set<String>] = [:]
+    }
+
     /// Build dynamic ModelDescriptors for all configured provider accounts
     /// using live ListModels responses. Only chat-capable models are included.
     func loadAllModelDescriptors() async throws -> [ModelDescriptor] {
+        try await loadModelCatalog().routed
+    }
+
+    /// The same, with the models listed as taking pictures.
+    func loadModelCatalog() async throws -> ModelCatalog {
         let locals = try loadLocalAccounts()
         var descriptors: [ModelDescriptor] = []
+        var imageModels: [String: Set<String>] = [:]
 
         // Chat reaches one OpenAI-compatible server, the first connected, so
         // only its models are offered.
@@ -615,6 +637,11 @@ actor ProviderAccountService {
                 // chat, so its chosen model stays on offer below.
                 guard providerID == "openai_compatible" else { continue }
                 metadata = []
+            }
+
+            let seeing = metadata.filter { $0.takesImages == true }.map(\.id)
+            if !seeing.isEmpty {
+                imageModels[providerID, default: []].formUnion(seeing)
             }
 
             // The router picks by a coarse cost class, which cannot rank
@@ -701,7 +728,7 @@ actor ProviderAccountService {
             )
         }
 
-        return descriptors
+        return ModelCatalog(routed: descriptors, imageModels: imageModels)
     }
 
     /// Helper to refresh all provider accounts for the current user in parallel.
