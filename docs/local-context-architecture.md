@@ -143,7 +143,7 @@ On top of the LLM and routing layer, the client exposes a small set of **provide
   - Timezone-aware `currentTime()` used by the context sandwich.
   - `webSearch(query:maxResults:)` implemented via DuckDuckGo's public JSON API (no extra keys).
   - `analyzeAttachment(...)` and `analyzeFile(...)` that use the best available chat/vision model to summarize or answer questions about images and files.
-  - `generateImage(prompt:)` and `generateFile(...)` which create local image/file artifacts and return URLs that can be attached to messages.
+  - `generateFile(...)` which creates a local file artifact and returns a URL that can be attached to messages. (Images are made by the `image.generate` tool through `ImageGenerationService`, and kept in the attachment store.)
 
 The tools layer is intentionally thin: it never talks to a custom backend and only uses the provider keys the user has configured in the app.
 
@@ -160,7 +160,7 @@ The `dev` branch of this repo implements most of the architecture described abov
   - Routes to an appropriate provider/model via `ModelRouter`.
   - Streams answers into the SwiftUI chat UI (currently using non-streaming SDK calls under the hood).
 - An `AgentRunner` capable of bounded multi-step runs, storing `AgentRun` and `AgentStep` rows.
-- A tools layer (`ToolEnvironment` + `ToolService`) wired into both the context sandwich and the enhanced message composer (web search, attachment analysis, local file/image generation).
+- A tools layer (`ToolEnvironment` + `ToolService`) wired into both the context sandwich and the enhanced message composer (web search, attachment analysis, local file generation). Images are made by the `image.generate` tool, which a chat turn's model calls.
 
 Some areas remain intentionally flexible or partially implemented so contributors can help shape them:
 

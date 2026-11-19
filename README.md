@@ -20,7 +20,7 @@ This repo started as an extraction of the original multi-tenant AICoven app and 
 - A provider-agnostic `LLMClient` + `ModelRouter` used for all LLM calls, supporting OpenAI, Anthropic, Google Gemini, OpenRouter, Ollama, and on-device MLX models.
 - Encrypted local context storage (threads, memories, settings) backed by SQLite/GRDB.
 - A "context sandwich" builder that composes system contract, policies, time, memories, history, and the current turn — with device-aware context limits for iPhones.
-- A tools layer (`ToolEnvironment` + `ToolService`) that exposes web search, file/image analysis, and local file/image generation using only your provider keys.
+- A tools layer (`ToolEnvironment` + `ToolService`) that exposes web search, file/image analysis, and local file generation using only your provider keys, and an `image.generate` tool that makes images with your OpenAI key.
 - An MCP client (`MCPClient`) that connects to remote MCP servers over HTTP/SSE, discovers tools, and executes them — with semantic tool selection via embedding-based matching and a benchmark suite for evaluating local model tool-calling accuracy.
 - Shell command tools with an approval flow, and connected-app integrations (GitHub, Google Drive).
 - StoreKit 2 in-app purchase support with a community edition compile flag.
@@ -38,7 +38,7 @@ Some premium features (shell tools, GitHub integration, Google Drive integration
 - **Encryption**: chats, memories, and provider configs encrypted at rest using a key derived from a user passphrase.
 - **Secrets**: API keys stored via a `SecretsStore` abstraction backed by the system Keychain.
 - **LLM abstraction**: `LLMClient` protocol and `HeuristicModelRouter` to pick the right `(providerID, modelID)` for each task, with user-preference-first routing via `findExact`.
-- **Tools layer**: `ToolEnvironment` + `ToolService` offering time, web search, attachment analysis, file/image generation, shell commands (with approval), and connected apps.
+- **Tools layer**: `ToolEnvironment` + `ToolService` offering time, web search, attachment analysis and file generation; the `image.generate` tool (`ImageGenerationService`); shell commands (with approval); and connected apps.
 - **Memory model**: encrypted `memory_chunks` and `memory_proposals` tables accessed via repositories and `MemoryService`, with user- and thread-scoped snippets stored alongside optional embeddings and tags.
 - **Autonomous agents**: an `AgentRunner` that executes bounded multi-step runs fully locally, backed by encrypted `agent_runs`/`agent_steps` tables and sharing the same context sandwich, tools, and routing as interactive chat.
 
@@ -60,7 +60,7 @@ The Swift sources live under `swift/` and are organized as:
   - `Infrastructure/Keychain` – `SecretsStore` and Keychain-backed implementation.
   - `Infrastructure/Design` – Design system and shared styles.
   - `Infrastructure/Security` – `DataEncryptionService` for encrypted storage.
-  - `Infrastructure/Tools` – `ToolService` (time, web search, attachment analysis, file/image generation).
+  - `Infrastructure/Tools` – `ToolService` (time, web search, attachment analysis, file generation) and `ImageGenerationService` (images, for the `image.generate` tool).
 - `swift/AICoven/AICoven/Models` – Domain model types (threads, messages, memories, provider configs, agent runs/steps).
 - `swift/AICoven/AICoven/Networking` – Environment configuration.
 - `swift/AICoven/AICoven/Features` – Feature-oriented SwiftUI modules (chat, settings, etc.).
@@ -118,7 +118,7 @@ The tools layer is provider-agnostic and designed to work with whatever keys you
 - **File read/write/list** (`file.read`, `file.write`, `file.list`) – Read, write, and list local files and directories.
 - **Shell commands** (`shell.execute`) – Execute local shell commands with a user-approval flow before execution.
 - **Attachment analysis** – Summarization/QA over attached files and images using the best available vision/chat model.
-- **Image generation** – Simple image generation using a chat model and local decoding; images are stored as local files and appear as attachments.
+- **Image generation** (`image.generate`) – A model can make an image with your OpenAI key; it is kept on the device, encrypted, and shown under the reply.
 - **Connected apps** – GitHub repository tools (read/write files, create branches/PRs, search code) and Google Drive file tools (list, read, upload, Sheets read/write), authenticated via user-provided tokens.
 - **MCP server tools** – Any tools exposed by connected [MCP](https://modelcontextprotocol.io) servers (e.g. email via Zapier, calendar, Slack). Tools are discovered automatically via `tools/list`, cached locally, and executed via JSON-RPC over HTTP or SSE. Semantic tool selection uses embedding-based matching when many tools are available.
 
@@ -156,7 +156,7 @@ See `docs/local-context-architecture.md` for more details on the encryption and 
 For a complete documentation index, see [`docs/README.md`](docs/README.md).
 
 - `docs/local-context-architecture.md` – Local context sandwich, GRDB persistence, encryption, routing, and autonomous agents.
-- `docs/tools-and-providers.md` – Provider keys, `LLMClient`/`ModelRouter` routing, the tools layer (web search, attachment analysis, file/image generation), and MCP server integration.
+- `docs/tools-and-providers.md` – Provider keys, `LLMClient`/`ModelRouter` routing, the tools layer (web search, attachment analysis, file generation, the `image.generate` tool), and MCP server integration.
 - `docs/TEST_COVERAGE.md` – Comprehensive test coverage documentation with 18 test files and 41 test methods across all layers.
 - `docs/CODE_REVIEW.md` – Detailed code review findings and architectural recommendations.
 - `docs/REVIEW_SUMMARY.md` – High-level summary of code quality, implementation status, and readiness assessment.

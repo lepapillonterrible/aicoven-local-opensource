@@ -22,7 +22,6 @@ extension ToolService: ChatToolService {}
 /// level services (agents, chat):
 /// - Timezone-aware current time
 /// - Web search (stubbed for now)
-/// - Image generation
 /// - File generation with download links
 /// - Image analysis (vision)
 /// - File analysis (summaries / QA)
@@ -50,84 +49,6 @@ actor ToolService {
     // Marked `nonisolated` because it does not touch any actor state and can
     // be safely called without hopping onto the ToolService actor.
     // Implementation moved up to satisfy ChatToolService; kept here for docs.
-
-    // MARK: - Image generation
-
-    struct GeneratedImage {
-        let id: String
-        let url: URL
-    }
-
-    /// Provider-agnostic entry point for image generation. For now this
-    /// delegates to the OpenAI client when available and otherwise throws.
-    func generateImage(prompt: String) async throws -> GeneratedImage {
-        // Prefer OpenAI if available; other providers can be wired in later.
-        guard let caps = environment.capabilities.first(where: { $0.providerID == "openai" }),
-              let client = environment.clients["openai"]
-        else {
-            throw NSError(
-                domain: "ToolService",
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Image generation is not available – no suitable provider configured."]
-            )
-        }
-
-        // We do not yet have a dedicated image endpoint on LLMClient, so for
-        // now we ask the chat model for an HTML <img> tag with a data URL and
-        // decode it locally. This is intentionally simple and can be replaced
-        // with a first-class images API later.
-        let systemPrompt = "You are an image generator helper. When asked to generate an image, you must respond with a single data URL in an <img src=\"...\"> tag, no other text."
-        let messages = [
-            LLMMessage(role: .system, content: systemPrompt),
-            LLMMessage(role: .user, content: "Generate an image for: \(prompt)")
-        ]
-        let options = ChatOptions(temperature: 0.8, maxTokens: nil, stream: false)
-        let response = try await client.completeChat(
-            messages: messages,
-            model: caps.chatModel ?? "gpt-4o",
-            options: options
-        )
-        let html = response.message.content
-
-        // Very small heuristic to pull out a data URL if present.
-        guard let range = html.range(of: "data:image"),
-              let endQuote = html[range.lowerBound...].firstIndex(of: "\"") ?? html[range.lowerBound...].firstIndex(of: "'")
-        else {
-            throw NSError(
-                domain: "ToolService",
-                code: -2,
-                userInfo: [NSLocalizedDescriptionKey: "Image generation did not return a data URL."]
-            )
-        }
-        let urlString = String(html[range.lowerBound ..< endQuote])
-        guard let dataURL = URL(string: urlString) else {
-            throw NSError(
-                domain: "ToolService",
-                code: -3,
-                userInfo: [NSLocalizedDescriptionKey: "Invalid image data URL returned by model."]
-            )
-        }
-
-        // Persist the image to disk so the UI can display/download it.
-        let fileManager = FileManager.default
-        let baseDir = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
-        let imagesDir = baseDir.appendingPathComponent("GeneratedImages", isDirectory: true)
-        do {
-            try fileManager.createDirectory(at: imagesDir, withIntermediateDirectories: true)
-        } catch {
-            AppErrorReporter.log(error: error, context: "ToolService.generateImage.createDirectory")
-        }
-
-        let id = UUID().uuidString
-        let fileURL = imagesDir.appendingPathComponent("\(id).png")
-
-        if let data = Data(base64Encoded: dataURL.lastPathComponent) {
-            try data.write(to: fileURL)
-        }
-
-        return GeneratedImage(id: id, url: fileURL)
-    }
 
     // MARK: - File generation
 

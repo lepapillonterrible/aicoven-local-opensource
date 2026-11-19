@@ -59,6 +59,153 @@ actor ToolExecutionService {
         await MainActor.run { StoreService.shared.hasToolsPack }
     }
 
+    // MARK: - Image generation
+
+    /// What `image.generate` was asked for, or why it cannot be made.
+    struct ImageRequest: Equatable {
+        let prompt: String
+        let model: String?
+        let size: String
+        let quality: String?
+    }
+
+    /// Reads a call's arguments: a prompt that says something, OpenAI as
+    /// the provider if one is named, and a size that reads as one.
+    nonisolated static func imageRequest(from args: [String: AnyJSONValue]) -> Result<ImageRequest, ImageRequestRefusal> {
+        func text(_ key: String) -> String? {
+            let value = (args[key]?.value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value?.isEmpty == false ? value : nil
+        }
+        guard let prompt = text("prompt") else {
+            return .failure(ImageRequestRefusal(message: "Missing required argument: 'prompt'", field: "prompt"))
+        }
+        if let provider = text("provider"), provider.lowercased() != "openai" {
+            return .failure(ImageRequestRefusal(message: "Images are made with OpenAI in this app; '\(provider)' is not available. Leave 'provider' out.", field: "provider"))
+        }
+        // A size that was given must read as one: only one left out (or
+        // given as null, as models write what they leave out) is the
+        // default.
+        let size: String
+        if let given = args["size"], !(given.value is NSNull) {
+            guard let asked = given.value as? String, ImageGenerationService.isSize(asked) else {
+                return .failure(ImageRequestRefusal(message: "'size' must be width x height in pixels, like '1024x1024'.", field: "size"))
+            }
+            size = asked
+        } else {
+            size = ImageGenerationService.defaultSize
+        }
+        return .success(ImageRequest(prompt: prompt, model: text("model"), size: size, quality: text("quality")))
+    }
+
+    struct ImageRequestRefusal: Error, Equatable {
+        let message: String
+        let field: String
+    }
+
+    /// What the model is told of a picture that was made: that the person
+    /// has it, not where it is.
+    nonisolated static func imageContextBlock(for made: ImageGenerationService.Generated) -> String {
+        var lines = ["[Generated image]", "An image was made with \(made.model) (\(made.size)) and is shown to the user in the app, with your reply. Do not write a link or a file name for it."]
+        if let revised = made.revisedPrompt, !revised.isEmpty {
+            lines.append("Prompt as the model revised it: \(revised)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Makes the picture with the person's OpenAI key and keeps it in the
+    /// attachment store for the thread; the turn gives it to its reply.
+    private func generateImage(toolCall: ParsedToolCall, threadID: String?) async -> ToolExecutionResult {
+        let request: ImageRequest
+        switch Self.imageRequest(from: toolCall.args) {
+        case let .success(asked): request = asked
+        case let .failure(refusal): return .validationError(tool: toolCall.name, message: refusal.message, field: refusal.field)
+        }
+        guard let threadID else {
+            return .error(tool: toolCall.name, message: "An image can be made only in a thread.", errorType: "image_needs_a_thread")
+        }
+        // The key is the signed-in account's. A turn can outlive the
+        // account it was started as, so the thread must be that account's
+        // before anything is asked with its key. The account and its key
+        // are read together, with nothing between them, so the key is
+        // that account's whatever is signed in a moment later.
+        let keyed = imageService
+        let (account, service) = await MainActor.run { (UserScope.currentUserID, keyed()) }
+        let isTheAccounts: Bool
+        do {
+            isTheAccounts = try await ThreadRepository.shared.isThread(threadID, of: account)
+        } catch {
+            let failure = error as NSError
+            AppErrorReporter.log(message: "A thread's account could not be read (\(failure.domain) \(failure.code)).", context: "ToolExecutionService.generateImage")
+            return .error(tool: toolCall.name, message: "The thread could not be read: no image was made.", errorType: "image_thread_unreadable", isRetryable: true)
+        }
+        guard isTheAccounts else {
+            return .error(tool: toolCall.name, message: "This thread is not the signed-in account's: no image was made.", errorType: "image_account_changed")
+        }
+        guard let service else {
+            return .error(
+                tool: toolCall.name,
+                message: "Image generation needs an OpenAI connection with a key.",
+                errorType: "image_provider_key_required",
+                helpfulInstructions: "Add an OpenAI connection in Settings to make images."
+            )
+        }
+        let made: ImageGenerationService.Generated
+        do {
+            made = try await service.generate(prompt: request.prompt, model: request.model, size: request.size, quality: request.quality)
+        } catch is CancellationError {
+            return .error(tool: toolCall.name, message: "Stopped before the image was made.", errorType: "cancelled")
+        } catch let failure as ImageGenerationService.Failure {
+            return .error(tool: toolCall.name, message: failure.errorDescription ?? "The image could not be made.", errorType: "image_generation_failed", isRetryable: failure != .keyRefused)
+        } catch {
+            let failure = error as NSError
+            AppErrorReporter.log(message: "An image could not be made (\(failure.domain) \(failure.code)).", context: "ToolExecutionService.generateImage")
+            return .error(tool: toolCall.name, message: "The image could not be made: OpenAI could not be reached.", errorType: "image_generation_failed", isRetryable: true)
+        }
+        do {
+            let kept = try await AttachmentStore.shared.add(made.data, named: Self.generatedImageName, mimeType: made.mimeType, toThread: threadID)
+            return .success(
+                tool: toolCall.name,
+                result: [Self.generatedFilesKey: .array([kept.messageMetadata]), "provider": .string("openai"), "model": .string(made.model), "size": .string(made.size)],
+                contextBlock: Self.imageContextBlock(for: made)
+            )
+        } catch {
+            // Made, but not kept on this device, whatever stopped it (the
+            // data locked, the account changed, the disk): there is
+            // nothing to show.
+            let failure = error as NSError
+            AppErrorReporter.log(message: "A generated image could not be kept (\(failure.domain) \(failure.code)).", context: "ToolExecutionService.generateImage")
+            return .error(tool: toolCall.name, message: "The image was made but could not be kept on this device.", errorType: "image_persistence_failed")
+        }
+    }
+
+    /// What a generated image is called; the store adds the kind it keeps.
+    nonisolated static let generatedImageName = "Generated image.png"
+
+    /// Where a tool's result lists the files it made for the person, each
+    /// as a message keeps an attachment.
+    nonisolated static let generatedFilesKey = "generated_attachments"
+
+    /// The files a tool's result says it made for the person.
+    nonisolated static func generatedFiles(in result: ToolExecutionResult) -> [FileAttachmentDetail] {
+        guard result.status == "ok", case let .array(entries)? = result.result?[generatedFilesKey] else { return [] }
+        return entries.compactMap(FileAttachmentDetail.init(messageMetadata:))
+    }
+
+    /// The service a picture is asked of, with the person's OpenAI key;
+    /// nil where there is no key. Tests give one that answers from a script.
+    nonisolated static let imageServiceWithTheStoredKey: @Sendable () -> ImageGenerationService? = {
+        guard let key = ProviderAccountService.apiKeyFromKeychain(forProvider: "openai"), !key.isEmpty else { return nil }
+        return ImageGenerationService(apiKey: key)
+    }
+
+    private var imageService = imageServiceWithTheStoredKey
+
+    func setImageService(_ make: @escaping @Sendable () -> ImageGenerationService?) {
+        imageService = make
+    }
+
+    // MARK: - Execution
+
     func execute(toolCall: ParsedToolCall, agentType: String, threadID: String? = nil) async -> ToolExecutionResult {
         // 1. Rate Limiting
         if isRateLimited() {
@@ -131,6 +278,10 @@ actor ToolExecutionService {
             return await shellService.execute(command: command) { command, directory in
                 await self.answer(in: threadID) { .shell(command: command, directory: directory, threadID: $0) }
             }
+
+        // --- Image generation ---
+        case "image.generate":
+            return await generateImage(toolCall: toolCall, threadID: threadID)
 
         // --- Web Tools ---
         case "web_search":

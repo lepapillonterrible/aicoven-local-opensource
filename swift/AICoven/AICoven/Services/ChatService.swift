@@ -453,7 +453,7 @@ actor ChatService {
         let isLocalModel = isLocalDeployment(providerID: descriptor.providerID)
         let toolConfig: ContextBuilder.ToolConfig = isLocalModel
             ? await .mlxTools()
-            : await .connected()
+            : await .connected(deliversFiles: true)
         await ToolExecutionService.shared.setWhitelist(for: "chat", tools: toolConfig.enabledTools)
 
         // ── Context-aware repeat detection (ported from backend) ──────────
@@ -541,7 +541,8 @@ actor ChatService {
                         onStateChange(state)
 
                         AnalyticsService.shared.trackToolUsed(toolName: invocation.tool, threadId: threadId)
-                        let (_, contextBlock) = try await executeChatToolCall(invocation, threadID: threadId)
+                        let (_, contextBlock, files) = try await executeChatToolCall(invocation, threadID: threadId)
+                        state.generatedFiles += files
 
                         state.toolsInProgress[toolID]?.status = "completed"
                         state.toolsInProgress[toolID]?.result = contextBlock
@@ -587,7 +588,8 @@ actor ChatService {
                     onStateChange(state)
 
                     AnalyticsService.shared.trackToolUsed(toolName: forcedNative.tool, threadId: threadId)
-                    let (_, contextBlock) = try await executeChatToolCall(forcedNative, threadID: threadId)
+                    let (_, contextBlock, files) = try await executeChatToolCall(forcedNative, threadID: threadId)
+                    state.generatedFiles += files
 
                     state.toolsInProgress[toolID]?.status = "completed"
                     state.toolsInProgress[toolID]?.result = contextBlock
@@ -617,7 +619,8 @@ actor ChatService {
                     onStateChange(state)
 
                     AnalyticsService.shared.trackToolUsed(toolName: forcedMCP.tool, threadId: threadId)
-                    let (_, contextBlock) = try await executeChatToolCall(forcedMCP, threadID: threadId)
+                    let (_, contextBlock, files) = try await executeChatToolCall(forcedMCP, threadID: threadId)
+                    state.generatedFiles += files
 
                     state.toolsInProgress[toolID]?.status = "completed"
                     state.toolsInProgress[toolID]?.result = contextBlock
@@ -813,7 +816,8 @@ actor ChatService {
                     state.bumpVersion()
                     onStateChange(state)
 
-                    let (summary, contextBlock) = try await executeChatToolCall(toolCall, threadID: threadId)
+                    let (summary, contextBlock, files) = try await executeChatToolCall(toolCall, threadID: threadId)
+                    state.generatedFiles += files
 
                     state.toolsInProgress[toolID]?.status = "completed"
                     state.toolsInProgress[toolID]?.result = contextBlock
@@ -871,7 +875,8 @@ actor ChatService {
                         state.bumpVersion()
                         onStateChange(state)
 
-                        let (summary, contextBlock) = try await executeChatToolCall(forcedCall, threadID: threadId)
+                        let (summary, contextBlock, files) = try await executeChatToolCall(forcedCall, threadID: threadId)
+                        state.generatedFiles += files
 
                         state.toolsInProgress[toolID]?.status = "completed"
                         state.toolsInProgress[toolID]?.result = contextBlock
@@ -954,7 +959,8 @@ actor ChatService {
                             state.bumpVersion()
                             onStateChange(state)
 
-                            let (summary, contextBlock) = try await executeChatToolCall(forcedCall, threadID: threadId)
+                            let (summary, contextBlock, files) = try await executeChatToolCall(forcedCall, threadID: threadId)
+                            state.generatedFiles += files
 
                             state.toolsInProgress[toolID]?.status = "completed"
                             state.toolsInProgress[toolID]?.result = contextBlock
@@ -1775,7 +1781,7 @@ extension ChatService {
     /// Execute a chat tool call using ToolExecutionService and return a short summary
     /// plus an optional context block that can be fed back into the context sandwich.
     /// This enhanced version routes through the central ToolExecutionService for all tools.
-    nonisolated func executeChatToolCall(_ call: ChatToolInvocation, threadID: String?) async throws -> (summary: String, contextBlock: String?) {
+    nonisolated func executeChatToolCall(_ call: ChatToolInvocation, threadID: String?) async throws -> (summary: String, contextBlock: String?, files: [FileAttachmentDetail]) {
         // A stopped turn starts no tool.
         try Task.checkCancellation()
         // Convert ChatToolInvocation to ParsedToolCall for ToolExecutionService
@@ -1812,16 +1818,17 @@ extension ChatService {
         // Summaries are user-facing so use friendly descriptions.
         if result.status == "ok" {
             let summary = Self.friendlyToolSummary(for: call.tool)
-            return (summary, result.contextBlock)
+            // What the tool made for the person goes with the turn's reply.
+            return (summary, result.contextBlock, ToolExecutionService.generatedFiles(in: result))
         } else if result.status == "denied" {
             let message = result.error ?? "Permission denied"
             let summary = "⚠️ \(Self.friendlyToolName(call.tool)): permission denied"
-            return (summary, "[Tool Permission Denied: \(result.tool)]\n\(message)")
+            return (summary, "[Tool Permission Denied: \(result.tool)]\n\(message)", [])
         } else {
             // Error or validation error
             let message = result.error ?? "Unknown error"
             let summary = "⚠️ \(Self.friendlyToolName(call.tool)): error"
-            return (summary, "[Tool Error: \(result.tool)]\n\(message)")
+            return (summary, "[Tool Error: \(result.tool)]\n\(message)", [])
         }
     }
 
@@ -1908,6 +1915,7 @@ extension ChatService {
         case "file.write": "File Write"
         case "file.list": "File List"
         case "shell.execute": "Shell Command"
+        case "image.generate": "Image Generation"
         case _ where tool.hasPrefix("github."): "GitHub"
         case _ where tool.hasPrefix("google_drive"): "Google Drive"
         case _ where tool.hasPrefix("google_sheets"): "Google Sheets"
@@ -1925,6 +1933,7 @@ extension ChatService {
         case "file.write": "✍️ Writing file…"
         case "file.list": "📂 Listing files…"
         case "shell.execute": "💻 Running command…"
+        case "image.generate": "🎨 Making an image…"
         case _ where tool.hasPrefix("github."): "🐙 Working with GitHub…"
         case _ where tool.hasPrefix("google_drive"): "📁 Accessing Google Drive…"
         case _ where tool.hasPrefix("google_sheets"): "📊 Working with Sheets…"

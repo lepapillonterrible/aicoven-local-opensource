@@ -486,6 +486,7 @@ final class TurnEngine: ObservableObject {
         settling.insert(turnID)
         let wasStopped = running[threadID]?.isStopping == true
         var ending = progress.ending(in: threadID, thrown: thrown, stopped: wasStopped)
+        ending.message = await TurnProgress.keepingGeneratedFiles(of: ending.message, inThread: threadID)
         // Copied, and forgotten there only once the ending is published:
         // until then the thread shows a running turn's answers from there.
         ending.trace.approvals = approvals.answered[threadID] ?? []
@@ -578,6 +579,33 @@ struct TurnProgress {
         }
     }
 
+    /// The reply with the files the turn made for the person marked as its
+    /// own in the attachment store, before it is stored: files not marked
+    /// with a message are cleared as unsent. If they cannot be marked the
+    /// reply is stored without them, not with files that would go from
+    /// under it, and those of them still unmarked are removed.
+    static func keepingGeneratedFiles(of message: ChatMessage, inThread threadID: String, store: AttachmentStore = .shared) async -> ChatMessage {
+        guard let kept = message.metadata, let files = FileAttachmentDetail.attachments(in: kept), !files.isEmpty else { return message }
+        do {
+            try await store.markSent(files.map(\.id), with: message.id, inThread: threadID)
+            return message
+        } catch {
+            let failure = error as NSError
+            AppErrorReporter.log(message: "A reply's generated files could not be kept with it (\(failure.domain) \(failure.code)).", context: "TurnEngine.keepingGeneratedFiles")
+            // What is no message's is not kept until the next launch clears it.
+            await store.removeUnsent(files.map(\.id))
+            var metadata = kept
+            for key in (FileAttachmentDetail.messageMetadata(for: files) ?? [:]).keys {
+                metadata[key] = nil
+            }
+            return ChatMessage(
+                id: message.id, threadId: message.threadId, role: message.role, content: message.content,
+                metadata: metadata.isEmpty ? nil : metadata, tokenUsage: message.tokenUsage, createdAt: message.createdAt,
+                isEncrypted: message.isEncrypted, keyFingerprint: message.keyFingerprint
+            )
+        }
+    }
+
     /// How the turn ended and the message that says so: the reply, the
     /// failure the chat service reported, or the error it threw. A turn the
     /// person stopped ends as stopped, with what had been answered so far,
@@ -590,9 +618,13 @@ struct TurnProgress {
     ) -> (outcome: TurnOutcome, message: ChatMessage, trace: WorkTrace) {
         var trace = trace
         trace.finishedAt = now
+        // What the turn's tools made for the person (a generated image)
+        // goes with its message however the turn ended: it was made.
+        let made = FileAttachmentDetail.messageMetadata(for: last?.generatedFiles ?? []) ?? [:]
         // However the turn ended, its message is shown under the name it
         // was started with.
-        let named = agentName.map { ["role_name": AnyJSONValue($0)] }
+        var named: [String: AnyJSONValue]? = made.merging(agentName.map { ["role_name": AnyJSONValue($0)] } ?? [:]) { _, name in name }
+        if named?.isEmpty == true { named = nil }
         // Stopped by the person, or by the agent that was running it.
         if (stopped && (thrown != nil || last?.status != .completed)) || (thrown == nil && last?.status == .cancelled) {
             let partial = MessageAdapter.sanitizeContentForDisplay(partialAnswer).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -610,7 +642,7 @@ struct TurnProgress {
             return (.failed, Self.message(in: threadID, role: "assistant", content: answer, metadata: named), trace)
         }
 
-        var metadata: [String: AnyJSONValue] = [:]
+        var metadata: [String: AnyJSONValue] = made
         let joined = thoughts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         if !joined.isEmpty {
             metadata["thoughts"] = AnyJSONValue([joined])
