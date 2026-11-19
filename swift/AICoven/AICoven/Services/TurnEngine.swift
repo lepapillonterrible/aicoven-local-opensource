@@ -1,3 +1,4 @@
+import Accessibility
 internal import Combine
 import Foundation
 
@@ -110,6 +111,9 @@ final class TurnEngine: ObservableObject {
         running[threadID]?.isStopping = true
         running[threadID]?.message = TurnProgress.stoppingMessage
         replies[threadID]?.cancel()
+        // Said here, once for the turn, whatever screen is showing: with
+        // the keyboard shortcut, VoiceOver's focus can be anywhere.
+        AccessibilityNotification.Announcement("Stopping").post()
     }
 
     /// Keeps the text of a send that could not be started, for a thread that
@@ -207,6 +211,10 @@ final class TurnEngine: ObservableObject {
         let thrown = await reply.value
         replies[threadID] = nil
         let ending = progress.ending(in: threadID, thrown: thrown, stopped: running[threadID]?.isStopping == true)
+        if ending.outcome == .cancelled {
+            // Once, when the turn has in fact stopped.
+            AccessibilityNotification.Announcement("Stopped").post()
+        }
 
         do {
             guard try await store.endTurn(id: turnID, outcome: ending.outcome, message: ending.message) else {

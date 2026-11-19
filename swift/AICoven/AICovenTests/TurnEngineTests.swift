@@ -167,7 +167,7 @@ final class TurnEngineTests: XCTestCase {
 
     func testStop_keepsWhatAStreamedAnswerHadSaidAndDoesNotCallItComplete() async throws {
         let firstPart = expectation(description: "The answer has started to arrive")
-        let engine = makeEngine(provider: StreamingProvider(firstPartSent: firstPart))
+        let engine = makeEngine(provider: StreamingProvider(parts: [LLMStreamDelta(text: "Once upon a")], sent: firstPart))
         // A request the reply loop answers without tools, so the answer is
         // streamed.
         try await engine.start(with: question("Tell me about dragons"), context: "Tell me about dragons", roleID: nil, agentName: nil, attachments: nil)
@@ -182,6 +182,25 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertEqual(messages.last?.content, "Once upon a\n\n_Stopped here._")
         let turn = try await storedTurn()
         XCTAssertEqual(turn?.status, "cancelled")
+    }
+
+    func testStop_afterAStreamedAnswerHasArrivedInFullKeepsItAsTheReply() async throws {
+        let wholeAnswer = expectation(description: "The whole answer has arrived")
+        let engine = makeEngine(provider: StreamingProvider(
+            parts: [LLMStreamDelta(text: "Dragons are large."), LLMStreamDelta(text: "", isFinished: true)],
+            sent: wholeAnswer
+        ))
+        try await engine.start(with: question("Tell me about dragons"), context: "Tell me about dragons", roleID: nil, agentName: nil, attachments: nil)
+        await fulfillment(of: [wholeAnswer], timeout: 10)
+
+        // The stream has said it is finished but has not closed.
+        engine.stop(threadID: threadID)
+        await finished(engine)
+
+        let messages = try await ChatService.shared.loadMessages(threadId: threadID)
+        XCTAssertEqual(messages.last?.content, "Dragons are large.")
+        let turn = try await storedTurn()
+        XCTAssertEqual(turn?.status, "completed")
     }
 
     func testStop_startsNoToolOnceTheTurnIsStopped() async {
@@ -362,22 +381,24 @@ final class TurnEngineTests: XCTestCase {
     }
 }
 
-/// A provider that streams the start of an answer and then nothing more;
+/// A provider that streams the parts it is given and then nothing more;
 /// when its consumer is cancelled the stream ends without an error.
 private final class StreamingProvider: StreamingLLMClient, @unchecked Sendable {
+    private let parts: [LLMStreamDelta]
     /// Fulfilled once, from the stream's task; XCTestExpectation is safe to
     /// fulfil from any thread.
-    private let firstPartSent: XCTestExpectation
+    private let sent: XCTestExpectation
 
-    init(firstPartSent: XCTestExpectation) {
-        self.firstPartSent = firstPartSent
+    init(parts: [LLMStreamDelta], sent: XCTestExpectation) {
+        self.parts = parts
+        self.sent = sent
     }
 
     func streamChat(messages _: [LLMMessage], model _: String, options _: ChatOptions) -> AsyncThrowingStream<LLMStreamDelta, Error> {
         AsyncThrowingStream { continuation in
             continuation.onTermination = { _ in continuation.finish() }
-            continuation.yield(LLMStreamDelta(text: "Once upon a"))
-            firstPartSent.fulfill()
+            parts.forEach { continuation.yield($0) }
+            sent.fulfill()
         }
     }
 
