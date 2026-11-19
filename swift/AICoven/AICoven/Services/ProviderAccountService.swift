@@ -832,9 +832,6 @@ extension ProviderAccountService {
                 )
             }
         case "mlx":
-            guard MLXModelManager.isSupported else {
-                throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "This device can't run MLX models."])
-            }
             // MLX: return curated catalog models as static metadata.
             return MLXModelManager.defaultCatalog.map { info in
                 ProviderInitializationStatus.ModelMetadata(
