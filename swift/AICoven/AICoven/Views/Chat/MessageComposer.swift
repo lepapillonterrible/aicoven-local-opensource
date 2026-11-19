@@ -550,9 +550,9 @@ struct MessageComposer: View {
                 choosingPictures = nil
             }
         }
-        // Pasted or dropped while the (+) is off, or anything while an
-        // attaching is under way: not taken, and on the Mac said so with
-        // the system's sound.
+        // Pasted or dropped while the composer is attaching, sending or
+        // disabled, or anything while an attaching is under way: not
+        // taken, and on the Mac said so with the system's sound.
         guard attachingTask == nil, chosen != nil || !(isBusy || isDisabled) else {
             #if os(macOS)
             NSSound.beep()
@@ -602,9 +602,16 @@ struct MessageComposer: View {
         case let .photo(item):
             // Its bytes as the library has them; the store writes a still
             // picture out afresh, upright and without where it was taken.
-            guard let data = try await item.loadTransferable(type: Data.self) else {
-                throw AttachmentStore.Failure.unreadable(name: source.name)
+            // The library has none to give, or could not fetch them (a
+            // photo in iCloud while offline): either way it was not read.
+            let loaded: Data?
+            do {
+                loaded = try await item.loadTransferable(type: Data.self)
+            } catch {
+                Self.log("A photo could not be loaded", error)
+                loaded = nil
             }
+            guard let data = loaded else { throw AttachmentStore.Failure.unreadable(name: source.name) }
             guard attachingTask == task else { throw CancellationError() }
             let name = ComposerRules.photoName(fileExtension: item.supportedContentTypes.first?.preferredFilenameExtension)
             return try await AttachmentStore.shared.add(data, named: name, mimeType: AttachmentImage.mimeType(forFileNamed: name), toThread: threadId)

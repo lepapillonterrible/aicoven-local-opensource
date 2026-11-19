@@ -266,7 +266,8 @@ struct GrowingTextEditor: NSViewRepresentable {
         /// Paste is on only for what the field can read; files and picture
         /// bytes are added so that ⌘V reaches `paste` when the clipboard
         /// holds only those. After the text kinds, so text still wins
-        /// where both are there.
+        /// over a picture's bytes where both are there (files are
+        /// attached whatever text comes with them).
         override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
             onAttach == nil ? super.readablePasteboardTypes : super.readablePasteboardTypes + Self.attachableTypes
         }
