@@ -241,7 +241,7 @@ actor ToolExecutionService {
     func execute(toolCall called: ParsedToolCall, agentType: String, threadID: String? = nil) async -> ToolExecutionResult {
         // A tool called by a name it had before is the tool as it is named
         // now: allowed, refused and run as that one.
-        let toolCall = ParsedToolCall(name: GitHubToolArguments.offeredName(of: called.name), args: called.args, reason: called.reason)
+        let toolCall = ParsedToolCall(name: ToolNames.offeredName(of: called.name), args: called.args, reason: called.reason)
 
         // 1. Rate Limiting
         if isRateLimited() {
@@ -454,8 +454,17 @@ actor ToolExecutionService {
         case "google_sheets.readValues", "google_sheets.read_values":
             return await executeGoogleSheetsReadValues(toolCall: toolCall)
 
-        case "google_sheets.writeValues", "google_sheets.write_values":
-            return await executeGoogleSheetsWriteValues(toolCall: toolCall, threadID: threadID)
+        case "google_sheets.updateValues", "google_sheets.write_values":
+            return await executeGoogleSheetsUpdateValues(toolCall: toolCall, threadID: threadID)
+
+        case "google_sheets.batchUpdate":
+            return await executeGoogleRequests(.spreadsheet, toolCall: toolCall, threadID: threadID)
+
+        case "google_slides.update":
+            return await executeGoogleRequests(.presentation, toolCall: toolCall, threadID: threadID)
+
+        case "google_docs.update":
+            return await executeGoogleDocsUpdate(toolCall: toolCall, threadID: threadID)
 
         default:
             return await .error(
@@ -1176,8 +1185,12 @@ actor ToolExecutionService {
         }
 
         let mimeType = extractString(from: toolCall.args, key: "mime_type") ?? "text/plain"
+        // The folders to put it in, by id, as the cloud app takes them.
+        guard let folders = GoogleToolArguments.folders(in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: "'parents' must be a list of folder ids, or be left out.", field: "parents")
+        }
 
-        if let refusal = await refusal(ofAppChange: toolCall, in: threadID, { .driveUpload(name: name, mimeType: mimeType, content: content, threadID: $0) }) {
+        if let refusal = await refusal(ofAppChange: toolCall, in: threadID, { .driveUpload(name: name, mimeType: mimeType, content: content, folders: folders, threadID: $0) }) {
             return refusal
         }
 
@@ -1186,7 +1199,8 @@ actor ToolExecutionService {
                 accountId: account.id,
                 name: name,
                 mimeType: mimeType,
-                content: content.data(using: .utf8) ?? Data()
+                content: content.data(using: .utf8) ?? Data(),
+                parentFolderIds: folders
             )
             let block = "[Google Drive File Uploaded]\nName: \(file.name)\nID: \(file.id)"
             return await .success(tool: toolCall.name, result: ["file_id": AnyJSONValue(file.id)], contextBlock: block)
@@ -1222,8 +1236,9 @@ actor ToolExecutionService {
         }
     }
 
-    /// Execute google_sheets.writeValues
-    private func executeGoogleSheetsWriteValues(toolCall: ParsedToolCall, threadID: String?) async -> ToolExecutionResult {
+    /// Execute google_sheets.updateValues (this app's older name for it
+    /// was writeValues): write cells of a spreadsheet.
+    private func executeGoogleSheetsUpdateValues(toolCall: ParsedToolCall, threadID: String?) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .googleDrive) else {
             return await .error(tool: toolCall.name, message: "Google Drive not connected.")
         }
@@ -1234,15 +1249,15 @@ actor ToolExecutionService {
         guard let range = Self.given(extractString(from: toolCall.args, key: "range")) else {
             return await .validationError(tool: toolCall.name, message: "Missing required argument: 'range'", field: "range")
         }
-
-        // Parse values from args - expecting array of arrays
-        guard let valuesArg = toolCall.args["values"]?.value as? [[Any]] else {
-            return await .validationError(tool: toolCall.name, message: "Missing or invalid 'values' argument (expected array of arrays)")
+        guard let rows = GoogleToolArguments.rows(in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: "Missing or invalid 'values': give rows of cells, such as [[\"Name\", \"Total\"], [\"Ada\", 3]].", field: "values")
+        }
+        guard let inputOption = GoogleToolArguments.valueInputOption(in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: "'value_input_option' must be USER_ENTERED or RAW, or be left out.", field: "value_input_option")
         }
 
-        let values = valuesArg.map { row in row.map { String(describing: $0) } }
-
-        if let refusal = await refusal(ofAppChange: toolCall, in: threadID, { .sheetsWrite(spreadsheetID: spreadsheetId, range: range, values: values, threadID: $0) }) {
+        let shown = rows.map { $0.map(GoogleToolArguments.shown) }
+        if let refusal = await refusal(ofAppChange: toolCall, in: threadID, { .sheetsWrite(spreadsheetID: spreadsheetId, range: range, values: shown, asTyped: inputOption == "USER_ENTERED", threadID: $0) }) {
             return refusal
         }
 
@@ -1251,10 +1266,105 @@ actor ToolExecutionService {
                 accountId: account.id,
                 spreadsheetId: spreadsheetId,
                 range: range,
-                values: values
+                // Each cell as it was given: text as text, a number as a number.
+                values: rows.map { $0.map { cell in cell == .null ? "" : MCPClient.plain(cell) } },
+                inputOption: inputOption
             )
-            let block = "[Google Sheets Updated: \(range)]\nWrote \(values.count) rows"
-            return await .success(tool: toolCall.name, result: ["updated_rows": AnyJSONValue(values.count)], contextBlock: block)
+            let block = "[Google Sheets Updated: \(range)]\nWrote \(rows.count) \(rows.count == 1 ? "row" : "rows")"
+            return await .success(tool: toolCall.name, result: ["updated_rows": AnyJSONValue(rows.count)], contextBlock: block)
+        } catch {
+            return await .error(tool: toolCall.name, message: error.localizedDescription)
+        }
+    }
+
+    /// Execute google_sheets.batchUpdate or google_slides.update: changes
+    /// to a spreadsheet or a presentation, in Google's own form of
+    /// requests, which the person is shown as they will be sent.
+    private func executeGoogleRequests(_ file: ToolApproval.GoogleFile, toolCall: ParsedToolCall, threadID: String?) async -> ToolExecutionResult {
+        guard let account = await connectedAccountsService.getConnectedAccount(for: .googleDrive) else {
+            return await .error(tool: toolCall.name, message: "Google Drive not connected.")
+        }
+
+        let keys = file == .spreadsheet ? ["spreadsheet_id", "spreadsheetId"] : ["presentation_id", "presentationId"]
+        guard let id = GoogleToolArguments.id(keys, in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: GoogleToolArguments.idMissing(keys[0]), field: keys[0])
+        }
+        guard let requests = GoogleToolArguments.requests(in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: Self.requestsMissing, field: "requests")
+        }
+
+        return await makeGoogleChanges(file, id: id, requests: requests, account: account.id, toolCall: toolCall, threadID: threadID) {
+            .googleRequests(file, id: id, requests: requests, threadID: $0)
+        }
+    }
+
+    /// Execute google_docs.update: text added to a document (`content`,
+    /// at `index` or at the end), or changes in Google's own form of
+    /// requests (`requests`).
+    private func executeGoogleDocsUpdate(toolCall: ParsedToolCall, threadID: String?) async -> ToolExecutionResult {
+        guard let account = await connectedAccountsService.getConnectedAccount(for: .googleDrive) else {
+            return await .error(tool: toolCall.name, message: "Google Drive not connected.")
+        }
+
+        guard let id = GoogleToolArguments.id(["document_id", "documentId"], in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: GoogleToolArguments.idMissing("document_id"), field: "document_id")
+        }
+
+        // Requests, where the call gives them: they are what is asked.
+        if let given = toolCall.args["requests"], !(given.value is NSNull) {
+            guard let requests = GoogleToolArguments.requests(in: toolCall.args) else {
+                return await .validationError(tool: toolCall.name, message: Self.requestsMissing, field: "requests")
+            }
+            return await makeGoogleChanges(.document, id: id, requests: requests, account: account.id, toolCall: toolCall, threadID: threadID) {
+                .googleRequests(.document, id: id, requests: requests, threadID: $0)
+            }
+        }
+
+        // Otherwise text to add, at a position or at the end.
+        guard let text = Self.given(extractString(from: toolCall.args, key: "content")) else {
+            return await .validationError(tool: toolCall.name, message: "Give 'content' (text to add to the document) or 'requests' (Google Docs API requests).", field: "content")
+        }
+        var index: Int?
+        if let given = toolCall.args["index"], !(given.value is NSNull) {
+            guard let position = GitHubToolArguments.whole("index", in: toolCall.args), position >= 1 else {
+                return await .validationError(tool: toolCall.name, message: "'index' must be a position in the document (1 is its start), or be left out to add at the end.", field: "index")
+            }
+            index = position
+        }
+        let place: [String: AnyJSONValue] = index.map { ["location": .dictionary(["index": .int($0)])] } ?? ["endOfSegmentLocation": .dictionary([:])]
+        let request: [String: AnyJSONValue] = ["insertText": .dictionary(place.merging(["text": .string(text)]) { first, _ in first })]
+
+        return await makeGoogleChanges(.document, id: id, requests: [request], account: account.id, toolCall: toolCall, threadID: threadID) {
+            .docsAddText(documentID: id, text: text, index: index, threadID: $0)
+        }
+    }
+
+    private static let requestsMissing = "Missing or invalid 'requests': give one or more requests as the Google API takes them (a list of objects)."
+
+    /// Asks the person about changes to a Google file and, if they
+    /// approve, asks Google to make them.
+    private func makeGoogleChanges(
+        _ file: ToolApproval.GoogleFile,
+        id: String,
+        requests: [[String: AnyJSONValue]],
+        account: String,
+        toolCall: ParsedToolCall,
+        threadID: String?,
+        _ describe: @Sendable (_ threadID: String) -> ToolApproval
+    ) async -> ToolExecutionResult {
+        if let refusal = await refusal(ofAppChange: toolCall, in: threadID, describe) {
+            return refusal
+        }
+
+        let plain = requests.map { $0.mapValues(MCPClient.plain) }
+        do {
+            switch file {
+            case .document: _ = try await googleDriveService.updateDocument(accountId: account, documentId: id, requests: plain)
+            case .spreadsheet: _ = try await googleDriveService.batchUpdateSpreadsheet(accountId: account, spreadsheetId: id, requests: plain)
+            case .presentation: _ = try await googleDriveService.updatePresentation(accountId: account, presentationId: id, requests: plain)
+            }
+            let block = "[Google \(file.named) Changed: \(id)]\n\(requests.count) \(requests.count == 1 ? "change" : "changes") made."
+            return await .success(tool: toolCall.name, result: ["id": AnyJSONValue(id), "changes": AnyJSONValue(requests.count)], contextBlock: block)
         } catch {
             return await .error(tool: toolCall.name, message: error.localizedDescription)
         }

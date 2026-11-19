@@ -279,7 +279,8 @@ enum PromptTemplates {
             parameters: [
                 ToolParameter(name: "name", type: "string", description: "File name", required: true),
                 ToolParameter(name: "content", type: "string", description: "File content", required: true),
-                ToolParameter(name: "mime_type", type: "string", description: "MIME type (default: text/plain)", required: false)
+                ToolParameter(name: "mime_type", type: "string", description: "MIME type (default: text/plain)", required: false),
+                ToolParameter(name: "parents", type: "array", description: "Ids of the folders to put it in (My Drive if left out)", required: false)
             ],
             example: #"{"tool": "google_drive.uploadFile", "input": {"name": "notes.txt", "content": "Meeting notes..."}, "reason": "Save notes to Drive"}"#
         ),
@@ -293,14 +294,44 @@ enum PromptTemplates {
             example: #"{"tool": "google_sheets.readValues", "input": {"spreadsheet_id": "abc123", "range": "Sheet1!A1:D10"}, "reason": "Read data from spreadsheet"}"#
         ),
         ToolDefinition(
-            name: "google_sheets.writeValues",
-            description: "Write values to a Google Sheets spreadsheet.",
+            name: "google_sheets.updateValues",
+            description: "Write values to a range of a Google Sheets spreadsheet.",
             parameters: [
                 ToolParameter(name: "spreadsheet_id", type: "string", description: "Spreadsheet ID", required: true),
                 ToolParameter(name: "range", type: "string", description: "A1 notation range", required: true),
-                ToolParameter(name: "values", type: "array", description: "2D array of values to write", required: true)
+                ToolParameter(name: "values", type: "array", description: "Rows of cells (a 2D array) to write", required: true),
+                ToolParameter(name: "value_input_option", type: "string", description: "USER_ENTERED (the default: as if typed, so formulas work) or RAW (exactly as written)", required: false)
             ],
-            example: #"{"tool": "google_sheets.writeValues", "input": {"spreadsheet_id": "abc123", "range": "Sheet1!A1", "values": [["Name", "Value"], ["Test", "123"]]}, "reason": "Update spreadsheet"}"#
+            example: #"{"tool": "google_sheets.updateValues", "input": {"spreadsheet_id": "abc123", "range": "Sheet1!A1", "values": [["Name", "Value"], ["Test", 123]]}, "reason": "Update spreadsheet"}"#
+        ),
+        ToolDefinition(
+            name: "google_sheets.batchUpdate",
+            description: "Change a Google Sheets spreadsheet's structure or formatting (add a sheet, format cells, sort) with Sheets API batchUpdate requests.",
+            parameters: [
+                ToolParameter(name: "spreadsheet_id", type: "string", description: "Spreadsheet ID", required: true),
+                ToolParameter(name: "requests", type: "array", description: "Sheets API requests, as spreadsheets.batchUpdate takes them", required: true)
+            ],
+            example: #"{"tool": "google_sheets.batchUpdate", "input": {"spreadsheet_id": "abc123", "requests": [{"addSheet": {"properties": {"title": "Summary"}}}]}, "reason": "Add a sheet for the summary"}"#
+        ),
+        ToolDefinition(
+            name: "google_docs.update",
+            description: "Add text to a Google Doc (content, at index or at the end), or change it with Docs API batchUpdate requests.",
+            parameters: [
+                ToolParameter(name: "document_id", type: "string", description: "Document ID", required: true),
+                ToolParameter(name: "content", type: "string", description: "Text to add to the document", required: false),
+                ToolParameter(name: "index", type: "integer", description: "Position to add the text at (1 is the start); at the end if left out", required: false),
+                ToolParameter(name: "requests", type: "array", description: "Docs API requests, as documents.batchUpdate takes them (instead of content)", required: false)
+            ],
+            example: #"{"tool": "google_docs.update", "input": {"document_id": "abc123", "content": "Next steps: ..."}, "reason": "Add the next steps to the document"}"#
+        ),
+        ToolDefinition(
+            name: "google_slides.update",
+            description: "Change a Google Slides presentation with Slides API batchUpdate requests.",
+            parameters: [
+                ToolParameter(name: "presentation_id", type: "string", description: "Presentation ID", required: true),
+                ToolParameter(name: "requests", type: "array", description: "Slides API requests, as presentations.batchUpdate takes them", required: true)
+            ],
+            example: #"{"tool": "google_slides.update", "input": {"presentation_id": "abc123", "requests": [{"createSlide": {}}]}, "reason": "Add a slide"}"#
         )
     ]
 
@@ -688,8 +719,9 @@ enum PromptTemplates {
     /// Google tools: Drive, Docs, Sheets and Slides, of the one Google connection.
     static let googleDriveTools: Set<String> = [
         "google_drive.listFiles", "google_drive.readFile", "google_drive.uploadFile",
-        "google_docs.read", "google_slides.read",
-        "google_sheets.read", "google_sheets.readValues", "google_sheets.writeValues"
+        "google_docs.read", "google_docs.update",
+        "google_slides.read", "google_slides.update",
+        "google_sheets.read", "google_sheets.readValues", "google_sheets.updateValues", "google_sheets.batchUpdate"
     ]
 
     /// Image generation, offered where there is an OpenAI key to make

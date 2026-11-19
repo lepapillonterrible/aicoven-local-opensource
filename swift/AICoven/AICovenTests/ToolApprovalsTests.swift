@@ -646,7 +646,28 @@ final class ToolApprovalsTests: XCTestCase {
         XCTAssertTrue(upload.details.hasPrefix("plan.txt\ntext/plain · "))
 
         let sheet = ToolApproval.sheetsWrite(spreadsheetID: "abc", range: "A1:B2", values: [["1", "2"], ["3", "4"]], threadID: "t")
-        XCTAssertEqual(sheet.details, "A1:B2 in spreadsheet abc\n2 rows\n\n1\t2\n3\t4")
+        XCTAssertEqual(sheet.details, "A1:B2 in spreadsheet abc\n2 rows, entered as if typed (formulas are worked out)\n\n1\t2\n3\t4")
+        XCTAssertEqual(sheet.toolName, "google_sheets.updateValues")
+        let raw = ToolApproval.sheetsWrite(spreadsheetID: "abc", range: "A1", values: [["=1+1"]], asTyped: false, threadID: "t")
+        XCTAssertEqual(raw.details, "A1 in spreadsheet abc\n1 row, entered exactly as written\n\n=1+1")
+
+        let inFolders = ToolApproval.driveUpload(name: "plan.txt", mimeType: "text/plain", content: "Plan", folders: ["f1", "f2"], threadID: "t")
+        XCTAssertTrue(inFolders.details.hasPrefix("plan.txt\nIn folders f1, f2\ntext/plain · "))
+
+        let added = ToolApproval.docsAddText(documentID: "doc1", text: "Next steps", index: nil, threadID: "t")
+        XCTAssertEqual(added.question, "Add this text to the Google Doc?")
+        XCTAssertTrue(added.details.hasPrefix("Document doc1\nAt the end · "))
+        XCTAssertTrue(added.details.hasSuffix("\n\nNext steps"))
+        XCTAssertTrue(ToolApproval.docsAddText(documentID: "doc1", text: "x", index: 5, threadID: "t").details.hasPrefix("Document doc1\nAt position 5 · "))
+
+        let changes = ToolApproval.googleRequests(.presentation, id: "deck1", requests: [["createSlide": .dictionary([:])], ["deleteObject": .dictionary(["objectId": .string("p2")])]], threadID: "t")
+        XCTAssertEqual(changes.question, "Change this Google Slides presentation?")
+        XCTAssertEqual(changes.toolName, "google_slides.update")
+        XCTAssertTrue(changes.details.hasPrefix("Presentation deck1\n2 changes, as Google is asked to make them:\n\n["))
+        XCTAssertTrue(changes.details.contains("\"objectId\" : \"p2\""), "The requests are shown as they will be sent")
+        let one = ToolApproval.googleRequests(.spreadsheet, id: "s1", requests: [["addSheet": .dictionary([:])]], threadID: "t")
+        XCTAssertTrue(one.details.hasPrefix("Spreadsheet s1\n1 change, as Google is asked to make it:\n\n"))
+        XCTAssertEqual(ToolApproval.googleRequests(.document, id: "d", requests: [["x": .null]], threadID: "t").question, "Change this Google Doc?")
     }
 }
 
