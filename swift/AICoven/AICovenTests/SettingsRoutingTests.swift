@@ -3,9 +3,9 @@ import XCTest
 
 @MainActor
 final class SettingsRoutingTests: XCTestCase {
-    override func tearDown() {
+    override func tearDown() async throws {
         AppState.shared.requestedSettingsPane = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
     func testOpenSettings_takesThePlacesSettingsHoldsAndLeavesOtherTabsAlone() {

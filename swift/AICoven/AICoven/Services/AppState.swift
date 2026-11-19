@@ -112,6 +112,7 @@ class AppState: ObservableObject {
         threads = []
         hasCompletedOnboarding = false
         pendingDeepLink = nil
+        requestedSettingsPane = nil
     }
 
     /// Fetch user's threads (personal-only, local store)
