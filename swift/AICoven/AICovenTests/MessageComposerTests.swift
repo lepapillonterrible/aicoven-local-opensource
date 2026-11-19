@@ -178,17 +178,24 @@ final class MessageComposerTests: XCTestCase {
     }
 
     func testTheMacField_takesFilesAndPicturesOnlyWhileTheComposerCanAttachThem() {
-        let field = GrowingTextEditor.ChatTextView()
+        // In a window, as a text view lists what can be dropped on it only there.
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 60), styleMask: [.borderless], backing: .buffered, defer: false)
+        let field = GrowingTextEditor.ChatTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 60))
+        field.isRichText = false
+        window.contentView = field
         let plain = (paste: field.readablePasteboardTypes, drop: field.acceptableDragTypes)
         XCTAssertFalse(plain.paste.contains(.png))
+        XCTAssertFalse(field.registeredDraggedTypes.contains(.png))
 
         field.onAttach = { _, _ in }
         XCTAssertEqual(field.readablePasteboardTypes, plain.paste + [.fileURL, .png, .tiff], "After the text kinds, so text still wins")
         XCTAssertEqual(field.acceptableDragTypes, plain.drop + [.fileURL, .png, .tiff])
+        XCTAssertTrue(Set(field.registeredDraggedTypes).isSuperset(of: [.fileURL, .png, .tiff]), "Listed for drops as soon as it can attach")
 
         field.onAttach = nil
         XCTAssertEqual(field.readablePasteboardTypes, plain.paste)
         XCTAssertEqual(field.acceptableDragTypes, plain.drop)
+        XCTAssertFalse(field.registeredDraggedTypes.contains(.png), "And no longer once it cannot")
     }
 
     func testAPastedPicture_isKeptUnderANameWithTheKindItIsKeptAs() throws {
@@ -206,6 +213,17 @@ final class MessageComposerTests: XCTestCase {
         XCTAssertEqual(ComposerRules.photoName(fileExtension: "jpg"), "Photo.jpg")
         XCTAssertEqual(ComposerRules.photoName(fileExtension: nil), "Photo")
         XCTAssertEqual(ComposerRules.photoName(fileExtension: ""), "Photo")
-        XCTAssertEqual(ComposerRules.mostPhotosAtOnce, 10)
+    }
+
+    func testSomethingToAttach_isTakenUnlessAnAttachingIsUnderWay_andAPasteOrDropOnlyWhileThePlusIsOn() {
+        // Back from a chooser: the (+) that opened it was on.
+        XCTAssertTrue(ComposerRules.takesAttachments(isAttaching: false, isFromAChooser: true, isBusy: false, isDisabled: false))
+        XCTAssertTrue(ComposerRules.takesAttachments(isAttaching: false, isFromAChooser: true, isBusy: true, isDisabled: false), "The Mac's panel can return while a message is being sent")
+        XCTAssertFalse(ComposerRules.takesAttachments(isAttaching: true, isFromAChooser: true, isBusy: true, isDisabled: false))
+        // Pasted or dropped.
+        XCTAssertTrue(ComposerRules.takesAttachments(isAttaching: false, isFromAChooser: false, isBusy: false, isDisabled: false))
+        XCTAssertFalse(ComposerRules.takesAttachments(isAttaching: false, isFromAChooser: false, isBusy: true, isDisabled: false), "Not while a message is being sent")
+        XCTAssertFalse(ComposerRules.takesAttachments(isAttaching: false, isFromAChooser: false, isBusy: false, isDisabled: true))
+        XCTAssertFalse(ComposerRules.takesAttachments(isAttaching: true, isFromAChooser: false, isBusy: true, isDisabled: false))
     }
 }

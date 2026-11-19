@@ -254,7 +254,17 @@ struct GrowingTextEditor: NSViewRepresentable {
     final class ChatTextView: NSTextView {
         var onSend: (() -> Void)?
         var onFocusChange: ((Bool) -> Void)?
-        var onAttach: ((_ files: [URL], _ pictures: [Data]) -> Void)?
+        /// What can be dropped on the field depends on whether this is
+        /// set, and a text view lists that only when told to: it is told
+        /// whenever this is set where it was not, or the other way round.
+        /// Listing only adds, so what was listed is dropped first.
+        var onAttach: ((_ files: [URL], _ pictures: [Data]) -> Void)? {
+            didSet {
+                guard (oldValue == nil) != (onAttach == nil) else { return }
+                unregisterDraggedTypes()
+                updateDragTypeRegistration()
+            }
+        }
 
         // MARK: Paste and drop
 

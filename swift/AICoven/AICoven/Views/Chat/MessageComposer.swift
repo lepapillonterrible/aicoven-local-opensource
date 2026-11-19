@@ -40,6 +40,16 @@ nonisolated enum ComposerRules {
     /// the extension of the kind it is kept as.
     static let pastedPictureName = "Pasted image"
 
+    /// Whether something to attach is taken now. Never while an attaching
+    /// is under way. What comes back from a chooser is otherwise taken:
+    /// the (+) that opened it was on. What is pasted or dropped is taken
+    /// only while the (+) would be: not while a message is being sent or
+    /// the composer is off.
+    static func takesAttachments(isAttaching: Bool, isFromAChooser: Bool, isBusy: Bool, isDisabled: Bool) -> Bool {
+        guard !isAttaching else { return false }
+        return isFromAChooser || !(isBusy || isDisabled)
+    }
+
     /// What a photo taken or picked is called: the library and the camera
     /// give it no name of its own.
     static func photoName(fileExtension: String?) -> String {
@@ -151,7 +161,7 @@ struct MessageComposer: View {
     /// into another's message.
     @State private var attachingTask: UUID?
     @State private var isSubmittingSend = false
-    /// Why the last file chosen could not be attached.
+    /// Why the last attachment could not be taken.
     @State private var attachFailure: String?
     @State private var showMentionSuggestions = false
     @State private var mentionQuery = ""
@@ -221,7 +231,14 @@ struct MessageComposer: View {
         .onDisappear {
             attachingTask = nil
             choosingFiles = nil
+            #if os(iOS)
+            // The camera covers the whole screen, the composer with it:
+            // the composer is not gone for that, and the photo is still
+            // taken. If the composer does go, the camera goes with it.
+            if !showCamera { choosingPictures = nil }
+            #else
             choosingPictures = nil
+            #endif
         }
         .onChange(of: threadId) { _, _ in
             attachingTask = nil
@@ -553,7 +570,7 @@ struct MessageComposer: View {
         // Pasted or dropped while the composer is attaching, sending or
         // disabled, or anything while an attaching is under way: not
         // taken, and on the Mac said so with the system's sound.
-        guard attachingTask == nil, chosen != nil || !(isBusy || isDisabled) else {
+        guard ComposerRules.takesAttachments(isAttaching: isAttaching, isFromAChooser: chosen != nil, isBusy: isBusy, isDisabled: isDisabled) else {
             #if os(macOS)
             NSSound.beep()
             #endif
@@ -579,7 +596,7 @@ struct MessageComposer: View {
             } catch is CancellationError {
                 return
             } catch {
-                Self.log("A file could not be attached", error)
+                Self.log("An attachment could not be taken", error)
                 guard attachingTask == task else { return }
                 // The store says why of what it refuses (too large, not
                 // readable); anything else is said plainly.
@@ -832,10 +849,6 @@ struct MessageComposer: View {
     }
 }
 
-// Send and Stop: a rounded rectangle at least `side` square, corner
-// `radius`, in the button fill, centred in a hit area at least `target`
-// square. The radius is the box's less the slot's gap to the box's edge,
-// never a circle.
 #if os(iOS)
 /// The system's camera, for one photo: gives its bytes as a JPEG and
 /// closes, or closes with nothing if it is cancelled.
@@ -878,6 +891,10 @@ private struct CameraPicker: UIViewControllerRepresentable {
 }
 #endif
 
+/// Send and Stop: a rounded rectangle at least `side` square, corner
+/// `radius`, in the button fill, centred in a hit area at least `target`
+/// square. The radius is the box's less the slot's gap to the box's edge,
+/// never a circle.
 private struct ComposerSlotStyle: ButtonStyle {
     let side: CGFloat
     let target: CGFloat
