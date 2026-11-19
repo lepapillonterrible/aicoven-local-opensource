@@ -176,6 +176,24 @@ final class ImageGenerationTests: XCTestCase {
             XCTAssertEqual(error.localizedDescription, "OpenAI did not make the image (400): Your request was rejected by the safety system.")
         }
 
+        let unlisted = service(keeping: Asked()) { _ in (429, #"{"error": {"message": "Rate limit reached for this organisation."}}"#) }
+        do {
+            _ = try await unlisted.generate(prompt: "Something")
+            XCTFail("The models could not be listed")
+        } catch {
+            XCTAssertEqual(error as? ImageGenerationService.Failure, .refused(status: 429, message: "Rate limit reached for this organisation."), "What it said, also when the models could not be listed")
+        }
+
+        let huge = String(repeating: "A", count: (ImageGenerationService.largestPicture / 3 + 1) * 4)
+        let tooLarge = service(keeping: Asked()) { _ in (200, #"{"data": [{"b64_json": "\#(huge)"}]}"#) }
+        do {
+            _ = try await tooLarge.generate(prompt: "Something", model: "gpt-image-9")
+            XCTFail("It is larger than the app keeps")
+        } catch {
+            XCTAssertEqual(error as? ImageGenerationService.Failure, .tooLarge)
+            XCTAssertEqual(error.localizedDescription, "OpenAI's image is larger than 10 MB and was not kept.")
+        }
+
         let empty = service(keeping: Asked()) { _ in (200, #"{"data": []}"#) }
         do {
             _ = try await empty.generate(prompt: "Something", model: "gpt-image-9")
@@ -221,7 +239,7 @@ final class ImageGenerationTests: XCTestCase {
         for size in ["1024x1024", "1536x864", "64x64"] {
             XCTAssertTrue(ImageGenerationService.isSize(size), size)
         }
-        for size in ["1024", "x1024", "1024x", "0x100", "1024x1024x3", "big", "1024 x 1024", "auto", "1x1"] {
+        for size in ["1024", "x1024", "1024x", "0x100", "1024x1024x3", "big", "1024 x 1024", "auto", "1x1", "12x12\n", "\n12x12", "1٢x1٢", ""] {
             XCTAssertFalse(ImageGenerationService.isSize(size), size)
         }
     }
@@ -247,11 +265,27 @@ final class ImageGenerationTests: XCTestCase {
             return XCTFail("Not a size")
         }
         XCTAssertEqual(size.field, "size")
+        // A size that was given must be one: only one left out is the default.
+        for given: AnyJSONValue in [.string(""), .string("  "), .int(1024), .string("1024x1024\n")] {
+            guard case let .failure(refusal) = ToolExecutionService.imageRequest(from: ["prompt": .string("A"), "size": given]) else {
+                XCTFail("Not a size: \(given)")
+                continue
+            }
+            XCTAssertEqual(refusal.field, "size")
+        }
     }
 
     func testTheTool_isOfferedAsAnyOtherAndTellsTheModelThePersonHasTheImage() async {
         XCTAssertEqual(PromptTemplates.imageTools, ["image.generate"])
         XCTAssertTrue(PromptTemplates.allTools.isDisjoint(with: PromptTemplates.imageTools), "Not offered unless there is a key to make images with")
+        // An agent run does not give what a tool makes to a reply, so it is
+        // not offered the tool whatever keys there are; a chat turn is,
+        // exactly where there is a key.
+        let forAnAgentRun = await ContextBuilder.ToolConfig.connected()
+        XCTAssertFalse(forAnAgentRun.enabledTools.contains("image.generate"))
+        let forAChatTurn = await ContextBuilder.ToolConfig.connected(deliversFiles: true)
+        XCTAssertEqual(forAChatTurn.enabledTools.contains("image.generate"), !PromptTemplates.offeredImageTools().isEmpty)
+        XCTAssertEqual(forAChatTurn.enabledTools.subtracting(PromptTemplates.imageTools), forAnAgentRun.enabledTools)
         let offered = await PromptTemplates.llmToolDefinitions(for: PromptTemplates.imageTools)
         XCTAssertEqual(offered.map(\.name), ["image.generate"])
         XCTAssertEqual(offered.first?.parameters.filter(\.required).map(\.name), ["prompt"])
@@ -333,6 +367,15 @@ final class ImageGenerationTests: XCTestCase {
 
         let noThread = try await ChatService.shared.executeChatToolCall(call, threadID: nil)
         XCTAssertEqual(noThread.contextBlock, "[Tool Error: image.generate]\nAn image can be made only in a thread.")
+
+        // A thread that is not the signed-in account's (a turn that outlived
+        // its account): nothing is asked of OpenAI with this account's key.
+        let notAsked = Asked()
+        let anothers = service(keeping: notAsked) { _ in (200, "{}") }
+        await ToolExecutionService.shared.setImageService { anothers }
+        let wrongAccount = try await ChatService.shared.executeChatToolCall(call, threadID: "not-this-accounts-\(UUID().uuidString)")
+        XCTAssertEqual(wrongAccount.contextBlock, "[Tool Error: image.generate]\nThis thread is not the signed-in account's: no image was made.")
+        XCTAssertEqual(notAsked.requests.count, 0)
 
         let noPrompt = try await ChatService.shared.executeChatToolCall(ChatToolInvocation(tool: "image.generate", input: AnyJSONValue(["size": "1024x1024"]), reason: nil), threadID: threadID)
         XCTAssertEqual(noPrompt.contextBlock, "[Tool Error: image.generate]\nMissing required argument: 'prompt'")

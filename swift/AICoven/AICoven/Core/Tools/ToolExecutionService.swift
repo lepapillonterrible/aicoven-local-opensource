@@ -82,9 +82,16 @@ actor ToolExecutionService {
         if let provider = text("provider"), provider.lowercased() != "openai" {
             return .failure(ImageRequestRefusal(message: "Images are made with OpenAI in this app; '\(provider)' is not available. Leave 'provider' out.", field: "provider"))
         }
-        let size = text("size") ?? ImageGenerationService.defaultSize
-        guard ImageGenerationService.isSize(size) else {
-            return .failure(ImageRequestRefusal(message: "'size' must be width x height in pixels, like '1024x1024'.", field: "size"))
+        // A size that was given must read as one: only one left out is
+        // the default.
+        let size: String
+        if let given = args["size"], !(given.value is NSNull) {
+            guard let asked = given.value as? String, ImageGenerationService.isSize(asked) else {
+                return .failure(ImageRequestRefusal(message: "'size' must be width x height in pixels, like '1024x1024'.", field: "size"))
+            }
+            size = asked
+        } else {
+            size = ImageGenerationService.defaultSize
         }
         return .success(ImageRequest(prompt: prompt, model: text("model"), size: size, quality: text("quality")))
     }
@@ -115,7 +122,15 @@ actor ToolExecutionService {
         guard let threadID else {
             return .error(tool: toolCall.name, message: "An image can be made only in a thread.", errorType: "image_needs_a_thread")
         }
-        guard let service = imageService() else {
+        // The key is the signed-in account's. A turn can outlive the
+        // account it was started as, so the thread must be that account's
+        // before anything is asked with its key.
+        let account = await MainActor.run { UserScope.currentUserID }
+        let service = imageService()
+        guard await ThreadRepository.shared.isThread(threadID, of: account), await MainActor.run(body: { UserScope.currentUserID }) == account else {
+            return .error(tool: toolCall.name, message: "This thread is not the signed-in account's: no image was made.", errorType: "image_account_changed")
+        }
+        guard let service else {
             return .error(
                 tool: toolCall.name,
                 message: "Image generation needs an OpenAI connection with a key.",
@@ -123,27 +138,32 @@ actor ToolExecutionService {
                 helpfulInstructions: "Add an OpenAI connection in Settings to make images."
             )
         }
+        let made: ImageGenerationService.Generated
         do {
-            let made = try await service.generate(prompt: request.prompt, model: request.model, size: request.size, quality: request.quality)
+            made = try await service.generate(prompt: request.prompt, model: request.model, size: request.size, quality: request.quality)
+        } catch is CancellationError {
+            return .error(tool: toolCall.name, message: "Stopped before the image was made.", errorType: "cancelled")
+        } catch let failure as ImageGenerationService.Failure {
+            return .error(tool: toolCall.name, message: failure.errorDescription ?? "The image could not be made.", errorType: "image_generation_failed", isRetryable: failure != .keyRefused)
+        } catch {
+            let failure = error as NSError
+            AppErrorReporter.log(message: "An image could not be made (\(failure.domain) \(failure.code)).", context: "ToolExecutionService.generateImage")
+            return .error(tool: toolCall.name, message: "The image could not be made: OpenAI could not be reached.", errorType: "image_generation_failed", isRetryable: true)
+        }
+        do {
             let kept = try await AttachmentStore.shared.add(made.data, named: Self.generatedImageName, mimeType: made.mimeType, toThread: threadID)
             return .success(
                 tool: toolCall.name,
                 result: [Self.generatedFilesKey: .array([kept.messageMetadata]), "provider": .string("openai"), "model": .string(made.model), "size": .string(made.size)],
                 contextBlock: Self.imageContextBlock(for: made)
             )
-        } catch is CancellationError {
-            return .error(tool: toolCall.name, message: "Stopped before the image was made.", errorType: "cancelled")
-        } catch let failure as ImageGenerationService.Failure {
-            return .error(tool: toolCall.name, message: failure.errorDescription ?? "The image could not be made.", errorType: "image_generation_failed", isRetryable: failure != .keyRefused)
-        } catch let failure as AttachmentStore.Failure {
-            // Made, but not kept on this device: there is nothing to show.
-            let failure = failure as NSError
+        } catch {
+            // Made, but not kept on this device, whatever stopped it (the
+            // data locked, the account changed, the disk): there is
+            // nothing to show.
+            let failure = error as NSError
             AppErrorReporter.log(message: "A generated image could not be kept (\(failure.domain) \(failure.code)).", context: "ToolExecutionService.generateImage")
             return .error(tool: toolCall.name, message: "The image was made but could not be kept on this device.", errorType: "image_persistence_failed")
-        } catch {
-            let failure = error as NSError
-            AppErrorReporter.log(message: "An image could not be made (\(failure.domain) \(failure.code)).", context: "ToolExecutionService.generateImage")
-            return .error(tool: toolCall.name, message: "The image could not be made: OpenAI could not be reached.", errorType: "image_generation_failed", isRetryable: true)
         }
     }
 

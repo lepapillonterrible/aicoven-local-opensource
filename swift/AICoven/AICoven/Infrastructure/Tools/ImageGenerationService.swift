@@ -1,7 +1,9 @@
 import Foundation
 
 /// Makes a picture from a description, with the person's own OpenAI key
-/// and OpenAI's image endpoint. Nothing goes anywhere else.
+/// and OpenAI's image endpoint. The key and the description go to OpenAI
+/// only; where an older model answers with a link to the picture, the
+/// picture is fetched from that link, without the key.
 nonisolated struct ImageGenerationService {
     /// A picture as OpenAI made it.
     struct Generated: Equatable {
@@ -22,8 +24,10 @@ nonisolated struct ImageGenerationService {
         case noImageModel
         /// OpenAI refused or failed the request, with what it said of it.
         case refused(status: Int, message: String?)
-        /// It answered without a picture, or with one that is too large.
+        /// It answered without a picture.
         case noPicture
+        /// It answered with a picture larger than the app keeps.
+        case tooLarge
 
         var errorDescription: String? {
             switch self {
@@ -36,6 +40,7 @@ nonisolated struct ImageGenerationService {
                     "OpenAI did not make the image (\(status))."
                 }
             case .noPicture: "OpenAI answered without an image."
+            case .tooLarge: "OpenAI's image is larger than 10 MB and was not kept."
             }
         }
     }
@@ -119,9 +124,11 @@ nonisolated struct ImageGenerationService {
         return nil
     }
 
-    /// Whether a size reads as width by height in pixels.
+    /// Whether a size reads as width by height in pixels: the whole of it,
+    /// in the digits 0 to 9, each side two to five digits not starting
+    /// with 0.
     static func isSize(_ size: String) -> Bool {
-        size.range(of: #"^[1-9]\d{1,4}x[1-9]\d{1,4}$"#, options: .regularExpression) != nil
+        size.range(of: #"\A[1-9][0-9]{1,4}x[1-9][0-9]{1,4}\z"#, options: .regularExpression) != nil
     }
 
     // MARK: - OpenAI
@@ -142,12 +149,26 @@ nonisolated struct ImageGenerationService {
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status != 401 else { throw Failure.keyRefused }
-        guard (200 ..< 300).contains(status), let listing = try? JSONDecoder().decode(Listing.self, from: data) else {
+        guard (200 ..< 300).contains(status) else { throw Failure.refused(status: status, message: Self.refusal(in: data)) }
+        guard let listing = try? JSONDecoder().decode(Listing.self, from: data) else {
             throw Failure.refused(status: status, message: nil)
         }
         return listing.data.map(\.id)
             .filter { $0.lowercased().contains("image") || $0.lowercased().contains("dall") }
             .sorted(by: >)
+    }
+
+    /// What OpenAI said of a request it did not carry out (`error.message`),
+    /// at most 300 characters of it.
+    static func refusal(in data: Data) -> String? {
+        struct Refusal: Decodable {
+            struct Detail: Decodable {
+                let message: String?
+            }
+
+            let error: Detail?
+        }
+        return (try? JSONDecoder().decode(Refusal.self, from: data))?.error?.message.map { String($0.prefix(300)) }
     }
 
     private func attempt(prompt: String, model: String, size: String, quality: String?) async throws -> Generated {
@@ -167,14 +188,6 @@ nonisolated struct ImageGenerationService {
 
             let data: [Picture]?
         }
-        struct Refusal: Decodable {
-            struct Detail: Decodable {
-                let message: String?
-            }
-
-            let error: Detail?
-        }
-
         let asked = Self.quality(quality, for: model)
         var request = URLRequest(url: baseURL.appendingPathComponent("images/generations"))
         request.httpMethod = "POST"
@@ -187,8 +200,7 @@ nonisolated struct ImageGenerationService {
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status != 401 else { throw Failure.keyRefused }
         guard (200 ..< 300).contains(status) else {
-            let said = (try? JSONDecoder().decode(Refusal.self, from: data))?.error?.message
-            throw Failure.refused(status: status, message: said.map { String($0.prefix(300)) })
+            throw Failure.refused(status: status, message: Self.refusal(in: data))
         }
         guard let picture = (try? JSONDecoder().decode(Answer.self, from: data))?.data?.first else { throw Failure.noPicture }
         let bytes: Data
@@ -204,7 +216,8 @@ nonisolated struct ImageGenerationService {
         } else {
             throw Failure.noPicture
         }
-        guard !bytes.isEmpty, bytes.count <= Self.largestPicture else { throw Failure.noPicture }
+        guard !bytes.isEmpty else { throw Failure.noPicture }
+        guard bytes.count <= Self.largestPicture else { throw Failure.tooLarge }
         return Generated(data: bytes, mimeType: "image/png", model: model, size: size, quality: asked, revisedPrompt: picture.revised_prompt)
     }
 }

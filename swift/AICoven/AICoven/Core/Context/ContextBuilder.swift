@@ -81,8 +81,15 @@ struct ContextBuilder {
         /// Configuration that dynamically includes only tools whose backing
         /// connected app (GitHub, Google Workspace) is actually linked.
         /// Call this instead of `.allTools` so the LLM never sees tools it can't use.
-        static func connected() async -> ToolConfig {
-            let tools = await PromptTemplates.connectedToolSet()
+        ///
+        /// `deliversFiles` says the caller gives the files a tool makes to
+        /// its reply (a chat turn does; an agent run does not): only then
+        /// are the tools that make files for the person offered.
+        static func connected(deliversFiles: Bool = false) async -> ToolConfig {
+            var tools = await PromptTemplates.connectedToolSet()
+            if deliversFiles {
+                tools.formUnion(PromptTemplates.offeredImageTools())
+            }
             let mcpServers = await ConnectedAccountsService.shared.getAllMCPServers()
 
             // Add all cached tools to the enabled list so the prompt generator includes them.

@@ -204,7 +204,7 @@ This layer holds cross-cutting technical concerns:
 
 - `Infrastructure/Tools/`
   - `ToolService` provides provider-agnostic tools (time, web search, attachment analysis, file generation).
-  - `ImageGenerationService` makes a picture from a description with the person's OpenAI key (`POST /v1/images/generations`; with no model named, the key's image models are tried in the cloud app's order, four at most). The `image.generate` tool (`ToolExecutionService`) is offered to a turn where there is an OpenAI key; what it makes is kept in `AttachmentStore`, told to the turn in `TurnState.generatedFiles`, marked as the reply's when the turn ends (`TurnProgress.keepingGeneratedFiles`) and shown with the reply like any attachment. The model is told the person has the image, not where it is.
+  - `ImageGenerationService` makes a picture from a description with the person's OpenAI key (`POST /v1/images/generations`; with no model named, the key's image models are tried in the cloud app's order, four at most). The `image.generate` tool (`ToolExecutionService`) is offered to a chat turn where there is an OpenAI key (`ToolConfig.connected(deliversFiles: true)`; an agent run, which gives no files to a reply, is not offered it), and makes nothing unless the thread is the signed-in account's; what it makes is kept in `AttachmentStore`, told to the turn in `TurnState.generatedFiles`, marked as the reply's when the turn ends (`TurnProgress.keepingGeneratedFiles`) and shown with the reply like any attachment. The model is told the person has the image, not where it is.
   - All tools work with user-configured provider keys only; no custom backend required.
 
 - `Infrastructure/Design/`

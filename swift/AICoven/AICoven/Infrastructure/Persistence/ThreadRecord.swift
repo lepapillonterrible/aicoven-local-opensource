@@ -819,6 +819,16 @@ extension ThreadRepository {
         }
     }
 
+    /// Whether the thread is this account's, as the database has it. False
+    /// where it cannot be read.
+    func isThread(_ threadID: String, of userID: String) async -> Bool {
+        guard let queue = await getDbQueue() else { return false }
+        let owned = try? await queue.read { db in
+            try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM threads WHERE id = ? AND user_id = ?)", arguments: [threadID, userID])
+        }
+        return owned == true
+    }
+
     /// Throws unless `userID` is still the current account and the data key
     /// in memory is its own. A read checks before it decrypts and before
     /// every return, with or without anything read: after a switch of

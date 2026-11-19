@@ -660,8 +660,16 @@ enum PromptTemplates {
     ]
 
     /// Image generation, offered where there is an OpenAI key to make
-    /// images with.
+    /// images with, to a turn that gives what is made to its reply.
     static let imageTools: Set<String> = ["image.generate"]
+
+    /// The image tools a chat turn is offered now: all of them where a
+    /// non-empty OpenAI key is stored, whichever model answers the turn;
+    /// none otherwise.
+    static func offeredImageTools() -> Set<String> {
+        guard let key = ProviderAccountService.apiKeyFromKeychain(forProvider: "openai"), !key.isEmpty else { return [] }
+        return imageTools
+    }
 
     /// All tools combined.
     static let allTools: Set<String> = basicChatTools
@@ -678,12 +686,6 @@ enum PromptTemplates {
         let hasToolsPack = await MainActor.run { StoreService.shared.hasToolsPack }
         if hasToolsPack {
             tools.formUnion(shellTools)
-        }
-
-        // Images are made with the person's OpenAI key, whichever model
-        // answers the turn.
-        if let key = ProviderAccountService.apiKeyFromKeychain(forProvider: "openai"), !key.isEmpty {
-            tools.formUnion(imageTools)
         }
 
         let accountsService = ConnectedAccountsService.shared
