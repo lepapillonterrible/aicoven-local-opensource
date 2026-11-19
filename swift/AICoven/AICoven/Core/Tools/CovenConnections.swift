@@ -108,6 +108,7 @@ nonisolated enum CovenConnectionRules {
         if name.hasPrefix("github.") { return "github" }
         // One Google connection carries Drive, Docs, Sheets and Slides.
         if ["google_drive.", "google_docs.", "google_sheets.", "google_slides."].contains(where: name.hasPrefix) { return "google_drive" }
+        if name.hasPrefix("figma.") { return "figma" }
         return nil
     }
 

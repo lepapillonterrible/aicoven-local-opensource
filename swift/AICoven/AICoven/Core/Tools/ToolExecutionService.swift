@@ -75,7 +75,7 @@ actor ToolExecutionService {
     // MARK: - Entitlement gating for paid tools
 
     /// Tool name prefixes that require the Tools Pack purchase.
-    private static let toolsPackPrefixes = ["shell.", "github.", "google_drive.", "google_docs.", "google_sheets.", "google_slides."]
+    private static let toolsPackPrefixes = ["shell.", "github.", "google_drive.", "google_docs.", "google_sheets.", "google_slides.", "figma."]
 
     /// Returns true when the given tool name requires the Tools Pack entitlement.
     private func requiresToolsPack(_ toolName: String) -> Bool {
@@ -1402,7 +1402,7 @@ actor ToolExecutionService {
     private func covenRefusal(ofAppTool tool: String, in threadID: String?) async -> ToolExecutionResult? {
         guard let threadID, let app = CovenConnectionRules.app(of: tool) else { return nil }
         let decision = await CovenConnectionRules.decision(forAppTool: tool, in: covenConnections(threadID))
-        let connection = app == "github" ? "GitHub" : "Google Drive"
+        let connection = ConnectedAppProvider(rawValue: app)?.displayName ?? app
         guard let refusal = CovenConnectionRules.refusal(decision, tool: tool, connection: connection) else { return nil }
         return .error(tool: tool, message: refusal.message, errorType: refusal.code)
     }

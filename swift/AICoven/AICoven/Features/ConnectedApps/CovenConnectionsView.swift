@@ -37,7 +37,7 @@ final class CovenConnectionsModel: ObservableObject {
             },
             apps: {
                 var apps: [App] = []
-                for provider in [ConnectedAppProvider.github, .googleDrive] {
+                for provider in ConnectedAppProvider.allCases {
                     let account = await ConnectedAccountsService.shared.getConnectedAccount(for: provider)
                     apps.append(App(id: provider.rawValue, name: provider.displayName, account: account?.displayName))
                 }

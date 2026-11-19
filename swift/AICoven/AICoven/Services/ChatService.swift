@@ -1931,6 +1931,7 @@ extension ChatService {
         case _ where tool.hasPrefix("google_docs"): "Google Docs"
         case _ where tool.hasPrefix("google_sheets"): "Google Sheets"
         case _ where tool.hasPrefix("google_slides"): "Google Slides"
+        case _ where tool.hasPrefix("figma."): "Figma"
         default: tool
         }
     }
@@ -1951,6 +1952,7 @@ extension ChatService {
         case _ where tool.hasPrefix("google_docs"): "📝 Working with Docs…"
         case _ where tool.hasPrefix("google_sheets"): "📊 Working with Sheets…"
         case _ where tool.hasPrefix("google_slides"): "🖼️ Working with Slides…"
+        case _ where tool.hasPrefix("figma."): "🎨 Looking in Figma…"
         default: "⚙️ Using \(tool)…"
         }
     }

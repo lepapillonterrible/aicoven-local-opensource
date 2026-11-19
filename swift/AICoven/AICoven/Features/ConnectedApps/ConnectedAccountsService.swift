@@ -34,6 +34,9 @@ actor ConnectedAccountsService {
 
     private let tokens: TokenStore
 
+    /// Asks Figma who a token belongs to; a test answers in Figma's place.
+    private let figmaIdentity: @Sendable (_ token: String) async throws -> FigmaToolService.Identity
+
     /// The account whose connections are in memory, or nil before any are.
     private var loadedFor: String?
 
@@ -46,11 +49,13 @@ actor ConnectedAccountsService {
     init(
         currentUser: @escaping @Sendable () async -> String = { await MainActor.run { UserScope.currentUserID } },
         defaults: UserDefaults = .standard,
-        tokens: TokenStore = .keychain
+        tokens: TokenStore = .keychain,
+        figmaIdentity: @escaping @Sendable (_ token: String) async throws -> FigmaToolService.Identity = { try await FigmaToolService.identity(token: $0) }
     ) {
         self.currentUser = currentUser
         self.defaults = defaults
         self.tokens = tokens
+        self.figmaIdentity = figmaIdentity
     }
 
     /// Makes what is in memory the signed-in account's, and says whose it
@@ -178,6 +183,93 @@ actor ConnectedAccountsService {
             // Also delete the tokens
             deleteTokenBundle(forAccountId: id, of: owner)
         }
+    }
+
+    // MARK: - Figma, connected with a token
+
+    /// Why a Figma token was not taken.
+    enum FigmaTokenRefusal: Error, Equatable {
+        /// It says nothing, or is longer than a token is.
+        case notAToken
+        /// Figma did not accept it.
+        case refused
+        /// It is of another Figma account than the one whose token is
+        /// being replaced.
+        case otherAccount
+        /// The connection being given a new token is no longer there, or
+        /// another account signed in to the app while Figma was asked.
+        case changed
+    }
+
+    /// The Figma metadata key that holds Figma's id of the user.
+    static let figmaUserKey = "figma_user_id"
+
+    /// Connects Figma with a personal access token, or gives the
+    /// connection `replacing` a new one. The token is checked with Figma
+    /// first (who it belongs to); nothing is kept of a token Figma does
+    /// not accept. A new token for a connection must be of the same Figma
+    /// account. The token is kept in the Keychain and is never returned.
+    func connectFigma(token given: String, replacing accountID: String? = nil) async throws -> ConnectedAccount {
+        let token = given.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty, token.count <= FigmaToolService.longestToken else { throw FigmaTokenRefusal.notAToken }
+
+        let owner = await ensureAccountsLoaded()
+        let who: FigmaToolService.Identity
+        do {
+            who = try await figmaIdentity(token)
+        } catch FigmaError.tokenRefused {
+            throw FigmaTokenRefusal.refused
+        }
+        // Figma was waited for. What follows is for the account that
+        // asked, with nothing more waited for.
+        guard await ensureAccountsLoaded() == owner else { throw FigmaTokenRefusal.changed }
+
+        let bundle = OAuthTokenBundle(accessToken: token, refreshToken: nil, tokenType: "X-Figma-Token", expiresAt: nil, scopes: [])
+        let now = Date()
+
+        if let accountID {
+            guard let index = accountsCache?.firstIndex(where: { $0.id == accountID && $0.provider == .figma }), var account = accountsCache?[index] else {
+                throw FigmaTokenRefusal.changed
+            }
+            guard account.metadata[Self.figmaUserKey] == who.id else { throw FigmaTokenRefusal.otherAccount }
+            try storeTokenBundle(bundle, forAccountId: accountID, of: owner)
+            account.displayName = who.label
+            account.status = .connected
+            account.updatedAt = now
+            account.lastRefreshAt = now
+            accountsCache?[index] = account
+            saveAccountsToStorage()
+            return account
+        }
+
+        let account = ConnectedAccount(
+            id: UUID().uuidString,
+            provider: .figma,
+            displayName: who.label,
+            status: .connected,
+            scopes: [],
+            metadata: [Self.figmaUserKey: who.id, "source": "personal_access_token"],
+            createdAt: now,
+            updatedAt: now,
+            lastRefreshAt: now
+        )
+        try storeTokenBundle(bundle, forAccountId: account.id, of: owner)
+        // One Figma connection is used: an earlier one is put down, with
+        // its token.
+        for earlier in accountsCache ?? [] where earlier.provider == .figma {
+            deleteTokenBundle(forAccountId: earlier.id, of: owner)
+        }
+        accountsCache?.removeAll { $0.provider == .figma }
+        accountsCache = (accountsCache ?? []) + [account]
+        saveAccountsToStorage()
+        return account
+    }
+
+    /// The Figma connection whose token Figma has refused, which waits
+    /// for a new one; nil if there is none.
+    func figmaAccountNeedingAToken() async -> ConnectedAccount? {
+        await ensureAccountsLoaded()
+        return accountsCache?.first { $0.provider == .figma && $0.status == .error }
     }
 
     // MARK: - MCP Server Management
@@ -402,6 +494,11 @@ actor ConnectedAccountsService {
                 refreshToken: refreshToken,
                 currentScopes: currentBundle.scopes
             )
+
+        case .figma:
+            // A personal access token is not refreshed: it works until
+            // the expiry set in Figma, and is then replaced by the person.
+            throw ConnectedAccountError.refreshNotSupported(provider: account.provider)
         }
 
         // The provider was waited for. The new token is kept only if the
