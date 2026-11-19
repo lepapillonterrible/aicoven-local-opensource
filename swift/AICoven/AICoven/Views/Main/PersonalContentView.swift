@@ -521,6 +521,9 @@ struct PersonalChatView: View {
 
             await TurnEngine.shared.settleInterruptedTurns(threadID: thread.id)
             await loadStoredThread()
+            // The view can have moved to another thread while this one was
+            // read: its unsent text stays kept for when it is opened again.
+            guard shownThreadID == thread.id else { return }
             if let unsent = TurnEngine.shared.takeUnsent(for: thread.id) {
                 giveBack(unsent.text, because: unsent.reason)
             }
