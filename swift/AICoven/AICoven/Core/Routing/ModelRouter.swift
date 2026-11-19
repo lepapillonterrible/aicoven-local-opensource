@@ -17,6 +17,9 @@ public struct ModelDescriptor: Hashable, Sendable {
     /// Whether this model can be used for embeddings.
     public let supportsEmbeddings: Bool
     public let costClass: CostClass
+    /// Whether the model is sent the pictures attached to a message. One
+    /// that is not is told of them by name.
+    public let takesImages: Bool
 
     public init(
         providerID: String,
@@ -24,7 +27,8 @@ public struct ModelDescriptor: Hashable, Sendable {
         maxContextTokens: Int,
         supportsTools: Bool,
         supportsEmbeddings: Bool,
-        costClass: CostClass
+        costClass: CostClass,
+        takesImages: Bool = false
     ) {
         self.providerID = providerID
         self.modelID = modelID
@@ -32,6 +36,27 @@ public struct ModelDescriptor: Hashable, Sendable {
         self.supportsTools = supportsTools
         self.supportsEmbeddings = supportsEmbeddings
         self.costClass = costClass
+        self.takesImages = takesImages
+    }
+
+    /// Whether a provider's model takes pictures, from what is known of it.
+    /// Anthropic's, OpenAI's and Google's chat models do, but for OpenAI's
+    /// older and smaller text-only ones. An OpenRouter model does if
+    /// OpenRouter's catalog says so (`listed`). Nothing is known of a model
+    /// on a server of the person's own, on this device, or behind OpenClaw,
+    /// so those are not sent pictures.
+    public static func takesImages(providerID: String, modelID: String, listed: Bool? = nil) -> Bool {
+        switch providerID {
+        case "anthropic", "google":
+            return true
+        case "openai":
+            let id = modelID.lowercased()
+            return !["gpt-3.5", "o1-mini", "o1-preview", "o3-mini"].contains { id.hasPrefix($0) }
+        case "openrouter":
+            return listed == true
+        default:
+            return false
+        }
     }
 }
 
@@ -115,7 +140,8 @@ public final class HeuristicModelRouter: ModelRouter, @unchecked Sendable {
                 maxContextTokens: 128_000,
                 supportsTools: true,
                 supportsEmbeddings: false,
-                costClass: .expensive
+                costClass: .expensive,
+                takesImages: ModelDescriptor.takesImages(providerID: providerID, modelID: modelID)
             )
         }
         return nil

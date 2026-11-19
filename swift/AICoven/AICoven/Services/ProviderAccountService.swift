@@ -664,14 +664,16 @@ actor ProviderAccountService {
                     cost = .expensive
                 }
 
+                let provider = modelMeta.provider?.lowercased() ?? providerID
                 descriptors.append(
                     ModelDescriptor(
-                        providerID: modelMeta.provider?.lowercased() ?? providerID,
+                        providerID: provider,
                         modelID: modelMeta.id,
                         maxContextTokens: context,
                         supportsTools: true,
                         supportsEmbeddings: false,
-                        costClass: cost
+                        costClass: cost,
+                        takesImages: ModelDescriptor.takesImages(providerID: provider, modelID: modelMeta.id, listed: modelMeta.takesImages)
                     )
                 )
             }
@@ -1271,6 +1273,11 @@ extension ProviderAccountService {
                 let context_length: Int?
                 let supported_parameters: [String]?
                 let endpoints: [String]?
+                let architecture: Architecture?
+            }
+
+            struct Architecture: Decodable {
+                let input_modalities: [String]?
             }
 
             let data: [Model]
@@ -1283,7 +1290,8 @@ extension ProviderAccountService {
                     id: model.id,
                     name: model.name ?? model.id,
                     provider: "openrouter",
-                    contextLength: model.context_length
+                    contextLength: model.context_length,
+                    takesImages: model.architecture?.input_modalities?.contains("image") == true
                 )
             }
         for prefix in ["anthropic/claude-sonnet", "openai/gpt-", "google/gemini-"] {

@@ -149,6 +149,8 @@ struct ContextBuilder {
     ///     tool-generated context blocks (e.g. "[Web search results]" or
     ///     "[Attachment analysis]") which we treat as system context rather
     ///     than literal user text.
+    ///   - images: The pictures that go with the current user input, for a
+    ///     model that can see them.
     ///   - maxContextTokens: Optional soft limit on prompt tokens for the
     ///     assembled context. When provided, we apply truncation rules that
     ///     preserve system/policies, thread summary, top memories, and the last
@@ -158,6 +160,7 @@ struct ContextBuilder {
     func buildContext(
         threadID: String?,
         userMessage: String,
+        images: [LLMImage] = [],
         maxContextTokens: Int? = nil,
         toolConfig: ToolConfig? = nil
     ) async throws -> [LLMMessage] {
@@ -307,7 +310,7 @@ struct ContextBuilder {
         }
 
         // Layer 7: current user message (human-authored question only)
-        segments.user.append(LLMMessage(role: .user, content: question))
+        segments.user.append(LLMMessage(role: .user, content: question, images: images))
 
         // Layer 8: response guidance – kept deliberately brief and
         // conversational so models do not echo it verbatim.
@@ -367,15 +370,18 @@ private extension ContextBuilder {
 
     /// Approximate token count for a list of messages. We use a very cheap
     /// heuristic (characters / 4) that is monotonic with true token count and
-    /// sufficient for truncation decisions.
+    /// sufficient for truncation decisions. A picture counts as a flat
+    /// number of tokens, as the cloud app counts it.
     static func approximateTokenCount(for messages: [LLMMessage]) -> Int {
         var total = 0
         for message in messages {
             let charCount = message.content.count
-            total += max(1, charCount / 4)
+            total += max(1, charCount / 4) + message.images.count * tokensPerImage
         }
         return total
     }
+
+    static let tokensPerImage = 560
 
     /// Assemble segments back into the final ordered message list.
     static func assemble(segments: ContextSegments) -> [LLMMessage] {

@@ -2,6 +2,18 @@ import Foundation
 
 /// Represents a single chat message in the core LLM interface.
 /// Conforms to Sendable since all properties are value types.
+/// A picture given to a model with a message: its bytes as they are sent,
+/// and the kind of picture they are.
+public struct LLMImage: Sendable, Equatable {
+    public let data: Data
+    public let mimeType: String
+
+    public init(data: Data, mimeType: String) {
+        self.data = data
+        self.mimeType = mimeType
+    }
+}
+
 public struct LLMMessage: Sendable {
     public enum Role: String, Sendable {
         case system
@@ -13,11 +25,15 @@ public struct LLMMessage: Sendable {
     public let id: UUID
     public let role: Role
     public let content: String
+    /// The pictures that go with the text, after it. Only a client whose
+    /// models can see pictures sends them; the others send the text.
+    public let images: [LLMImage]
 
-    public init(id: UUID = UUID(), role: Role, content: String) {
+    public init(id: UUID = UUID(), role: Role, content: String, images: [LLMImage] = []) {
         self.id = id
         self.role = role
         self.content = content
+        self.images = images
     }
 }
 

@@ -488,13 +488,16 @@ actor ChatService {
         // Track initial message sent
         AnalyticsService.shared.trackMessageSent(threadId: threadId, hasAttachments: !(attachments?.isEmpty ?? true), attachmentCount: attachments?.count ?? 0)
 
-        // What the model is told of the files attached to the message: the
-        // text read from each, after the message. A model on this device or
-        // this network is given less of each, as it has less room.
-        let messageWithAttachments = await message + AttachmentContext.block(
+        // What the model is given of the files attached to the message: the
+        // text read from each, after the message, and, if it can see
+        // pictures, the pictures. A model on this device or this network is
+        // given less of each text, as it has less room.
+        let attached = await AttachmentContext.read(
             for: attachments ?? [],
-            longestText: isLocalModel ? Self.longestAttachmentTextForLocalModels : AttachmentContext.longestText
+            longestText: isLocalModel ? Self.longestAttachmentTextForLocalModels : AttachmentContext.longestText,
+            showsPictures: descriptor.takesImages
         )
+        let messageWithAttachments = message + attached.text
 
         // ── Pre-execute tools for local models ────────────────────────────
         // Small local models (MLX/Ollama) cannot reliably produce JSON tool
@@ -697,6 +700,7 @@ actor ChatService {
             let contextMessages = try await contextBuilder.buildContext(
                 threadID: threadId,
                 userMessage: composedUserMessage,
+                images: attached.pictures,
                 maxContextTokens: promptBudget,
                 toolConfig: toolConfig
             )
@@ -1071,6 +1075,7 @@ actor ChatService {
             let contextMessages = try await contextBuilder.buildContext(
                 threadID: threadId,
                 userMessage: composedUserMessage,
+                images: attached.pictures,
                 maxContextTokens: promptBudget,
                 toolConfig: finalToolConfig
             )

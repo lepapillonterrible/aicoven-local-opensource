@@ -30,8 +30,26 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
     }
 
     func completeChat(messages: [LLMMessage], model: String, options: ChatOptions) async throws -> LLMChatResponse {
-        struct MessageContent: Encodable { let type = "text"
-            let text: String
+        // A part of a message: its text, or a picture that goes with it.
+        struct ImageSource: Encodable {
+            let type = "base64"
+            let media_type: String
+            let data: String
+        }
+        struct MessageContent: Encodable {
+            let type: String
+            var text: String?
+            var source: ImageSource?
+
+            init(text: String) {
+                type = "text"
+                self.text = text
+            }
+
+            init(image: LLMImage) {
+                type = "image"
+                source = ImageSource(media_type: image.mimeType, data: image.data.base64EncodedString())
+            }
         }
         struct RequestMessage: Encodable { let role: String
             let content: [MessageContent]
@@ -93,7 +111,7 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
         let reqMessages = messages.filter { $0.role != .system }.map { msg in
             RequestMessage(
                 role: msg.role == .user ? "user" : "assistant",
-                content: [MessageContent(text: msg.content)]
+                content: [MessageContent(text: msg.content)] + msg.images.map(MessageContent.init(image:))
             )
         }
 

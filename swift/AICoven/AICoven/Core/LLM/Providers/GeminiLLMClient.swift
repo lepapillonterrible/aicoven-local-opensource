@@ -34,7 +34,23 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
 
     func completeChat(messages: [LLMMessage], model: String, options: ChatOptions) async throws -> LLMChatResponse {
         // ── Request types ──────────────────────────────────────────────────
-        struct ReqPart: Encodable { let text: String }
+        // A part of a message: its text, or a picture that goes with it.
+        struct InlineData: Encodable {
+            let mimeType: String
+            let data: String
+        }
+        struct ReqPart: Encodable {
+            var text: String?
+            var inlineData: InlineData?
+
+            init(text: String) {
+                self.text = text
+            }
+
+            init(image: LLMImage) {
+                inlineData = InlineData(mimeType: image.mimeType, data: image.data.base64EncodedString())
+            }
+        }
         struct ReqContent: Encodable { let role: String
             let parts: [ReqPart]
         }
@@ -114,7 +130,7 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
         let contents = messages.map { msg in
             ReqContent(
                 role: msg.role == .user ? "user" : "model",
-                parts: [ReqPart(text: msg.content)]
+                parts: [ReqPart(text: msg.content)] + msg.images.map(ReqPart.init(image:))
             )
         }
 

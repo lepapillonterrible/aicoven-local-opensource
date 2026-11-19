@@ -215,12 +215,16 @@ struct ProviderInitializationStatus: Codable {
         let name: String?
         let provider: String?
         let contextLength: Int?
+        /// Whether the provider's own list says the model takes pictures;
+        /// nil where the list does not say.
+        var takesImages: Bool?
 
         enum CodingKeys: String, CodingKey {
             case id
             case name
             case provider
             case contextLength = "context_length"
+            case takesImages = "supports_vision"
         }
     }
 
