@@ -616,6 +616,10 @@ final class MCPClientTests: XCTestCase {
             #"{"resultType":"complete","content":"words"}"#,
             #"{"resultType":"complete","content":[{"text":"no type"}]}"#,
             #"{"resultType":"complete","content":[],"isError":"yes"}"#,
+            #"{"resultType":"complete","content":[],"isError":null}"#,
+            #"{"resultType":"complete"}"#,
+            #"{"resultType":"complete","content":null}"#,
+            #"{"resultType":"complete","content":null,"structuredContent":{"a":1}}"#,
             #"{"resultType":7,"content":[]}"#,
         ] {
             let server = modernServer(call: .result(malformed))
@@ -654,6 +658,86 @@ final class MCPClientTests: XCTestCase {
         let telling = modernServer(call: .result(#"{"resultType":"complete","content":[{"type":"text","text":"you sent \#(token)"}],"structuredContent":{"sent":"\#(token)"}}"#))
         let content = try await client(telling, eras: eras, token: token, auth: .bearer).callTool(name: "get_weather", arguments: [:])
         XCTAssertEqual(content.map(\.shown), ["you sent [token]"])
+
+        // Nor in a piece's kind, an odd result's type, or the versions a
+        // server says it speaks.
+        let typed = modernServer(call: .result(#"{"resultType":"complete","content":[{"type":"\#(token)"}]}"#))
+        let pieces = try await client(typed, eras: eras, token: token, auth: .bearer).callTool(name: "get_weather", arguments: [:])
+        XCTAssertEqual(pieces.map(\.shown), ["[[token] content, not shown]"])
+
+        let oddlyTyped = modernServer(call: .result(#"{"resultType":"\#(token)"}"#))
+        do {
+            _ = try await client(oddlyTyped, eras: eras, token: token, auth: .bearer).callTool(name: "get_weather", arguments: [:])
+            XCTFail("Not a result type")
+        } catch {
+            XCTAssertEqual(error as? MCPClientError, .invalidResponse("result type [token]"))
+        }
+
+        let versioned = ScriptedMCPServer { _, _ in
+            .error(-32022, "Unsupported", status: 400, data: #"{"supported":["\#(token)"]}"#)
+        }
+        do {
+            _ = try await client(versioned, token: token, auth: .bearer).discoverTools()
+            XCTFail("No version in common")
+        } catch {
+            XCTAssertEqual(error as? MCPClientError, .unsupportedVersion(supported: ["[token]"]))
+        }
+    }
+
+    func testAToolThatAnswersOnlyWithStructuredContent_mayLeaveItsContentOut() async throws {
+        let eras = MCPEraCache()
+        eras.note(.modern, for: "https://mcp.example.com/mcp")
+        let server = modernServer(call: .result(#"{"resultType":"complete","structuredContent":{"ok":true}}"#))
+        let content = try await client(server, eras: eras).callTool(name: "get_weather", arguments: [:])
+        XCTAssertEqual(content.map(\.shown), [#"{"ok":true}"#])
+    }
+
+    func testListedTools_areKeptOnTheServerAsItIsStored_andAnEarlierListingDoesNotReplaceALaterOnes() async throws {
+        let service = ConnectedAccountsService.shared
+        let added = try await service.createMCPServer(name: "Test \(UUID().uuidString)", serverUrl: "https://mcp.example.com/mcp", transport: .streamableHttp, authType: .none, token: nil)
+        addTeardownBlock { try? await service.deleteMCPServer(id: added.id) }
+        let first = [MCPToolDefinition(name: "first", description: nil, inputSchema: ["type": "object"])]
+        let later = [MCPToolDefinition(name: "later", description: nil, inputSchema: ["type": "object"], readOnlyHint: true)]
+
+        // Add's listing, when nothing has listed since.
+        let kept = await service.cacheMCPTools(first, forServerId: added.id, unlessListedSince: true)
+        XCTAssertTrue(kept)
+        // A Test's listing replaces what is there.
+        let replaced = await service.cacheMCPTools(later, forServerId: added.id)
+        XCTAssertTrue(replaced)
+        // An Add's listing that comes in after it does not.
+        let late = await service.cacheMCPTools(first, forServerId: added.id, unlessListedSince: true)
+        XCTAssertFalse(late)
+
+        let stored = await service.getMCPServer(id: added.id)
+        XCTAssertEqual(stored?.cachedTools, later)
+        XCTAssertEqual(stored?.status, .connected)
+        XCTAssertNotNil(stored?.toolsCachedAt)
+        XCTAssertEqual(stored?.name, added.name, "The rest of the server as it was")
+
+        let gone = await service.cacheMCPTools(first, forServerId: "no-such-server")
+        XCTAssertFalse(gone)
+    }
+
+    func testAnEarlierServersGreeting_isCheckedLikeAnyAnswer() async {
+        for (type, expected) in [("42", MCPClientError.invalidResponse("result type")), (#""partial""#, .invalidResponse("result type partial")), (#""input_required""#, .needsInput)] {
+            let eras = MCPEraCache()
+            let server = ScriptedMCPServer { asked, _ in
+                switch asked.method {
+                case "server/discover": .status(404)
+                case "initialize": .result(#"{"protocolVersion":"2025-11-25","capabilities":{},"resultType":\#(type)}"#, headers: ["Mcp-Session-Id": "s"])
+                default: .status(asked.httpMethod == "DELETE" ? 405 : 202)
+                }
+            }
+            do {
+                _ = try await client(server, eras: eras).discoverTools()
+                XCTFail("Not a whole greeting")
+            } catch {
+                XCTAssertEqual(error as? MCPClientError, expected)
+            }
+            XCTAssertEqual(server.methods, ["server/discover", "initialize", "DELETE"], "Not told the client is ready; its session ended")
+            XCTAssertNil(eras.era(of: "https://mcp.example.com/mcp"))
+        }
     }
 
     func testAGreetingThatFails_leavesNothingSettledAndEndsTheSessionItWasGiven() async throws {

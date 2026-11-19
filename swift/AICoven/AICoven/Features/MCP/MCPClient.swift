@@ -119,6 +119,14 @@ actor MCPClient {
 
     /// The server's tools, every page of them.
     func discoverTools() async throws -> [MCPToolDefinition] {
+        do {
+            return try await listedTools()
+        } catch let error as MCPClientError {
+            throw withoutToken(error)
+        }
+    }
+
+    private func listedTools() async throws -> [MCPToolDefinition] {
         var tools: [MCPToolDefinition] = []
         var cursor: String?
         var seen: Set<String> = []
@@ -141,12 +149,20 @@ actor MCPClient {
     /// marks for it as headers too. Throws `toolFailed` with what the tool
     /// said if it ran and reported an error.
     func callTool(name: String, arguments: [String: AnyJSONValue], tool: MCPToolDefinition? = nil) async throws -> [MCPContentItem] {
+        do {
+            return try await called(name, arguments: arguments, tool: tool)
+        } catch let error as MCPClientError {
+            throw withoutToken(error)
+        }
+    }
+
+    private func called(_ name: String, arguments: [String: AnyJSONValue], tool: MCPToolDefinition?) async throws -> [MCPContentItem] {
         let params: [String: Any] = ["name": name, "arguments": arguments.mapValues(Self.plain)]
         let result = try await request("tools/call", params: params, name: name, parameterHeaders: Self.parameterHeaders(for: arguments, schema: tool?.inputSchema))
         let response = try Self.decode(MCPCallToolResponse.self, from: result)
-        // Nothing a server says back is given on with this connection's
-        // token in it.
-        var content = response.content.map { MCPContentItem(type: $0.type, text: $0.text.map(withoutToken)) }
+        // Nothing of what a server answers is given on with this
+        // connection's token in it: not a piece's text, nor its kind.
+        var content = response.content.map { MCPContentItem(type: withoutToken($0.type), text: $0.text.map(withoutToken)) }
         // A tool that answers only with structured content is still read.
         if !content.contains(where: { $0.text?.isEmpty == false }), let structured = response.structuredContent,
            let data = try? JSONSerialization.data(withJSONObject: Self.plain(structured), options: [.fragmentsAllowed, .sortedKeys]) {
@@ -276,6 +292,7 @@ actor MCPClient {
         }
         sessionID = reply.sessionID
         do {
+            try Self.requireWhole(result)
             guard let version = result["protocolVersion"] as? String, Self.legacyVersions.contains(version) else {
                 throw MCPClientError.unsupportedVersion(supported: [result["protocolVersion"] as? String].compactMap(\.self))
             }
@@ -299,12 +316,18 @@ actor MCPClient {
         guard let result = reply.message?["result"] as? [String: Any] else {
             throw MCPClientError.invalidResponse("no result")
         }
-        // The current revision says whether a result is whole. One that
-        // asks for input first cannot be answered here; anything else it
-        // might say is not a result this protocol has.
-        guard let type = result["resultType"] else { return result }
+        try Self.requireWhole(result)
+        return result
+    }
+
+    /// The current revision says whether a result is whole; an earlier
+    /// server says nothing, which is whole. One that asks for input first
+    /// cannot be answered here; anything else it might say is not a
+    /// result this protocol has.
+    private static func requireWhole(_ result: [String: Any]) throws {
+        guard let type = result["resultType"] else { return }
         switch type as? String {
-        case "complete": return result
+        case "complete": return
         case "input_required": throw MCPClientError.needsInput
         case let other?: throw MCPClientError.invalidResponse("result type \(other.prefix(40))")
         case nil: throw MCPClientError.invalidResponse("result type")
@@ -315,6 +338,17 @@ actor MCPClient {
     private func withoutToken(_ text: String) -> String {
         guard let token, token.count >= 8 else { return text }
         return text.replacingOccurrences(of: token, with: "[token]")
+    }
+
+    /// An error without the token in anything it quotes of the server.
+    private func withoutToken(_ error: MCPClientError) -> MCPClientError {
+        switch error {
+        case let .serverError(code, message): .serverError(code: code, message: withoutToken(message))
+        case let .invalidResponse(what): .invalidResponse(withoutToken(what))
+        case let .unsupportedVersion(supported): .unsupportedVersion(supported: supported.map(withoutToken))
+        case let .toolFailed(what): .toolFailed(withoutToken(what))
+        case .invalidURL, .notReached, .refused, .oldTransport, .needsInput, .tooLarge: error
+        }
     }
 
     // MARK: - The wire
@@ -673,8 +707,10 @@ struct MCPContentItem: Decodable, Equatable {
     }
 }
 
-/// What a tool answered. A result that is not what the protocol has (its
-/// content not a list of typed pieces) is not read as an empty one.
+/// What a tool answered. A result that is not what the protocol has is
+/// not read as an empty one: its `content` must be a list of typed pieces
+/// (it may be left out only where there is structured content instead),
+/// and `isError`, where given, true or false.
 struct MCPCallToolResponse: Decodable {
     let content: [MCPContentItem]
     let isError: Bool?
@@ -682,9 +718,14 @@ struct MCPCallToolResponse: Decodable {
 
     nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        content = try container.decodeIfPresent([MCPContentItem].self, forKey: .content) ?? []
-        isError = try container.decodeIfPresent(Bool.self, forKey: .isError)
-        structuredContent = try container.decodeIfPresent(AnyJSONValue.self, forKey: .structuredContent)
+        let structured = container.contains(.structuredContent) ? try container.decode(AnyJSONValue.self, forKey: .structuredContent) : nil
+        structuredContent = structured == .null ? nil : structured
+        if container.contains(.content) || structuredContent == nil {
+            content = try container.decode([MCPContentItem].self, forKey: .content)
+        } else {
+            content = []
+        }
+        isError = container.contains(.isError) ? try container.decode(Bool.self, forKey: .isError) : nil
     }
 
     enum CodingKeys: String, CodingKey {

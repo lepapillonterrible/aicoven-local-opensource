@@ -164,14 +164,7 @@ struct MCPServerManagementView: View {
             }
             // Onto the server as it is kept now, not as it was when the test
             // began: it may have been edited, or removed, meanwhile.
-            guard var updated = await service.getAllMCPServers().first(where: { $0.id == server.id }) else {
-                await loadServers()
-                return
-            }
-            updated.cachedTools = tools
-            updated.toolsCachedAt = Date()
-            updated.status = .connected
-            try await service.updateMCPServer(updated)
+            await service.cacheMCPTools(tools, forServerId: server.id)
 
             await loadServers()
         } catch {
@@ -520,12 +513,7 @@ struct AddMCPServerSheet: View {
                     // Only if nothing has listed its tools since (a Test
                     // run meanwhile is newer than this), and onto the
                     // server as it is kept now.
-                    guard var updated = await service.getAllMCPServers().first(where: { $0.id == newAccount.id }),
-                          updated.toolsCachedAt == nil else { return }
-                    updated.cachedTools = tools
-                    updated.toolsCachedAt = Date()
-                    updated.status = .connected
-                    try await service.updateMCPServer(updated)
+                    await service.cacheMCPTools(tools, forServerId: newAccount.id, unlessListedSince: true)
                 } catch {
                     // What failed and its kind, never what a server said.
                     let failure = error as NSError
