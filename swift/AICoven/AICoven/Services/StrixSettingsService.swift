@@ -99,6 +99,9 @@ actor StrixSettingsService {
     // MARK: - Private helpers
 
     private func loadLocalSettings() -> LocalStrixSettings {
+        // The settings can still name Hermes for what is now a server: read
+        // after that is put right, or a load in flight would save it back.
+        ProviderAccountService.convertHermesModelConnectionsIfNeeded()
         let defaults = UserDefaults.standard
         guard let data = defaults.data(forKey: storageKey) else {
             return LocalStrixSettings(

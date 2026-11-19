@@ -18,7 +18,7 @@ The `LLMClient` layer is designed to work with multiple providers. The exact lis
 - **Ollama** – local model server running on `http://localhost:11434`. Models are discovered automatically via `/api/tags`. No API key required.
 - **MLX (on-device)** – runs models directly on Apple Silicon (Mac, iPad 8 GB+, iPhone 6 GB+) using Apple's MLX framework. Models are downloaded from HuggingFace and cached locally. The curated catalog includes 11 models organized by category (General, Coding, Mobile) and tier (Core, Specialized), with device-aware filtering for iPhones.
 - **OpenClaw** – An OpenAI-compatible self-hosted proxy. Can point at a local endpoint (`http://localhost:3000`) or a remote cloud API. The client exposes `isLocalEndpoint` so `ChatService` applies the correct timeout profile (300s/600s for local vs. 60s/120s for cloud) and skips cloud-only behavior like background thread summarization.
-- **Hermes** – Nous Research's Hermes model family, available via **Together AI** (cloud) or **self-hosted** (any OpenAI-compatible server like LM Studio or llama.cpp). Like OpenClaw, `HermesLLMClient` exposes `isLocalEndpoint` using the same `isLocalAddress()` helper. API key is optional when a custom `baseURL` is provided for self-hosted use.
+- **OpenAI-compatible server** – any server that speaks the OpenAI chat API, on this machine (LM Studio, llama.cpp, vLLM) or hosted: an address, a key if the server asks for one, and a model. A connection made for Nous Research's Hermes models in an earlier version becomes one of these the first time the app reads its connections: at Together AI's address when it named none, with its key and its model (`ProviderAccountService.convertHermesModelConnectionsIfNeeded`).
 - **MCP servers** – external tool servers connected via the Model Context Protocol. See the [MCP server integration](#mcp-server-integration) section below.
 
 `ModelRouter` selects a `(providerID, modelID)` pair for each task (chat, summarization, embeddings, MCP tool calling, etc.) based on the set of providers that have keys configured on your device. The `.mcpToolCalling` task type prefers models flagged as tool-capable, falling back to the cheapest available model.
@@ -191,51 +191,21 @@ If you intend to extend the tools layer (for example, to add Git or local shell 
 
 ---
 
-## Hybrid providers: OpenClaw and Hermes
+## Servers that can be local or remote: OpenClaw and OpenAI-compatible servers
 
-OpenClaw and Hermes are **hybrid providers** — they can point at either a local server or a remote cloud API. The client detects this automatically via the `isLocalEndpoint` computed property.
+An OpenClaw connection and an OpenAI-compatible server can each point at a server on this machine or at a remote one. The client detects which via the `isLocalEndpoint` computed property.
 
 ### `isLocalEndpoint` detection
-
-`OpenClawLLMClient` provides a static `isLocalAddress(_ url: URL) -> Bool` helper that checks whether the base URL resolves to a loopback address, `localhost`, or a private RFC1918 IP range (`10.x`, `172.16-31.x`, `192.168.x`). `HermesLLMClient` reuses this same helper.
+`OpenClawLLMClient` provides a static `isLocalAddress(_ url: URL) -> Bool` helper that checks whether the base URL resolves to a loopback address, `localhost`, or a private network range.
 
 When `isLocalEndpoint` is `true`:
 - Timeouts are extended: **300s connect / 600s response** (local inference is slow).
 - `ChatService.isLocalDeployment(providerID:)` returns `true`, suppressing cloud-only behaviors such as background thread summarization on iOS.
 - `hasCloudProvider` (used for background summary gating) returns `false`.
 
-When `isLocalEndpoint` is `false` (cloud endpoint, e.g. Together AI):
+When `isLocalEndpoint` is `false` (a remote address, e.g. Together AI):
 - Standard cloud timeouts apply: **60s connect / 120s response**.
 - Background summarization is enabled.
-
-### Strix Settings UI
-
-Both OpenClaw and Hermes appear in the `StrixSettingsView` provider picker:
-
-- **OpenClaw** – subtitle: *"OpenAI-compatible self-hosted proxy"*
-- **Hermes** – subtitle: *"Nous Research – Together AI or self-hosted"*
-  - When cloud Hermes is selected, the model picker shows Together AI model aliases.
-  - When self-hosted Hermes is selected (custom `baseURL`), the picker shows the raw model ID as configured.
-- `isLocalProvider` in the settings view now checks the actual Hermes `baseURL` rather than the provider name, so the UI is consistent with `isLocalEndpoint`.
-
-### Self-hosted Hermes without an API key
-
-Self-hosted Hermes servers (LM Studio, llama.cpp, Ollama-compatible) typically run unauthenticated. `HermesLLMClient` handles this:
-
-- `apiKey` is `Optional<String>` — no key is required.
-- The `Authorization: Bearer` header is **only** injected if a key is present.
-- `LLMConfiguration.makeDefaultClients()` initializes `HermesLLMClient` if **either** an API key is present **or** a custom `baseURL` is configured.
-
-```swift
-// No API key required for self-hosted:
-let client = HermesLLMClient(baseURL: URL(string: "http://localhost:8080/v1")!)
-
-// Together AI (cloud) requires a key:
-let cloudClient = HermesLLMClient(
-    baseURL: URL(string: "https://api.together.xyz/v1")!,
-    apiKey: "tok_..."
-)
-```
 
 ---
 

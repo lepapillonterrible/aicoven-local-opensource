@@ -123,12 +123,11 @@ This is the local-first backbone intended to replace many backend-oriented servi
   - `ToolEnvironment` inspects configured providers and derives per-provider capabilities.
   - Provider implementations for OpenAI, Anthropic, Gemini, OpenRouter (through the OpenAI client at OpenRouter's address), Ollama, and MLX (on-device via Apple Silicon).
   - **`OpenClawLLMClient`** – OpenAI-compatible self-hosted proxy client. Exposes `isLocalEndpoint` (checks `baseURL` against loopback/RFC1918 ranges) and adjusts timeouts (300s/600s for local, 60s/120s for cloud). `baseURL` is `internal` so `ChatService` can inspect it for `isLocalDeployment()` decisions.
-  - **`HermesLLMClient`** – Nous Research Hermes model client. Supports both Together AI (cloud) and self-hosted (LM Studio, llama.cpp). `apiKey` is `Optional<String>` — no key needed for self-hosted; `Authorization: Bearer` header is only injected if present. Uses `OpenClawLLMClient.isLocalAddress()` for endpoint detection.
   - `MLXLLMClient` runs models locally via Apple's MLX framework. Handles iOS memory pressure (model eviction after inference, GPU cache limits, `autoreleasepool` for generation). System messages are folded into the first user message for compatibility with strict chat templates (Gemma 2, Phi, etc.).
   - `MLXModelManager` manages a curated model catalog with category (`general`, `coding`, `mobile`), tier (`core`, `specialized`), recommended-for tags, and device-aware filtering (iPhones only see models ≤ 3 GB RAM or `.mobile` category).
   - `MCPToolCallingBenchmark` evaluates a local model's MCP tool-calling accuracy across 10 test cases (web, file, GitHub, shell, Google Drive). Results are persisted in `UserDefaults` and displayed in the MLX settings UI.
   - `MCPToolEmbeddingCache` caches embedding vectors for MCP tool descriptions, enabling semantic tool selection via cosine similarity when many tools are available.
-  - `LLMConfiguration.makeEnvironment()` now registers the active MLX model as a `ModelDescriptor` so it participates in routing. `makeDefaultClients()` initializes `HermesLLMClient` if an API key **or** a custom `baseURL` is present.
+  - `LLMConfiguration.makeEnvironment()` now registers the active MLX model as a `ModelDescriptor` so it participates in routing.
 
 - `Core/Context/`
   - `ContextBuilder` assembles the layered context sandwich for each chat turn.
@@ -217,7 +216,7 @@ This directory contains a mix of active and legacy services:
 
 **Active services:**
 - `AppState.swift` – Shared application state (threads, selection, global actions), injected into the view hierarchy.
-- `ChatService.swift` – Encapsulates chat/thread operations using `LLMClient` and repositories. User-preference-first model selection via `resolveProviderAndModel()` + `findExact`. For local models, supports pre-execution of native and MCP tools based on keyword/fuzzy matching before sending to the model. Applies device-aware memory limits on iPhone (tighter context, tool context truncation, skips background summaries when only local models are available). `isLocalDeployment(providerID:)` inspects the active client's `baseURL` to determine if OpenClaw/Hermes is pointing at a local server vs. cloud.
+- `ChatService.swift` – Encapsulates chat/thread operations using `LLMClient` and repositories. User-preference-first model selection via `resolveProviderAndModel()` + `findExact`. For local models, supports pre-execution of native and MCP tools based on keyword/fuzzy matching before sending to the model. Applies device-aware memory limits on iPhone (tighter context, tool context truncation, skips background summaries when only local models are available). `isLocalDeployment(providerID:)` inspects the active client's `baseURL` to determine if OpenClaw or an OpenAI-compatible server is pointing at a local server vs. cloud.
 - `ChatEventBus.swift` – Lightweight `AsyncStream`-based event bus for broadcasting post-turn events (`.memoryProposalsReady`, `.threadNeedsSummary`) to background actors without blocking the chat path.
 - `BackgroundMemoryService.swift` – Background `actor` that subscribes to `.memoryProposalsReady` events and persists memory proposals via `MemoryService`. Started at app launch; never blocks interactive chat.
 - `BackgroundSummarizationService.swift` – Background `actor` that subscribes to `.threadNeedsSummary` events and runs thread summarization using its own independent LLM environment. Skips on iOS when only local models are available.
