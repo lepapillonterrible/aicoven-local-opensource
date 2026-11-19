@@ -111,7 +111,10 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
         let reqMessages = messages.filter { $0.role != .system }.map { msg in
             RequestMessage(
                 role: msg.role == .user ? "user" : "assistant",
-                content: [MessageContent(text: msg.content)] + msg.images.map(MessageContent.init(image:))
+                // A message that is only pictures has no text part: an
+                // empty one is refused.
+                content: (msg.content.isEmpty && !msg.images.isEmpty ? [] : [MessageContent(text: msg.content)])
+                    + msg.images.map(MessageContent.init(image:))
             )
         }
 

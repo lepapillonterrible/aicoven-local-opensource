@@ -377,6 +377,36 @@ final class PicturesToModelsTests: XCTestCase {
         XCTAssertEqual(Set(parts[1].keys), ["inlineData"])
     }
 
+    func testAMessageThatIsOnlyAPicture_isSentWithNoEmptyTextPart() async throws {
+        let only = [LLMMessage(role: .user, content: "", images: [picture])]
+        let options = ChatOptions(temperature: 0.3, maxTokens: 128, stream: false)
+        let address = try XCTUnwrap(URL(string: "https://example.com/v1"))
+
+        let toOpenAI = Sent()
+        _ = try await OpenAILLMClient(
+            apiKey: "TEST_KEY", baseURL: address,
+            urlSession: session(answering: #"{"choices": [{"index": 0, "message": {"role": "assistant", "content": "A cat"}}], "model": "gpt-9"}"#, keeping: toOpenAI)
+        ).completeChat(messages: only, model: "gpt-9", options: options)
+        let openAIParts = try XCTUnwrap((toOpenAI.json()["messages"] as? [[String: Any]])?.first?["content"] as? [[String: Any]])
+        XCTAssertEqual(openAIParts.map { $0["type"] as? String }, ["image_url"])
+
+        let toAnthropic = Sent()
+        _ = try await AnthropicLLMClient(
+            apiKey: "TEST_KEY", baseURL: address,
+            urlSession: session(answering: #"{"content": [{"type": "text", "text": "A cat"}], "model": "claude-9"}"#, keeping: toAnthropic)
+        ).completeChat(messages: only, model: "claude-9", options: options)
+        let anthropicParts = try XCTUnwrap((toAnthropic.json()["messages"] as? [[String: Any]])?.first?["content"] as? [[String: Any]])
+        XCTAssertEqual(anthropicParts.map { $0["type"] as? String }, ["image"])
+
+        let toGemini = Sent()
+        _ = try await GeminiLLMClient(
+            apiKey: "TEST_KEY", baseURL: address,
+            urlSession: session(answering: #"{"candidates": [{"content": {"parts": [{"text": "A cat"}]}}], "modelVersion": "models/gemini-9"}"#, keeping: toGemini)
+        ).completeChat(messages: only, model: "models/gemini-9", options: options)
+        let geminiParts = try XCTUnwrap((toGemini.json()["contents"] as? [[String: Any]])?.first?["parts"] as? [[String: Any]])
+        XCTAssertEqual(geminiParts.map { Array($0.keys) }, [["inlineData"]])
+    }
+
     // MARK: - Through a turn
 
     func testTheContext_carriesThePicturesOnThePersonsMessage() async throws {

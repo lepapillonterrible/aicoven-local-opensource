@@ -217,7 +217,8 @@ struct ProviderInitializationStatus: Codable {
         let contextLength: Int?
         /// Whether the provider's own list says the model takes pictures.
         /// Only OpenRouter's is read for it (false where an entry does not
-        /// say); nil for every other provider's.
+        /// say); nil for every other provider's. Set where a list is
+        /// read, not decoded from one.
         var takesImages: Bool?
 
         enum CodingKeys: String, CodingKey {
@@ -225,7 +226,6 @@ struct ProviderInitializationStatus: Codable {
             case name
             case provider
             case contextLength = "context_length"
-            case takesImages = "supports_vision"
         }
     }
 

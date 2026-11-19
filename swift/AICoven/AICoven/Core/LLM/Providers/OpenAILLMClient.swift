@@ -73,7 +73,10 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
                 let pictures = images.map {
                     ContentPart(type: "image_url", image_url: ImageURL(url: "data:\($0.mimeType);base64,\($0.data.base64EncodedString())"))
                 }
-                try container.encode([ContentPart(type: "text", text: content)] + pictures, forKey: .content)
+                // A message that is only pictures has no text part: an
+                // empty one is refused.
+                let text = content.isEmpty ? [] : [ContentPart(type: "text", text: content)]
+                try container.encode(text + pictures, forKey: .content)
             }
         }
         // Native tool calling structures (OpenAI format)

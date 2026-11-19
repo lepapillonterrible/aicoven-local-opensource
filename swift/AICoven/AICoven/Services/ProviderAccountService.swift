@@ -664,7 +664,10 @@ actor ProviderAccountService {
                         id: chosen,
                         name: chosen,
                         provider: "openrouter",
-                        contextLength: nil
+                        contextLength: nil,
+                        // Not among the models chat is offered, but the
+                        // catalog may still say it takes pictures.
+                        takesImages: imageModels["openrouter"]?.contains(chosen)
                     )]
                 } else {
                     routed = Array(metadata.prefix(1))

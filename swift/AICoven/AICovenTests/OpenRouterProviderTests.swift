@@ -124,6 +124,12 @@ final class OpenRouterProviderTests: XCTestCase {
         let seeing = try await ProviderAccountService.shared.loadModelCatalog()
         XCTAssertEqual(seeing.routed.map(\.modelID), ["vendor/sees"])
         XCTAssertEqual(seeing.routed.first?.takesImages, true)
+
+        // One chosen that chat is not offered is still known by the catalog.
+        defaults.set("vendor/sees-without-tools", forKey: UserScope.scopedKey("openrouter_model"))
+        let unoffered = try await ProviderAccountService.shared.loadModelCatalog()
+        XCTAssertEqual(unoffered.routed.map(\.modelID), ["vendor/sees-without-tools"])
+        XCTAssertEqual(unoffered.routed.first?.takesImages, true)
         await ProviderAccountService.shared.forgetOpenRouterCatalog()
     }
 

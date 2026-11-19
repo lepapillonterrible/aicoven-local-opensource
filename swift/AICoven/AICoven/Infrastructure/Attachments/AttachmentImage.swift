@@ -106,6 +106,8 @@ nonisolated enum AttachmentImage {
         let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
         let sourceEdge = max(properties?[kCGImagePropertyPixelWidth] as? Int ?? longestEdge, properties?[kCGImagePropertyPixelHeight] as? Int ?? longestEdge)
         for attempt in triesForModel {
+            // A turn that was stopped is not worked for.
+            guard !Task.isCancelled else { return nil }
             // Never drawn larger than it is.
             let options: [CFString: Any] = [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,

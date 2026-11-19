@@ -130,7 +130,9 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
         let contents = messages.map { msg in
             ReqContent(
                 role: msg.role == .user ? "user" : "model",
-                parts: [ReqPart(text: msg.content)] + msg.images.map(ReqPart.init(image:))
+                // A message that is only pictures has no text part.
+                parts: (msg.content.isEmpty && !msg.images.isEmpty ? [] : [ReqPart(text: msg.content)])
+                    + msg.images.map(ReqPart.init(image:))
             )
         }
 
