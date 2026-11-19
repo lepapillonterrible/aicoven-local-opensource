@@ -51,7 +51,7 @@ actor GoogleDriveToolService {
         }
         if let queryParams {
             let existingItems = components.queryItems ?? []
-            components.queryItems = existingItems + queryParams.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
+            components.queryItems = existingItems + queryParams.map { URLQueryItem(name: $0.key, value: $0.value) }
         }
 
         guard let finalURL = components.url else {

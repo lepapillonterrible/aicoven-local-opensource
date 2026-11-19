@@ -1020,7 +1020,7 @@ actor ToolExecutionService {
             return .error(tool: toolCall.name, message: "Google Drive not connected. Please connect in Settings > \(SettingsPane.connectedApps.listedTitle).")
         }
 
-        let query = Self.given(extractString(from: toolCall.args, key: "query"))
+        let query = extractString(from: toolCall.args, key: "query")
         // As many as asked for, between 1 and 100 (Google's most a page).
         let pageSize = min(100, max(1, GitHubToolArguments.whole("page_size", in: toolCall.args) ?? 50))
 
@@ -1050,8 +1050,16 @@ actor ToolExecutionService {
         }
 
         // What to export it as: what the call names (by the cloud app's
-        // name for it, or this app's older one), or what suits the file.
-        let named = Self.given(extractString(from: toolCall.args, key: "export_format")) ?? Self.given(extractString(from: toolCall.args, key: "export_mime_type"))
+        // name for it, or, where that is not there, this app's older one),
+        // or what suits the file. A format that is named is the one asked
+        // for: one that says nothing is not made up for.
+        let named: String?
+        switch GoogleToolArguments.exportFormat(in: toolCall.args) {
+        case let .named(format): named = format
+        case .leftOut: named = nil
+        case let .unreadable(key):
+            return await .validationError(tool: toolCall.name, message: "'\(key)' must be a MIME type such as text/plain, or be left out.", field: key)
+        }
 
         do {
             var exportMimeType = named

@@ -32,6 +32,26 @@ nonisolated enum GoogleToolArguments {
         }
     }
 
+    /// What a call says of the format to export a file as.
+    enum ExportFormat: Equatable {
+        case named(String)
+        case leftOut
+        /// The argument of this name is there and is no format.
+        case unreadable(String)
+    }
+
+    /// The format a call names: `export_format` where it is there (and
+    /// not null), or else this app's older `export_mime_type`. The one
+    /// that is there must be text that says something.
+    static func exportFormat(in args: [String: AnyJSONValue]) -> ExportFormat {
+        for key in ["export_format", "export_mime_type"] {
+            guard let given = args[key], !(given.value is NSNull) else { continue }
+            guard let format = given.value as? String, !format.isEmpty else { return .unreadable(key) }
+            return .named(format)
+        }
+        return .leftOut
+    }
+
     /// What a call is told when it names no id that reads as one.
     static func idMissing(_ key: String) -> String {
         "Missing or unreadable '\(key)'. Give the id as Google gives it (google_drive.listFiles tells each file's id)."
@@ -76,9 +96,9 @@ nonisolated enum GoogleWorkspaceText {
         return text(ofContent: content)
     }
 
-    private static func text(ofContent content: [[String: Any]], depth: Int = 0) -> String {
-        // A table in a cell of a table, and so on, is followed only so far.
-        guard depth < 8 else { return "" }
+    /// (A table in a cell of a table, and so on, is followed as deep as
+    /// it goes: an answer is read as JSON first, which is only so deep.)
+    private static func text(ofContent content: [[String: Any]]) -> String {
         var text = ""
         for element in content {
             if let paragraph = element["paragraph"] as? [String: Any] {
@@ -88,14 +108,14 @@ nonisolated enum GoogleWorkspaceText {
             } else if let table = element["table"] as? [String: Any] {
                 for row in table["tableRows"] as? [[String: Any]] ?? [] {
                     let cells = (row["tableCells"] as? [[String: Any]] ?? []).map { cell in
-                        Self.text(ofContent: cell["content"] as? [[String: Any]] ?? [], depth: depth + 1)
+                        Self.text(ofContent: cell["content"] as? [[String: Any]] ?? [])
                             .trimmingCharacters(in: .whitespacesAndNewlines)
                             .replacingOccurrences(of: "\n", with: " ")
                     }
                     text += cells.joined(separator: "\t") + "\n"
                 }
             } else if let contents = element["tableOfContents"] as? [String: Any] {
-                text += Self.text(ofContent: contents["content"] as? [[String: Any]] ?? [], depth: depth + 1)
+                text += Self.text(ofContent: contents["content"] as? [[String: Any]] ?? [])
             }
         }
         return text
@@ -113,8 +133,7 @@ nonisolated enum GoogleWorkspaceText {
         }.joined(separator: "\n\n")
     }
 
-    private static func text(ofPageElements elements: [[String: Any]], depth: Int = 0) -> String {
-        guard depth < 8 else { return "" }
+    private static func text(ofPageElements elements: [[String: Any]]) -> String {
         var text = ""
         for element in elements {
             if let shape = element["shape"] as? [String: Any] {
@@ -129,7 +148,7 @@ nonisolated enum GoogleWorkspaceText {
                     text += cells.joined(separator: "\t") + "\n"
                 }
             } else if let group = element["elementGroup"] as? [String: Any] {
-                text += Self.text(ofPageElements: group["children"] as? [[String: Any]] ?? [], depth: depth + 1)
+                text += Self.text(ofPageElements: group["children"] as? [[String: Any]] ?? [])
             }
         }
         return text

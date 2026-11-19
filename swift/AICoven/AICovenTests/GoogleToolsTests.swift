@@ -89,6 +89,22 @@ final class GoogleToolsTests: XCTestCase {
         """#)
         XCTAssertEqual(GoogleWorkspaceText.text(ofPresentation: presentation), "Slide 1:\nTitle\nIn a group\nA\tB\n\nSlide 2:\n(No text)\n\nSlide 3:\n(No text)")
         XCTAssertEqual(GoogleWorkspaceText.text(ofPresentation: [:]), "")
+
+        // Text in a group in a group, however deep, is still the slide's text.
+        var element: [String: Any] = ["shape": ["text": ["textElements": [["textRun": ["content": "Deep down"]]]]]]
+        for _ in 0 ..< 40 {
+            element = ["elementGroup": ["children": [element]]]
+        }
+        XCTAssertEqual(GoogleWorkspaceText.text(ofPresentation: ["slides": [["pageElements": [element]]]]), "Slide 1:\nDeep down")
+    }
+
+    func testTheFormatACallNames_isTheFirstNameThatIsThere_andMustSaySomething() {
+        XCTAssertEqual(GoogleToolArguments.exportFormat(in: [:]), .leftOut)
+        XCTAssertEqual(GoogleToolArguments.exportFormat(in: ["export_format": .null]), .leftOut)
+        XCTAssertEqual(GoogleToolArguments.exportFormat(in: ["export_format": AnyJSONValue("text/csv"), "export_mime_type": AnyJSONValue("text/html")]), .named("text/csv"))
+        XCTAssertEqual(GoogleToolArguments.exportFormat(in: ["export_format": .null, "export_mime_type": AnyJSONValue("text/html")]), .named("text/html"), "The older name, where the cloud app's is not there")
+        XCTAssertEqual(GoogleToolArguments.exportFormat(in: ["export_format": AnyJSONValue(""), "export_mime_type": AnyJSONValue("text/html")]), .unreadable("export_format"), "A format that is there and says nothing is not made up for")
+        XCTAssertEqual(GoogleToolArguments.exportFormat(in: ["export_mime_type": AnyJSONValue(7)]), .unreadable("export_mime_type"))
     }
 
     func testASpreadsheetsSheets_areToldWithTheirSizes() throws {
@@ -256,6 +272,12 @@ final class GoogleToolsTests: XCTestCase {
         XCTAssertEqual(world.asked.requests[5].query, ["mimeType": "text/csv"])
         XCTAssertEqual(world.asked.requests[7].query, ["mimeType": "text/markdown"])
         XCTAssertEqual(world.asked.requests[8].query, ["mimeType": "text/html"])
+
+        // A format that is named and says nothing is told so; Google is not asked.
+        let unsaid = await world.call("google_drive.readFile", ["file_id": AnyJSONValue("doc1"), "export_format": AnyJSONValue(""), "export_mime_type": AnyJSONValue("text/html")])
+        XCTAssertEqual(unsaid.errorType, "invalid_parameters")
+        XCTAssertEqual(unsaid.field, "export_format")
+        XCTAssertEqual(world.asked.requests.count, 9)
     }
 
     func testReadFile_saysWhenAFileIsNotText_andCutsTextThatIsTooLong() async throws {
