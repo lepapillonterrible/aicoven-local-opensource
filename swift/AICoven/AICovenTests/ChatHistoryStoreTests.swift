@@ -9,12 +9,24 @@ final class ChatHistoryStoreTests: XCTestCase {
     private let service = ThreadService.shared
     private let repository = ThreadRepository.shared
     private var created: [String] = []
+    /// A folder of this test's own for the files an import reads, so no
+    /// test touches an account's real ones.
+    private var folder: URL!
+    private var threadsFile: URL {
+        folder.appendingPathComponent("personal_threads.json")
+    }
+
+    private var messagesFile: URL {
+        folder.appendingPathComponent("messages.json")
+    }
 
     override func setUp() async throws {
         try await super.setUp()
         await DataEncryptionService.shared.unlockForTestingEphemeral()
         DatabaseManager.shared.configureIfNeeded()
         await service.reloadForCurrentUser()
+        folder = FileManager.default.temporaryDirectory.appendingPathComponent("chat-history-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     }
 
     override func tearDown() async throws {
@@ -23,6 +35,7 @@ final class ChatHistoryStoreTests: XCTestCase {
         }
         await service.reloadForCurrentUser()
         await DataEncryptionService.shared.lock()
+        try? FileManager.default.removeItem(at: folder)
         try await super.tearDown()
     }
 
@@ -45,9 +58,17 @@ final class ChatHistoryStoreTests: XCTestCase {
     }
 
     func testThreads_cannotBeReadWhileLockedAndLoadOnceUnlocked() async throws {
-        _ = try await newThread(title: "Locked \(UUID().uuidString)")
-        await service.reloadForCurrentUser()
+        let thread = try await newThread(title: "Locked \(UUID().uuidString)")
+        // Loaded, then locked: the list in memory must not be served either.
+        _ = try await service.loadThreads()
         await DataEncryptionService.shared.lock()
+
+        do {
+            _ = try await service.getThread(threadId: thread.id)
+            XCTFail("A loaded thread must not be read while the data is locked")
+        } catch {
+            XCTAssertEqual(error as? RepositoryError, .dataLocked)
+        }
 
         do {
             _ = try await service.loadThreads()
@@ -76,6 +97,25 @@ final class ChatHistoryStoreTests: XCTestCase {
         XCTAssertFalse(loaded.contains { $0.id == unreadable.id })
     }
 
+    func testChangesStartedTogether_allLandAndNoneBringsBackADeletedThread() async throws {
+        let thread = try await newThread(title: "Before \(UUID().uuidString)")
+
+        async let renamed = service.updateThread(threadId: thread.id, title: "After")
+        async let pinned = service.updateThread(threadId: thread.id, isPinned: true)
+        _ = try await (renamed, pinned)
+        await service.reloadForCurrentUser()
+        let both = try await service.getThread(threadId: thread.id)
+        XCTAssertEqual(both.title, "After")
+        XCTAssertTrue(both.isPinned)
+
+        async let deleted: Void = service.deleteThread(threadId: thread.id)
+        async let archived = service.updateThread(threadId: thread.id, isArchived: true)
+        try await deleted
+        _ = try? await archived
+        let row = try await storedRow(threadID: thread.id)
+        XCTAssertNil(row)
+    }
+
     // MARK: - Messages
 
     func testMessages_comeBackInOrderByPageAndGoWithTheirThread() async throws {
@@ -100,6 +140,25 @@ final class ChatHistoryStoreTests: XCTestCase {
             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM messages WHERE thread_id = ?", arguments: [thread.id])
         }
         XCTAssertEqual(rows, 0)
+    }
+
+    func testMessages_pagePastOneThatCannotBeRead() async throws {
+        let thread = try await newThread(title: "Damaged \(UUID().uuidString)")
+        for number in 1 ... 5 {
+            await ChatService.shared.addLocalMessage(message("d\(number)-\(thread.id)", in: thread.id, content: "Message \(number)"))
+        }
+        try await DatabaseManager.shared.dbQueue?.write { db in
+            try db.execute(
+                sql: "UPDATE messages SET content_ciphertext = ? WHERE id = ?",
+                arguments: [Data(repeating: 7, count: 64), "d4-\(thread.id)"]
+            )
+        }
+
+        let newest = try await ChatService.shared.loadMessages(threadId: thread.id, limit: 2)
+        let older = try await ChatService.shared.loadMessages(threadId: thread.id, limit: 2, before: newest.first?.id)
+
+        XCTAssertEqual(newest.map(\.content), ["Message 3", "Message 5"])
+        XCTAssertEqual(older.map(\.content), ["Message 1", "Message 2"])
     }
 
     func testMessages_keepTheirMetadataAndAreNotReadableInTheDatabase() async throws {
@@ -130,22 +189,19 @@ final class ChatHistoryStoreTests: XCTestCase {
 
     // MARK: - The files earlier builds kept
 
-    func testImport_movesTheAccountsFilesIntoTheDatabaseOnceAndDeletesThem() async throws {
+    func testImport_movesTheAccountsFilesIntoTheDatabaseAndDeletesThem() async throws {
         let userID = UserScope.currentUserID
         let mine = thread(id: "legacy-mine-\(UUID().uuidString)", userId: userID, title: "From the file")
         let someoneElses = thread(id: "legacy-other-\(UUID().uuidString)", userId: "another-user", title: "Not mine")
         created.append(mine.id)
-        let messages = [
+        try write([mine, someoneElses], to: threadsFile)
+        try write([
             mine.id: [message("l1-\(mine.id)", in: mine.id, content: "First"), message("l2-\(mine.id)", in: mine.id, content: "Second")],
             someoneElses.id: [message("l3-\(mine.id)", in: someoneElses.id, content: "Other")],
             "a-deleted-thread": [message("l4-\(mine.id)", in: "a-deleted-thread", content: "Orphan")],
-        ]
-        let threadsFile = LegacyChatHistoryImport.threadsFileURL(for: userID)
-        let messagesFile = LegacyChatHistoryImport.messagesFileURL(for: userID)
-        try write([mine, someoneElses], to: threadsFile)
-        try write(messages, to: messagesFile)
+        ], to: messagesFile)
 
-        try await LegacyChatHistoryImport.importFiles(for: userID)
+        try await LegacyChatHistoryImport.importFiles(for: userID, threadsFile: threadsFile, messagesFile: messagesFile)
         await service.reloadForCurrentUser()
         let threads = try await service.loadThreads()
         let imported = try await ChatService.shared.loadMessages(threadId: mine.id)
@@ -163,21 +219,56 @@ final class ChatHistoryStoreTests: XCTestCase {
         let userID = UserScope.currentUserID
         let mine = thread(id: "legacy-locked-\(UUID().uuidString)", userId: userID, title: "Kept")
         created.append(mine.id)
-        let threadsFile = LegacyChatHistoryImport.threadsFileURL(for: userID)
         try write([mine], to: threadsFile)
         await DataEncryptionService.shared.lock()
 
         do {
-            try await LegacyChatHistoryImport.importFiles(for: userID)
+            try await LegacyChatHistoryImport.importFiles(for: userID, threadsFile: threadsFile, messagesFile: messagesFile)
             XCTFail("Nothing can be stored while the data is locked")
         } catch {}
         XCTAssertTrue(FileManager.default.fileExists(atPath: threadsFile.path))
 
         await DataEncryptionService.shared.unlockForTestingEphemeral()
-        try await LegacyChatHistoryImport.importFiles(for: userID)
+        try await LegacyChatHistoryImport.importFiles(for: userID, threadsFile: threadsFile, messagesFile: messagesFile)
         let stored = try await repository.loadChatThreads()
         XCTAssertTrue(stored.contains { $0.id == mine.id })
         XCTAssertFalse(FileManager.default.fileExists(atPath: threadsFile.path))
+    }
+
+    func testImport_storesNothingAndKeepsTheFilesForAnAccountThatIsNotTheCurrentOne() async throws {
+        let other = thread(id: "legacy-switched-\(UUID().uuidString)", userId: "another-user", title: "Theirs")
+        try write([other], to: threadsFile)
+
+        do {
+            try await LegacyChatHistoryImport.importFiles(for: "another-user", threadsFile: threadsFile, messagesFile: messagesFile)
+            XCTFail("History is only imported for the account that is signed in")
+        } catch {
+            XCTAssertEqual(error as? RepositoryError, .accountChanged)
+        }
+
+        let row = try await storedRow(threadID: other.id)
+        XCTAssertNil(row)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: threadsFile.path))
+    }
+
+    func testImport_setsAsideAFileItCannotReadAndStillImportsTheOther() async throws {
+        let userID = UserScope.currentUserID
+        let mine = thread(id: "legacy-partial-\(UUID().uuidString)", userId: userID, title: "Readable")
+        created.append(mine.id)
+        try write([mine], to: threadsFile)
+        let damaged = Data("not-json".utf8)
+        try damaged.write(to: messagesFile)
+
+        try await LegacyChatHistoryImport.importFiles(for: userID, threadsFile: threadsFile, messagesFile: messagesFile)
+
+        let stored = try await repository.loadChatThreads()
+        XCTAssertTrue(stored.contains { $0.id == mine.id })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: threadsFile.path))
+        // The damaged file is kept under another name, not deleted.
+        let kept = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+        XCTAssertEqual(kept.count, 1)
+        XCTAssertTrue(kept[0].lastPathComponent.hasPrefix("messages.json.unreadable-"))
+        XCTAssertEqual(try Data(contentsOf: kept[0]), damaged)
     }
 
     // MARK: - Helpers

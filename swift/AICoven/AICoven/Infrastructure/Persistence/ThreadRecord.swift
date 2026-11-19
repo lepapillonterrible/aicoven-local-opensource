@@ -283,6 +283,7 @@ actor ThreadRepository {
     /// the summary.
     func updateSummary(forThreadID threadID: String, summary: String?) async throws {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let session = await beginWrite()
 
         let ciphertext: Data?
         if let summary {
@@ -291,9 +292,14 @@ actor ThreadRepository {
         } else {
             ciphertext = nil
         }
+        try await confirm(session)
 
         try await dbQueue.write { db in
-            guard var record = try ThreadRecord.fetchOne(db, key: threadID) else { return }
+            // Only the thread of the account the summary was encrypted for.
+            let owned = ThreadRecord
+                .filter(ThreadRecord.Columns.id == threadID)
+                .filter(ThreadRecord.Columns.userId == session.userID)
+            guard var record = try owned.fetchOne(db) else { return }
             record.summaryCiphertext = ciphertext
             record.updatedAt = Date()
             try record.update(db)
@@ -376,19 +382,44 @@ actor ThreadRepository {
 
 // MARK: - Chat history
 
+/// The account and data key a write starts under. A write encrypts and then
+/// stores, and waits in between; the account, or the key in memory, can
+/// change while it does.
+struct WriteSession {
+    let userID: String
+    let keyEpoch: Int
+}
+
 /// The app's own threads and messages. Each thread and each message is
-/// stored whole and encrypted, so nothing about a conversation, its title
-/// included, is readable in the database file. Reading or adding to the
-/// history first moves in whatever earlier builds left in files.
+/// stored whole and encrypted, so a conversation's titles and content are
+/// not readable in the database file; a row's dates, role and owner are.
+/// Reading or adding to the history first moves in whatever earlier builds
+/// left in files.
 extension ThreadRepository {
+    func beginWrite() async -> WriteSession {
+        let userID = await MainActor.run { UserScope.currentUserID }
+        return await WriteSession(userID: userID, keyEpoch: DataEncryptionService.shared.keyEpoch)
+    }
+
+    /// Throws unless the account and the data key are still the ones the
+    /// write began under. Checked after the last encryption, so what is then
+    /// stored was encrypted for the account it is stored under.
+    func confirm(_ session: WriteSession) async throws {
+        let userID = await MainActor.run { UserScope.currentUserID }
+        guard userID == session.userID, await DataEncryptionService.shared.keyEpoch == session.keyEpoch else {
+            throw RepositoryError.accountChanged
+        }
+    }
+
     /// Saves a thread, new or changed.
     func saveThread(_ thread: Thread) async throws {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-        let currentUserId = await MainActor.run { UserScope.currentUserID }
+        let session = await beginWrite()
         let payload = try await DataEncryptionService.shared.encrypt(JSONEncoder().encode(thread), purpose: "chat_thread")
+        try await confirm(session)
 
         try await dbQueue.write { db in
-            try Self.upsert(thread, payload: payload, userId: currentUserId, in: db)
+            try Self.upsert(thread, payload: payload, userId: session.userID, in: db)
         }
     }
 
@@ -433,8 +464,9 @@ extension ThreadRepository {
     func appendChatMessage(_ message: ChatMessage) async throws {
         try await LegacyChatHistoryImport.shared.importIfNeeded()
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-        let currentUserId = await MainActor.run { UserScope.currentUserID }
-        let record = try await Self.record(for: message, userId: currentUserId)
+        let session = await beginWrite()
+        let record = try await Self.record(for: message, userId: session.userID)
+        try await confirm(session)
 
         try await dbQueue.write { db in
             try record.insert(db)
@@ -442,60 +474,82 @@ extension ThreadRepository {
     }
 
     /// A page of a thread's messages, oldest first: the `limit` newest, or
-    /// the `limit` just before the message `before`.
+    /// the `limit` just before the message `before`. Fewer than `limit`
+    /// means there are no older ones: a stored message that cannot be read
+    /// is passed over, and the page is filled from further back.
     func loadChatMessages(threadID: String, limit: Int, before: String?) async throws -> [ChatMessage] {
         try await LegacyChatHistoryImport.shared.importIfNeeded()
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         let currentUserId = await MainActor.run { UserScope.currentUserID }
 
         // Messages are appended in order, so the row order is their order.
-        let records: [MessageRecord] = try await dbQueue.read { db in
-            var sql = "SELECT * FROM messages WHERE thread_id = ? AND user_id = ? AND payload_format = ?"
-            var arguments: [any DatabaseValueConvertible] = [threadID, currentUserId, MessageRecord.chatMessage]
-            if let before {
-                sql += " AND rowid < (SELECT rowid FROM messages WHERE id = ? AND thread_id = ? AND user_id = ?)"
-                arguments += [before, threadID, currentUserId]
+        var olderThan: Int64?
+        if let before {
+            olderThan = try await dbQueue.read { db in
+                try Int64.fetchOne(
+                    db,
+                    sql: "SELECT rowid FROM messages WHERE id = ? AND thread_id = ? AND user_id = ?",
+                    arguments: [before, threadID, currentUserId]
+                )
             }
-            sql += " ORDER BY rowid DESC LIMIT ?"
-            arguments.append(limit)
-            return try MessageRecord.fetchAll(db, sql: sql, arguments: StatementArguments(arguments))
+            guard olderThan != nil else { return [] }
         }
 
-        var messages: [ChatMessage] = []
-        messages.reserveCapacity(records.count)
-        for record in records.reversed() {
-            if let message = try await Self.open(ChatMessage.self, record.contentCiphertext, purpose: "chat_message") {
-                messages.append(message)
+        var newestFirst: [ChatMessage] = []
+        while newestFirst.count < limit {
+            let wanted = limit - newestFirst.count
+            let cursor = olderThan
+            let rows: [Row] = try await dbQueue.read { db in
+                var sql = "SELECT rowid AS row_order, content_ciphertext FROM messages WHERE thread_id = ? AND user_id = ? AND payload_format = ?"
+                var arguments: [any DatabaseValueConvertible] = [threadID, currentUserId, MessageRecord.chatMessage]
+                if let cursor {
+                    sql += " AND rowid < ?"
+                    arguments.append(cursor)
+                }
+                sql += " ORDER BY rowid DESC LIMIT ?"
+                arguments.append(wanted)
+                return try Row.fetchAll(db, sql: sql, arguments: StatementArguments(arguments))
             }
+            for row in rows {
+                let ciphertext: Data = row["content_ciphertext"]
+                if let message = try await Self.open(ChatMessage.self, ciphertext, purpose: "chat_message") {
+                    newestFirst.append(message)
+                }
+            }
+            guard rows.count == wanted, let oldest = rows.last else { break }
+            olderThan = oldest["row_order"]
         }
-        return messages
+        return newestFirst.reversed()
     }
 
-    /// Stores threads and their messages together, or not at all: the one
-    /// write of chat history from the files that used to hold it. A thread or
-    /// message already stored is left as it is.
-    func importChatHistory(threads: [Thread], messages: [String: [ChatMessage]]) async throws {
+    /// Stores the account `userID`'s threads and their messages together, or
+    /// not at all: the one write of chat history from the files that used to
+    /// hold it. A thread or message already stored is left as it is. Throws
+    /// if `userID` is not, or stops being, the current account.
+    func importChatHistory(threads: [Thread], messages: [String: [ChatMessage]], userID: String) async throws {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-        let currentUserId = await MainActor.run { UserScope.currentUserID }
+        let session = await beginWrite()
+        guard session.userID == userID else { throw RepositoryError.accountChanged }
 
         var entries: [(thread: Thread, payload: Data, messages: [MessageRecord])] = []
         for thread in threads {
             let payload = try await DataEncryptionService.shared.encrypt(JSONEncoder().encode(thread), purpose: "chat_thread")
             var records: [MessageRecord] = []
             for message in messages[thread.id] ?? [] {
-                try await records.append(Self.record(for: message, userId: currentUserId))
+                try await records.append(Self.record(for: message, userId: userID))
             }
             entries.append((thread, payload, records))
         }
+        try await confirm(session)
 
         let toWrite = entries
         try await dbQueue.write { db in
             for entry in toWrite {
                 if let stored = try ThreadRecord.fetchOne(db, key: entry.thread.id) {
                     // A row another user owns cannot take this user's messages.
-                    guard stored.userId == currentUserId else { continue }
+                    guard stored.userId == userID else { continue }
                 } else {
-                    try Self.upsert(entry.thread, payload: entry.payload, userId: currentUserId, in: db)
+                    try Self.upsert(entry.thread, payload: entry.payload, userId: userID, in: db)
                 }
                 for record in entry.messages {
                     try record.insert(db, onConflict: .ignore)
@@ -536,7 +590,7 @@ extension ThreadRepository {
     }
 
     /// Writes a thread's row: a new row, or the payload and dates of the
-    /// current user's existing one, whose summary stays.
+    /// user's existing one, whose summary stays.
     private static func upsert(_ thread: Thread, payload: Data, userId: String, in db: Database) throws {
         let existing = try ThreadRecord
             .filter(ThreadRecord.Columns.id == thread.id)
@@ -567,4 +621,8 @@ extension ThreadRepository: ThreadStore {}
 
 enum RepositoryError: Error {
     case databaseUnavailable
+    /// The account's data is locked, so nothing of it can be read.
+    case dataLocked
+    /// The account, or its data key, changed while a write was encrypting.
+    case accountChanged
 }

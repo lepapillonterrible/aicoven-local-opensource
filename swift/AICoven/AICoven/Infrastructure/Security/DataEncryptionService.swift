@@ -42,7 +42,20 @@ actor DataEncryptionService {
     }
 
     /// Cached in-memory data-encryption key (K_data) for the current session.
-    private var cachedDataKey: SymmetricKey?
+    private var cachedDataKey: SymmetricKey? {
+        didSet { keyEpoch += 1 }
+    }
+
+    /// Counts every change of the data key in memory: each unlock and each
+    /// lock. A write that encrypts and then stores compares it before and
+    /// after, so a record is never stored under one account with a key
+    /// unlocked for another.
+    private(set) var keyEpoch = 0
+
+    /// Whether the data key is in memory.
+    var isUnlocked: Bool {
+        cachedDataKey != nil
+    }
 
     private init() {}
 

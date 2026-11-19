@@ -96,8 +96,6 @@ final class ErrorReportingTests: XCTestCase {
         let reporter = CapturingErrorReporter()
         AppErrorReporter.use(reporter)
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("personal_threads_\(UUID().uuidString).json")
-        let setAside = file.appendingPathExtension("unreadable")
-        defer { try? FileManager.default.removeItem(at: setAside) }
         try Data("not-json".utf8).write(to: file)
 
         let threads = LegacyChatHistoryImport.read([AICoven.Thread].self, at: file)
@@ -105,7 +103,11 @@ final class ErrorReportingTests: XCTestCase {
         XCTAssertNil(threads)
         XCTAssertTrue(reporter.errors.contains { $0.context == "LegacyChatHistoryImport.read" })
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: setAside.path))
+        let setAside = try FileManager.default
+            .contentsOfDirectory(at: file.deletingLastPathComponent(), includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix(file.lastPathComponent + ".unreadable-") }
+        XCTAssertEqual(setAside.count, 1)
+        setAside.forEach { try? FileManager.default.removeItem(at: $0) }
     }
 
     func testDatabaseManager_logsErrorOnFailedMigration() {
