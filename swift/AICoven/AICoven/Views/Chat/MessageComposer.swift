@@ -237,7 +237,11 @@ struct MessageComposer: View {
                 AttachmentsListView(
                     attachments: attachments,
                     compact: true,
-                    onRemove: { id in attachments.removeAll { $0.id == id } },
+                    onRemove: { id in
+                        attachments.removeAll { $0.id == id }
+                        // Taken out unsent: its copy is not kept.
+                        Task { await AttachmentStore.shared.removeUnsent([id]) }
+                    },
                     showRemove: true
                 )
             }
@@ -433,16 +437,27 @@ struct MessageComposer: View {
         let task = UUID()
         attachingTask = task
         defer { if attachingTask == task { attachingTask = nil } }
+        var failures: [String] = []
         for url in urls {
             do {
-                let detail = try await UploadService.shared.upload(url: url, threadId: threadId)
-                // The composer can have moved to another thread meanwhile.
-                guard attachingTask == task else { return }
+                // Copied into the app's own store now, so it is there to
+                // send whatever becomes of the original.
+                let detail = try await AttachmentStore.shared.add(fileAt: url, toThread: threadId)
+                // The composer can have moved to another thread meanwhile:
+                // the file was attached for the thread it left, and is not
+                // kept for no message.
+                guard attachingTask == task else {
+                    await AttachmentStore.shared.removeUnsent([detail.id])
+                    return
+                }
                 attachments.append(detail)
             } catch {
                 Self.log("A file could not be attached", error)
                 guard attachingTask == task else { return }
-                attachFailure = "\(url.lastPathComponent) could not be attached."
+                // The store says why of what it refuses (too large, not
+                // readable); anything else is said plainly.
+                failures.append((error as? AttachmentStore.Failure)?.errorDescription ?? "\(url.lastPathComponent) could not be attached.")
+                attachFailure = failures.joined(separator: "\n")
             }
         }
     }

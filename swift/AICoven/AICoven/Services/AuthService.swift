@@ -318,6 +318,8 @@ class AuthService: ObservableObject {
 
         // Delete all user data from local SQLite database
         await deleteLocalUserData(userId: userId)
+        // And the files attached to the account's messages.
+        await AttachmentStore.shared.deleteAllFiles(for: userId)
 
         // Clear user-specific UserDefaults
         UserDefaults.standard.removeObject(forKey: AuthService.onboardingKey(for: userId))

@@ -47,6 +47,9 @@ actor ThreadService {
         guard loadedUserID != userID else { return }
         personalThreads = threads.sorted { $0.createdAt < $1.createdAt }
         loadedUserID = userID
+        // What a composer held attached and unsent when the app last closed
+        // is not kept: once in each run, before any composer is used.
+        await AttachmentStore.shared.clearUnsentFromEarlierRuns(for: userID)
         await cleanupTestThreads()
     }
 
@@ -88,7 +91,9 @@ actor ThreadService {
         AppErrorReporter.log(message: "Removing \(testThreads.count) automated test threads", context: "ThreadService.cleanupTestThreads")
         for thread in testThreads {
             do {
+                let attached = await AttachmentStore.shared.ids(inThread: thread.id, for: thread.userId)
                 try await ThreadRepository.shared.deleteThread(id: thread.id, for: thread.userId)
+                await AttachmentStore.shared.deleteFiles(attached, for: thread.userId)
                 personalThreads.removeAll { $0.id == thread.id }
             } catch {
                 AppErrorReporter.log(error: error, context: "ThreadService.cleanupTestThreads")
@@ -243,7 +248,11 @@ actor ThreadService {
             AppErrorReporter.log(message: "Ignoring delete for unknown thread", context: "ThreadService.deleteThread")
             return
         }
+        // The thread's attachments go with it: their rows with its row,
+        // their files once that is gone.
+        let attached = await AttachmentStore.shared.ids(inThread: threadId, for: userID)
         try await ThreadRepository.shared.deleteThread(id: threadId, for: userID)
+        await AttachmentStore.shared.deleteFiles(attached, for: userID)
         if isShowing(userID) {
             personalThreads.removeAll { $0.id == threadId }
         }

@@ -158,7 +158,7 @@ actor ToolService {
     // These analysis helpers are intentionally lightweight – they assume that
     // some other part of the app manages attachments and can provide raw
     // bytes for a given attachment identifier. Hooking them into the existing
-    // UploadService/attachments pipeline will be done at a higher layer.
+    // the attachments store will be done at a higher layer.
 
     struct AnalysisResult {
         let textSummary: String

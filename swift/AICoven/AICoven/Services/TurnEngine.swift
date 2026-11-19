@@ -169,6 +169,8 @@ final class TurnEngine: ObservableObject {
         do {
             try await storeWaitingEnding(threadID: threadID)
             try await store.beginTurn(id: turnID, userMessage: userMessage)
+            // Its files are the thread's from here on.
+            await AttachmentStore.shared.markSent((attachments ?? []).map(\.id), with: userMessage.id, inThread: threadID)
         } catch {
             running[threadID] = nil
             // What was set to wait for this turn, while it was being
@@ -251,7 +253,12 @@ final class TurnEngine: ObservableObject {
     /// being started: it is on its way.
     func removeWaiting(_ id: WaitingMessage.ID, threadID: String) {
         guard starting[threadID] != id else { return }
+        // Its files were never sent, and are not kept for no message.
+        let files = waiting[threadID]?.first { $0.id == id }?.attachments.map(\.id) ?? []
         drop(id, from: threadID)
+        if !files.isEmpty {
+            Task { await AttachmentStore.shared.removeUnsent(files) }
+        }
     }
 
     /// Edit: the waiting message leaves the queue and goes back to the

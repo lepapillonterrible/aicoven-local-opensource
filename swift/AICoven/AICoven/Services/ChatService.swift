@@ -496,41 +496,36 @@ actor ChatService {
                 let name = attachment.name
                 let mime = attachment.mimeType ?? "unknown"
 
-                // Try to read file contents from the local URL
-                if let url = attachment.url {
-                    do {
-                        if mime.hasPrefix("image/") {
-                            // For images, describe them (actual image content would need vision API)
-                            let sizeDesc = attachment.sizeBytes.map { "\(ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file))" } ?? "unknown size"
-                            let dims = (attachment.width != nil && attachment.height != nil) ? "\(attachment.width!)×\(attachment.height!)" : ""
-                            attachmentLines.append("[Image: \(name)] (\(mime), \(sizeDesc)\(dims.isEmpty ? "" : ", \(dims)"))")
-                            attachmentLines.append("Note: This is an image attachment. Describe what you see or ask the user about it if needed.")
+                // Its bytes, from the app's own store.
+                do {
+                    if mime.hasPrefix("image/") {
+                        // For images, describe them (actual image content would need vision API)
+                        let sizeDesc = attachment.sizeBytes.map { "\(ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file))" } ?? "unknown size"
+                        let dims = (attachment.width != nil && attachment.height != nil) ? "\(attachment.width!)×\(attachment.height!)" : ""
+                        attachmentLines.append("[Image: \(name)] (\(mime), \(sizeDesc)\(dims.isEmpty ? "" : ", \(dims)"))")
+                        attachmentLines.append("Note: This is an image attachment. Describe what you see or ask the user about it if needed.")
+                    } else {
+                        // For text-based files, read the content
+                        let data = try await Self.bytes(of: attachment)
+                        if let text = String(data: data, encoding: .utf8) {
+                            // Truncate very large files to avoid context overflow
+                            let maxChars = 8000
+                            let truncated = text.count > maxChars
+                            let content = truncated ? String(text.prefix(maxChars)) + "\n... [truncated, \(text.count - maxChars) more characters]" : text
+                            attachmentLines.append("[File: \(name)] (\(mime))")
+                            attachmentLines.append("```")
+                            attachmentLines.append(content)
+                            attachmentLines.append("```")
                         } else {
-                            // For text-based files, read the content
-                            let data = try Data(contentsOf: url)
-                            if let text = String(data: data, encoding: .utf8) {
-                                // Truncate very large files to avoid context overflow
-                                let maxChars = 8000
-                                let truncated = text.count > maxChars
-                                let content = truncated ? String(text.prefix(maxChars)) + "\n... [truncated, \(text.count - maxChars) more characters]" : text
-                                attachmentLines.append("[File: \(name)] (\(mime))")
-                                attachmentLines.append("```")
-                                attachmentLines.append(content)
-                                attachmentLines.append("```")
-                            } else {
-                                // Binary file that's not an image - just note its presence
-                                let sizeDesc = attachment.sizeBytes.map { "\(ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file))" } ?? "unknown size"
-                                attachmentLines.append("[Binary file: \(name)] (\(mime), \(sizeDesc)) - Contents cannot be displayed as text.")
-                            }
+                            // Binary file that's not an image - just note its presence
+                            let sizeDesc = attachment.sizeBytes.map { "\(ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file))" } ?? "unknown size"
+                            attachmentLines.append("[Binary file: \(name)] (\(mime), \(sizeDesc)) - Contents cannot be displayed as text.")
                         }
-                    } catch {
-                        AppErrorReporter.log(error: error, context: "ChatService.streamMessage.readAttachment")
-                        attachmentLines.append("[File: \(name)] (\(mime)) - Unable to read file contents: \(error.localizedDescription)")
                     }
-                } else {
-                    // No URL available, just describe the attachment
-                    let sizeDesc = attachment.sizeBytes.map { "\(ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file))" } ?? "unknown size"
-                    attachmentLines.append("[File: \(name)] (\(mime), \(sizeDesc)) - No local file URL available.")
+                } catch {
+                    let failure = error as NSError
+                    AppErrorReporter.log(message: "An attachment could not be read (\(failure.domain) \(failure.code)).", context: "ChatService.streamMessage.readAttachment")
+                    attachmentLines.append("[File: \(name)] (\(mime)) - Its contents could not be read.")
                 }
             }
             if !attachmentLines.isEmpty {
@@ -1428,6 +1423,15 @@ actor ChatService {
             let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("\(provider)_model")) ?? fallback
             return (provider, model)
         }
+    }
+
+    /// An attachment's bytes: from the app's own store, or, for one that
+    /// still names a file elsewhere, from that file.
+    private static func bytes(of attachment: FileAttachmentDetail) async throws -> Data {
+        if let url = attachment.url {
+            return try Data(contentsOf: url)
+        }
+        return try await AttachmentStore.shared.data(of: attachment.id)
     }
 
     /// Human-readable label for a provider string.

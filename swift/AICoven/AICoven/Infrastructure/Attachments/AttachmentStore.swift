@@ -1,0 +1,252 @@
+import CryptoKit
+import Foundation
+import GRDB
+
+/// The files attached to messages, kept on this device. A file is copied in
+/// when it is attached, so it is still there when the message is sent and
+/// when the thread is read later, wherever the original has gone. Its bytes
+/// are encrypted in the app's own folder, as the account's messages are in
+/// the database; its row says whose it is and which thread it belongs to.
+/// It goes when it is taken out of the composer unsent, with its thread, and
+/// with its account.
+actor AttachmentStore {
+    static let shared = AttachmentStore()
+
+    /// The largest file that is attached.
+    static let maxBytes = 10 * 1024 * 1024
+
+    nonisolated enum Failure: LocalizedError, Equatable {
+        case tooLarge(name: String)
+        case unreadable(name: String)
+        /// Not this account's, or no longer on this device.
+        case missing
+
+        var errorDescription: String? {
+            switch self {
+            case let .tooLarge(name): "\(name) is larger than 10 MB and was not attached."
+            case let .unreadable(name): "\(name) could not be read and was not attached."
+            case .missing: "This attachment is no longer on this device."
+            }
+        }
+    }
+
+    /// Where the files are kept; nil until first used, then beside the
+    /// database.
+    private var directory: URL?
+    /// The accounts whose unsent attachments from earlier runs of the app
+    /// have been cleared in this one.
+    private var clearedAccounts: Set<String> = []
+
+    init(directory: URL? = nil) {
+        self.directory = directory
+    }
+
+    // MARK: - Attaching
+
+    /// Copies a file in as an attachment of the thread. Throws
+    /// `Failure.tooLarge` or `.unreadable` naming the file, or what the
+    /// store's own checks throw (locked data, a thread that is not the
+    /// current account's).
+    func add(fileAt url: URL, toThread threadID: String) async throws -> FileAttachmentDetail {
+        let name = url.lastPathComponent
+        // A file chosen in the system's chooser is readable only between these.
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        // Its size first, so a file far too large is not read at all.
+        if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > Self.maxBytes {
+            throw Failure.tooLarge(name: name)
+        }
+        guard let data = try? Data(contentsOf: url) else { throw Failure.unreadable(name: name) }
+        return try await add(data, named: name, mimeType: AttachmentImage.mimeType(forFileNamed: name), toThread: threadID)
+    }
+
+    /// Keeps these bytes as an attachment of the thread.
+    func add(_ data: Data, named name: String, mimeType: String?, toThread threadID: String) async throws -> FileAttachmentDetail {
+        guard data.count <= Self.maxBytes else { throw Failure.tooLarge(name: name) }
+        let prepared: AttachmentImage.Prepared
+        do {
+            prepared = try AttachmentImage.prepared(data, name: name, mimeType: mimeType)
+        } catch {
+            throw Failure.unreadable(name: name)
+        }
+        let detail = FileAttachmentDetail(
+            id: UUID().uuidString,
+            name: prepared.name,
+            mimeType: prepared.mimeType,
+            sizeBytes: prepared.data.count,
+            width: prepared.width,
+            height: prepared.height,
+            url: nil
+        )
+        guard let queue = await dbQueue() else { throw RepositoryError.databaseUnavailable }
+        let session = try await ThreadRepository.shared.beginWrite()
+        let body = try await DataEncryptionService.shared.encrypt(prepared.data, purpose: "attachment")
+        let meta = try await DataEncryptionService.shared.encrypt(JSONEncoder().encode(detail), purpose: "attachment_meta")
+        try await ThreadRepository.shared.confirm(session)
+
+        // The row first: it is refused for a thread that is not this
+        // account's, and then nothing is written.
+        try await queue.write { db in
+            try db.execute(
+                sql: "INSERT INTO attachments (id, user_id, thread_id, meta_ciphertext, created_at) VALUES (?, ?, ?, ?, ?)",
+                arguments: [detail.id, session.userID, threadID, meta, Date()]
+            )
+        }
+        do {
+            let file = try await fileURL(of: detail.id, for: session.userID, creatingFolder: true)
+            try body.write(to: file, options: .atomic)
+        } catch {
+            _ = try? await queue.write { db in
+                try db.execute(sql: "DELETE FROM attachments WHERE id = ?", arguments: [detail.id])
+            }
+            throw Failure.unreadable(name: name)
+        }
+        return detail
+    }
+
+    // MARK: - Reading
+
+    /// The attachment's bytes. Throws `Failure.missing` unless it is the
+    /// current account's and still on this device, and what the store's
+    /// readers throw while the data is locked or if the account changes.
+    func data(of id: String) async throws -> Data {
+        guard let queue = await dbQueue() else { throw RepositoryError.databaseUnavailable }
+        let userID = await MainActor.run { UserScope.currentUserID }
+        let isOwned = try await queue.read { db in
+            try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM attachments WHERE id = ? AND user_id = ?)", arguments: [id, userID]) ?? false
+        }
+        guard isOwned else { throw Failure.missing }
+        try await ThreadRepository.shared.requireKey(of: userID)
+        guard let body = try? await Data(contentsOf: fileURL(of: id, for: userID, creatingFolder: false)) else { throw Failure.missing }
+        let data = try await DataEncryptionService.shared.decrypt(body, purpose: "attachment")
+        try await ThreadRepository.shared.requireKey(of: userID)
+        return data
+    }
+
+    // MARK: - Sending and removing
+
+    /// Marks attachments as sent with a message: they are the thread's from
+    /// here on, and are no longer cleared as unsent.
+    func markSent(_ ids: [String], with messageID: String, inThread threadID: String) async {
+        guard !ids.isEmpty, let queue = await dbQueue() else { return }
+        let userID = await MainActor.run { UserScope.currentUserID }
+        do {
+            try await queue.write { db in
+                for id in ids {
+                    try db.execute(
+                        sql: "UPDATE attachments SET message_id = ? WHERE id = ? AND user_id = ? AND thread_id = ?",
+                        arguments: [messageID, id, userID, threadID]
+                    )
+                }
+            }
+        } catch {
+            Self.log("Attachments could not be marked as sent", error)
+        }
+    }
+
+    /// Removes attachments that were not sent: taken out of the composer,
+    /// or dropped with a waiting message. One that was sent stays.
+    func removeUnsent(_ ids: [String]) async {
+        guard !ids.isEmpty, let queue = await dbQueue() else { return }
+        let userID = await MainActor.run { UserScope.currentUserID }
+        do {
+            let removed = try await queue.write { db in
+                var removed: [String] = []
+                for id in ids {
+                    try db.execute(
+                        sql: "DELETE FROM attachments WHERE id = ? AND user_id = ? AND message_id IS NULL",
+                        arguments: [id, userID]
+                    )
+                    if db.changesCount > 0 { removed.append(id) }
+                }
+                return removed
+            }
+            await deleteFiles(removed, for: userID)
+        } catch {
+            Self.log("Unsent attachments could not be removed", error)
+        }
+    }
+
+    /// Clears what earlier runs of the app left attached and unsent for
+    /// this account: a composer's files are held only while the app runs.
+    /// Done once in each run, before any composer of the account's is used.
+    func clearUnsentFromEarlierRuns(for userID: String) async {
+        guard clearedAccounts.insert(userID).inserted, let queue = await dbQueue() else { return }
+        do {
+            let removed = try await queue.write { db in
+                let ids = try String.fetchAll(db, sql: "SELECT id FROM attachments WHERE user_id = ? AND message_id IS NULL", arguments: [userID])
+                try db.execute(sql: "DELETE FROM attachments WHERE user_id = ? AND message_id IS NULL", arguments: [userID])
+                return ids
+            }
+            await deleteFiles(removed, for: userID)
+        } catch {
+            Self.log("Unsent attachments from earlier runs could not be cleared", error)
+        }
+    }
+
+    /// The ids of a thread's attachments, to delete their files once the
+    /// thread, and with it their rows, is gone.
+    func ids(inThread threadID: String, for userID: String) async -> [String] {
+        guard let queue = await dbQueue() else { return [] }
+        return await (try? queue.read { db in
+            try String.fetchAll(db, sql: "SELECT id FROM attachments WHERE thread_id = ? AND user_id = ?", arguments: [threadID, userID])
+        }) ?? []
+    }
+
+    /// Deletes the files of attachments whose rows are gone.
+    func deleteFiles(_ ids: [String], for userID: String) async {
+        for id in ids {
+            guard let file = try? await fileURL(of: id, for: userID, creatingFolder: false) else { continue }
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+
+    /// Deletes every file kept for an account: the account is being deleted.
+    func deleteAllFiles(for userID: String) async {
+        guard let folder = try? await folder(for: userID) else { return }
+        try? FileManager.default.removeItem(at: folder)
+    }
+
+    // MARK: - Where the files are
+
+    /// An account's folder: named by a digest of its id, which says nothing
+    /// of the account and is always a plain name.
+    private func folder(for userID: String) async throws -> URL {
+        let base: URL
+        if let directory {
+            base = directory
+        } else {
+            base = await MainActor.run { DatabaseManager.shared.databaseURL.deletingLastPathComponent() }
+                .appendingPathComponent("Attachments", isDirectory: true)
+            directory = base
+        }
+        let digest = SHA256.hash(data: Data(userID.utf8)).map { String(format: "%02x", $0) }.joined()
+        return base.appendingPathComponent(digest, isDirectory: true)
+    }
+
+    /// The file an attachment's bytes are in. An id that is not one of the
+    /// store's own is refused: it is used as a file name.
+    private func fileURL(of id: String, for userID: String, creatingFolder: Bool) async throws -> URL {
+        guard UUID(uuidString: id) != nil else { throw Failure.missing }
+        let folder = try await folder(for: userID)
+        if creatingFolder {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            // Kept out of backups made of the device's files in the clear.
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            var marked = folder
+            try? marked.setResourceValues(values)
+        }
+        return folder.appendingPathComponent(id, isDirectory: false)
+    }
+
+    private func dbQueue() async -> DatabaseQueue? {
+        await MainActor.run { DatabaseManager.shared.dbQueue }
+    }
+
+    /// Logs what failed and the error's kind, never its description.
+    private nonisolated static func log(_ what: String, _ error: Error) {
+        let error = error as NSError
+        AppErrorReporter.log(message: "\(what) (\(error.domain) \(error.code)).", context: "AttachmentStore")
+    }
+}

@@ -363,6 +363,49 @@ final class DatabaseManager {
                 }
             }
 
+            // v12: the files attached to messages. A file's bytes are kept
+            // encrypted in the app's own folder, under the attachment's id;
+            // its row says whose it is and which thread it was attached in,
+            // and holds its name and kind encrypted. `message_id` is set
+            // once the message it went with has been stored: until then it
+            // is only in a composer or waiting to be sent.
+            migrator.registerMigration("v12_attachments") { db in
+                try db.create(table: "attachments") { t in
+                    t.column("id", .text).primaryKey()
+                    t.column("user_id", .text).notNull()
+                    t.column("thread_id", .text).notNull()
+                    t.column("meta_ciphertext", .blob).notNull()
+                    t.column("message_id", .text)
+                    t.column("created_at", .datetime).notNull()
+                    t.foreignKey(["thread_id"], references: "threads", columns: ["id"], onDelete: .cascade)
+                }
+                try db.create(index: "attachments_user_thread", on: "attachments", columns: ["user_id", "thread_id"])
+                // As for messages and turns: an attachment belongs to the
+                // user its thread does.
+                try db.execute(sql: """
+                CREATE TRIGGER attachments_match_thread_user_insert
+                BEFORE INSERT ON attachments
+                WHEN length(trim(NEW.user_id)) = 0 OR NOT EXISTS (
+                    SELECT 1 FROM threads
+                    WHERE threads.id = NEW.thread_id AND threads.user_id = NEW.user_id
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'attachments.thread_id must reference a thread owned by the same user');
+                END;
+                """)
+                try db.execute(sql: """
+                CREATE TRIGGER attachments_match_thread_user_update
+                BEFORE UPDATE OF user_id, thread_id ON attachments
+                WHEN length(trim(NEW.user_id)) = 0 OR NOT EXISTS (
+                    SELECT 1 FROM threads
+                    WHERE threads.id = NEW.thread_id AND threads.user_id = NEW.user_id
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'attachments.thread_id must reference a thread owned by the same user');
+                END;
+                """)
+            }
+
             try migrator.migrate(queue)
             dbQueue = queue
         } catch {
