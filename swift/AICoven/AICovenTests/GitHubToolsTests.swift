@@ -349,7 +349,7 @@ final class GitHubToolsTests: XCTestCase {
         defer { folder.forget() }
         let onAFolder = await folder.call(
             "github.writeFile",
-            ["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue("docs"), "content": AnyJSONValue("x"), "commit_message": AnyJSONValue("x")],
+            ["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue("docs"), "content": AnyJSONValue("x"), "message": AnyJSONValue("x")],
             threadID: "thread"
         )
         XCTAssertEqual(onAFolder.status, "error")
@@ -360,7 +360,7 @@ final class GitHubToolsTests: XCTestCase {
         defer { refusing.forget() }
         let unseen = await refusing.call(
             "github.writeFile",
-            ["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue("README.md"), "content": AnyJSONValue("x"), "commit_message": AnyJSONValue("x")],
+            ["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue("README.md"), "content": AnyJSONValue("x"), "message": AnyJSONValue("x")],
             threadID: "thread"
         )
         XCTAssertEqual(unseen.status, "error")
@@ -371,7 +371,7 @@ final class GitHubToolsTests: XCTestCase {
         for path in ["../collaborators/someone", "docs/../../x", "docs//x", "", "/", "."] {
             let refused = await refusing.call(
                 "github.writeFile",
-                ["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue(path), "content": AnyJSONValue("x"), "commit_message": AnyJSONValue("x"), "sha": AnyJSONValue("abc")],
+                ["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue(path), "content": AnyJSONValue("x"), "message": AnyJSONValue("x"), "sha": AnyJSONValue("abc")],
                 threadID: "thread"
             )
             XCTAssertEqual(refused.errorType, "invalid_parameters", path)
