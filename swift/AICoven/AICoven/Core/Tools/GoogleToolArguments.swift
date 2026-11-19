@@ -71,7 +71,9 @@ nonisolated enum GoogleToolArguments {
             return .string(text)
         case let number as NSNumber:
             if CFGetTypeID(number) == CFBooleanGetTypeID() { return .bool(number.boolValue) }
-            if let whole = Int(exactly: number.doubleValue), !CFNumberIsFloatType(number) { return .int(whole) }
+            // A whole number as it was read, without a turn through a
+            // floating-point one, which cannot hold every whole number.
+            if !CFNumberIsFloatType(number), let whole = Int(exactly: number) { return .int(whole) }
             return .double(number.doubleValue)
         case let members as [String: Any]:
             return .dictionary(members.mapValues(jsonValue))

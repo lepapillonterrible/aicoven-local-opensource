@@ -486,6 +486,13 @@ final class GoogleToolsTests: XCTestCase {
         )
         XCTAssertEqual(GoogleToolArguments.rows(in: ["values": .string(#"[["a", 1], [true, null]]"#)]), [[.string("a"), .int(1)], [.bool(true), .null]])
 
+        // A whole number is read exactly, however large; one with a fraction stays one.
+        XCTAssertEqual(GoogleToolArguments.rows(in: ["values": .string("[[9007199254740993, -9223372036854775808, 1.5, 3.0]]")]), [[.int(9_007_199_254_740_993), .int(Int.min), .double(1.5), .double(3.0)]])
+        XCTAssertEqual(
+            GoogleToolArguments.requests(in: ["requests": .array([.string(#"{"deleteSheet": {"sheetId": 9007199254740993}}"#)])]),
+            [["deleteSheet": .dictionary(["sheetId": .int(9_007_199_254_740_993)])]]
+        )
+
         // Text that is not JSON for a list or an object is not one.
         XCTAssertNil(GoogleToolArguments.requests(in: ["requests": .array([.string("addSheet")])]))
         XCTAssertNil(GoogleToolArguments.requests(in: ["requests": .array([.string("[1, 2]")])]), "A request is an object")
