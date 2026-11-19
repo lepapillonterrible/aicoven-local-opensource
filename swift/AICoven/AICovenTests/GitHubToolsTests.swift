@@ -125,6 +125,8 @@ final class GitHubToolsTests: XCTestCase {
             let path: String
             let query: [String: String]
             let authorization: String?
+            /// What was sent with it, where that was JSON.
+            var sent: [String: String] = [:]
         }
 
         private let lock = NSLock()
@@ -137,11 +139,25 @@ final class GitHubToolsTests: XCTestCase {
         func note(_ request: URLRequest) {
             let components = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }
             let query = Dictionary((components?.queryItems ?? []).map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { first, _ in first })
+            var data = request.httpBody ?? Data()
+            // URLProtocol hands a request's body over as a stream.
+            if let stream = request.httpBodyStream {
+                stream.open()
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }
+                    data.append(buffer, count: count)
+                }
+                stream.close()
+            }
+            let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
             let noted = Request(
                 method: request.httpMethod ?? "GET",
                 path: components?.percentEncodedPath ?? "",
                 query: query,
-                authorization: request.value(forHTTPHeaderField: "Authorization")
+                authorization: request.value(forHTTPHeaderField: "Authorization"),
+                sent: body.compactMapValues { $0 as? String }
             )
             lock.withLock { kept.append(noted) }
         }
@@ -247,34 +263,167 @@ final class GitHubToolsTests: XCTestCase {
         XCTAssertEqual(world.asked.requests.count, 1, "Nothing more was asked of GitHub")
     }
 
-    func testAWriteNamesItsRepositoryTheSameWay_andAPathThatClimbsOutIsNotSentThoughApproved() async throws {
+    /// A world whose person approves (or not) and is remembered, and whose
+    /// GitHub answers a look at a file with `looked` and a write with 201.
+    private func writingWorld(approving: Bool = true, looked: (status: Int, body: String)) async throws -> (World, Seen) {
         let seen = Seen()
         let world = try await world(ask: { approval in
             await seen.note(approval)
-            return .approved
-        }, answer: { _ in (201, "{}") })
+            return approving ? .approved : .denied
+        }, answer: { request in
+            request.httpMethod == "GET" ? looked : (201, "{}")
+        })
+        return (world, seen)
+    }
+
+    func testWritingAFileThatIsNotThere_looksFirst_asksAboutANewFile_andSendsNoSha() async throws {
+        let (world, seen) = try await writingWorld(looked: (404, #"{"message": "Not Found"}"#))
         defer { world.forget() }
 
         let written = await world.call(
             "github.writeFile",
-            ["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue("docs/new.md"), "content": AnyJSONValue("hello"), "message": AnyJSONValue("Add a page")],
+            ["repo": AnyJSONValue("octo/site"), "branch": AnyJSONValue("docs"), "path": AnyJSONValue("docs/new.md"), "content": AnyJSONValue("hello"), "commit_message": AnyJSONValue("Add a page")],
+            threadID: "thread"
+        )
+
+        XCTAssertEqual(written.status, "ok")
+        XCTAssertEqual(written.contextBlock, "[GitHub File Written: octo/site/docs/new.md]\nA new file.\nCommit message: Add a page")
+        let approvals = await seen.approvals
+        XCTAssertEqual(approvals.count, 1)
+        XCTAssertEqual(approvals.first?.details.hasPrefix("docs/new.md in octo/site, on docs\nCommit message: Add a page\nA new file · "), true)
+        XCTAssertEqual(world.asked.requests.map(\.method), ["GET", "PUT"])
+        XCTAssertEqual(world.asked.requests.map(\.path), ["/repos/octo/site/contents/docs/new.md", "/repos/octo/site/contents/docs/new.md"])
+        XCTAssertEqual(world.asked.requests.first?.query, ["ref": "docs"], "The file is looked for on the branch it is written to")
+        // "hello" in base64.
+        XCTAssertEqual(world.asked.requests.last?.sent, ["message": "Add a page", "content": "aGVsbG8=", "branch": "docs"])
+    }
+
+    func testWritingAFileThatIsThere_asksAboutReplacingIt_andSendsItsSha() async throws {
+        let (world, seen) = try await writingWorld(looked: (200, #"{"type": "file", "sha": "abc123", "encoding": "none", "content": ""}"#))
+        defer { world.forget() }
+
+        // The commit message by the name this app's tool had.
+        let written = await world.call(
+            "github.writeFile",
+            ["owner": AnyJSONValue("octo"), "repo": AnyJSONValue("site"), "path": AnyJSONValue("README.md"), "content": AnyJSONValue("hello"), "message": AnyJSONValue("Update"), "sha": AnyJSONValue("")],
+            threadID: "thread"
+        )
+
+        XCTAssertEqual(written.status, "ok")
+        XCTAssertEqual(written.contextBlock, "[GitHub File Written: octo/site/README.md]\nReplaced the file that was there.\nCommit message: Update")
+        let approvals = await seen.approvals
+        XCTAssertEqual(approvals.first?.details.hasPrefix("README.md in octo/site, on the default branch\nCommit message: Update\nReplaces the file that is there · "), true)
+        XCTAssertEqual(world.asked.requests.first?.query, [:], "On the default branch")
+        XCTAssertEqual(world.asked.requests.last?.sent, ["message": "Update", "content": "aGVsbG8=", "sha": "abc123"])
+    }
+
+    func testAShaTheCallNames_isSentAsItIs_withoutLooking_andADeniedWriteSendsNothing() async throws {
+        let (world, seen) = try await writingWorld(looked: (500, "{}"))
+        defer { world.forget() }
+
+        let written = await world.call(
+            "github.writeFile",
+            ["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue("README.md"), "content": AnyJSONValue("hello"), "commit_message": AnyJSONValue("Update"), "sha": AnyJSONValue("fromthecall")],
             threadID: "thread"
         )
         XCTAssertEqual(written.status, "ok")
-        let first = await seen.approvals.first
-        XCTAssertEqual(first?.details.hasPrefix("docs/new.md in octo/site, on the default branch"), true, "The person is asked about the repository the call named")
         XCTAssertEqual(world.asked.requests.map(\.method), ["PUT"])
-        XCTAssertEqual(world.asked.requests.map(\.path), ["/repos/octo/site/contents/docs/new.md"])
+        XCTAssertEqual(world.asked.requests.last?.sent["sha"], "fromthecall")
+        let approvals = await seen.approvals
+        XCTAssertEqual(approvals.first?.details.contains("Replaces the file that is there"), true)
 
-        // A path that would reach another part of GitHub's API is not sent,
-        // whatever was approved.
-        let climbing = await world.call(
+        let (denying, _) = try await writingWorld(approving: false, looked: (404, "{}"))
+        defer { denying.forget() }
+        let denied = await denying.call(
             "github.writeFile",
-            ["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue("../collaborators/someone"), "content": AnyJSONValue("x"), "message": AnyJSONValue("x")],
+            ["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue("README.md"), "content": AnyJSONValue("hello"), "commit_message": AnyJSONValue("Update")],
             threadID: "thread"
         )
-        XCTAssertEqual(climbing.status, "error")
-        XCTAssertEqual(world.asked.requests.count, 1)
+        XCTAssertEqual(denied.status, "denied")
+        XCTAssertEqual(denying.asked.requests.map(\.method), ["GET"], "It was looked at, and not written")
+    }
+
+    func testAWriteThatCannotLookFirst_orThatNamesNoFile_isNotAskedAbout() async throws {
+        // A folder is at the path.
+        let (folder, askedOfFolder) = try await writingWorld(looked: (200, #"[{"name": "a.md", "type": "file", "sha": "x"}]"#))
+        defer { folder.forget() }
+        let onAFolder = await folder.call(
+            "github.writeFile",
+            ["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue("docs"), "content": AnyJSONValue("x"), "message": AnyJSONValue("x")],
+            threadID: "thread"
+        )
+        XCTAssertEqual(onAFolder.status, "error")
+        XCTAssertEqual(onAFolder.error?.contains("'docs' is a folder, not a file."), true)
+
+        // GitHub will not say what is there.
+        let (refusing, askedOfRefusing) = try await writingWorld(looked: (403, #"{"message": "Resource not accessible"}"#))
+        defer { refusing.forget() }
+        let unseen = await refusing.call(
+            "github.writeFile",
+            ["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue("README.md"), "content": AnyJSONValue("x"), "message": AnyJSONValue("x")],
+            threadID: "thread"
+        )
+        XCTAssertEqual(unseen.status, "error")
+        XCTAssertEqual(unseen.error?.hasPrefix("Could not look at 'README.md' before writing it: "), true)
+
+        // A path that is none, or that would reach another part of
+        // GitHub's API, is refused before anything is asked of anyone.
+        for path in ["../collaborators/someone", "docs/../../x", "docs//x", "", "/", "."] {
+            let refused = await refusing.call(
+                "github.writeFile",
+                ["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue(path), "content": AnyJSONValue("x"), "message": AnyJSONValue("x"), "sha": AnyJSONValue("abc")],
+                threadID: "thread"
+            )
+            XCTAssertEqual(refused.errorType, "invalid_parameters", path)
+            XCTAssertEqual(refused.field, "path", path)
+        }
+        // An empty commit message is none, and the other name is then read.
+        let empty = await refusing.call("github.writeFile", ["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue("a.md"), "content": AnyJSONValue("x"), "commit_message": AnyJSONValue("")], threadID: "thread")
+        XCTAssertEqual(empty.error, "Missing required arguments: 'path', 'content', 'commit_message'")
+        // With no thread there is no one to ask: nothing is looked up.
+        let nowhere = await refusing.call("github.writeFile", ["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue("a.md"), "content": AnyJSONValue("x"), "commit_message": AnyJSONValue(""), "message": AnyJSONValue("Add")])
+        XCTAssertNotEqual(nowhere.status, "ok")
+        XCTAssertNotEqual(nowhere.errorType, "invalid_parameters", "The other name's message was read")
+        // No commit message by either name.
+        let unsaid = await refusing.call("github.writeFile", ["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue("a.md"), "content": AnyJSONValue("x")], threadID: "thread")
+        XCTAssertEqual(unsaid.error, "Missing required arguments: 'path', 'content', 'commit_message'")
+
+        XCTAssertEqual(folder.asked.requests.map(\.method), ["GET"])
+        XCTAssertEqual(refusing.asked.requests.map(\.method), ["GET"])
+        let approvalsOfFolder = await askedOfFolder.approvals
+        let approvalsOfRefusing = await askedOfRefusing.approvals
+        XCTAssertEqual(approvalsOfFolder.count + approvalsOfRefusing.count, 0, "The person was asked nothing")
+    }
+
+    func testABranchIsMadeFromTheArgumentsTheCloudNames_andANameThatIsNoneIsNotAskedAbout() async throws {
+        // The person says no each time, so nothing is asked of GitHub.
+        let (world, seen) = try await writingWorld(approving: false, looked: (500, "{}"))
+        defer { world.forget() }
+
+        _ = await world.call("github.createBranch", ["repo": AnyJSONValue("octo/site"), "base_ref": AnyJSONValue("main"), "new_branch": AnyJSONValue("fix/it")], threadID: "thread")
+        _ = await world.call("github.createBranch", ["repo": AnyJSONValue("octo/site"), "base_branch": AnyJSONValue("release/2"), "branch": AnyJSONValue("fix-2")], threadID: "thread")
+        var approvals = await seen.approvals
+        XCTAssertEqual(approvals.map(\.details), ["fix/it in octo/site\nFrom main", "fix-2 in octo/site\nFrom release/2"])
+
+        for (base, new, field) in [("../../user", "fix", "base_ref"), ("main", "../x", "new_branch"), ("main", "a//b", "new_branch"), ("", "fix", "base_ref"), ("main", "/", "new_branch")] {
+            let refused = await world.call("github.createBranch", ["repo": AnyJSONValue("octo/site"), "base_ref": AnyJSONValue(base), "new_branch": AnyJSONValue(new)], threadID: "thread")
+            XCTAssertEqual(refused.errorType, "invalid_parameters", "\(base) \(new)")
+            XCTAssertEqual(refused.field, field, "\(base) \(new)")
+        }
+        let unnamed = await world.call("github.createBranch", ["repo": AnyJSONValue("octo/site"), "new_branch": AnyJSONValue("fix")], threadID: "thread")
+        XCTAssertEqual(unnamed.error, "Missing required arguments: 'base_ref', 'new_branch'")
+
+        approvals = await seen.approvals
+        XCTAssertEqual(approvals.count, 2, "Only the two that named branches were asked about")
+        XCTAssertEqual(world.asked.requests, [])
+    }
+
+    func testModelsAreToldTheWriteArgumentsAsTheCloudNamesThem() throws {
+        let write = try XCTUnwrap(PromptTemplates.toolDefinitions.first { $0.name == "github.writeFile" })
+        XCTAssertEqual(write.parameters.filter(\.required).map(\.name), ["repo", "path", "content", "commit_message"])
+        XCTAssertEqual(write.parameters.filter { !$0.required }.map(\.name), ["branch", "sha"])
+        let branch = try XCTUnwrap(PromptTemplates.toolDefinitions.first { $0.name == "github.createBranch" })
+        XCTAssertEqual(branch.parameters.map(\.name), ["repo", "base_ref", "new_branch"])
     }
 
     /// The approvals that were asked.
