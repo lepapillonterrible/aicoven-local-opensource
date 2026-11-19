@@ -56,11 +56,28 @@ jobs:
           xcodebuild -version
           swift --version
 
-      - name: Install SwiftLint
-        run: brew install swiftlint
+      - name: Install SwiftLint 0.63.2
+        run: |
+          # Pinned for the same reason as SwiftFormat below: a newer version
+          # adds rules that fail files no change touched.
+          curl -fsSL -o "$RUNNER_TEMP/swiftlint.zip" \
+            https://github.com/realm/SwiftLint/releases/download/0.63.2/portable_swiftlint.zip
+          echo "c59a405c85f95b92ced677a500804e081596a4cae4a6a485af76065557d6ed29  $RUNNER_TEMP/swiftlint.zip" | shasum -a 256 -c -
+          unzip -o -q "$RUNNER_TEMP/swiftlint.zip" -d "$RUNNER_TEMP/swiftlint"
+          chmod +x "$RUNNER_TEMP/swiftlint/swiftlint"
+          echo "$RUNNER_TEMP/swiftlint" >> "$GITHUB_PATH"
 
-      - name: Install SwiftFormat
-        run: brew install swiftformat
+      - name: Install SwiftFormat 0.61.1
+        run: |
+          # The repository is formatted with this version. A newer one adds
+          # rules that fail files no change touched. The checksum is the
+          # release asset's published sha256.
+          curl -fsSL -o "$RUNNER_TEMP/swiftformat.zip" \
+            https://github.com/nicklockwood/SwiftFormat/releases/download/0.61.1/swiftformat.zip
+          echo "b990400779aceb7d7020796eb9ba814d4480543f671d38fc0ff48cb72f04c584  $RUNNER_TEMP/swiftformat.zip" | shasum -a 256 -c -
+          unzip -o -q "$RUNNER_TEMP/swiftformat.zip" -d "$RUNNER_TEMP/swiftformat"
+          chmod +x "$RUNNER_TEMP/swiftformat/swiftformat"
+          echo "$RUNNER_TEMP/swiftformat" >> "$GITHUB_PATH"
 
       - name: SwiftFormat version
         run: swiftformat --version
@@ -75,7 +92,9 @@ jobs:
           }
 
       - name: Run SwiftLint
-        run: swiftlint --strict
+        run: |
+          swiftlint version
+          swiftlint --strict
 
       - name: Create placeholder GoogleService-Info.plist
         run: |
