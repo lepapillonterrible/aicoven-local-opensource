@@ -121,7 +121,14 @@ nonisolated struct OpenClawTurn {
                 let ended: (status: TurnStatus, answer: String)?
                 do {
                     ended = try await ending(of: runID, in: following.sessionKey, through: gateway)
-                } catch OpenClawGatewayError.closed {
+                } catch let error as OpenClawGatewayError where error != .closed {
+                    // The Gateway's own refusal, or an answer that is not one.
+                    throw error
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    // The connection ended, or failed, as the run was
+                    // looked for.
                     try Task.checkCancellation()
                     ended = (.failed, Self.lostContact)
                 }
