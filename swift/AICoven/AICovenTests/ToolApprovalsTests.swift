@@ -119,6 +119,35 @@ final class ToolApprovalsTests: XCTestCase {
         XCTAssertEqual(approvals.showing?.phase, .answered(.denied))
     }
 
+    // MARK: - What a turn keeps
+
+    func testAnswers_areHeldForTheirThreadInOrderUntilItsTurnTakesThem() async {
+        let approvals = makeApprovals()
+        let first = ToolApproval(threadID: "thread-1", question: "Run this command?", details: "git push\nIn /tmp", toolName: "shell.execute")
+        let second = ToolApproval(threadID: "thread-1", question: "Write this file?", details: "/tmp/notes.txt\nA new file", toolName: "file.write")
+        let other = approval(in: "thread-2")
+        let asking = [first, second, other].map { approval in Task { await approvals.ask(approval) } }
+        await asked(approvals, 3)
+
+        approvals.answer(first.id, approve: true)
+        runScheduled()
+        approvals.answer(second.id, approve: false)
+        runScheduled()
+        // The other thread's turn stops: nothing was answered, so nothing is kept.
+        asking[2].cancel()
+        for task in asking {
+            _ = await task.value
+        }
+
+        XCTAssertEqual(approvals.answered["thread-1"], [
+            WorkTrace.Approval(id: first.id, subject: "git push", approved: true),
+            WorkTrace.Approval(id: second.id, subject: "/tmp/notes.txt", approved: false),
+        ])
+        XCTAssertNil(approvals.answered["thread-2"])
+        XCTAssertEqual(approvals.takeAnswers(threadID: "thread-1").count, 2)
+        XCTAssertEqual(approvals.takeAnswers(threadID: "thread-1"), [], "A turn takes its answers once")
+    }
+
     // MARK: - A turn that stops
 
     func testAnApprovalWhoseTurnStops_isRefusedAndSaysItIsNoLongerWaiting() async {

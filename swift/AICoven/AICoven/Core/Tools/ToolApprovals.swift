@@ -17,6 +17,12 @@ nonisolated struct ToolApproval: Identifiable, Equatable {
     let details: String
     let toolName: String
 
+    /// What the thread's line says was approved or denied: the first line
+    /// of what will happen (the command, the file, the branch).
+    var subject: String {
+        details.split(separator: "\n").first.map(String.init) ?? question
+    }
+
     init(threadID: String, question: String, details: String, toolName: String) {
         id = UUID().uuidString
         self.threadID = threadID
@@ -82,6 +88,10 @@ final class ToolApprovals: ObservableObject {
     @Published private(set) var waiting: [ToolApproval] = []
     /// The threads with a turn waiting on an answer.
     @Published private(set) var askingThreadIDs: Set<String> = []
+    /// What each thread's running turn has been asked and has had answered,
+    /// in the order answered, by thread id: the thread shows a line for
+    /// each, and the turn keeps them when it ends.
+    @Published private(set) var answered: [String: [WorkTrace.Approval]] = [:]
 
     /// How long the block says what was chosen before it leaves, and how
     /// long it takes to leave.
@@ -132,10 +142,16 @@ final class ToolApprovals: ObservableObject {
         } onCancel: {
             Task { @MainActor in self.withdraw(approval.id) }
         }
-        // An answer counts only if the turn was still there to take it.
+        // An answer counts, and is kept, only if the turn was still there to
+        // take it.
         guard !Task.isCancelled else {
             sayNoLongerWaiting(approval.id)
             return .withdrawn
+        }
+        if answer == .approved || answer == .denied {
+            answered[approval.threadID, default: []].append(
+                WorkTrace.Approval(id: approval.id, subject: approval.subject, approved: answer == .approved)
+            )
         }
         return answer
     }
@@ -164,6 +180,13 @@ final class ToolApprovals: ObservableObject {
         guard let current = showing, current.phase == .asking, !waiting.isEmpty else { return }
         waiting.append(current.approval)
         show(waiting.removeFirst())
+    }
+
+    /// The answers given to a thread's turn, which are then no longer held
+    /// here: the turn that ends takes them with it, and a turn that starts
+    /// begins with none.
+    func takeAnswers(threadID: String) -> [WorkTrace.Approval] {
+        answered.removeValue(forKey: threadID) ?? []
     }
 
     // MARK: - Private

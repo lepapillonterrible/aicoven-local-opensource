@@ -14,11 +14,22 @@ struct WorkTrace: Codable, Equatable {
         var failed = false
     }
 
+    /// Something the turn asked the person before doing it, and the answer.
+    struct Approval: Codable, Equatable, Identifiable {
+        let id: String
+        /// What was approved or denied: the command, the file, the branch.
+        let subject: String
+        let approved: Bool
+    }
+
     let startedAt: Date
     /// Nil while the turn runs.
     var finishedAt: Date?
     var steps: [Step] = []
     var reasoning: [String] = []
+    /// In the order they were answered. One the turn stopped on is not
+    /// here: it was not answered.
+    var approvals: [Approval] = []
 
     var isEmpty: Bool {
         steps.isEmpty && reasoning.isEmpty
@@ -76,5 +87,17 @@ struct WorkTrace: Codable, Equatable {
             return String(format: "%d:%02d:%02d", hours, minutes, secs)
         }
         return String(format: "%d:%02d", minutes, secs)
+    }
+}
+
+extension WorkTrace {
+    /// A trace stored before turns kept their approvals has none.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        startedAt = try container.decode(Date.self, forKey: .startedAt)
+        finishedAt = try container.decodeIfPresent(Date.self, forKey: .finishedAt)
+        steps = try container.decode([Step].self, forKey: .steps)
+        reasoning = try container.decode([String].self, forKey: .reasoning)
+        approvals = try container.decodeIfPresent([Approval].self, forKey: .approvals) ?? []
     }
 }

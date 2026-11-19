@@ -78,9 +78,13 @@ final class TurnEngine: ObservableObject {
 
     private let chat: ChatService
     private let store = ThreadRepository.shared
+    /// Where the turns' tools ask the person, and the answers are held
+    /// while a turn runs.
+    private let approvals: ToolApprovals
 
-    init(chat: ChatService) {
+    init(chat: ChatService, approvals: ToolApprovals = .shared) {
         self.chat = chat
+        self.approvals = approvals
     }
 
     /// Starts a turn with the person's message, which is stored as it is:
@@ -100,6 +104,8 @@ final class TurnEngine: ObservableObject {
         let turnID = UUID().uuidString
         // Marked before anything waits, so a second send cannot start too.
         running[threadID] = Activity(turnID: turnID, message: TurnProgress.startingMessage, trace: WorkTrace(startedAt: Date()))
+        // Answers left from a turn that never ended here are not this one's.
+        _ = approvals.takeAnswers(threadID: threadID)
         do {
             try await storeWaitingEnding(threadID: threadID)
             try await store.beginTurn(id: turnID, userMessage: userMessage)
@@ -237,7 +243,8 @@ final class TurnEngine: ObservableObject {
         let thrown = await reply.value
         replies[threadID] = nil
         settling.insert(turnID)
-        let ending = progress.ending(in: threadID, thrown: thrown, stopped: running[threadID]?.isStopping == true)
+        var ending = progress.ending(in: threadID, thrown: thrown, stopped: running[threadID]?.isStopping == true)
+        ending.trace.approvals = approvals.takeAnswers(threadID: threadID)
 
         do {
             guard try await store.endTurn(id: turnID, outcome: ending.outcome, message: ending.message, trace: ending.trace) else {

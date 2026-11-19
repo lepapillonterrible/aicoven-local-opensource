@@ -342,6 +342,9 @@ struct PersonalChatView: View {
 
                         // stable element UUID to allow SwiftUI caching of older history.
                         ForEach(Array(enhancedMessages.enumerated()), id: \.element.id) { _, em in
+                            // What the turn asked on the way to this reply,
+                            // and the answer it was given.
+                            approvalLines(traces[em.id]?.approvals ?? [])
                             RichMessageBubble(
                                 message: em,
                                 onApproveToolCall: { _ in },
@@ -363,6 +366,7 @@ struct PersonalChatView: View {
                         // The reply on its way: one line saying what it
                         // is doing, with Details and Stop.
                         if let runningTurn {
+                            approvalLines(approvals.answered[thread.id] ?? [])
                             VStack(alignment: .leading, spacing: Spacing.xs) {
                                 HStack(spacing: 6) {
                                     Image(systemName: "sparkles")
@@ -689,6 +693,15 @@ struct PersonalChatView: View {
             role: "assistant",
             content: "I couldn't send your message: \(reason)"
         ))
+    }
+
+    /// One line for each approval a turn asked for, in the reading column.
+    private func approvalLines(_ approvals: [WorkTrace.Approval]) -> some View {
+        ForEach(approvals) { approval in
+            ApprovalRecordLine(approval: approval)
+                .frame(maxWidth: 800, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     /// Shows how the last turn in this thread ended, if it is not shown
