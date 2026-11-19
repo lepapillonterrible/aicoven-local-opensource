@@ -338,6 +338,18 @@ nonisolated extension ToolApproval {
         )
     }
 
+    /// What a Hermes run is waiting to be allowed, in Hermes's own words:
+    /// the command whole where it gives one, then what it says about it.
+    static func hermes(_ request: HermesApprovalRequest, threadID: String) -> ToolApproval {
+        let lines = [request.command, request.description].compactMap(\.self)
+        return ToolApproval(
+            threadID: threadID,
+            question: request.command == nil ? "Let Hermes do this?" : "Let Hermes run this command?",
+            details: lines.isEmpty ? "Hermes did not say what it is for." : lines.joined(separator: "\n"),
+            toolName: request.tool ?? "hermes"
+        )
+    }
+
     /// The text as it will be written, or its start and how much more
     /// there is: the whole of a long file does not fit in an approval.
     private static func shown(_ text: String) -> String {

@@ -49,6 +49,7 @@ struct StrixSettingsView: View {
         ("openai_compatible", "OpenAI-compatible server"),
         ("mistral", "Mistral AI"),
         ("openclaw", "OpenClaw (Self-Hosted)"),
+        ("hermes", "Hermes agent"),
         ("ollama", "Ollama (Local)"),
         ("mlx", "MLX (On-Device)"),
     ]
@@ -57,7 +58,7 @@ struct StrixSettingsView: View {
     /// OpenClaw is always treated as local since it requires a self-hosted
     /// endpoint.
     private var isLocalProvider: Bool {
-        if provider == "mlx" || provider == "ollama" || provider == "openclaw" {
+        if provider == "mlx" || provider == "ollama" || provider == "openclaw" || provider == "hermes" {
             return true
         }
         return false
@@ -78,8 +79,9 @@ struct StrixSettingsView: View {
             return [(ollamaModel, ollamaModel)]
         }
         // OpenClaw doesn't need a model picker — the model is determined by
-        // whatever is running on the server endpoint.
-        if provider == "openclaw" {
+        // whatever is running on the server endpoint. Nor does Hermes: the
+        // agent uses the model it is set up with.
+        if provider == "openclaw" || provider == "hermes" {
             return []
         }
         if let accountId = providerAccountId,
@@ -242,7 +244,7 @@ struct StrixSettingsView: View {
                                 ForEach(providerOptions, id: \.0) { option in
                                     let accountsForProvider = accountsByProvider[option.0] ?? []
                                     let isLocal = option.0 == "mlx" || option.0 == "ollama"
-                                        || option.0 == "openclaw"
+                                        || option.0 == "openclaw" || option.0 == "hermes"
 
                                     if isLocal {
                                         // Local/self-hosted provider – one tap selects provider and model
@@ -260,6 +262,10 @@ struct StrixSettingsView: View {
                                             } else if option.0 == "openclaw" {
                                                 model = UserDefaults.standard.string(forKey: UserScope.scopedKey("openclaw_model"))
                                                     ?? "openai/gpt-3.5-turbo"
+                                            } else if option.0 == "hermes" {
+                                                // Hermes uses the model it is set up with;
+                                                // the settings keep its name in the model's place.
+                                                model = "hermes"
                                             }
                                         } label: {
                                             HStack {
@@ -269,7 +275,7 @@ struct StrixSettingsView: View {
                                                     Text(option.1)
                                                         .font(.aicovenBody)
                                                         .foregroundColor(.aicovenTextPrimary)
-                                                    if isSelected {
+                                                    if isSelected, option.0 != "hermes" {
                                                         let modelLabel = availableModels.first(where: { $0.0 == model })?.1 ?? model
                                                         Text(modelLabel)
                                                             .font(.aicovenCaption)
@@ -278,6 +284,7 @@ struct StrixSettingsView: View {
                                                         let subtitle = switch option.0 {
                                                         case "mlx": "On-device via Apple Silicon"
                                                         case "openclaw": "OpenAI-compatible self-hosted proxy"
+                                                        case "hermes": "Runs the turn itself, with its own tools and memory"
                                                         default: "Running locally"
                                                         }
                                                         Text(subtitle)
@@ -368,7 +375,7 @@ struct StrixSettingsView: View {
                             // Model picker – only for cloud providers that support
                             // model selection. OpenClaw uses whatever model is
                             // running on the server endpoint.
-                            if !isLocalProvider, provider != "openclaw" {
+                            if !isLocalProvider, provider != "openclaw", provider != "hermes" {
                                 if !availableModels.isEmpty {
                                     VStack(alignment: .leading, spacing: Spacing.xs) {
                                         Text("Model")
