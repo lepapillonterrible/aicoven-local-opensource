@@ -54,6 +54,20 @@ final class OpenAICompatibleServerTests: XCTestCase {
         XCTAssertTrue(found.isEmpty)
     }
 
+    func testCheck_asksATypedURLUnderItsOwnPathAndNamesAKnownPort() async throws {
+        let transport = FakeTransport(answers: ["https://models.example.com/llm/v1/models": .success(modelList)])
+        let discovery = LocalProviderDiscoveryService(transport: transport)
+        let typed = try XCTUnwrap(LocalProviderDiscoveryService.serverBaseURL(from: "https://models.example.com/llm/v1"))
+
+        let found = await discovery.probe(typed, provider: "openai_compatible", displayName: "models.example.com")
+
+        XCTAssertEqual(found?.baseURL, "https://models.example.com/llm")
+        XCTAssertEqual(found?.models, ["qwen-9", "phi-9"])
+        XCTAssertNil(discovery.knownEndpoint(at: typed))
+        let ollama = try XCTUnwrap(LocalProviderDiscoveryService.serverBaseURL(from: "11434"))
+        XCTAssertEqual(discovery.knownEndpoint(at: ollama)?.provider, "ollama")
+    }
+
     func testTypedAddress_readsPortsHostsAndURLsAndRefusesWhatHasNoPort() {
         typealias Endpoint = LocalProviderDiscoveryService.ManualEndpoint
         let parse = LocalProviderDiscoveryService.parseManualEndpoint
@@ -113,7 +127,8 @@ final class OpenAICompatibleServerTests: XCTestCase {
 
         XCTAssertEqual(server.baseURL.absoluteString, "http://127.0.0.1:1234")
         XCTAssertNil(server.apiKey)
-        XCTAssertNotNil(LLMConfiguration.makeDefaultClients()["openai_compatible"])
+        let client = LLMConfiguration.makeDefaultClients()["openai_compatible"] as? OpenClawLLMClient
+        XCTAssertEqual(client?.baseURL.absoluteString, "http://127.0.0.1:1234")
     }
 
     func testRouting_seesTheModelChosenForTheFirstServerOnly() async throws {
@@ -137,6 +152,20 @@ final class OpenAICompatibleServerTests: XCTestCase {
 
         XCTAssertEqual(connected.map(\.modelID), ["phi-9"])
         XCTAssertEqual(chosenInSettings.map(\.modelID), ["qwen-9"])
+    }
+
+    func testRouting_keepsTheChosenModelWhenTheServersModelListFails() async throws {
+        _ = try await service.createOpenAICompatibleAccount(
+            displayName: "First", baseURL: "http://127.0.0.1:1234", apiKey: nil, defaultModel: "phi-9"
+        )
+        URLProtocol.registerClass(MockURLProtocol.self)
+        MockURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 429, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let offered = try await service.loadAllModelDescriptors().filter { $0.providerID == "openai_compatible" }
+
+        XCTAssertEqual(offered.map(\.modelID), ["phi-9"])
     }
 
     func testReply_isReportedAsTheServersNotOpenClaws() async throws {

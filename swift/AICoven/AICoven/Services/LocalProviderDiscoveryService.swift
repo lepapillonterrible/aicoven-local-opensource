@@ -40,7 +40,7 @@ nonisolated extension URLSession: LocalProviderProbeTransport {
             request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
         }
         do {
-            let (stream, response) = try await bytes(for: request)
+            let (stream, response) = try await bytes(for: request, delegate: RefuseRedirects())
             guard let http = response as? HTTPURLResponse else { return .unavailable }
             if http.statusCode == 401 || http.statusCode == 403 { return .unauthorized }
             guard (200 ..< 300).contains(http.statusCode) else { return .unavailable }
@@ -54,6 +54,21 @@ nonisolated extension URLSession: LocalProviderProbeTransport {
         } catch {
             return .unavailable
         }
+    }
+}
+
+/// Stops a probe at the address it asked. Followed, a redirect would let
+/// whatever listens on a known port send Detect to another machine and have
+/// that machine's answer shown as this Mac's.
+private final nonisolated class RefuseRedirects: NSObject, URLSessionTaskDelegate {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
     }
 }
 
@@ -82,7 +97,6 @@ nonisolated struct LocalProviderDiscoveryService {
     static let validPortRange = 1 ... 65535
     /// Loopback: Detect only ever asks this machine.
     static let defaultHost = "127.0.0.1"
-    static let modelsPath = "/v1/models"
     /// The largest reply read. A model list is a few kilobytes.
     static let maxProbeResponseBytes = 512 * 1024
 
@@ -119,7 +133,7 @@ nonisolated struct LocalProviderDiscoveryService {
         await withTaskGroup(of: DetectedLocalProvider?.self) { group in
             for endpoint in endpoints {
                 group.addTask {
-                    let address = ManualEndpoint(scheme: "http", host: Self.defaultHost, port: endpoint.port)
+                    guard let address = URL(string: "http://\(Self.defaultHost):\(endpoint.port)") else { return nil }
                     return await probe(
                         address,
                         provider: endpoint.provider,
@@ -136,19 +150,17 @@ nonisolated struct LocalProviderDiscoveryService {
         }
     }
 
-    /// Asks one address for its models, with no key. `nil` when nothing
-    /// usable answered.
+    /// Asks the server at `baseURL` for its models, with no key. `nil` when
+    /// nothing usable answered.
     func probe(
-        _ endpoint: ManualEndpoint,
+        _ baseURL: URL,
         provider: String,
         displayName: String,
         timeout: TimeInterval = LocalProviderDiscoveryService.namedAddressTimeoutSeconds
     ) async -> DetectedLocalProvider? {
-        guard Self.validPortRange.contains(endpoint.port), !endpoint.host.isEmpty,
-              let url = URL(string: endpoint.baseURL + Self.modelsPath) else { return nil }
         let models: [String]
         let requiresKey: Bool
-        switch await transport.probe(url: url, bearerToken: nil, timeout: timeout) {
+        switch await transport.probe(url: baseURL.appendingPathComponent("v1/models"), bearerToken: nil, timeout: timeout) {
         case let .success(data):
             models = Self.parseModelIds(from: data)
             requiresKey = false
@@ -159,11 +171,11 @@ nonisolated struct LocalProviderDiscoveryService {
             return nil
         }
         return DetectedLocalProvider(
-            id: "\(provider)-\(endpoint.baseURL)",
+            id: "\(provider)-\(baseURL.absoluteString)",
             provider: provider,
             displayName: displayName,
-            baseURL: endpoint.baseURL,
-            port: endpoint.port,
+            baseURL: baseURL.absoluteString,
+            port: baseURL.port ?? (baseURL.scheme == "https" ? 443 : 80),
             models: models,
             requiresKey: requiresKey
         )
@@ -179,9 +191,11 @@ nonisolated struct LocalProviderDiscoveryService {
         )
     }
 
-    /// The known tool whose usual port this is, which names a typed address.
-    func knownEndpoint(forPort port: Int) -> KnownEndpoint? {
-        endpoints.first { $0.port == port }
+    /// The known tool a typed address is the usual place of, which names
+    /// it: its port, with no path under it.
+    func knownEndpoint(at baseURL: URL) -> KnownEndpoint? {
+        guard baseURL.path.isEmpty || baseURL.path == "/" else { return nil }
+        return endpoints.first { $0.port == baseURL.port }
     }
 
     // MARK: - A typed address
@@ -206,10 +220,10 @@ nonisolated struct LocalProviderDiscoveryService {
 
     enum ManualEntryCopy {
         static let placeholder = "8080 or 127.0.0.1:8080"
-        static let invalidInput = "Enter a port (such as 8080), or a host and port (such as 127.0.0.1:8080)."
+        static let invalidInput = "Enter a port (such as 8080), a host and port (such as 127.0.0.1:8080), or the server's URL."
 
-        static func noResponse(at endpoint: ManualEndpoint) -> String {
-            "Nothing answered at \(endpoint.authority). Check the server is running and serves the OpenAI API."
+        static func noResponse(at address: String) -> String {
+            "Nothing answered at \(address). Check the server is running and serves the OpenAI API."
         }
     }
 

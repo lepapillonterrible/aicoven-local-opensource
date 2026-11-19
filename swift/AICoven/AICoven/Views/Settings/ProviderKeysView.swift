@@ -389,13 +389,21 @@ struct AddProviderKeySheet: View {
         defer { isDetecting = false }
         detectedServers = await LocalProviderDiscoveryService().discover()
         hasDetected = true
+        announce(
+            detectedServers.isEmpty
+                ? "No server answered on the usual ports."
+                : "Found \(detectedServers.map(\.displayName).formatted(.list(type: .and)))."
+        )
     }
 
     private func checkTypedAddress() async {
+        // Return in the field reaches here while a check runs; one at a time.
+        guard !isCheckingAddress else { return }
         let typed = typedAddress
         typedAddressFailure = nil
-        guard let endpoint = LocalProviderDiscoveryService.parseManualEndpoint(typed) else {
+        guard let address = LocalProviderDiscoveryService.serverBaseURL(from: typed) else {
             typedAddressFailure = LocalProviderDiscoveryService.ManualEntryCopy.invalidInput
+            announce(LocalProviderDiscoveryService.ManualEntryCopy.invalidInput)
             return
         }
         isCheckingAddress = true
@@ -404,21 +412,25 @@ struct AddProviderKeySheet: View {
         let discovery = LocalProviderDiscoveryService()
         // A known tool's usual port names the server; anything else is an
         // OpenAI-compatible server at its address.
-        let known = discovery.knownEndpoint(forPort: endpoint.port)
+        let known = discovery.knownEndpoint(at: address)
+        let shownAddress = address.absoluteString.replacingOccurrences(of: "http://", with: "")
         let found = await discovery.probe(
-            endpoint,
+            address,
             provider: known?.provider ?? "openai_compatible",
-            displayName: known?.displayName ?? endpoint.authority
+            displayName: known?.displayName ?? shownAddress
         )
         // The answer is for the address that was checked.
         guard typed == typedAddress else { return }
         guard let found else {
-            typedAddressFailure = LocalProviderDiscoveryService.ManualEntryCopy.noResponse(at: endpoint)
+            let failure = LocalProviderDiscoveryService.ManualEntryCopy.noResponse(at: shownAddress)
+            typedAddressFailure = failure
+            announce(failure)
             return
         }
         namedServers.removeAll { $0.id == found.id }
         namedServers.append(found)
         typedAddress = ""
+        announce("Found \(found.displayName).")
     }
     #endif
 }
@@ -431,6 +443,12 @@ private extension View {
         #if os(macOS)
             .frame(minWidth: 480, idealWidth: 520, minHeight: 360, idealHeight: 520)
         #endif
+    }
+
+    /// Says a finished check's result to VoiceOver, which stays on the
+    /// button that started it.
+    func announce(_ message: String) {
+        AccessibilityNotification.Announcement(message).post()
     }
 
     func inlineNavigationTitle() -> some View {
@@ -483,7 +501,7 @@ private struct AddProviderKeyStep2View: View {
     private static let serverAsksForKey = "This server asks for an API key. Enter it below, then Connect."
 
     /// `detected` fills the form from a server Detect found, so connecting
-    /// it needs nothing typed.
+    /// it needs nothing typed unless the server asks for a key.
     init(
         selectedProvider: String,
         detected: DetectedLocalProvider? = nil,
@@ -829,10 +847,11 @@ private struct AddProviderKeyStep2View: View {
     }
 
     /// Lists the models of the server at the address in the field, with the
-    /// key in the form if there is one. An answer for an address the field
-    /// no longer holds is dropped.
+    /// key in the form if there is one. An answer for an address or a key
+    /// the form no longer holds is dropped.
     private func connectToServer() async {
         let address = baseURL
+        let key = apiKey
         isLoadingModels = true
         connectionFailure = nil
         defer { isLoadingModels = false }
@@ -840,14 +859,14 @@ private struct AddProviderKeyStep2View: View {
         var models: [String] = []
         var failure: String?
         if let server = LocalProviderDiscoveryService.serverBaseURL(from: address) {
-            switch await LocalProviderDiscoveryService().models(at: server, apiKey: apiKey) {
+            switch await LocalProviderDiscoveryService().models(at: server, apiKey: key) {
             case let .success(data):
                 models = LocalProviderDiscoveryService.parseModelIds(from: data)
                 if models.isEmpty {
                     failure = "Connected, but the server listed no models. Load one in the server first."
                 }
             case .unauthorized:
-                failure = apiKey.isEmpty ? Self.serverAsksForKey : "The server refused this API key."
+                failure = key.isEmpty ? Self.serverAsksForKey : "The server refused this API key."
             case .unavailable:
                 failure = "Nothing answered at \(address). Check the server is running and serves the OpenAI API."
             }
@@ -855,12 +874,13 @@ private struct AddProviderKeyStep2View: View {
             failure = "Enter the server's address, such as http://127.0.0.1:1234."
         }
 
-        guard address == baseURL else { return }
+        guard address == baseURL, key == apiKey else { return }
         serverModels = models
         connectionFailure = failure
         if !models.contains(selectedServerModel) {
             selectedServerModel = models.first ?? ""
         }
+        announce(failure ?? (models.count == 1 ? "1 model listed." : "\(models.count) models listed."))
     }
 
     private func saveProviderKey() async {
@@ -1017,12 +1037,22 @@ struct EditProviderKeySheet: View {
         errorMessage = nil
         defer { saving = false }
 
+        var address = baseURL
+        if slug == "openai_compatible" {
+            // Saved as the address requests go to, as Add saves it.
+            guard let server = LocalProviderDiscoveryService.serverBaseURL(from: baseURL) else {
+                errorMessage = "Enter the server's address, such as http://127.0.0.1:1234."
+                return
+            }
+            address = server.absoluteString
+        }
+
         do {
             try await ProviderAccountService.shared.updateProviderAccount(
                 id: account.id,
                 displayName: displayName,
                 apiKey: apiKey.isEmpty ? nil : apiKey,
-                baseURL: hasAddress ? baseURL : nil
+                baseURL: hasAddress ? address : nil
             )
             onComplete()
             dismiss()

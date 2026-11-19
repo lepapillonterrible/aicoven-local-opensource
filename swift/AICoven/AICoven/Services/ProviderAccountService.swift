@@ -323,10 +323,16 @@ actor ProviderAccountService {
             createdAt: Date()
         )
         locals.append(local)
-        try saveLocalAccounts(locals)
-
+        // The key first: a failed key save then leaves no connection behind,
+        // and a failed account save takes its key back out.
         if let apiKey, !apiKey.isEmpty {
             try KeychainHelper.save(key: keychainKey(for: id), value: apiKey)
+        }
+        do {
+            try saveLocalAccounts(locals)
+        } catch {
+            KeychainHelper.delete(key: keychainKey(for: id))
+            throw error
         }
 
         await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
@@ -536,7 +542,10 @@ actor ProviderAccountService {
                 metadata = try await fetchRemoteModels(for: account)
             } catch {
                 AppErrorReporter.log(error: error, context: "ProviderAccountService.loadAllModelDescriptors.fetchRemoteModels.\(providerID)")
-                continue
+                // A server's model list can fail while it still answers
+                // chat, so its chosen model stays on offer below.
+                guard providerID == "openai_compatible" else { continue }
+                metadata = []
             }
 
             // The router picks by a coarse cost class, which cannot rank
