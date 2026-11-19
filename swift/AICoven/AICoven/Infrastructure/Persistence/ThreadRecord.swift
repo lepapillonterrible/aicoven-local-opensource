@@ -467,7 +467,7 @@ extension ThreadRepository {
         }
 
         guard !payloads.isEmpty else {
-            try await requireAccount(currentUserId)
+            try await requireKey(of: currentUserId)
             return []
         }
         try await requireKey(of: currentUserId)
@@ -532,7 +532,7 @@ extension ThreadRepository {
             )
         }
         guard !rows.isEmpty else {
-            try await requireAccount(currentUserId)
+            try await requireKey(of: currentUserId)
             return [:]
         }
         try await requireKey(of: currentUserId)
@@ -628,7 +628,7 @@ extension ThreadRepository {
                 )
             }
             guard olderThan != nil else {
-                try await requireAccount(currentUserId)
+                try await requireKey(of: currentUserId)
                 return []
             }
         }
@@ -665,7 +665,7 @@ extension ThreadRepository {
         }
         // However the page was completed, including by a last look that
         // found nothing more, and when it is empty.
-        try await requireAccount(currentUserId)
+        try await requireKey(of: currentUserId)
         return newestFirst.reversed()
     }
 
@@ -715,22 +715,16 @@ extension ThreadRepository {
     }
 
     /// Throws unless `userID` is still the current account and the data key
-    /// in memory is its own. A read checks before it decrypts and again
-    /// before it returns: after a switch of account the earlier one's key
-    /// can stay in memory for a moment, and what it opens is not the new
-    /// account's to see.
+    /// in memory is its own. A read checks before it decrypts and before
+    /// every return, with or without anything read: after a switch of
+    /// account the earlier one's key can stay in memory for a moment, and
+    /// what it opens is not the new account's to see; and nothing is read,
+    /// not even that there is nothing, while the data is locked.
     func requireKey(of userID: String) async throws {
-        try await requireAccount(userID)
+        guard await MainActor.run(body: { UserScope.currentUserID }) == userID else { throw RepositoryError.accountChanged }
         guard await DataEncryptionService.shared.isUnlocked(for: userID) else { throw RepositoryError.dataLocked }
         // Again, because the account can have changed while the key was
         // asked about. Whoever shows what was read checks once more.
-        try await requireAccount(userID)
-    }
-
-    /// Throws unless `userID` is still the current account. A read that
-    /// found nothing to decrypt checks this alone before it returns: it
-    /// used no key, and with nothing stored it reads the same locked or not.
-    private func requireAccount(_ userID: String) async throws {
         guard await MainActor.run(body: { UserScope.currentUserID }) == userID else { throw RepositoryError.accountChanged }
     }
 

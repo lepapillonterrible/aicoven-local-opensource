@@ -127,6 +127,30 @@ final class ChatHistoryStoreTests: XCTestCase {
         await DataEncryptionService.shared.unlockForTestingEphemeral()
     }
 
+    func testAReadThatFindsNothing_stillThrowsWhileTheDataIsLocked() async throws {
+        let empty = "empty-\(UUID().uuidString)"
+        await DataEncryptionService.shared.lock()
+
+        for read in [
+            { _ = try await self.repository.loadChatMessages(threadID: empty, limit: 20, before: nil) },
+            { _ = try await self.repository.loadChatMessages(threadID: empty, limit: 20, before: "no-such-message") },
+            { _ = try await self.repository.loadWorkTraces(threadID: empty) },
+        ] as [() async throws -> Void] {
+            do {
+                try await read()
+                XCTFail("Nothing is read while the data is locked, not even that there is nothing")
+            } catch {
+                XCTAssertEqual(error as? RepositoryError, .dataLocked)
+            }
+        }
+
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        let messages = try await repository.loadChatMessages(threadID: empty, limit: 20, before: nil)
+        let traces = try await repository.loadWorkTraces(threadID: empty)
+        XCTAssertEqual(messages, [])
+        XCTAssertEqual(traces, [:])
+    }
+
     func testAThreadOfAnotherAccount_isNotStoredUnderThisOne() async throws {
         let theirs = thread(id: "not-mine-\(UUID().uuidString)", userId: "another-user", title: "Theirs")
 
