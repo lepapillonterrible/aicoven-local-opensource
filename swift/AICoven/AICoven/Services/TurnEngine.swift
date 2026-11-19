@@ -71,8 +71,9 @@ final class TurnEngine: ObservableObject {
         let attachments: [FileAttachmentDetail]
     }
 
-    /// A message the engine added to a thread: numbered in the order
-    /// added, across threads, with the work behind it if it is a reply.
+    /// A message the engine added to a thread, numbered from 1 in the
+    /// order added to that thread, with the work behind it if it is a
+    /// reply.
     struct Addition: Equatable {
         let sequence: Int
         let message: ChatMessage
@@ -96,8 +97,10 @@ final class TurnEngine: ObservableObject {
     @Published private(set) var starting: [String: WaitingMessage.ID] = [:]
     /// What the engine itself added to each thread, in order, by thread
     /// id: each turn's ending and each waiting message it sent. A thread on
-    /// screen shows what it has not shown yet from here, so nothing is
-    /// missed however its updates fall. The last few are kept.
+    /// screen shows what it has not shown yet from here, in order,
+    /// however its updates fall. The last few are kept: a thread that
+    /// finds some gone, by their numbers, reads the thread again from
+    /// where it is stored.
     @Published private(set) var additions: [String: [Addition]] = [:]
     /// Why a thread's waiting messages were not sent, for its composer to
     /// say, until the next message is sent there.
@@ -129,7 +132,8 @@ final class TurnEngine: ObservableObject {
     /// Turns, by id, on which Stop was pressed too late to stop the reply,
     /// while its ending was being stored.
     private var stoppedTooLate: Set<String> = []
-    private var additionsMade = 0
+    /// How many additions each thread has had, by thread id.
+    private var additionsMade: [String: Int] = [:]
 
     private let chat: ChatService
     private let store = ThreadRepository.shared
@@ -331,9 +335,10 @@ final class TurnEngine: ObservableObject {
     /// Notes a message the engine added to a thread, for a thread on
     /// screen to show.
     private func add(_ message: ChatMessage, trace: WorkTrace? = nil, to threadID: String) {
-        additionsMade += 1
+        let sequence = (additionsMade[threadID] ?? 0) + 1
+        additionsMade[threadID] = sequence
         var kept = additions[threadID] ?? []
-        kept.append(Addition(sequence: additionsMade, message: message, trace: trace))
+        kept.append(Addition(sequence: sequence, message: message, trace: trace))
         additions[threadID] = Array(kept.suffix(Self.additionsKept))
     }
 

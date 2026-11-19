@@ -266,8 +266,8 @@ struct PersonalChatView: View {
     /// The thread this view's state belongs to. The view is reused when the
     /// thread changes, so work that waited checks it before touching state.
     @State private var shownThreadID: String?
-    /// The last of the engine's additions to the thread that was there
-    /// when the thread was opened: later ones are shown as they come.
+    /// The number of the last of the engine's additions to the thread
+    /// that this view has taken in: later ones are shown as they come.
     @State private var additionsShown = 0
     /// The work traces of this thread's finished turns, by the id of the
     /// message each ended with: the receipt under a reply opens its trace.
@@ -503,9 +503,6 @@ struct PersonalChatView: View {
         // reset and reload the messages/provider keys for the new thread.
         .task(id: thread.id) {
             shownThreadID = thread.id
-            // What the engine added before now is among the messages
-            // loaded below; what it adds from here on is shown as added.
-            additionsShown = turns.additions[thread.id]?.last?.sequence ?? 0
             messages = []
             traces = [:]
             shownTrace = nil
@@ -518,10 +515,7 @@ struct PersonalChatView: View {
             pendingScrollAnchorId = nil
 
             await TurnEngine.shared.settleInterruptedTurns(threadID: thread.id)
-            await loadInitialMessages()
-            await loadTraces()
-            showAdditions()
-            showLastEnding()
+            await loadStoredThread()
             if let unsent = TurnEngine.shared.takeUnsent(for: thread.id) {
                 giveBack(unsent.text, because: unsent.reason)
             }
@@ -747,14 +741,37 @@ struct PersonalChatView: View {
         }
     }
 
-    /// Shows what the engine has added to this thread since it was opened
-    /// and that is not shown yet: replies, and waiting messages it sent, in
-    /// the order it added them.
+    /// Reads the thread from where it is stored, then shows what the engine
+    /// added meanwhile. What it had added before the read began is among
+    /// the messages read.
+    private func loadStoredThread() async {
+        let before = turns.additions[thread.id]?.last?.sequence ?? 0
+        additionsShown = before
+        await loadInitialMessages()
+        await loadTraces()
+        // From before the read again: what was added during it can have
+        // been shown and then replaced by what was read.
+        additionsShown = before
+        showAdditions()
+        showLastEnding()
+    }
+
+    /// Shows what the engine has added to this thread and this view has
+    /// not taken in yet: replies, and waiting messages it sent, in the
+    /// order it added them. If some are no longer kept (more were added
+    /// than the engine keeps since this view last looked), the thread is
+    /// read again from where it is stored.
     private func showAdditions() {
         // Only while this thread is the one shown: on the way to another
         // thread, that thread's messages are loaded afresh.
         guard shownThreadID == thread.id else { return }
-        for addition in turns.additions[thread.id] ?? [] where addition.sequence > additionsShown {
+        let pending = (turns.additions[thread.id] ?? []).filter { $0.sequence > additionsShown }
+        guard let first = pending.first, let last = pending.last else { return }
+        guard first.sequence == additionsShown + 1 else {
+            Task { await loadStoredThread() }
+            return
+        }
+        for addition in pending {
             if !messages.contains(where: { $0.id == addition.message.id }) {
                 messages.append(addition.message)
             }
@@ -762,6 +779,7 @@ struct PersonalChatView: View {
                 traces[addition.message.id] = trace
             }
         }
+        additionsShown = last.sequence
     }
 
     /// Shows how the last turn in this thread ended, if it is not shown

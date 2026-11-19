@@ -673,19 +673,28 @@ final class TurnEngineTests: XCTestCase {
         let engine = makeEngine()
         // Locked: the message cannot be stored, so the turn cannot start.
         await DataEncryptionService.shared.lock()
-        let first = question("First")
-        let starting = Task { try await engine.start(with: first, context: "First", roleID: nil, agentName: "Strix", attachments: nil) }
+        let threadID = threadID
         // The turn shows as running from the moment it is asked for:
         // another window on the thread can send while it is being stored.
-        while engine.running[threadID] == nil {
-            await Task.yield()
+        // Sent here as soon as it shows, before the storing can have
+        // failed: the main actor takes this up when the start first waits.
+        let second = waiting("Second")
+        let enqueued = expectation(description: "A second message was sent while the first was being started")
+        enqueued.assertForOverFulfill = false
+        let watching = engine.$running.sink { running in
+            guard running[threadID] != nil else { return }
+            Task { @MainActor in
+                XCTAssertTrue(engine.enqueue(second, threadID: threadID))
+                enqueued.fulfill()
+            }
         }
-        XCTAssertTrue(engine.enqueue(waiting("Second"), threadID: threadID))
 
         do {
-            try await starting.value
+            try await engine.start(with: question("First"), context: "First", roleID: nil, agentName: "Strix", attachments: nil)
             XCTFail("The turn cannot start while its message cannot be stored")
         } catch {}
+        await fulfillment(of: [enqueued], timeout: 10)
+        watching.cancel()
 
         XCTAssertNil(engine.running[threadID])
         XCTAssertNil(engine.waiting[threadID], "Nothing is left waiting for a turn that never started")
@@ -694,16 +703,22 @@ final class TurnEngineTests: XCTestCase {
         await DataEncryptionService.shared.unlockForTestingEphemeral()
     }
 
-    func testTheEnginesAdditionsToAThread_keepTheLastFew() async throws {
+    func testTheEnginesAdditionsToAThread_areNumberedInOrderAndTheLastFewKept() async throws {
         let engine = makeEngine()
         provider.release()
-        for number in 1 ... 3 {
+        let turns = TurnEngine.additionsKept + 3
+        for number in 1 ... turns {
             try await engine.start(with: question("Question \(number)"), context: "Question \(number)", roleID: nil, agentName: nil, attachments: nil)
             await finished(engine)
         }
-        XCTAssertEqual(engine.additions[threadID]?.count, 3)
-        XCTAssertLessThanOrEqual(TurnEngine.additionsKept, 30)
-        XCTAssertGreaterThanOrEqual(TurnEngine.additionsKept, 10)
+
+        // One reply a turn: the first three are no longer kept, and the
+        // numbers say so to a thread that has not taken them in.
+        let added = try XCTUnwrap(engine.additions[threadID])
+        XCTAssertEqual(added.map(\.sequence), Array(4 ... turns))
+        XCTAssertEqual(added.count, TurnEngine.additionsKept)
+        // Numbered in each thread on its own.
+        XCTAssertNil(engine.additions["another-thread"])
     }
 
     // MARK: - Helpers
