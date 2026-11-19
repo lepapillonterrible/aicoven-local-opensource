@@ -113,13 +113,18 @@ final class CovenConnectionsTests: XCTestCase {
         XCTAssertEqual(CovenConnections.Access.allCases.map(\.label), ["Read", "Read and make changes"])
     }
 
-    /// What the screen is given in place of the app's stores.
+    /// What the screen is given in place of the app's stores. Sendable by
+    /// hand: everything in it that changes is read and written under `lock`,
+    /// and nothing waits while the lock is held.
     private final class World: @unchecked Sendable {
         private let lock = NSLock()
         private var stored: CovenConnections?
         private var saves: [CovenConnections] = []
         private var failsToSave = false
         private var failsToLoad = false
+        private var whileSaving: (@Sendable () async -> Void)?
+        private var whileLoading: (@Sendable () async -> Void)?
+        private var loadCount = 0
 
         init(stored: CovenConnections?) {
             self.stored = stored
@@ -137,13 +142,30 @@ final class CovenConnectionsTests: XCTestCase {
             lock.withLock { failsToLoad = fails }
         }
 
+        var loads: Int {
+            lock.withLock { loadCount }
+        }
+
+        /// What happens while a save is on its way, before it is kept.
+        func duringSaving(_ happens: (@Sendable () async -> Void)?) {
+            lock.withLock { whileSaving = happens }
+        }
+
+        /// What happens while the choice is being read.
+        func duringLoading(_ happens: (@Sendable () async -> Void)?) {
+            lock.withLock { whileLoading = happens }
+        }
+
         var sources: CovenConnectionsModel.Sources {
             CovenConnectionsModel.Sources(
                 choice: { [self] _ in
-                    try lock.withLock {
+                    let read: CovenConnections? = try lock.withLock {
+                        loadCount += 1
                         if failsToLoad { throw CovenRepositoryError.settingsUnreadable }
                         return stored
                     }
+                    if let during = lock.withLock({ whileLoading }) { await during() }
+                    return read
                 },
                 apps: {
                     [
@@ -153,11 +175,12 @@ final class CovenConnectionsTests: XCTestCase {
                 },
                 servers: {
                     [
-                        .init(id: "a", name: "Notes", line: "2 tools", cannotConnect: false, marksReadOnlyTools: true),
-                        .init(id: "b", name: "Mail", line: "Can't connect. Test it in Settings.", cannotConnect: true, marksReadOnlyTools: false),
+                        .init(id: "a", name: "Notes", line: "2 tools", cannotConnect: false),
+                        .init(id: "b", name: "Mail", line: "Can't connect. Test it in Settings.", cannotConnect: true),
                     ]
                 },
                 save: { [self] choice, _ in
+                    if let during = lock.withLock({ whileSaving }) { await during() }
                     try lock.withLock {
                         if failsToSave { throw CovenRepositoryError.settingsUnreadable }
                         stored = choice
@@ -229,12 +252,59 @@ final class CovenConnectionsTests: XCTestCase {
         XCTAssertFalse(model.loadFailed)
     }
 
+    @MainActor
+    func testALoadAskedForWhileAChangeIsBeingSaved_waitsForIt_andDoesNotBringBackWhatWasThere() async {
+        let world = World(stored: CovenConnections(apps: ["github": .readWrite], mcpServers: ["a": .readOnly]))
+        let model = CovenConnectionsModel(covenID: "coven", sources: world.sources)
+        await model.load()
+        XCTAssertEqual(world.loads, 1)
+
+        // The screen comes back while the change is on its way: what is
+        // stored then is still what was there before the change.
+        world.duringSaving { await model.load() }
+        await model.setApp("github", on: false)
+        world.duringSaving(nil)
+
+        XCTAssertNil(model.access(ofApp: "github"), "The change stands")
+        XCTAssertEqual(world.loads, 2, "The load was made once the change was kept")
+        XCTAssertEqual(model.saving, [])
+
+        await model.setServer("a", access: .readWrite)
+        XCTAssertEqual(world.saved.last, CovenConnections(mcpServers: ["a": .readWrite]), "The next change does not turn GitHub back on")
+    }
+
+    @MainActor
+    func testTryingAgainAfterALoadThatFailed_showsThatItIsLoading() async {
+        let world = World(stored: CovenConnections())
+        let model = CovenConnectionsModel(covenID: "coven", sources: world.sources)
+        world.failLoading(true)
+        await model.load()
+        XCTAssertTrue(model.loadFailed)
+
+        world.failLoading(false)
+        let seen = Seen()
+        world.duringLoading { await seen.note(failed: model.loadFailed, loaded: model.isLoaded) }
+        await model.load()
+
+        let whileLoading = await seen.noted
+        XCTAssertEqual(whileLoading.map(\.failed), [false], "The failure is not shown while it tries again")
+        XCTAssertEqual(whileLoading.map(\.loaded), [false])
+        XCTAssertTrue(model.isLoaded)
+    }
+
+    /// What the screen was showing at a moment.
+    private actor Seen {
+        private(set) var noted: [(failed: Bool, loaded: Bool)] = []
+
+        func note(failed: Bool, loaded: Bool) {
+            noted.append((failed, loaded))
+        }
+    }
+
     func testAServersRow_saysItsToolsOrThatItCannotConnect() {
         let listed = server("s", tools: [("look", true), ("change", false)])
         XCTAssertEqual(CovenConnectionsModel.Server(account: listed).line, "2 tools")
-        XCTAssertTrue(CovenConnectionsModel.Server(account: listed).marksReadOnlyTools)
         XCTAssertEqual(CovenConnectionsModel.Server(account: server("one", tools: [("change", false)])).line, "1 tool")
-        XCTAssertFalse(CovenConnectionsModel.Server(account: server("one", tools: [("change", false)])).marksReadOnlyTools)
         var broken = server("down", tools: [])
         broken.status = .error
         XCTAssertEqual(CovenConnectionsModel.Server(account: broken).line, "Can't connect. Test it in Settings.")

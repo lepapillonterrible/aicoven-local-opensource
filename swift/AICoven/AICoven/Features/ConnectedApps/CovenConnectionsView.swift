@@ -21,9 +21,6 @@ final class CovenConnectionsModel: ObservableObject {
         /// "3 tools", or that it cannot be reached.
         let line: String
         let cannotConnect: Bool
-        /// Whether it marks any tool as read-only: one that marks none
-        /// offers nothing when it is on to read.
-        let marksReadOnlyTools: Bool
     }
 
     /// What the screen needs of the world, so tests can stand in for it.
@@ -74,6 +71,8 @@ final class CovenConnectionsModel: ObservableObject {
     /// Counts loads and changes: a load applies only if nothing newer
     /// started while it waited.
     private var generation = 0
+    /// A load was asked for while a change was being saved, and waits for it.
+    private var loadWaits = false
 
     init(covenID: String, sources: Sources = .live) {
         self.covenID = covenID
@@ -85,8 +84,16 @@ final class CovenConnectionsModel: ObservableObject {
     }
 
     func load() async {
+        // A change being saved is newer than anything read now, and what
+        // is read now may be from before it. The load waits for the change.
+        guard saving.isEmpty else {
+            loadWaits = true
+            return
+        }
         generation += 1
         let loading = generation
+        // Trying again shows that it is loading, not the last failure.
+        if choice == nil { loadFailed = false }
         do {
             let stored = try await sources.choice(covenID)
             let apps = await sources.apps()
@@ -158,6 +165,10 @@ final class CovenConnectionsModel: ObservableObject {
             errorMessage = "That change could not be saved."
         }
         saving.remove(row)
+        if loadWaits {
+            loadWaits = false
+            await load()
+        }
     }
 }
 
@@ -169,8 +180,7 @@ extension CovenConnectionsModel.Server {
             id: account.id,
             name: account.name,
             line: cannotConnect ? "Can't connect. Test it in Settings." : (tools.count == 1 ? "1 tool" : "\(tools.count) tools"),
-            cannotConnect: cannotConnect,
-            marksReadOnlyTools: tools.contains(where: \.readOnlyHint)
+            cannotConnect: cannotConnect
         )
     }
 }

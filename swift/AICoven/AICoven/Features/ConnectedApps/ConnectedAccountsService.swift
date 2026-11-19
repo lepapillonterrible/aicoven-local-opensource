@@ -10,18 +10,17 @@ actor ConnectedAccountsService {
     /// Keychain key prefix for OAuth tokens (will be user-scoped)
     private let keychainPrefix = "connected_account_token_"
 
-    /// UserDefaults key for accounts list (will be user-scoped)
-    private func getAccountsKey() async -> String {
-        await UserScope.scopedKey("connected_accounts")
-    }
-
     /// Keychain key prefix for MCP tokens (will be user-scoped)
     private let mcpKeychainPrefix = "mcp_server_token_"
 
-    /// UserDefaults key for MCP servers list (will be user-scoped)
-    private func getMCPServersKey() async -> String {
-        await UserScope.scopedKey("mcp_servers")
-    }
+    /// The signed-in account: connections are kept apart by account.
+    private let currentUser: @Sendable () async -> String
+
+    /// Where the lists of accounts and MCP servers are kept.
+    private let defaults: UserDefaults
+
+    /// The account whose connections are in memory, or nil before any are.
+    private var loadedFor: String?
 
     /// In-memory cache of accounts (nil means not yet loaded)
     private var accountsCache: [ConnectedAccount]?
@@ -29,20 +28,31 @@ actor ConnectedAccountsService {
     /// In-memory cache of MCP servers (nil means not yet loaded)
     private var mcpServersCache: [MCPServerAccount]?
 
-    /// Flag to ensure we only load once
-    private var hasLoadedAccounts = false
-
-    private init() {
-        // Note: We cannot call actor-isolated methods from init.
-        // Loading is done lazily on first access.
+    init(
+        currentUser: @escaping @Sendable () async -> String = { await MainActor.run { UserScope.currentUserID } },
+        defaults: UserDefaults = .standard
+    ) {
+        self.currentUser = currentUser
+        self.defaults = defaults
     }
 
-    /// Ensure accounts are loaded from storage (called by public methods)
+    /// Makes what is in memory the signed-in account's (called by public
+    /// methods). After another account signs in, the one before's
+    /// connections are put down and this one's read: they are never shown
+    /// or used as another account's, and never saved under its name.
     private func ensureAccountsLoaded() async {
-        guard !hasLoadedAccounts else { return }
-        hasLoadedAccounts = true
-        await loadAccountsFromStorage()
-        await loadMCPServersFromStorage()
+        let user = await currentUser()
+        // Nothing waits from here on: what is in memory is one account's whole.
+        guard loadedFor != user else { return }
+        loadedFor = user
+        loadAccountsFromStorage()
+        loadMCPServersFromStorage()
+    }
+
+    /// The key a list is kept under: the account's in memory, as
+    /// `UserScope.scopedKey` spells it.
+    private func storageKey(_ base: String) -> String? {
+        loadedFor.map { "\($0).\(base)" }
     }
 
     // MARK: - Account Management
@@ -102,7 +112,7 @@ actor ConnectedAccountsService {
             accountsCache = []
         }
         accountsCache?.append(account)
-        await saveAccountsToStorage()
+        saveAccountsToStorage()
 
         return account
     }
@@ -114,7 +124,7 @@ actor ConnectedAccountsService {
             var updated = account
             updated.updatedAt = Date()
             accountsCache?[index] = updated
-            await saveAccountsToStorage()
+            saveAccountsToStorage()
         }
     }
 
@@ -126,7 +136,7 @@ actor ConnectedAccountsService {
         // Remove from cache
         await ensureAccountsLoaded()
         accountsCache?.removeAll { $0.id == id }
-        await saveAccountsToStorage()
+        saveAccountsToStorage()
     }
 
     /// Disconnect an account (mark as disconnected, optionally keep for reconnect)
@@ -135,7 +145,7 @@ actor ConnectedAccountsService {
         if let index = accountsCache?.firstIndex(where: { $0.id == id }) {
             accountsCache?[index].status = .disconnected
             accountsCache?[index].updatedAt = Date()
-            await saveAccountsToStorage()
+            saveAccountsToStorage()
 
             // Also delete the tokens
             await deleteTokenBundle(forAccountId: id)
@@ -187,7 +197,7 @@ actor ConnectedAccountsService {
             mcpServersCache = []
         }
         mcpServersCache?.append(server)
-        await saveMCPServersToStorage()
+        saveMCPServersToStorage()
 
         return server
     }
@@ -204,7 +214,7 @@ actor ConnectedAccountsService {
                 try await storeMCPToken(token, forServerId: server.id)
             }
 
-            await saveMCPServersToStorage()
+            saveMCPServersToStorage()
         }
     }
 
@@ -225,7 +235,7 @@ actor ConnectedAccountsService {
         server.status = .connected
         server.updatedAt = now
         mcpServersCache?[index] = server
-        await saveMCPServersToStorage()
+        saveMCPServersToStorage()
         return true
     }
 
@@ -235,7 +245,7 @@ actor ConnectedAccountsService {
 
         await ensureAccountsLoaded()
         mcpServersCache?.removeAll { $0.id == id }
-        await saveMCPServersToStorage()
+        saveMCPServersToStorage()
     }
 
     /// Get the authentication token for an MCP server
@@ -450,10 +460,8 @@ actor ConnectedAccountsService {
     // MARK: - Persistence
 
     /// Load accounts from UserDefaults
-    private func loadAccountsFromStorage() async {
-        let key = await getAccountsKey()
-        // UserDefaults might be MainActor? No, UserDefaults is thread safe.
-        guard let data = UserDefaults.standard.data(forKey: key) else {
+    private func loadAccountsFromStorage() {
+        guard let key = storageKey("connected_accounts"), let data = defaults.data(forKey: key) else {
             accountsCache = []
             return
         }
@@ -470,24 +478,23 @@ actor ConnectedAccountsService {
     }
 
     /// Save accounts to UserDefaults
-    private func saveAccountsToStorage() async {
+    private func saveAccountsToStorage() {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
 
-        let key = await getAccountsKey()
+        guard let key = storageKey("connected_accounts") else { return }
 
         do {
             let data = try encoder.encode(accountsCache)
-            UserDefaults.standard.set(data, forKey: key)
+            defaults.set(data, forKey: key)
         } catch {
             AppErrorReporter.log(error: error, context: "ConnectedAccountsService.saveAccountsToStorage")
         }
     }
 
     /// Load MCP servers from UserDefaults
-    private func loadMCPServersFromStorage() async {
-        let key = await getMCPServersKey()
-        guard let data = UserDefaults.standard.data(forKey: key) else {
+    private func loadMCPServersFromStorage() {
+        guard let key = storageKey("mcp_servers"), let data = defaults.data(forKey: key) else {
             mcpServersCache = []
             return
         }
@@ -504,15 +511,15 @@ actor ConnectedAccountsService {
     }
 
     /// Save MCP servers to UserDefaults
-    private func saveMCPServersToStorage() async {
+    private func saveMCPServersToStorage() {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
 
-        let key = await getMCPServersKey()
+        guard let key = storageKey("mcp_servers") else { return }
 
         do {
             let data = try encoder.encode(mcpServersCache)
-            UserDefaults.standard.set(data, forKey: key)
+            defaults.set(data, forKey: key)
         } catch {
             AppErrorReporter.log(error: error, context: "ConnectedAccountsService.saveMCPServersToStorage")
         }
