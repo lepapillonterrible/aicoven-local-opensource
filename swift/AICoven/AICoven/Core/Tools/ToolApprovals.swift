@@ -16,6 +16,9 @@ nonisolated struct ToolApproval: Identifiable, Equatable {
     /// and what goes in it.
     let details: String
     let toolName: String
+    /// False for something that can only be denied: what asks will not
+    /// take an approval, or does not say what it would be an approval of.
+    var canApprove = true
 
     /// What the thread's line says was approved or denied: the first line
     /// of what will happen (the command, the file, the branch), or its
@@ -163,7 +166,9 @@ final class ToolApprovals: ObservableObject {
 
     /// The person pressed Approve or Deny on the approval showing.
     func answer(_ approvalID: String, approve: Bool) {
-        guard showing?.approval.id == approvalID, showing?.phase == .asking else { return }
+        guard let approval = showing?.approval, approval.id == approvalID, showing?.phase == .asking else { return }
+        // What can only be denied takes no approval.
+        guard approval.canApprove || !approve else { return }
         settle(approvalID, with: approve ? .approved : .denied)
         finishShowing(outcome: approve ? .approved : .denied)
     }
@@ -176,7 +181,9 @@ final class ToolApprovals: ObservableObject {
     func announceShowing(_ approvalID: String) -> Bool {
         guard let showing, showing.approval.id == approvalID, showing.phase == .asking, !announced.contains(approvalID) else { return false }
         announced.insert(approvalID)
-        AccessibilityNotification.Announcement("Needs your OK, from \(showing.approval.threadTitle): \(showing.approval.question)").post()
+        // What can only be denied is not waiting for an OK.
+        let needs = showing.approval.canApprove ? "Needs your OK" : "Can only be denied"
+        AccessibilityNotification.Announcement("\(needs), from \(showing.approval.threadTitle): \(showing.approval.question)").post()
         return true
     }
 
@@ -348,6 +355,63 @@ nonisolated extension ToolApproval {
             details: lines.isEmpty ? "Hermes did not say what it is for." : lines.joined(separator: "\n"),
             toolName: request.tool ?? "hermes"
         )
+    }
+
+    /// What OpenClaw is waiting to be allowed, as its Gateway presents it:
+    /// a command, whole, or a plugin's or an agent's own title and
+    /// description. It can be approved only if the Gateway takes an
+    /// approval for this once and says what it would be an approval of,
+    /// and all of that is shown; otherwise its last line says why not.
+    /// Each text is measured as the Gateway sent it, and shown without the
+    /// white space around it.
+    static func openClaw(_ presentation: [String: Any], threadID: String) -> ToolApproval {
+        var isCut = false
+        func text(_ key: String, limit: Int) -> String? {
+            guard let sent = presentation[key] as? String else { return nil }
+            isCut = isCut || sent.count > limit
+            let value = sent.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty else { return nil }
+            return value.count > limit ? "\(value.prefix(limit))\n… and \(value.count - limit) more characters" : value
+        }
+        let sentCommand = presentation["commandText"] as? String ?? ""
+        let command = sentCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        let said = [text("title", limit: 160), text("description", limit: 2000), text("warningText", limit: 500)].compactMap(\.self)
+        let host = text("host", limit: 160).map { "On \($0)" }
+        let allowsOnce = (presentation["allowedDecisions"] as? [String])?.contains("allow-once") == true
+
+        var lines: [String] = []
+        let whyNot: String?
+        if sentCommand.count > HermesAgentClient.longestCommandShown {
+            whyNot = "OpenClaw's command is too long to show here, so it can only be denied."
+        } else if command.isEmpty {
+            lines = said
+            whyNot = if said.isEmpty {
+                "OpenClaw did not say what it is for, so it can only be denied."
+            } else if isCut {
+                "What OpenClaw sent is longer than can be shown here, so it can only be denied."
+            } else if !allowsOnce {
+                "OpenClaw does not take an approval for this, so it can only be denied."
+            } else {
+                nil
+            }
+        } else {
+            lines = [command] + said + [host].compactMap(\.self)
+            whyNot = if isCut {
+                "What OpenClaw sent is longer than can be shown here, so it can only be denied."
+            } else if !allowsOnce {
+                "OpenClaw does not take an approval for this, so it can only be denied."
+            } else {
+                nil
+            }
+        }
+        var approval = ToolApproval(
+            threadID: threadID,
+            question: command.isEmpty ? "Let OpenClaw do this?" : "Let OpenClaw run this command?",
+            details: (lines + [whyNot].compactMap(\.self)).joined(separator: "\n"),
+            toolName: (presentation["kind"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(40)) } ?? "openclaw"
+        )
+        approval.canApprove = whyNot == nil
+        return approval
     }
 
     /// The text as it will be written, or its start and how much more

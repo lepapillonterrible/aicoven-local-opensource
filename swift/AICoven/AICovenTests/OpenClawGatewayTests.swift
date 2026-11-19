@@ -13,6 +13,20 @@ final class ScriptedGatewaySocket: OpenClawSocket, @unchecked Sendable {
     private var sentFrames: [[String: Any]] = []
     private var sentWatchers: [(count: Int, seen: XCTestExpectation)] = []
     private var closed = false
+    private var answers: (@Sendable ([String: Any]) -> [[String: Any]])?
+    private var sendFailure: Error?
+
+    /// From now on, nothing more can be sent: sending fails with `error`,
+    /// as a network that has gone would have it.
+    func failSending(with error: Error) {
+        lock.withLock { sendFailure = error }
+    }
+
+    /// Plays the Gateway by rule: each frame sent to it is answered with
+    /// the frames this gives, in order.
+    func answer(_ rule: @escaping @Sendable (_ request: [String: Any]) -> [[String: Any]]) {
+        lock.withLock { answers = rule }
+    }
 
     /// The Gateway sends a frame.
     func push(_ object: [String: Any]) {
@@ -54,14 +68,17 @@ final class ScriptedGatewaySocket: OpenClawSocket, @unchecked Sendable {
     }
 
     func send(_ text: String) async throws {
-        let met: [XCTestExpectation] = try lock.withLock {
+        let frame = (try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]) ?? [:]
+        let (met, rule): ([XCTestExpectation], (@Sendable ([String: Any]) -> [[String: Any]])?) = try lock.withLock {
             guard !closed else { throw OpenClawGatewayError.closed }
-            sentFrames.append((try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]) ?? [:])
+            if let sendFailure { throw sendFailure }
+            sentFrames.append(frame)
             let met = sentWatchers.filter { $0.count <= sentFrames.count }.map(\.seen)
             sentWatchers.removeAll { $0.count <= sentFrames.count }
-            return met
+            return (met, answers)
         }
         met.forEach { $0.fulfill() }
+        rule?(frame).forEach(push)
     }
 
     func receive() async throws -> String {
@@ -423,6 +440,43 @@ final class OpenClawGatewayTests: XCTestCase {
             XCTAssertEqual(error as? OpenClawGatewayError, .closed)
         }
         XCTAssertEqual(seen, 1)
+    }
+
+    func testARequestAskedWithoutWaiting_isSentBeforeWhatIsAskedNextWhoeverStopsWaiting() async throws {
+        let socket = ScriptedGatewaySocket()
+        let gateway = try connection(socket)
+        async let opened = gateway.open()
+        await socket.welcomeNextConnection(in: self)
+        _ = try await opened
+
+        // Asked from a task that is already stopped, and never waited for.
+        let asking = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            _ = try await gateway.ask("chat.send", ["idempotencyKey": "r1"])
+        }
+        try await asking.value
+        let stopping = Task { try await gateway.call("chat.abort", ["runId": "r1"]) }
+        await fulfillment(of: [socket.expectSent(3)], timeout: 10)
+
+        XCTAssertEqual(socket.sent.dropFirst().map { $0["method"] as? String }, ["chat.send", "chat.abort"])
+        await gateway.close()
+        _ = try? await stopping.value
+
+        // And its answer is its one value.
+        let second = ScriptedGatewaySocket()
+        let other = try connection(second)
+        async let reopened = other.open()
+        await second.welcomeNextConnection(in: self)
+        _ = try await reopened
+        let answer = try await other.ask("chat.send", ["idempotencyKey": "r2"])
+        await fulfillment(of: [second.expectSent(2)], timeout: 10)
+        second.push(["type": "res", "id": second.sent[1]["id"] ?? "", "ok": true, "payload": ["runId": "r2"]])
+        var answers: [String] = []
+        for try await payload in answer {
+            answers.append(String(decoding: payload, as: UTF8.self))
+        }
+        XCTAssertEqual(answers, [#"{"runId":"r2"}"#])
+        await other.close()
     }
 
     func testRequests_reachTheGatewayInTheOrderAskedAndAStoppedOneStopsWaiting() async throws {

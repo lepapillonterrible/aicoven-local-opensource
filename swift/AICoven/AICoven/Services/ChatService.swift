@@ -181,12 +181,16 @@ actor ChatService {
     private let shouldAutoRefreshEnvironment: Bool
     /// The Hermes agent connected, if one is; injected for tests.
     private let hermesAgent: @Sendable () -> HermesAgentClient?
-    /// The threads whose latest turn was a Hermes run. What follows a turn
-    /// (the thread's summary, and the memory proposed from it) is made by
-    /// one of the app's own models, and is not made for these: the turn
-    /// went to Hermes, and whichever provider is chosen by the time it ends
-    /// was not given it.
-    private var threadsLastAnsweredByHermes: Set<String> = []
+    /// A turn through the OpenClaw Gateway connected, if one is; injected
+    /// for tests.
+    private let openClawTurn: @Sendable (_ threadID: String) -> OpenClawTurn?
+    /// The threads whose latest turn was an agent's run (Hermes, or
+    /// OpenClaw through its Gateway). What follows a turn (the thread's
+    /// summary, and the memory proposed from it) is made by one of the
+    /// app's own models, and is not made for these: the turn went to the
+    /// agent, and whichever provider is chosen by the time it ends was not
+    /// given it.
+    private var threadsLastAnsweredByAnAgent: Set<String> = []
 
     /// Maximum number of prior turns to include when building LLM context.
     private let maxContextMessages = 20
@@ -198,7 +202,10 @@ actor ChatService {
         threadStore: ThreadStore,
         toolService: ChatToolService,
         shouldAutoRefreshEnvironment: Bool = true,
-        hermesAgent: @escaping @Sendable () -> HermesAgentClient? = ProviderAccountService.hermesAgent
+        hermesAgent: @escaping @Sendable () -> HermesAgentClient? = ProviderAccountService.hermesAgent,
+        openClawTurn: @escaping @Sendable (_ threadID: String) -> OpenClawTurn? = { threadID in
+            ProviderAccountService.openClawGateway().map { OpenClawTurn(address: $0.address, token: $0.token, threadID: threadID) }
+        }
     ) {
         self.contextBuilder = contextBuilder
         self.modelRouter = modelRouter
@@ -207,6 +214,7 @@ actor ChatService {
         self.toolService = toolService
         self.shouldAutoRefreshEnvironment = shouldAutoRefreshEnvironment
         self.hermesAgent = hermesAgent
+        self.openClawTurn = openClawTurn
     }
 
     /// Ensure that we have an up-to-date LLM environment based on the latest
@@ -344,7 +352,7 @@ actor ChatService {
         // Hermes is an agent, not a model: it runs the turn itself, with its
         // own tools and memory, and this app follows the run.
         if prefProvider == "hermes", let agent = hermesAgent() {
-            threadsLastAnsweredByHermes.insert(threadId)
+            threadsLastAnsweredByAnAgent.insert(threadId)
             let earlier = try await loadMessages(threadId: threadId, limit: Self.hermesHistoryLimit)
             try await HermesTurn(client: agent, threadID: threadId).run(
                 input: message,
@@ -354,7 +362,19 @@ actor ChatService {
             )
             return
         }
-        threadsLastAnsweredByHermes.remove(threadId)
+        // So is OpenClaw, where its connection names its Gateway: without
+        // one it is a server that speaks the OpenAI chat API, below.
+        if prefProvider == "openclaw", let turn = openClawTurn(threadId) {
+            threadsLastAnsweredByAnAgent.insert(threadId)
+            let earlier = try await loadMessages(threadId: threadId, limit: Self.hermesHistoryLimit)
+            try await turn.run(
+                message: OpenClawTurn.message(message, after: Self.hermesHistory(from: earlier).map { ($0.role, $0.content) }),
+                started: { await onAgentRun?(AgentRun(provider: AgentRun.openClaw, runID: $0)) },
+                report: onStateChange
+            )
+            return
+        }
+        threadsLastAnsweredByAnAgent.remove(threadId)
 
         let descriptor: ModelDescriptor
         let client: LLMClient
@@ -1259,7 +1279,7 @@ actor ChatService {
     /// configured LLM providers. This runs independently of any one chat turn
     /// and is safe to call opportunistically after new messages are added.
     func updateThreadSummary(threadId: String) async {
-        guard !threadsLastAnsweredByHermes.contains(threadId) else { return }
+        guard !threadsLastAnsweredByAnAgent.contains(threadId) else { return }
         // On iOS, skip background summaries when only local models are
         // available. Loading a second MLX model (~1.5 GB) for an optional
         // summary will push past the jetsam memory limit and crash the app.
@@ -1272,11 +1292,11 @@ actor ChatService {
         await ensureEnvironment()
         do {
             // Checked again after each wait, up to the sending and the
-            // keeping: a Hermes turn can have started in the thread since.
-            guard !threadsLastAnsweredByHermes.contains(threadId) else { return }
+            // keeping: an agent's turn can have started in the thread since.
+            guard !threadsLastAnsweredByAnAgent.contains(threadId) else { return }
             // Use the same history seen by the chat UI.
             let history = try await loadMessages(threadId: threadId, limit: maxContextMessages)
-            guard !history.isEmpty, !threadsLastAnsweredByHermes.contains(threadId) else { return }
+            guard !history.isEmpty, !threadsLastAnsweredByAnAgent.contains(threadId) else { return }
 
             var messages: [LLMMessage] = []
             messages.append(
@@ -1318,7 +1338,7 @@ actor ChatService {
                 options: options
             )
             let summary = response.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !summary.isEmpty, !threadsLastAnsweredByHermes.contains(threadId) else { return }
+            guard !summary.isEmpty, !threadsLastAnsweredByAnAgent.contains(threadId) else { return }
 
             try await threadStore.updateSummary(forThreadID: threadId, summary: summary)
 
@@ -1362,6 +1382,12 @@ actor ChatService {
         // chosen when it is connected.
         if savedProvider == "hermes", hermesAgent() != nil {
             return ("hermes", "")
+        }
+        // Nor does OpenClaw need one where its connection names its
+        // Gateway: its turns are run there. With a client too, its model
+        // is chosen below as before, for what is asked of a model.
+        if savedProvider == "openclaw", !llmClients.keys.contains("openclaw"), openClawTurn("") != nil {
+            return ("openclaw", "")
         }
 
         // If the saved provider isn't actually configured (e.g. no API key),
@@ -1438,15 +1464,17 @@ actor ChatService {
     /// have.
     func resumeAgentRun(_ run: AgentRun, threadId: String, onStateChange: @escaping @Sendable (TurnState) -> Void) async throws {
         guard run.provider == AgentRun.hermes, let agent = hermesAgent() else { throw HermesAgentError.cannotPickUp }
-        threadsLastAnsweredByHermes.insert(threadId)
+        threadsLastAnsweredByAnAgent.insert(threadId)
         try await HermesTurn(client: agent, threadID: threadId).resume(runID: run.runID, report: onStateChange)
     }
 
-    /// How much of the thread a Hermes run is given: Hermes keeps its own
-    /// memory of the session as well.
+    /// How much of the thread an agent's run is given (a Hermes run, or an
+    /// OpenClaw run through its Gateway): the agent keeps its own memory
+    /// of the session as well.
     static let hermesHistoryLimit = 40
 
-    /// What was said before the message a Hermes run answers. The message
+    /// What was said before the message an agent's run answers (a Hermes
+    /// run, or an OpenClaw run through its Gateway). The message
     /// itself is stored before the turn starts, so it is the last one
     /// loaded, and is left out: the run is given it as its input.
     static func hermesHistory(from stored: [ChatMessage]) -> [HermesAgentClient.Message] {
