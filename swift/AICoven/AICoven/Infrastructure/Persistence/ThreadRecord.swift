@@ -466,11 +466,8 @@ extension ThreadRepository {
                 .compactMap(\.payloadCiphertext)
         }
 
-        guard !payloads.isEmpty else {
-            try await requireKey(of: currentUserId)
-            return []
-        }
         try await requireKey(of: currentUserId)
+        guard !payloads.isEmpty else { return [] }
         let decoder = JSONDecoder()
         var threads: [Thread] = []
         threads.reserveCapacity(payloads.count)
@@ -531,11 +528,8 @@ extension ThreadRepository {
                 arguments: [currentUserId, threadID]
             )
         }
-        guard !rows.isEmpty else {
-            try await requireKey(of: currentUserId)
-            return [:]
-        }
         try await requireKey(of: currentUserId)
+        guard !rows.isEmpty else { return [:] }
         let decoder = JSONDecoder()
         var traces: [String: WorkTrace] = [:]
         for row in rows {

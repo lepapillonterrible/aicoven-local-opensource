@@ -132,6 +132,7 @@ final class ChatHistoryStoreTests: XCTestCase {
         await DataEncryptionService.shared.lock()
 
         for read in [
+            { _ = try await self.repository.loadChatThreads() },
             { _ = try await self.repository.loadChatMessages(threadID: empty, limit: 20, before: nil) },
             { _ = try await self.repository.loadChatMessages(threadID: empty, limit: 20, before: "no-such-message") },
             { _ = try await self.repository.loadWorkTraces(threadID: empty) },
