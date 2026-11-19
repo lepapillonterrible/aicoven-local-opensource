@@ -22,19 +22,20 @@ nonisolated enum OpenClawGatewayError: LocalizedError, Equatable {
     case refused(code: String, message: String)
     /// The connection ended before the answer came.
     case closed
-    /// A frame larger than the Gateway, or this app, takes.
+    /// A frame larger than the Gateway takes, or than this app sends or
+    /// takes.
     case tooLarge
     /// The Gateway has no such method, or did not grant the scope it needs.
     case notSupported(String)
 
     var errorDescription: String? {
         switch self {
-        case .invalidAddress: "Enter a Gateway address on this Mac that starts with ws://, or a secure one that starts with wss://."
+        case .invalidAddress: "Enter a Gateway address that starts with ws:// on this device, or wss:// anywhere else, with no name, password, path or query in it."
         case .unexpectedReply: "The address did not answer as an OpenClaw Gateway."
         case .unsupportedProtocol: "This OpenClaw Gateway speaks a version of its protocol AICoven does not."
         case let .refused(code, message): message.isEmpty ? "The OpenClaw Gateway refused: \(code)." : "The OpenClaw Gateway refused: \(message)"
         case .closed: "The connection to the OpenClaw Gateway closed."
-        case .tooLarge: "A message was too large for the OpenClaw Gateway."
+        case .tooLarge: "A message to or from the OpenClaw Gateway was too large."
         case let .notSupported(what): "This OpenClaw Gateway does not offer \(what)."
         }
     }
@@ -157,16 +158,18 @@ actor OpenClawGatewayConnection {
         (events, eventsIn) = AsyncThrowingStream<OpenClawGatewayEvent, Error>.makeStream()
     }
 
-    /// Whether an address is one a Gateway may be reached at: `ws://` on
-    /// this machine only, `wss://` anywhere, and nothing in it that could
-    /// carry a secret (a name, a password, a query, a fragment).
+    /// The address a Gateway may be reached at, from what was typed, or nil:
+    /// `ws://` on this machine only, `wss://` anywhere, and nothing in it
+    /// that could carry a secret (a name, a password, a query, a fragment)
+    /// and no path. A lone trailing slash is dropped.
     static func address(_ raw: String) -> URL? {
-        guard let components = URLComponents(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+        guard var components = URLComponents(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)),
               let scheme = components.scheme?.lowercased(), let host = components.host?.lowercased(), !host.isEmpty,
               components.user == nil, components.password == nil, components.query == nil, components.fragment == nil,
               components.path.isEmpty || components.path == "/" else { return nil }
         let isThisMachine = ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host)
         guard scheme == "wss" || (scheme == "ws" && isThisMachine) else { return nil }
+        components.path = ""
         return components.url
     }
 
@@ -179,7 +182,7 @@ actor OpenClawGatewayConnection {
         guard challenge["type"] as? String == "event", challenge["event"] as? String == "connect.challenge",
               let payload = challenge["payload"] as? [String: Any],
               let nonce = payload["nonce"] as? String, !nonce.isEmpty,
-              let timestamp = (payload["ts"] as? NSNumber)?.int64Value, timestamp >= 0 else {
+              let timestamp = Self.integer(payload["ts"]), timestamp >= 0 else {
             throw OpenClawGatewayError.unexpectedReply
         }
         // What is signed names this device, what it asks to be, the
@@ -211,17 +214,24 @@ actor OpenClawGatewayConnection {
         let id = newID()
         try await send(["type": "req", "id": id, "method": "connect", "params": params])
         let answer = try await frame(socket.receive())
-        guard answer["type"] as? String == "res", answer["id"] as? String == id else { throw OpenClawGatewayError.unexpectedReply }
-        guard answer["ok"] as? Bool == true else { throw Self.refusal(in: answer) }
-        guard let welcome = answer["payload"] as? [String: Any], welcome["type"] as? String == "hello-ok" else {
+        guard answer["type"] as? String == "res", answer["id"] as? String == id, let accepted = answer["ok"] as? Bool else {
             throw OpenClawGatewayError.unexpectedReply
         }
-        guard (welcome["protocol"] as? NSNumber)?.intValue == Self.protocolVersion,
-              let features = welcome["features"] as? [String: Any],
+        // A refusal is one only if it says what it refused with.
+        guard accepted else {
+            guard answer["error"] is [String: Any] else { throw OpenClawGatewayError.unexpectedReply }
+            throw Self.refusal(in: answer)
+        }
+        guard let welcome = answer["payload"] as? [String: Any], welcome["type"] as? String == "hello-ok",
+              let version = Self.integer(welcome["protocol"]) else {
+            throw OpenClawGatewayError.unexpectedReply
+        }
+        guard version == Self.protocolVersion else { throw OpenClawGatewayError.unsupportedProtocol }
+        guard let features = welcome["features"] as? [String: Any],
               let methods = features["methods"] as? [String], let events = features["events"] as? [String],
               let auth = welcome["auth"] as? [String: Any], let scopes = auth["scopes"] as? [String],
-              let limit = ((welcome["policy"] as? [String: Any])?["maxPayload"] as? NSNumber)?.intValue, limit > 0 else {
-            throw OpenClawGatewayError.unsupportedProtocol
+              let limit = Self.integer((welcome["policy"] as? [String: Any])?["maxPayload"]), limit > 0 else {
+            throw OpenClawGatewayError.unexpectedReply
         }
         maxPayload = min(limit, Self.frameLimit)
         let hello = OpenClawGatewayHello(
@@ -294,6 +304,13 @@ actor OpenClawGatewayConnection {
         return object
     }
 
+    /// A whole number as JSON gave it: not a fraction, and not true or
+    /// false, which read as numbers too.
+    private static func integer(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        return number as? Int
+    }
+
     private static func refusal(in answer: [String: Any]) -> OpenClawGatewayError {
         let error = answer["error"] as? [String: Any]
         let detail = (error?["details"] as? [String: Any])?["code"] as? String
@@ -317,10 +334,10 @@ actor OpenClawGatewayConnection {
                     }
                 case "event":
                     guard let name = object["event"] as? String else { continue }
-                    if let sequence = (object["seq"] as? NSNumber)?.intValue {
+                    if let sequence = Self.integer(object["seq"]) {
                         // A number skipped is an event lost: what follows
                         // cannot be trusted to be the whole of it.
-                        if let lastSequence, sequence != lastSequence + 1 { throw OpenClawGatewayError.closed }
+                        if let lastSequence, lastSequence == .max || sequence != lastSequence + 1 { throw OpenClawGatewayError.closed }
                         lastSequence = sequence
                     }
                     let payload = object["payload"] ?? [String: Any]()
@@ -360,9 +377,10 @@ nonisolated enum OpenClawGateway {
     static func hello(
         at address: URL,
         token: String?,
+        timeout: Duration = handshakeTimeout,
         over socket: @Sendable (URL) -> OpenClawSocket = { OpenClawWebSocket(url: $0) }
     ) async throws -> OpenClawGatewayHello {
-        let connection = try await open(address, token: token, over: socket)
+        let connection = try await open(address, token: token, timeout: timeout, over: socket)
         await connection.gateway.close()
         return connection.hello
     }
@@ -373,16 +391,28 @@ nonisolated enum OpenClawGateway {
     static func open(
         _ address: URL,
         token: String?,
+        timeout: Duration = handshakeTimeout,
         over socket: @Sendable (URL) -> OpenClawSocket = { OpenClawWebSocket(url: $0) }
     ) async throws -> (gateway: OpenClawGatewayConnection, hello: OpenClawGatewayHello) {
+        // The Keychain is the current account's. The handshake waits, and
+        // the account can change while it does: what is kept or forgotten
+        // afterwards is the account's this began for, or nothing.
+        let account = UserScope.currentUserID
         let identity = try OpenClawDeviceIdentity.loadOrCreate()
         let own = token.flatMap { $0.isEmpty ? nil : $0 }
         let issued = own == nil ? KeychainHelper.load(key: deviceTokenKey(for: address)) : nil
         do {
-            return try await open(address, identity: identity, token: own ?? issued, isDeviceToken: own == nil && issued != nil, over: socket)
+            return try await open(
+                address, identity: identity, token: own ?? issued, isDeviceToken: own == nil && issued != nil,
+                account: account, timeout: timeout, over: socket
+            )
         } catch OpenClawGatewayError.refused(code: "AUTH_DEVICE_TOKEN_MISMATCH", _) where issued != nil {
-            KeychainHelper.delete(key: deviceTokenKey(for: address))
-            return try await open(address, identity: identity, token: nil, isDeviceToken: false, over: socket)
+            // Forgotten only if it is still the one that was refused: a
+            // newer connection can have been issued another since.
+            if UserScope.currentUserID == account, KeychainHelper.load(key: deviceTokenKey(for: address)) == issued {
+                KeychainHelper.delete(key: deviceTokenKey(for: address))
+            }
+            return try await open(address, identity: identity, token: nil, isDeviceToken: false, account: account, timeout: timeout, over: socket)
         }
     }
 
@@ -391,6 +421,8 @@ nonisolated enum OpenClawGateway {
         identity: OpenClawDeviceIdentity,
         token: String?,
         isDeviceToken: Bool,
+        account: String,
+        timeout: Duration,
         over socket: (URL) -> OpenClawSocket
     ) async throws -> (gateway: OpenClawGatewayConnection, hello: OpenClawGatewayHello) {
         let transport = socket(address)
@@ -403,15 +435,21 @@ nonisolated enum OpenClawGateway {
         )
         // An address that takes the connection and says nothing would hold
         // this for ever: closing the socket ends the wait.
-        let timeout = Task {
-            try await Task.sleep(for: handshakeTimeout)
+        let givingUp = Task {
+            try await Task.sleep(for: timeout)
             transport.close()
         }
-        defer { timeout.cancel() }
+        defer { givingUp.cancel() }
         do {
             let hello = try await gateway.open()
-            if let issued = hello.deviceToken {
-                try? KeychainHelper.save(key: deviceTokenKey(for: address), value: issued)
+            if let issued = hello.deviceToken, UserScope.currentUserID == account {
+                do {
+                    try KeychainHelper.save(key: deviceTokenKey(for: address), value: issued)
+                } catch {
+                    // The connection stands; the next one will have no
+                    // issued token to show.
+                    AppErrorReporter.log(error: error, context: "OpenClawGateway.keepDeviceToken")
+                }
             }
             return (gateway, hello)
         } catch {
@@ -425,7 +463,9 @@ nonisolated enum OpenClawGateway {
     }
 }
 
-/// A web socket to a Gateway.
+/// A web socket to a Gateway. Unchecked as sendable because its one
+/// property, the system's web socket task, is safe to use from any thread
+/// and is not declared so.
 final nonisolated class OpenClawWebSocket: OpenClawSocket, @unchecked Sendable {
     private let task: URLSessionWebSocketTask
 

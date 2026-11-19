@@ -18,9 +18,8 @@ struct LocalProviderAccount: Codable {
     let baseURL: String?
     let status: String
     let createdAt: Date
-    /// For an OpenClaw connection, the address of its native Gateway, if it
-    /// has one: turns then run through the Gateway. Not there, the
-    /// connection speaks the OpenAI chat API at `baseURL` alone.
+    /// For an OpenClaw connection, the address of its native Gateway, if
+    /// the person gave one.
     var gatewayURL: String?
 }
 
@@ -495,7 +494,13 @@ actor ProviderAccountService {
                 guard let address = OpenClawGatewayConnection.address(gateway) else { throw OpenClawGatewayError.invalidAddress }
                 let hello = try await gatewayHello(address, testedKey)
                 if let missing = hello.missing { throw OpenClawGatewayError.notSupported(missing) }
-                outcome = await .success((try? fetchRemoteModels(for: account).count) ?? 0)
+                // The models are asked of the server address with the key
+                // as it is stored now. If either was edited while the
+                // Gateway answered, the new key is not sent to the old
+                // address: the models are not asked.
+                let current = try loadLocalAccounts().first { $0.id == accountId }
+                let unchanged = current?.baseURL == account.baseURL && KeychainHelper.load(key: keychainKey(for: accountId)) == testedKey
+                outcome = unchanged ? await .success((try? fetchRemoteModels(for: account).count) ?? 0) : .success(0)
             } else {
                 outcome = try await .success(fetchRemoteModels(for: account).count)
             }

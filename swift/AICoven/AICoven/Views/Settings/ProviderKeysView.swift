@@ -939,6 +939,7 @@ private struct AddProviderKeyStep2View: View {
             } else if isOpenClaw {
                 guard let gateway = OpenClawGatewayField.addressToSave(gatewayURL) else {
                     errorMessage = OpenClawGatewayError.invalidAddress.localizedDescription
+                    announce(OpenClawGatewayError.invalidAddress.localizedDescription)
                     return
                 }
                 _ = try await service.createOpenClawAccount(
@@ -1048,6 +1049,9 @@ struct EditProviderKeySheet: View {
                 }
                 if slug == "openclaw" {
                     OpenClawGatewayField(address: $gatewayURL)
+                        // Not to be typed in until the stored address has
+                        // been read: reading it would replace what was typed.
+                        .disabled(!gatewayIsRead)
                         .task {
                             gatewayURL = await (try? ProviderAccountService.shared.gatewayAddress(forAccount: account.id)) ?? ""
                             gatewayIsRead = true
@@ -1106,6 +1110,7 @@ struct EditProviderKeySheet: View {
             // Empty takes the Gateway off the connection.
             guard let checked = OpenClawGatewayField.addressToSave(gatewayURL) else {
                 errorMessage = OpenClawGatewayError.invalidAddress.localizedDescription
+                announce(OpenClawGatewayError.invalidAddress.localizedDescription)
                 return
             }
             gateway = checked
@@ -1245,9 +1250,7 @@ struct SecondaryButtonStyle: ButtonStyle {
     }
 }
 
-/// The Gateway address of an OpenClaw connection: where its turns run when
-/// it has one. Without it the connection speaks the OpenAI chat API at its
-/// server address.
+/// The Gateway address of an OpenClaw connection, which is optional.
 struct OpenClawGatewayField: View {
     @Binding var address: String
 
@@ -1257,7 +1260,7 @@ struct OpenClawGatewayField: View {
         } header: {
             Text("Gateway (optional)")
         } footer: {
-            Text("With its Gateway address, OpenClaw runs each turn itself, with its own tools, and asks here before it acts. On this Mac the address starts with ws://; anywhere else it must be secure and start with wss://.")
+            Text("The address of OpenClaw's native Gateway, if you use it. On this device it starts with ws://; anywhere else it must be secure and start with wss://.")
                 .font(.aicovenBodySmall)
         }
     }

@@ -240,6 +240,56 @@ final class OpenClawGatewayTests: XCTestCase {
         }
     }
 
+    func testOpening_takesNoChallengeOrWelcomeThatIsNotWellFormed() async throws {
+        // A challenge whose timestamp is not a whole number, or not a number.
+        for timestamp in [-0.5 as Any, true as Any, -1 as Any, "now" as Any] {
+            let socket = ScriptedGatewaySocket()
+            socket.push(["type": "event", "event": "connect.challenge", "payload": ["nonce": "n", "ts": timestamp]])
+            do {
+                _ = try await connection(socket).open()
+                XCTFail("Not a challenge: \(timestamp)")
+            } catch {
+                XCTAssertEqual(error as? OpenClawGatewayError, .unexpectedReply, "\(timestamp)")
+            }
+            XCTAssertTrue(socket.sent.isEmpty, "Nothing is signed for a challenge that is not one")
+        }
+
+        /// Answers to the connect that are neither a welcome nor a refusal.
+        func answer(_ change: (inout [String: Any]) -> Void) async throws -> Error? {
+            let socket = ScriptedGatewaySocket()
+            let gateway = try connection(socket)
+            async let opened = gateway.open()
+            socket.push(ScriptedGatewaySocket.challenge)
+            await fulfillment(of: [socket.expectSent(1)], timeout: 10)
+            var welcome = ScriptedGatewaySocket.welcome(to: socket.sent.first?["id"] as? String ?? "")
+            change(&welcome)
+            socket.push(welcome)
+            do {
+                _ = try await opened
+                return nil
+            } catch {
+                return error
+            }
+        }
+        func payload(_ welcome: inout [String: Any], _ change: (inout [String: Any]) -> Void) {
+            var payload = welcome["payload"] as? [String: Any] ?? [:]
+            change(&payload)
+            welcome["payload"] = payload
+        }
+        let noVerdict = try await answer { $0["ok"] = nil }
+        XCTAssertEqual(noVerdict as? OpenClawGatewayError, .unexpectedReply)
+        let refusalWithNoReason = try await answer { $0["ok"] = false }
+        XCTAssertEqual(refusalWithNoReason as? OpenClawGatewayError, .unexpectedReply)
+        let noMethods = try await answer { payload(&$0) { $0["features"] = ["events": ["chat"]] } }
+        XCTAssertEqual(noMethods as? OpenClawGatewayError, .unexpectedReply, "Protocol 4, but not a welcome")
+        let noLimit = try await answer { payload(&$0) { $0["policy"] = ["maxPayload": 0] } }
+        XCTAssertEqual(noLimit as? OpenClawGatewayError, .unexpectedReply)
+        let fractionalVersion = try await answer { payload(&$0) { $0["protocol"] = 4.5 } }
+        XCTAssertEqual(fractionalVersion as? OpenClawGatewayError, .unexpectedReply)
+        let newerVersion = try await answer { payload(&$0) { $0["protocol"] = 5 } }
+        XCTAssertEqual(newerVersion as? OpenClawGatewayError, .unsupportedProtocol)
+    }
+
     func testAGatewayThatLacksWhatATurnNeeds_saysWhatIsMissing() async throws {
         let socket = ScriptedGatewaySocket()
         let gateway = try connection(socket)
@@ -329,7 +379,97 @@ final class OpenClawGatewayTests: XCTestCase {
         }
     }
 
+    func testTheLargestEventNumber_endsTheConnectionAtTheNextEventAndDoesNotCrash() async throws {
+        let socket = ScriptedGatewaySocket()
+        let gateway = try connection(socket)
+        async let opened = gateway.open()
+        await socket.welcomeNextConnection(in: self)
+        _ = try await opened
+
+        socket.push(["type": "event", "event": "chat", "seq": Int.max, "payload": ["state": "delta"]])
+        socket.push(["type": "event", "event": "chat", "seq": 1, "payload": ["state": "delta"]])
+
+        var seen = 0
+        do {
+            for try await _ in gateway.events {
+                seen += 1
+            }
+            XCTFail("The events end with the connection")
+        } catch {
+            XCTAssertEqual(error as? OpenClawGatewayError, .closed)
+        }
+        XCTAssertEqual(seen, 1)
+    }
+
+    func testARequestLargerThanTheGatewayTakes_isNotSent() async throws {
+        let socket = ScriptedGatewaySocket()
+        let gateway = try connection(socket)
+        async let opened = gateway.open()
+        socket.push(ScriptedGatewaySocket.challenge)
+        await fulfillment(of: [socket.expectSent(1)], timeout: 10)
+        var welcome = ScriptedGatewaySocket.welcome(to: socket.sent.first?["id"] as? String ?? "")
+        var payload = try XCTUnwrap(welcome["payload"] as? [String: Any])
+        payload["policy"] = ["maxPayload": 200]
+        welcome["payload"] = payload
+        socket.push(welcome)
+        let hello = try await opened
+        XCTAssertEqual(hello.maxPayload, 200)
+
+        do {
+            _ = try await gateway.call("chat.send", ["message": String(repeating: "a", count: 300)])
+            XCTFail("Larger than the Gateway takes")
+        } catch {
+            XCTAssertEqual(error as? OpenClawGatewayError, .tooLarge)
+        }
+        XCTAssertEqual(socket.sent.count, 1, "Only the connect was sent")
+        await gateway.close()
+    }
+
     // MARK: - A connection for one piece of work
+
+    func testAGatewayThatSaysNothing_isGivenUpOn() async throws {
+        let address = try XCTUnwrap(OpenClawGatewayConnection.address("ws://127.0.0.1:18789"))
+        let silent = ScriptedGatewaySocket()
+
+        do {
+            _ = try await OpenClawGateway.hello(at: address, token: "T", timeout: .milliseconds(50), over: { _ in silent })
+            XCTFail("Nothing answered")
+        } catch {
+            XCTAssertEqual(error as? OpenClawGatewayError, .closed)
+        }
+        XCTAssertTrue(silent.isClosed)
+    }
+
+    func testTheConnectionsOwnToken_isShownThoughTheGatewayIssuedOneAndATokenIssuedSinceIsNotForgotten() async throws {
+        let address = try XCTUnwrap(OpenClawGatewayConnection.address("ws://127.0.0.1:\(Int.random(in: 20000 ... 60000))"))
+        let tokenKey = "openclaw-gateway-device-token.\(address.absoluteString)"
+        addTeardownBlock { KeychainHelper.delete(key: tokenKey) }
+        try KeychainHelper.save(key: tokenKey, value: "ISSUED")
+
+        let own = ScriptedGatewaySocket()
+        async let withOwn = OpenClawGateway.hello(at: address, token: "MINE", over: { _ in own })
+        await own.welcomeNextConnection(in: self)
+        _ = try await withOwn
+        XCTAssertEqual((own.sent.first?["params"] as? [String: Any])?["auth"] as? [String: String], ["token": "MINE"])
+        XCTAssertEqual(KeychainHelper.load(key: tokenKey), "ISSUED")
+
+        // The issued token is refused, but by then a newer connection has
+        // been issued another: that one stays.
+        let refused = ScriptedGatewaySocket()
+        let retried = ScriptedGatewaySocket()
+        let sockets = Sockets([refused, retried])
+        async let again = OpenClawGateway.hello(at: address, token: nil, over: { _ in sockets.next() })
+        refused.push(ScriptedGatewaySocket.challenge)
+        await fulfillment(of: [refused.expectSent(1)], timeout: 10)
+        try KeychainHelper.save(key: tokenKey, value: "NEWER")
+        refused.push([
+            "type": "res", "id": refused.sent.first?["id"] as? String ?? "", "ok": false,
+            "error": ["code": "UNAUTHORIZED", "message": "token mismatch", "details": ["code": "AUTH_DEVICE_TOKEN_MISMATCH"]],
+        ])
+        await retried.welcomeNextConnection(in: self)
+        _ = try await again
+        XCTAssertEqual(KeychainHelper.load(key: tokenKey), "NEWER")
+    }
 
     func testATokenTheGatewayIssues_isKeptAndShownNextTimeAndForgottenWhenItIsNoLongerTaken() async throws {
         let address = try XCTUnwrap(OpenClawGatewayConnection.address("ws://127.0.0.1:\(Int.random(in: 20000 ... 60000))"))
@@ -455,6 +595,7 @@ final class OpenClawGatewayTests: XCTestCase {
         for good in ["ws://127.0.0.1:18789", "ws://localhost:18789/", "ws://[::1]:18789", "wss://gateway.example.com", " wss://gateway.example.com:8443 "] {
             XCTAssertNotNil(OpenClawGatewayConnection.address(good), good)
         }
+        XCTAssertEqual(OpenClawGatewayConnection.address("ws://localhost:18789/")?.absoluteString, "ws://localhost:18789", "A lone trailing slash is dropped")
         for bad in [
             "", "ws://gateway.example.com:18789", "http://127.0.0.1:18789", "ws://user:secret@127.0.0.1:18789",
             "wss://gateway.example.com/?token=abc", "wss://gateway.example.com/#x", "wss://gateway.example.com/path", "127.0.0.1:18789",
