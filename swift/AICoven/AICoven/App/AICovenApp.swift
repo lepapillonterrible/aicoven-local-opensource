@@ -121,7 +121,10 @@ struct AICovenApp: App {
         Settings {
             Group {
                 if authService.isAuthenticated, isEncryptionUnlocked {
+                    // Re-keyed on the account, so a pane loaded for one
+                    // account is rebuilt, not shown, for the next.
                     SettingsWorkspaceView()
+                        .id(authService.currentUser?.id)
                 } else {
                     ContentUnavailableView(
                         "Sign in to change settings",

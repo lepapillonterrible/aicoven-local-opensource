@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The account menu in the top-right corner of the workspace. Its rows open
-/// Settings at the place they name.
+/// Settings at the place they name; the last signs the person out.
 struct ProfileMenuView: View {
     var onOpenTab: ((WorkspaceTabType) -> Void)?
     @EnvironmentObject private var authService: AuthService
