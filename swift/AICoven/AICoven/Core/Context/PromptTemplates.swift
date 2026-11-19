@@ -203,7 +203,7 @@ enum PromptTemplates {
             description: "Search for code on GitHub, in one repository or across those the account can reach. Each result names its repository and path.",
             parameters: [
                 ToolParameter(name: "query", type: "string", description: "Search query (GitHub's code search qualifiers, like extension:swift, can be used)", required: true),
-                ToolParameter(name: "repo", type: "string", description: "Repository to search in, as \"owner/name\"", required: false),
+                ToolParameter(name: "repo", type: "string", description: "A repository to search in, as \"owner/name\" (added to the query)", required: false),
                 ToolParameter(name: "page", type: "integer", description: "Page of results (default 1)", required: false),
                 ToolParameter(name: "per_page", type: "integer", description: "Results per page (default 30, at most 100)", required: false)
             ],

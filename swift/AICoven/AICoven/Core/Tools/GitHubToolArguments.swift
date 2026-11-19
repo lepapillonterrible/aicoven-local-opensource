@@ -19,19 +19,31 @@ nonisolated enum GitHubToolArguments {
     static let repositoryMissing = #"Missing or unreadable 'repo'. Give the repository as "owner/name"."#
 
     /// The repository a call names: `repo` as "owner/name", or `owner`
-    /// and `repo` apart. Nil if neither reads as a repository.
+    /// and `repo` apart. Nil if neither reads as a repository. Both are
+    /// read as they were written: nothing is trimmed or mended.
     static func repository(in args: [String: AnyJSONValue]) -> Repository? {
-        guard let repo = text("repo", in: args) else { return nil }
+        guard let repo = args["repo"]?.value as? String else { return nil }
+        // An `owner` left out, or given as null (as models write what they
+        // leave out), is none. One given as anything else must be text.
+        let apart: String?
+        switch args["owner"]?.value {
+        case nil, is NSNull:
+            apart = nil
+        case let given as String:
+            apart = given
+        default:
+            return nil
+        }
         let parts = repo.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         let owner: String
         let name: String
         switch parts.count {
         case 2:
             // "owner/name" says it all; an `owner` beside it must agree.
-            if let apart = text("owner", in: args), apart.caseInsensitiveCompare(parts[0]) != .orderedSame { return nil }
+            if let apart, apart.caseInsensitiveCompare(parts[0]) != .orderedSame { return nil }
             (owner, name) = (parts[0], parts[1])
         case 1:
-            guard let apart = text("owner", in: args) else { return nil }
+            guard let apart else { return nil }
             (owner, name) = (apart, parts[0])
         default:
             return nil
@@ -74,19 +86,13 @@ nonisolated enum GitHubToolArguments {
         min(100, max(1, whole("per_page", in: args) ?? standard))
     }
 
-    /// A text argument that says something.
-    static func text(_ key: String, in args: [String: AnyJSONValue]) -> String? {
-        let value = (args[key]?.value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value?.isEmpty == false ? value : nil
-    }
-
     /// A whole number, given as a number or as digits.
     static func whole(_ key: String, in args: [String: AnyJSONValue]) -> Int? {
         switch args[key]?.value {
         case let number as Int:
             number
-        case let number as Double where number == number.rounded() && abs(number) < 1e9:
-            Int(number)
+        case let number as Double:
+            Int(exactly: number)
         case let digits as String:
             Int(digits.trimmingCharacters(in: .whitespacesAndNewlines))
         default:

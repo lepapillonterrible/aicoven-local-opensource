@@ -18,7 +18,8 @@ final class GitHubToolsTests: XCTestCase {
         }
         XCTAssertEqual(read(["repo": AnyJSONValue("octo/site")]), "octo/site", "As the cloud app names it")
         XCTAssertEqual(read(["owner": AnyJSONValue("octo"), "repo": AnyJSONValue("site")]), "octo/site", "As this app's tools took it")
-        XCTAssertEqual(read(["owner": AnyJSONValue("Octo"), "repo": AnyJSONValue(" octo/site.io ")]), "octo/site.io", "Both, where they agree")
+        XCTAssertEqual(read(["owner": AnyJSONValue("Octo"), "repo": AnyJSONValue("octo/site.io")]), "octo/site.io", "Both, where they agree")
+        XCTAssertEqual(read(["owner": .null, "repo": AnyJSONValue("octo/site")]), "octo/site", "An owner given as null is one left out")
         XCTAssertEqual(read(["repo": AnyJSONValue("octo_org/my-site_2")]), "octo_org/my-site_2")
 
         XCTAssertNil(read(["owner": AnyJSONValue("someone"), "repo": AnyJSONValue("octo/site")]), "Two owners is no repository")
@@ -26,10 +27,14 @@ final class GitHubToolsTests: XCTestCase {
         XCTAssertNil(read(["owner": AnyJSONValue("octo")]))
         XCTAssertNil(read([:]))
         XCTAssertNil(read(["repo": AnyJSONValue(42)]))
-        for notOne in ["octo/site/extra", "octo/", "/site", "../site", "octo/..", "octo/.", "octo/si te", "octo/site?x=1", "octo/site#x", "octo/si%2Fte", "öcto/site"] {
+        XCTAssertNil(read(["owner": AnyJSONValue(42), "repo": AnyJSONValue("octo/site")]), "An owner that is not text")
+        XCTAssertNil(read(["owner": AnyJSONValue(""), "repo": AnyJSONValue("octo/site")]))
+        XCTAssertNil(read(["owner": .null, "repo": AnyJSONValue("site")]))
+        for notOne in ["octo/site/extra", "octo/", "/site", "../site", "octo/..", "octo/.", "octo/si te", " octo/site", "octo/site ", "octo/site\n", "octo/site?x=1", "octo/site#x", "octo/si%2Fte", "öcto/site"] {
             XCTAssertNil(read(["repo": AnyJSONValue(notOne)]), "\(notOne) does not read as a repository")
         }
         XCTAssertNil(read(["owner": AnyJSONValue("octo/x"), "repo": AnyJSONValue("site")]))
+        XCTAssertNil(read(["owner": AnyJSONValue(" octo"), "repo": AnyJSONValue("site")]), "Nothing is trimmed")
     }
 
     func testNumbersAreReadAsNumbersOrDigits_andPagesStayWithinWhatGitHubTakes() {
@@ -49,6 +54,9 @@ final class GitHubToolsTests: XCTestCase {
         XCTAssertEqual(GitHubToolArguments.perPage(in: ["per_page": AnyJSONValue(500)], standard: 30), 100)
         XCTAssertEqual(GitHubToolArguments.perPage(in: ["per_page": AnyJSONValue("5")], standard: 30), 5)
         XCTAssertEqual(GitHubToolArguments.perPage(in: ["per_page": AnyJSONValue(-1)], standard: 30), 1)
+        XCTAssertEqual(GitHubToolArguments.perPage(in: ["per_page": AnyJSONValue(1_000_000_000.0)], standard: 30), 100, "A large whole number is still a number")
+        XCTAssertEqual(GitHubToolArguments.perPage(in: ["per_page": AnyJSONValue(Double.infinity)], standard: 30), 30, "What is no whole number is nothing asked for")
+        XCTAssertEqual(GitHubToolArguments.page(in: ["page": AnyJSONValue(true)]), 1)
     }
 
     func testTwoToolsAreCalledByTheCloudsNames_andTheirOldNamesAreThoseTools() {
@@ -322,9 +330,38 @@ final class GitHubToolsTests: XCTestCase {
         )])
         XCTAssertEqual(result.contextBlock, "[GitHub Code Search: ContentView extension:swift repo:octo/site]\nocto/site: Sources/A.swift\nB.swift\n(Page 2, 2 of 12 results)")
 
-        // As before: a query alone, the first page.
-        _ = await world.call("github.searchCode", ["query": AnyJSONValue("ContentView")])
-        XCTAssertEqual(world.asked.requests.last?.query, ["q": "ContentView", "page": "1", "per_page": "30"])
+        // As before: a query alone, sent as it was written, the first page.
+        _ = await world.call("github.searchCode", ["query": AnyJSONValue(" ContentView ")])
+        XCTAssertEqual(world.asked.requests.last?.query, ["q": " ContentView ", "page": "1", "per_page": "30"])
+    }
+
+    func testASearchGitHubDidNotFinish_saysThereMayBeMore() async throws {
+        let world = try await world { _ in (200, #"{"total_count": 1, "incomplete_results": true, "items": [{"path": "A.swift", "repository": {"full_name": "octo/site"}}]}"#) }
+        defer { world.forget() }
+
+        let result = await world.call("github.searchCode", ["query": AnyJSONValue("ContentView")])
+
+        XCTAssertEqual(result.contextBlock, "[GitHub Code Search: ContentView]\nocto/site: A.swift\n(Page 1, 1 of 1 results; GitHub did not finish looking, so there may be more)")
+    }
+
+    // MARK: - Telling one call from another
+
+    func testACallIsToldFromAnotherByAllItsArguments_andAQueryAloneIsItsQuery() {
+        func signature(_ arguments: [String: AnyJSONValue]) -> String {
+            ChatService.inputForRepeatSignature(.dictionary(arguments))
+        }
+        XCTAssertEqual(signature(["query": AnyJSONValue("  swift concurrency ")]), "swift concurrency", "As it has been")
+        XCTAssertEqual(signature(["q": AnyJSONValue("swift")]), "swift")
+        XCTAssertEqual(ChatService.inputForRepeatSignature(.string(" ls -la ")), "ls -la")
+        XCTAssertEqual(ChatService.inputForRepeatSignature(nil), "")
+
+        let first = signature(["repo": AnyJSONValue("octo/site"), "pull_number": AnyJSONValue(7), "page": AnyJSONValue(1)])
+        let second = signature(["page": AnyJSONValue(2), "pull_number": AnyJSONValue(7), "repo": AnyJSONValue("octo/site")])
+        XCTAssertEqual(first, #"{"page":1,"pull_number":7,"repo":"octo/site"}"#)
+        XCTAssertNotEqual(first, second, "The second page is not the first again")
+        XCTAssertEqual(second, signature(["repo": AnyJSONValue("octo/site"), "pull_number": AnyJSONValue(7), "page": AnyJSONValue(2)]), "In whatever order the arguments came")
+        XCTAssertNotEqual(signature(["query": AnyJSONValue("swift"), "page": AnyJSONValue(1)]), signature(["query": AnyJSONValue("swift"), "page": AnyJSONValue(2)]))
+        XCTAssertNotEqual(signature(["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue("A.md")]), signature(["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue("B.md")]))
     }
 
     func testListFiles_tellsAFolderFromAFile_andTheTopOfARepositoryIsItsContents() async throws {

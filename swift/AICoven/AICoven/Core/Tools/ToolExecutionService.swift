@@ -812,10 +812,12 @@ actor ToolExecutionService {
             return await .error(tool: toolCall.name, message: "GitHub not connected.")
         }
 
-        guard let asked = GitHubToolArguments.text("query", in: toolCall.args) else {
+        guard let asked = extractString(from: toolCall.args, key: "query") else {
             return await .validationError(tool: toolCall.name, message: "Missing required argument: 'query'", field: "query")
         }
-        // A repository named beside the query keeps the search to it.
+        // A repository named beside the query is added to it, as the
+        // cloud app adds it. (A query that names repositories of its own
+        // still searches those too: this is no limit on where it looks.)
         var query = asked
         if toolCall.args["repo"] != nil {
             guard let repository = GitHubToolArguments.repository(in: toolCall.args) else {
@@ -837,9 +839,12 @@ actor ToolExecutionService {
                 let within = (item["repository"] as? [String: Any])?["full_name"] as? String
                 return within.map { "\($0): \(path)" } ?? path
             }
+            // GitHub says so when it stopped looking before it had looked
+            // everywhere.
+            let incomplete = result["incomplete_results"] as? Bool == true
             let block = "[GitHub Code Search: \(query)]\n"
                 + (found.isEmpty ? "(No results on this page)" : found.joined(separator: "\n"))
-                + "\n(Page \(page), \(found.count) of \(total) results)"
+                + "\n(Page \(page), \(found.count) of \(total) results\(incomplete ? "; GitHub did not finish looking, so there may be more" : ""))"
             return await .success(tool: toolCall.name, result: ["total_count": AnyJSONValue(total), "page": AnyJSONValue(page)], contextBlock: block)
         } catch {
             return await .error(tool: toolCall.name, message: error.localizedDescription)
