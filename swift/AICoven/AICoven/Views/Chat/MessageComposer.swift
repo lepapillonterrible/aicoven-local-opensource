@@ -118,6 +118,16 @@ struct MessageComposer: View {
         attachingTask != nil
     }
 
+    /// The Mac's file panel is open: it does not block the window, and a
+    /// second one would leave the first's files untaken.
+    private var isChoosingOnTheMac: Bool {
+        #if os(macOS)
+        choosingFiles != nil
+        #else
+        false
+        #endif
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
             if let attachFailure {
@@ -353,7 +363,7 @@ struct MessageComposer: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(isBusy || isDisabled)
+        .disabled(isBusy || isDisabled || isChoosingOnTheMac)
         .accessibilityLabel("Attach a file")
         .accessibilityIdentifier("composer-attach")
         #if os(macOS)
@@ -418,7 +428,7 @@ struct MessageComposer: View {
             .accessibilityHint("Stops \(recipientName)'s reply")
             .accessibilityIdentifier("composer-stop")
             #if os(macOS)
-                .help("Stop (⌘.)")
+                .help("Stop")
             #endif
         case .send:
             Button(action: send) {

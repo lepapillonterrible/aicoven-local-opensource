@@ -22,7 +22,6 @@ actor UploadService {
         let name = url.lastPathComponent
         let mime = mimeType(for: url.pathExtension)
         let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize
-        AppErrorReporter.log(message: "Treating attachment as local-only file: \(name)", context: "UploadService.upload.local")
         return FileAttachmentDetail(
             id: UUID().uuidString,
             name: name,

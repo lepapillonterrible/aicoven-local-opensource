@@ -86,12 +86,10 @@ struct GrowingTextEditor: NSViewRepresentable {
         NSFont.preferredFont(forTextStyle: .body)
     }
 
-    static var emptyHeight: CGFloat {
-        GrowingTextEditorLayout.clampedHeight(
-            usedGlyphHeight: NSLayoutManager().defaultLineHeight(for: font),
-            verticalInset: GrowingTextEditorLayout.verticalInset
-        )
-    }
+    static let emptyHeight = GrowingTextEditorLayout.clampedHeight(
+        usedGlyphHeight: NSLayoutManager().defaultLineHeight(for: font),
+        verticalInset: GrowingTextEditorLayout.verticalInset
+    )
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -248,8 +246,10 @@ struct GrowingTextEditor: NSViewRepresentable {
         var onSend: (() -> Void)?
 
         override func keyDown(with event: NSEvent) {
-            // Return, or Enter on the keypad.
-            let isEnter = event.keyCode == 36 || event.keyCode == 76
+            // Return, or Enter on the keypad. While an input method is
+            // composing (Japanese, Chinese), Return is its own: it confirms
+            // what is being composed, and sends nothing.
+            let isEnter = (event.keyCode == 36 || event.keyCode == 76) && !hasMarkedText()
             if isEnter, event.modifierFlags.contains(.shift) {
                 insertNewline(nil)
             } else if isEnter, let onSend {
