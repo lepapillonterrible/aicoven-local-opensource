@@ -120,7 +120,7 @@ The tools layer is provider-agnostic and designed to work with whatever keys you
 - **Attachment analysis** – Summarization/QA over attached files and images using the best available vision/chat model.
 - **Image generation** (`image.generate`) – A model can make an image with your OpenAI key; it is kept on the device, encrypted, and shown under the reply.
 - **Connected apps** – GitHub repository tools (read/write files, create branches/PRs, search code) and Google Drive file tools (list, read, upload, Sheets read/write), authenticated via user-provided tokens.
-- **MCP server tools** – Any tools exposed by connected [MCP](https://modelcontextprotocol.io) servers (e.g. email via Zapier, calendar, Slack). Tools are discovered automatically via `tools/list`, cached locally, and executed via JSON-RPC over Streamable HTTP. Semantic tool selection uses embedding-based matching when many tools are available.
+- **MCP server tools** – Any tools exposed by connected [MCP](https://modelcontextprotocol.io) servers (e.g. email via Zapier, calendar, Slack). Tools are discovered automatically via `tools/list`, cached locally, and executed via JSON-RPC over Streamable HTTP. A tool the server marks as read-only is used directly; any other asks you first, showing what it will be sent. Semantic tool selection uses embedding-based matching when many tools are available.
 
 These tools are available both to the autonomous `AgentRunner` and to the interactive chat UI via the enhanced message composer.
 

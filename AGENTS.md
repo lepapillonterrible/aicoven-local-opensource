@@ -147,7 +147,7 @@ This is the local-first backbone intended to replace many backend-oriented servi
   - `AgentProfile` describes agent types, allowed tools, memory scopes, and safety constraints.
 
 - `Core/Tools/`
-  - `ToolExecutionService` routes tool calls including shell commands, connected-app tools (GitHub, Google Drive), and MCP server tools. A tool that changes something (a shell command, a file write, a GitHub or Google write) first asks the person through `ToolApprovals`, which shows one approval at a time beside the thread (`Views/Chat/ApprovalBlock.swift`). An approval asked while the person is composing (the composer has focus and its text changed in the last three seconds, or the on-screen keyboard is up) is held back, and comes in when they send, pause, or leave the composer.
+  - `ToolExecutionService` routes tool calls including shell commands, connected-app tools (GitHub, Google Drive), and MCP server tools. A tool that changes something (a shell command, a file write, a GitHub or Google write, or a tool of an MCP server that the server does not mark as read-only) first asks the person through `ToolApprovals`, which shows one approval at a time beside the thread (`Views/Chat/ApprovalBlock.swift`). An approval asked while the person is composing (the composer has focus and its text changed in the last three seconds, or the on-screen keyboard is up) is held back, and comes in when they send, pause, or leave the composer.
 
 - `Features/MCP/`
   - `MCPClient` is an actor-based MCP (Model Context Protocol) client over Streamable HTTP: it lists a server's tools (`tools/list`, every page) and calls them (`tools/call`), in JSON-RPC 2.0.

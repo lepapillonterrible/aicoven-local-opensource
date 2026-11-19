@@ -241,7 +241,7 @@ actor ToolExecutionService {
 
         // 4. MCP Toll Routing
         if toolCall.name.hasPrefix("mcp.") {
-            return await executeMCPTool(toolCall: toolCall)
+            return await executeMCPTool(toolCall: toolCall, threadID: threadID)
         }
 
         // 5. Built-in Routing
@@ -414,7 +414,7 @@ actor ToolExecutionService {
 
     // MARK: - MCP Tool Implementations
 
-    private func executeMCPTool(toolCall: ParsedToolCall) async -> ToolExecutionResult {
+    private func executeMCPTool(toolCall: ParsedToolCall, threadID: String?) async -> ToolExecutionResult {
         // e.g. "mcp.my_server.tool_name"
         let parts = toolCall.name.split(separator: ".", maxSplits: 2)
         guard parts.count == 3 else {
@@ -439,11 +439,24 @@ actor ToolExecutionService {
 
         // Fetch the stored auth token (Bearer/API key) from keychain so
         // runtime tool calls use the same auth path as MCP connection tests.
-        let token = try? await connectedAccountsService.getMCPToken(forServerId: server.id)
-        let client = MCPClient(server: server, token: token)
         // The tool as the server listed it: the current protocol sends the
         // arguments its schema marks for it as headers too.
         let listed = server.cachedTools?.first { $0.name == actionName }
+
+        // A tool the server marks as only reading is used without asking.
+        // Any other (one it does not mark, or does not list) may change
+        // something on the person's behalf, so they are asked first.
+        if listed?.readOnlyHint != true {
+            let asked = await answer(in: threadID) {
+                .mcp(server: server.name, address: Self.shownAddress(of: server), tool: actionName, arguments: toolCall.args, threadID: $0)
+            }
+            if let refusal = await ToolExecutionResult.refusal(asked, tool: toolCall.name) {
+                return refusal
+            }
+        }
+
+        let token = try? await connectedAccountsService.getMCPToken(forServerId: server.id)
+        let client = mcpClient(server, token)
 
         do {
             let items = try await client.callTool(name: actionName, arguments: toolCall.args, tool: listed)
@@ -959,6 +972,22 @@ actor ToolExecutionService {
     /// Asks the person, in the thread the tool call came from, about what
     /// `describe` says is about to happen, and waits for the answer. Without
     /// a thread there is nowhere to ask and no one to answer.
+    /// Where a server is, as an approval shows it: its host (and port, if
+    /// it names one), without the path or anything else of its address,
+    /// which can carry a key.
+    nonisolated static func shownAddress(of server: MCPServerAccount) -> String {
+        guard let url = URL(string: server.serverUrl), let host = url.host, !host.isEmpty else { return "an address that cannot be read" }
+        return url.port.map { "\(host):\($0)" } ?? host
+    }
+
+    /// Makes the client a server's tool is called with; tests give one
+    /// that answers from a script.
+    private var mcpClient: @Sendable (MCPServerAccount, String?) -> MCPClient = { MCPClient(server: $0, token: $1) }
+
+    func setMCPClient(_ make: @escaping @Sendable (MCPServerAccount, String?) -> MCPClient) {
+        mcpClient = make
+    }
+
     private func answer(in threadID: String?, _ describe: @Sendable (_ threadID: String) -> ToolApproval) async -> ApprovalAnswer {
         guard let threadID else { return .notAsked }
         return await ask(describe(threadID))
