@@ -123,7 +123,8 @@ enum PromptTemplates {
             ]
         ),
 
-        // GitHub tools
+        // GitHub tools. A repository is named as the cloud app names it,
+        // in one argument: "owner/name".
         ToolDefinition(
             name: "github.listRepos",
             description: "List repositories accessible to the connected GitHub account.",
@@ -131,96 +132,102 @@ enum PromptTemplates {
             example: #"{"tool": "github.listRepos", "input": {}, "reason": "Find available repositories"}"#
         ),
         ToolDefinition(
+            name: "github.getRepo",
+            description: "Get a GitHub repository's full name, default branch and description.",
+            parameters: [
+                ToolParameter(name: "repo", type: "string", description: "Repository as \"owner/name\"", required: true)
+            ],
+            example: #"{"tool": "github.getRepo", "input": {"repo": "user/project"}, "reason": "Find the default branch"}"#
+        ),
+        ToolDefinition(
             name: "github.readFile",
             description: "Read a file from a GitHub repository.",
             parameters: [
-                ToolParameter(name: "owner", type: "string", description: "Repository owner", required: true),
-                ToolParameter(name: "repo", type: "string", description: "Repository name", required: true),
+                ToolParameter(name: "repo", type: "string", description: "Repository as \"owner/name\"", required: true),
                 ToolParameter(name: "path", type: "string", description: "File path in repository", required: true),
                 ToolParameter(name: "ref", type: "string", description: "Branch or commit SHA", required: false)
             ],
-            example: #"{"tool": "github.readFile", "input": {"owner": "user", "repo": "project", "path": "README.md"}, "reason": "Read documentation"}"#,
+            example: #"{"tool": "github.readFile", "input": {"repo": "user/project", "path": "README.md"}, "reason": "Read documentation"}"#,
             inputExamples: [
-                ToolInputExample(description: "Read a file from main", input: ["owner": "apple", "repo": "swift", "path": "README.md"]),
-                ToolInputExample(description: "Read from a specific branch", input: ["owner": "user", "repo": "project", "path": "src/main.swift", "ref": "feature/new"]),
+                ToolInputExample(description: "Read a file from main", input: ["repo": "apple/swift", "path": "README.md"]),
+                ToolInputExample(description: "Read from a specific branch", input: ["repo": "user/project", "path": "src/main.swift", "ref": "feature/new"]),
             ]
         ),
         ToolDefinition(
             name: "github.writeFile",
             description: "Create or update a file in a GitHub repository.",
             parameters: [
-                ToolParameter(name: "owner", type: "string", description: "Repository owner", required: true),
-                ToolParameter(name: "repo", type: "string", description: "Repository name", required: true),
+                ToolParameter(name: "repo", type: "string", description: "Repository as \"owner/name\"", required: true),
                 ToolParameter(name: "path", type: "string", description: "File path", required: true),
                 ToolParameter(name: "content", type: "string", description: "File content", required: true),
                 ToolParameter(name: "message", type: "string", description: "Commit message", required: true),
                 ToolParameter(name: "branch", type: "string", description: "Target branch", required: false),
                 ToolParameter(name: "sha", type: "string", description: "SHA of file being replaced (for updates)", required: false)
             ],
-            example: "{\"tool\": \"github.writeFile\", \"input\": {\"owner\": \"user\", \"repo\": \"project\", \"path\": \"README.md\", \"content\": \"Title\", \"message\": \"Update readme\"}, \"reason\": \"Update documentation\"}"
+            example: "{\"tool\": \"github.writeFile\", \"input\": {\"repo\": \"user/project\", \"path\": \"README.md\", \"content\": \"Title\", \"message\": \"Update readme\"}, \"reason\": \"Update documentation\"}"
         ),
         ToolDefinition(
             name: "github.listFiles",
-            description: "List files in a GitHub repository directory.",
+            description: "List files in a GitHub repository directory. A folder's name ends with a slash.",
             parameters: [
-                ToolParameter(name: "owner", type: "string", description: "Repository owner", required: true),
-                ToolParameter(name: "repo", type: "string", description: "Repository name", required: true),
+                ToolParameter(name: "repo", type: "string", description: "Repository as \"owner/name\"", required: true),
                 ToolParameter(name: "path", type: "string", description: "Directory path (empty for root)", required: false),
                 ToolParameter(name: "ref", type: "string", description: "Branch or commit SHA", required: false)
             ],
-            example: #"{"tool": "github.listFiles", "input": {"owner": "user", "repo": "project", "path": "src"}, "reason": "Explore source directory"}"#
+            example: #"{"tool": "github.listFiles", "input": {"repo": "user/project", "path": "src"}, "reason": "Explore source directory"}"#
         ),
         ToolDefinition(
             name: "github.createBranch",
             description: "Create a new branch from an existing branch.",
             parameters: [
-                ToolParameter(name: "owner", type: "string", description: "Repository owner", required: true),
-                ToolParameter(name: "repo", type: "string", description: "Repository name", required: true),
+                ToolParameter(name: "repo", type: "string", description: "Repository as \"owner/name\"", required: true),
                 ToolParameter(name: "base_branch", type: "string", description: "Branch to create from", required: true),
                 ToolParameter(name: "new_branch", type: "string", description: "Name for new branch", required: true)
             ],
-            example: #"{"tool": "github.createBranch", "input": {"owner": "user", "repo": "project", "base_branch": "main", "new_branch": "feature/new"}, "reason": "Create feature branch"}"#
+            example: #"{"tool": "github.createBranch", "input": {"repo": "user/project", "base_branch": "main", "new_branch": "feature/new"}, "reason": "Create feature branch"}"#
         ),
         ToolDefinition(
             name: "github.createPR",
             description: "Create a pull request.",
             parameters: [
-                ToolParameter(name: "owner", type: "string", description: "Repository owner", required: true),
-                ToolParameter(name: "repo", type: "string", description: "Repository name", required: true),
+                ToolParameter(name: "repo", type: "string", description: "Repository as \"owner/name\"", required: true),
                 ToolParameter(name: "title", type: "string", description: "PR title", required: true),
                 ToolParameter(name: "head", type: "string", description: "Source branch", required: true),
                 ToolParameter(name: "base", type: "string", description: "Target branch", required: true),
                 ToolParameter(name: "body", type: "string", description: "PR description", required: false)
             ],
-            example: #"{"tool": "github.createPR", "input": {"owner": "user", "repo": "project", "title": "Add feature", "head": "feature/new", "base": "main"}, "reason": "Open PR for review"}"#
+            example: #"{"tool": "github.createPR", "input": {"repo": "user/project", "title": "Add feature", "head": "feature/new", "base": "main"}, "reason": "Open PR for review"}"#
         ),
         ToolDefinition(
             name: "github.searchCode",
-            description: "Search for code across GitHub repositories.",
+            description: "Search for code on GitHub, in one repository or across those the account can reach. Each result names its repository and path.",
             parameters: [
-                ToolParameter(name: "query", type: "string", description: "Search query (can include qualifiers like repo:owner/name)", required: true)
+                ToolParameter(name: "query", type: "string", description: "Search query (GitHub's code search qualifiers, like extension:swift, can be used)", required: true),
+                ToolParameter(name: "repo", type: "string", description: "Repository to search in, as \"owner/name\"", required: false),
+                ToolParameter(name: "page", type: "integer", description: "Page of results (default 1)", required: false),
+                ToolParameter(name: "per_page", type: "integer", description: "Results per page (default 30, at most 100)", required: false)
             ],
-            example: #"{"tool": "github.searchCode", "input": {"query": "repo:user/project extension:swift"}, "reason": "Find Swift files in repository"}"#
+            example: #"{"tool": "github.searchCode", "input": {"query": "ContentView extension:swift", "repo": "user/project"}, "reason": "Find where the view is defined"}"#
         ),
         ToolDefinition(
-            name: "github.getPR",
+            name: "github.getPullRequest",
             description: "Get details of a pull request including title, description, state, and diff statistics.",
             parameters: [
-                ToolParameter(name: "owner", type: "string", description: "Repository owner", required: true),
-                ToolParameter(name: "repo", type: "string", description: "Repository name", required: true),
+                ToolParameter(name: "repo", type: "string", description: "Repository as \"owner/name\"", required: true),
                 ToolParameter(name: "pull_number", type: "integer", description: "Pull request number", required: true)
             ],
-            example: #"{"tool": "github.getPR", "input": {"owner": "user", "repo": "project", "pull_number": 42}, "reason": "Review pull request details"}"#
+            example: #"{"tool": "github.getPullRequest", "input": {"repo": "user/project", "pull_number": 42}, "reason": "Review pull request details"}"#
         ),
         ToolDefinition(
-            name: "github.listPRFiles",
-            description: "List all files changed in a pull request with their patches/diffs.",
+            name: "github.listPullRequestFiles",
+            description: "List the files changed in a pull request with their patches/diffs, a page at a time.",
             parameters: [
-                ToolParameter(name: "owner", type: "string", description: "Repository owner", required: true),
-                ToolParameter(name: "repo", type: "string", description: "Repository name", required: true),
-                ToolParameter(name: "pull_number", type: "integer", description: "Pull request number", required: true)
+                ToolParameter(name: "repo", type: "string", description: "Repository as \"owner/name\"", required: true),
+                ToolParameter(name: "pull_number", type: "integer", description: "Pull request number", required: true),
+                ToolParameter(name: "page", type: "integer", description: "Page of files (default 1)", required: false),
+                ToolParameter(name: "per_page", type: "integer", description: "Files per page (default 50, at most 100)", required: false)
             ],
-            example: #"{"tool": "github.listPRFiles", "input": {"owner": "user", "repo": "project", "pull_number": 42}, "reason": "See what files changed in PR"}"#
+            example: #"{"tool": "github.listPullRequestFiles", "input": {"repo": "user/project", "pull_number": 42}, "reason": "See what files changed in PR"}"#
         ),
 
         // Google Drive tools
@@ -648,9 +655,9 @@ enum PromptTemplates {
 
     /// GitHub tools for repository operations.
     static let githubTools: Set<String> = [
-        "github.listRepos", "github.readFile", "github.writeFile",
+        "github.listRepos", "github.getRepo", "github.readFile", "github.writeFile",
         "github.listFiles", "github.createBranch", "github.createPR", "github.searchCode",
-        "github.getPR", "github.listPRFiles"
+        "github.getPullRequest", "github.listPullRequestFiles"
     ]
 
     /// Google Drive/Sheets tools.

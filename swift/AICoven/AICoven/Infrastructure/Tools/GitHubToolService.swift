@@ -11,16 +11,23 @@ actor GitHubToolService {
     private let baseURL = "https://api.github.com"
 
     /// Connected accounts service for token management
-    private let accountsService = ConnectedAccountsService.shared
+    private let accountsService: ConnectedAccountsService
 
-    private init() {}
+    private let session: URLSession
+
+    /// The app's own; a test gives its own accounts and a session that
+    /// answers in GitHub's place.
+    init(accounts: ConnectedAccountsService = .shared, session: URLSession = .shared) {
+        accountsService = accounts
+        self.session = session
+    }
 
     // MARK: - HTTP Helpers
 
     /// Make an authenticated request to GitHub API
     private func request(
         method: String,
-        path: String,
+        steps: [String],
         accountId: String,
         queryParams: [String: String]? = nil,
         body: [String: Any]? = nil,
@@ -30,13 +37,16 @@ actor GitHubToolService {
         let accessToken = try await accountsService.getAccessToken(forAccountId: accountId)
 
         // Build URL
-        var components = URLComponents(string: baseURL + path)!
+        guard let path = Self.path(of: steps), var components = URLComponents(string: baseURL) else {
+            throw GitHubError.invalidURL(path: steps.joined(separator: "/"))
+        }
+        components.percentEncodedPath = path
         if let queryParams {
-            components.queryItems = queryParams.map { URLQueryItem(name: $0.key, value: $0.value) }
+            components.queryItems = queryParams.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
         }
 
         guard let url = components.url else {
-            throw GitHubError.invalidURL(path: path)
+            throw GitHubError.invalidURL(path: steps.joined(separator: "/"))
         }
 
         // Build request
@@ -53,7 +63,7 @@ actor GitHubToolService {
         }
 
         // Execute request
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw GitHubError.invalidResponse
@@ -66,6 +76,29 @@ actor GitHubToolService {
         }
 
         return (data, httpResponse)
+    }
+
+    /// The path of a request, from its steps. Each step is written so that
+    /// it stays one step, whatever it holds: a name given by a model cannot
+    /// add a step, a query or a fragment, nor climb out with "." or "..".
+    /// Nil if a step is empty or is one of those two.
+    nonisolated static func path(of steps: [String]) -> String? {
+        var unreserved = CharacterSet.alphanumerics
+        unreserved.insert(charactersIn: "-._~")
+        var written: [String] = []
+        for step in steps {
+            guard !step.isEmpty, step != ".", step != "..", let encoded = step.addingPercentEncoding(withAllowedCharacters: unreserved) else { return nil }
+            written.append(encoded)
+        }
+        return "/" + written.joined(separator: "/")
+    }
+
+    /// The steps of a path within a repository, or of a branch's name:
+    /// what lies between its slashes, without one at either end.
+    nonisolated static func steps(of path: String) -> [String] {
+        let within = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        // The top of a repository has no steps.
+        return within.isEmpty ? [] : within.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
     }
 
     /// Parse GitHub error response into actionable message
@@ -108,7 +141,7 @@ actor GitHubToolService {
 
         let (data, response) = try await request(
             method: "GET",
-            path: "/user/repos",
+            steps: ["user", "repos"],
             accountId: accountId,
             queryParams: params
         )
@@ -128,7 +161,7 @@ actor GitHubToolService {
     func getRepo(accountId: String, owner: String, repo: String) async throws -> [String: Any] {
         let (data, response) = try await request(
             method: "GET",
-            path: "/repos/\(owner)/\(repo)",
+            steps: ["repos", owner, repo],
             accountId: accountId
         )
 
@@ -158,7 +191,7 @@ actor GitHubToolService {
 
         let (data, response) = try await request(
             method: "GET",
-            path: "/repos/\(owner)/\(repo)/contents/\(path)",
+            steps: ["repos", owner, repo, "contents"] + Self.steps(of: path),
             accountId: accountId,
             queryParams: params.isEmpty ? nil : params
         )
@@ -190,7 +223,7 @@ actor GitHubToolService {
 
         let (data, response) = try await request(
             method: "GET",
-            path: "/repos/\(owner)/\(repo)/contents/\(path)",
+            steps: ["repos", owner, repo, "contents"] + Self.steps(of: path),
             accountId: accountId,
             queryParams: params.isEmpty ? nil : params
         )
@@ -241,7 +274,7 @@ actor GitHubToolService {
 
         let (data, response) = try await request(
             method: "PUT",
-            path: "/repos/\(owner)/\(repo)/contents/\(path)",
+            steps: ["repos", owner, repo, "contents"] + Self.steps(of: path),
             accountId: accountId,
             body: body,
             timeout: 20.0
@@ -271,7 +304,7 @@ actor GitHubToolService {
 
         let (data, response) = try await request(
             method: "GET",
-            path: "/repos/\(owner)/\(repo)/contents/\(path)",
+            steps: ["repos", owner, repo, "contents"] + Self.steps(of: path),
             accountId: accountId,
             queryParams: params.isEmpty ? nil : params
         )
@@ -314,7 +347,7 @@ actor GitHubToolService {
 
         let (data, response) = try await request(
             method: "GET",
-            path: "/repos/\(owner)/\(repo)/branches",
+            steps: ["repos", owner, repo, "branches"],
             accountId: accountId,
             queryParams: params
         )
@@ -341,7 +374,7 @@ actor GitHubToolService {
         // 1. Get the SHA of the base branch
         let (refData, refResponse) = try await request(
             method: "GET",
-            path: "/repos/\(owner)/\(repo)/git/refs/heads/\(baseBranch)",
+            steps: ["repos", owner, repo, "git", "refs", "heads"] + Self.steps(of: baseBranch),
             accountId: accountId
         )
 
@@ -363,7 +396,7 @@ actor GitHubToolService {
 
         let (createData, createResponse) = try await request(
             method: "POST",
-            path: "/repos/\(owner)/\(repo)/git/refs",
+            steps: ["repos", owner, repo, "git", "refs"],
             accountId: accountId,
             body: body
         )
@@ -375,7 +408,7 @@ actor GitHubToolService {
                 // Fetch existing branch info
                 let (existingData, existingResponse) = try await request(
                     method: "GET",
-                    path: "/repos/\(owner)/\(repo)/git/refs/heads/\(newBranch)",
+                    steps: ["repos", owner, repo, "git", "refs", "heads"] + Self.steps(of: newBranch),
                     accountId: accountId
                 )
 
@@ -426,7 +459,7 @@ actor GitHubToolService {
 
         let (data, response) = try await request(
             method: "POST",
-            path: "/repos/\(owner)/\(repo)/pulls",
+            steps: ["repos", owner, repo, "pulls"],
             accountId: accountId,
             body: payload,
             timeout: 20.0
@@ -452,7 +485,7 @@ actor GitHubToolService {
     ) async throws -> [String: Any] {
         let (data, response) = try await request(
             method: "GET",
-            path: "/repos/\(owner)/\(repo)/pulls/\(pullNumber)",
+            steps: ["repos", owner, repo, "pulls", String(pullNumber)],
             accountId: accountId
         )
 
@@ -473,13 +506,14 @@ actor GitHubToolService {
         owner: String,
         repo: String,
         pullNumber: Int,
+        page: Int = 1,
         perPage: Int = 50
     ) async throws -> [[String: Any]] {
-        let params = ["per_page": String(min(perPage, 100))]
+        let params = ["page": String(max(page, 1)), "per_page": String(min(perPage, 100))]
 
         let (data, response) = try await request(
             method: "GET",
-            path: "/repos/\(owner)/\(repo)/pulls/\(pullNumber)/files",
+            steps: ["repos", owner, repo, "pulls", String(pullNumber), "files"],
             accountId: accountId,
             queryParams: params
         )
@@ -512,7 +546,7 @@ actor GitHubToolService {
 
         let (data, response) = try await request(
             method: "GET",
-            path: "/repos/\(owner)/\(repo)/issues",
+            steps: ["repos", owner, repo, "issues"],
             accountId: accountId,
             queryParams: params
         )
@@ -543,7 +577,7 @@ actor GitHubToolService {
 
         let (data, response) = try await request(
             method: "POST",
-            path: "/repos/\(owner)/\(repo)/issues",
+            steps: ["repos", owner, repo, "issues"],
             accountId: accountId,
             body: payload,
             timeout: 20.0
@@ -566,16 +600,18 @@ actor GitHubToolService {
     func searchCode(
         accountId: String,
         query: String,
+        page: Int = 1,
         perPage: Int = 30
     ) async throws -> [String: Any] {
         let params = [
             "q": query,
+            "page": String(max(page, 1)),
             "per_page": String(min(perPage, 100))
         ]
 
         let (data, response) = try await request(
             method: "GET",
-            path: "/search/code",
+            steps: ["search", "code"],
             accountId: accountId,
             queryParams: params,
             timeout: 20.0

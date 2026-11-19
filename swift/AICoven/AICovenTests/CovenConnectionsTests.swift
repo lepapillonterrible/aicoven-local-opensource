@@ -27,7 +27,7 @@ final class CovenConnectionsTests: XCTestCase {
         for tool in ["github.writeFile", "github.write_file", "github.createBranch", "github.create_branch", "github.createPR", "github.create_pr", "google_drive.uploadFile", "google_drive.upload_file", "google_sheets.writeValues", "google_sheets.write_values"] {
             XCTAssertTrue(CovenConnectionRules.isWriteTool(tool), tool)
         }
-        for tool in ["github.readFile", "github.listRepos", "github.searchCode", "github.getPR", "github.listPRFiles", "google_drive.listFiles", "google_drive.readFile", "google_sheets.readValues", "file.write"] {
+        for tool in ["github.readFile", "github.listRepos", "github.searchCode", "github.getRepo", "github.getPullRequest", "github.listPullRequestFiles", "google_drive.listFiles", "google_drive.readFile", "google_sheets.readValues", "file.write"] {
             XCTAssertFalse(CovenConnectionRules.isWriteTool(tool), tool)
         }
         // Only the spellings the executor takes: anything else is no tool of its.

@@ -10,9 +10,12 @@ actor ToolExecutionService {
     private let fileService = FileToolService.shared
     private let shellService = ShellToolService.shared
     private let toolService: any ChatToolService
-    private let githubService = GitHubToolService.shared
+    private let githubService: GitHubToolService
     private let googleDriveService = GoogleDriveToolService.shared
-    private let connectedAccountsService = ConnectedAccountsService.shared
+    private let connectedAccountsService: ConnectedAccountsService
+
+    /// Whether the person has the Tools Pack.
+    private let hasToolsPack: @Sendable () async -> Bool
 
     /// Asks the person before a tool changes something, and waits for the
     /// answer.
@@ -26,20 +29,31 @@ actor ToolExecutionService {
         toolService = ToolService.shared
         ask = Self.askInItsThread
         covenConnections = { await CovenService.shared.connections(forThread: $0) }
+        githubService = .shared
+        connectedAccountsService = .shared
+        hasToolsPack = Self.hasBoughtTheToolsPack
     }
 
     /// Test-friendly initializer that accepts a mock tool service, an
     /// answer to every approval in place of the person's, and a coven's
     /// choice of connections in place of the thread's (none made, unless
-    /// given).
+    /// given). It can also be given its own connected accounts, a GitHub
+    /// service that asks a scripted server, and whether the Tools Pack
+    /// was bought.
     init(
         toolService: any ChatToolService,
         ask: @escaping @Sendable (ToolApproval) async -> ApprovalAnswer = { _ in .denied },
-        covenConnections: @escaping @Sendable (_ threadID: String) async -> CovenConnections? = { _ in nil }
+        covenConnections: @escaping @Sendable (_ threadID: String) async -> CovenConnections? = { _ in nil },
+        connectedAccounts: ConnectedAccountsService = .shared,
+        githubService: GitHubToolService = .shared,
+        hasToolsPack: @escaping @Sendable () async -> Bool = ToolExecutionService.hasBoughtTheToolsPack
     ) {
         self.toolService = toolService
         self.ask = ask
         self.covenConnections = covenConnections
+        connectedAccountsService = connectedAccounts
+        self.githubService = githubService
+        self.hasToolsPack = hasToolsPack
     }
 
     // Configuration
@@ -66,8 +80,12 @@ actor ToolExecutionService {
     }
 
     /// Check the Tools Pack entitlement on the main actor.
-    private func hasToolsPackEntitlement() async -> Bool {
+    nonisolated static let hasBoughtTheToolsPack: @Sendable () async -> Bool = {
         await MainActor.run { StoreService.shared.hasToolsPack }
+    }
+
+    private func hasToolsPackEntitlement() async -> Bool {
+        await hasToolsPack()
     }
 
     // MARK: - Image generation
@@ -217,7 +235,11 @@ actor ToolExecutionService {
 
     // MARK: - Execution
 
-    func execute(toolCall: ParsedToolCall, agentType: String, threadID: String? = nil) async -> ToolExecutionResult {
+    func execute(toolCall called: ParsedToolCall, agentType: String, threadID: String? = nil) async -> ToolExecutionResult {
+        // A tool called by a name it had before is the tool as it is named
+        // now: allowed, refused and run as that one.
+        let toolCall = ParsedToolCall(name: GitHubToolArguments.offeredName(of: called.name), args: called.args, reason: called.reason)
+
         // 1. Rate Limiting
         if isRateLimited() {
             return await .error(
@@ -380,6 +402,9 @@ actor ToolExecutionService {
         case "github.listRepos", "github.list_repos":
             return await executeGitHubListRepos(toolCall: toolCall)
 
+        case "github.getRepo", "github.get_repo":
+            return await executeGitHubGetRepo(toolCall: toolCall)
+
         case "github.readFile", "github.read_file":
             return await executeGitHubReadFile(toolCall: toolCall)
 
@@ -398,10 +423,10 @@ actor ToolExecutionService {
         case "github.searchCode", "github.search_code":
             return await executeGitHubSearchCode(toolCall: toolCall)
 
-        case "github.getPR", "github.get_pr":
+        case "github.getPullRequest", "github.get_pull_request", "github.get_pr":
             return await executeGitHubGetPR(toolCall: toolCall)
 
-        case "github.listPRFiles", "github.list_pr_files":
+        case "github.listPullRequestFiles", "github.list_pull_request_files", "github.list_pr_files":
             return await executeGitHubListPRFiles(toolCall: toolCall)
 
         // --- Google Drive Tools ---
@@ -568,11 +593,13 @@ actor ToolExecutionService {
             return await .error(tool: toolCall.name, message: "GitHub not connected.")
         }
 
-        guard let owner = extractString(from: toolCall.args, key: "owner"),
-              let repo = extractString(from: toolCall.args, key: "repo"),
-              let path = extractString(from: toolCall.args, key: "path") else {
-            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo', 'path'")
+        guard let repository = GitHubToolArguments.repository(in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: GitHubToolArguments.repositoryMissing, field: "repo")
         }
+        guard let path = extractString(from: toolCall.args, key: "path") else {
+            return await .validationError(tool: toolCall.name, message: "Missing required argument: 'path'", field: "path")
+        }
+        let (owner, repo) = (repository.owner, repository.name)
 
         let ref = extractString(from: toolCall.args, key: "ref")
 
@@ -597,13 +624,15 @@ actor ToolExecutionService {
             return await .error(tool: toolCall.name, message: "GitHub not connected.")
         }
 
-        guard let owner = extractString(from: toolCall.args, key: "owner"),
-              let repo = extractString(from: toolCall.args, key: "repo"),
-              let path = extractString(from: toolCall.args, key: "path"),
+        guard let repository = GitHubToolArguments.repository(in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: GitHubToolArguments.repositoryMissing, field: "repo")
+        }
+        guard let path = extractString(from: toolCall.args, key: "path"),
               let content = extractString(from: toolCall.args, key: "content"),
               let message = extractString(from: toolCall.args, key: "message") else {
-            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo', 'path', 'content', 'message'")
+            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'path', 'content', 'message'")
         }
+        let (owner, repo) = (repository.owner, repository.name)
 
         let branch = extractString(from: toolCall.args, key: "branch")
         let sha = extractString(from: toolCall.args, key: "sha")
@@ -636,10 +665,10 @@ actor ToolExecutionService {
             return await .error(tool: toolCall.name, message: "GitHub not connected.")
         }
 
-        guard let owner = extractString(from: toolCall.args, key: "owner"),
-              let repo = extractString(from: toolCall.args, key: "repo") else {
-            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo'")
+        guard let repository = GitHubToolArguments.repository(in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: GitHubToolArguments.repositoryMissing, field: "repo")
         }
+        let (owner, repo) = (repository.owner, repository.name)
 
         let path = extractString(from: toolCall.args, key: "path") ?? ""
         let ref = extractString(from: toolCall.args, key: "ref")
@@ -652,9 +681,48 @@ actor ToolExecutionService {
                 path: path,
                 ref: ref
             )
-            let fileNames = files.compactMap { $0["name"] as? String }
+            // A folder is told apart from a file by the slash after it.
+            let fileNames: [String] = files.compactMap { file in
+                guard let name = file["name"] as? String else { return nil }
+                return file["type"] as? String == "dir" ? name + "/" : name
+            }
             let block = "[GitHub Files: \(owner)/\(repo)/\(path)]\n" + fileNames.joined(separator: "\n")
             return await .success(tool: toolCall.name, result: ["count": AnyJSONValue(files.count)], contextBlock: block)
+        } catch {
+            return await .error(tool: toolCall.name, message: error.localizedDescription)
+        }
+    }
+
+    /// Execute github.getRepo: what a repository is and which branch is
+    /// its default.
+    private func executeGitHubGetRepo(toolCall: ParsedToolCall) async -> ToolExecutionResult {
+        guard let account = await connectedAccountsService.getConnectedAccount(for: .github) else {
+            return await .error(tool: toolCall.name, message: "GitHub not connected.")
+        }
+
+        guard let repository = GitHubToolArguments.repository(in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: GitHubToolArguments.repositoryMissing, field: "repo")
+        }
+
+        do {
+            let found = try await githubService.getRepo(accountId: account.id, owner: repository.owner, repo: repository.name)
+            let fullName = found["full_name"] as? String ?? repository.fullName
+            let defaultBranch = found["default_branch"] as? String ?? ""
+            let description = found["description"] as? String ?? ""
+            let block = """
+            [GitHub Repo: \(fullName)]
+            Default branch: \(defaultBranch.isEmpty ? "(none)" : defaultBranch)
+            Description: \(description.isEmpty ? "(none)" : description)
+            """
+            return await .success(
+                tool: toolCall.name,
+                result: [
+                    "full_name": AnyJSONValue(fullName),
+                    "default_branch": AnyJSONValue(defaultBranch),
+                    "description": AnyJSONValue(description),
+                ],
+                contextBlock: block
+            )
         } catch {
             return await .error(tool: toolCall.name, message: error.localizedDescription)
         }
@@ -666,12 +734,14 @@ actor ToolExecutionService {
             return await .error(tool: toolCall.name, message: "GitHub not connected.")
         }
 
-        guard let owner = extractString(from: toolCall.args, key: "owner"),
-              let repo = extractString(from: toolCall.args, key: "repo"),
-              let baseBranch = extractString(from: toolCall.args, key: "base_branch") ?? extractString(from: toolCall.args, key: "baseBranch"),
-              let newBranch = extractString(from: toolCall.args, key: "new_branch") ?? extractString(from: toolCall.args, key: "newBranch") else {
-            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo', 'base_branch', 'new_branch'")
+        guard let repository = GitHubToolArguments.repository(in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: GitHubToolArguments.repositoryMissing, field: "repo")
         }
+        guard let baseBranch = extractString(from: toolCall.args, key: "base_branch") ?? extractString(from: toolCall.args, key: "baseBranch"),
+              let newBranch = extractString(from: toolCall.args, key: "new_branch") ?? extractString(from: toolCall.args, key: "newBranch") else {
+            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'base_branch', 'new_branch'")
+        }
+        let (owner, repo) = (repository.owner, repository.name)
 
         if let refusal = await refusal(ofAppChange: toolCall, in: threadID, { .gitHubCreateBranch(owner: owner, repo: repo, newBranch: newBranch, baseBranch: baseBranch, threadID: $0) }) {
             return refusal
@@ -701,13 +771,15 @@ actor ToolExecutionService {
             return await .error(tool: toolCall.name, message: "GitHub not connected.")
         }
 
-        guard let owner = extractString(from: toolCall.args, key: "owner"),
-              let repo = extractString(from: toolCall.args, key: "repo"),
-              let title = extractString(from: toolCall.args, key: "title"),
+        guard let repository = GitHubToolArguments.repository(in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: GitHubToolArguments.repositoryMissing, field: "repo")
+        }
+        guard let title = extractString(from: toolCall.args, key: "title"),
               let head = extractString(from: toolCall.args, key: "head"),
               let base = extractString(from: toolCall.args, key: "base") else {
-            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo', 'title', 'head', 'base'")
+            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'title', 'head', 'base'")
         }
+        let (owner, repo) = (repository.owner, repository.name)
 
         let body = extractString(from: toolCall.args, key: "body")
 
@@ -740,47 +812,53 @@ actor ToolExecutionService {
             return await .error(tool: toolCall.name, message: "GitHub not connected.")
         }
 
-        guard let query = extractString(from: toolCall.args, key: "query") else {
-            return await .validationError(tool: toolCall.name, message: "Missing required argument: 'query'")
+        guard let asked = GitHubToolArguments.text("query", in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: "Missing required argument: 'query'", field: "query")
         }
+        // A repository named beside the query keeps the search to it.
+        var query = asked
+        if toolCall.args["repo"] != nil {
+            guard let repository = GitHubToolArguments.repository(in: toolCall.args) else {
+                return await .validationError(tool: toolCall.name, message: GitHubToolArguments.repositoryMissing, field: "repo")
+            }
+            query += " repo:\(repository.fullName)"
+        }
+        let page = GitHubToolArguments.page(in: toolCall.args)
+        let perPage = GitHubToolArguments.perPage(in: toolCall.args, standard: 30)
 
         do {
-            let result = try await githubService.searchCode(accountId: account.id, query: query)
+            let result = try await githubService.searchCode(accountId: account.id, query: query, page: page, perPage: perPage)
             let items = result["items"] as? [[String: Any]] ?? []
-            let paths = items.compactMap { $0["path"] as? String }
-            let block = "[GitHub Code Search: \(query)]\n" + paths.prefix(20).joined(separator: "\n")
-            return await .success(tool: toolCall.name, result: ["total_count": AnyJSONValue(result["total_count"] as? Int ?? 0)], contextBlock: block)
+            let total = result["total_count"] as? Int ?? 0
+            // Each result with the repository it is in: a search can
+            // reach more than one.
+            let found: [String] = items.compactMap { item in
+                guard let path = item["path"] as? String else { return nil }
+                let within = (item["repository"] as? [String: Any])?["full_name"] as? String
+                return within.map { "\($0): \(path)" } ?? path
+            }
+            let block = "[GitHub Code Search: \(query)]\n"
+                + (found.isEmpty ? "(No results on this page)" : found.joined(separator: "\n"))
+                + "\n(Page \(page), \(found.count) of \(total) results)"
+            return await .success(tool: toolCall.name, result: ["total_count": AnyJSONValue(total), "page": AnyJSONValue(page)], contextBlock: block)
         } catch {
             return await .error(tool: toolCall.name, message: error.localizedDescription)
         }
     }
 
-    /// Execute github.getPR - fetch pull request details including title, body, state, and diff info
+    /// Execute github.getPullRequest - fetch pull request details including title, body, state, and diff info
     private func executeGitHubGetPR(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .github) else {
             return await .error(tool: toolCall.name, message: "GitHub not connected. Please connect GitHub in Settings > \(SettingsPane.connectedApps.listedTitle).")
         }
 
-        guard let owner = extractString(from: toolCall.args, key: "owner"),
-              let repo = extractString(from: toolCall.args, key: "repo") else {
-            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo'")
+        guard let repository = GitHubToolArguments.repository(in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: GitHubToolArguments.repositoryMissing, field: "repo")
         }
-
-        // Accept pull_number as int or string
-        let pullNumber: Int
-        if let num = toolCall.args["pull_number"]?.value as? Int {
-            pullNumber = num
-        } else if let numStr = extractString(from: toolCall.args, key: "pull_number"),
-                  let num = Int(numStr) {
-            pullNumber = num
-        } else if let num = toolCall.args["number"]?.value as? Int {
-            pullNumber = num
-        } else if let numStr = extractString(from: toolCall.args, key: "number"),
-                  let num = Int(numStr) {
-            pullNumber = num
-        } else {
-            return await .validationError(tool: toolCall.name, message: "Missing required argument: 'pull_number'")
+        guard let pullNumber = GitHubToolArguments.pullNumber(in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: "Missing required argument: 'pull_number'", field: "pull_number")
         }
+        let (owner, repo) = (repository.owner, repository.name)
 
         do {
             let pr = try await githubService.getPullRequest(
@@ -827,39 +905,29 @@ actor ToolExecutionService {
         }
     }
 
-    /// Execute github.listPRFiles - list files changed in a pull request with patches
+    /// Execute github.listPullRequestFiles - list files changed in a pull request with patches
     private func executeGitHubListPRFiles(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .github) else {
             return await .error(tool: toolCall.name, message: "GitHub not connected. Please connect GitHub in Settings > \(SettingsPane.connectedApps.listedTitle).")
         }
 
-        guard let owner = extractString(from: toolCall.args, key: "owner"),
-              let repo = extractString(from: toolCall.args, key: "repo") else {
-            return .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo'")
+        guard let repository = GitHubToolArguments.repository(in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: GitHubToolArguments.repositoryMissing, field: "repo")
         }
-
-        // Accept pull_number as int or string
-        let pullNumber: Int
-        if let num = toolCall.args["pull_number"]?.value as? Int {
-            pullNumber = num
-        } else if let numStr = extractString(from: toolCall.args, key: "pull_number"),
-                  let num = Int(numStr) {
-            pullNumber = num
-        } else if let num = toolCall.args["number"]?.value as? Int {
-            pullNumber = num
-        } else if let numStr = extractString(from: toolCall.args, key: "number"),
-                  let num = Int(numStr) {
-            pullNumber = num
-        } else {
-            return await .validationError(tool: toolCall.name, message: "Missing required argument: 'pull_number'")
+        guard let pullNumber = GitHubToolArguments.pullNumber(in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: "Missing required argument: 'pull_number'", field: "pull_number")
         }
+        let (owner, repo) = (repository.owner, repository.name)
 
         do {
+            let page = GitHubToolArguments.page(in: toolCall.args)
             let files = try await githubService.listPullRequestFiles(
                 accountId: account.id,
                 owner: owner,
                 repo: repo,
-                pullNumber: pullNumber
+                pullNumber: pullNumber,
+                page: page,
+                perPage: GitHubToolArguments.perPage(in: toolCall.args, standard: 50)
             )
 
             // Build a detailed view of changed files with patches
@@ -883,7 +951,7 @@ actor ToolExecutionService {
                 fileDetails.append(detail)
             }
 
-            let block = "[GitHub PR #\(pullNumber) Files (\(files.count) changed)]\n\n" + fileDetails.joined(separator: "\n\n")
+            let block = "[GitHub PR #\(pullNumber) Files (\(files.count) on page \(page))]\n\n" + fileDetails.joined(separator: "\n\n")
 
             return await .success(
                 tool: toolCall.name,
