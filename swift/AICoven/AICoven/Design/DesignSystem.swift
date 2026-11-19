@@ -1,4 +1,9 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 // MARK: - Brand Colors
 
@@ -68,6 +73,20 @@ extension Color {
 
     static var aicovenError: Color {
         ThemeManager.shared.theme.error
+    }
+
+    /// A colour that follows the device's appearance: `light` by day,
+    /// `dark` at dusk.
+    static func room(light: Color, dark: Color) -> Color {
+        #if os(macOS)
+        let light = NSColor(light), dark = NSColor(dark)
+        return Color(NSColor(name: nil) {
+            $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+        })
+        #else
+        let light = UIColor(light), dark = UIColor(dark)
+        return Color(UIColor { $0.userInterfaceStyle == .dark ? dark : light })
+        #endif
     }
 
     /// Initialize Color from hex string
