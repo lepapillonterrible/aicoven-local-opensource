@@ -540,15 +540,12 @@ struct PersonalChatView: View {
         guard !isInitialLoading else { return }
         isInitialLoading = true
         defer { isInitialLoading = false }
-        let threadID = thread.id
-        let account = UserScope.currentUserID
         do {
             let page = try await ChatService.shared.loadMessages(
-                threadId: threadID,
+                threadId: thread.id,
                 limit: pageSize,
                 before: nil
             )
-            guard isStillShowing(threadID, for: account) else { return }
             messages = page
             oldestMessageId = page.first?.id
             hasMoreMessages = page.count == pageSize
@@ -576,15 +573,12 @@ struct PersonalChatView: View {
         isLoadingMore = true
         defer { isLoadingMore = false }
 
-        let threadID = thread.id
-        let account = UserScope.currentUserID
         do {
             let older = try await ChatService.shared.loadMessages(
-                threadId: threadID,
+                threadId: thread.id,
                 limit: pageSize,
                 before: oldestId
             )
-            guard isStillShowing(threadID, for: account) else { return }
             guard !older.isEmpty else {
                 hasMoreMessages = false
                 return
@@ -682,20 +676,15 @@ struct PersonalChatView: View {
         }
     }
 
-    /// Whether what was loaded for a thread, for an account, is still this
-    /// view's to show: by the time a load returns the view can be showing
-    /// another thread, or the app another account.
-    private func isStillShowing(_ threadID: String, for account: String) -> Bool {
-        shownThreadID == threadID && UserScope.currentUserID == account
-    }
-
     /// Loads the work traces of this thread's finished turns.
     private func loadTraces() async {
         let threadID = thread.id
         let account = UserScope.currentUserID
         do {
             let loaded = try await ThreadRepository.shared.loadWorkTraces(threadID: threadID)
-            guard isStillShowing(threadID, for: account) else { return }
+            // The view can be showing another thread by now, or another
+            // account's.
+            guard shownThreadID == threadID, UserScope.currentUserID == account else { return }
             // A turn that ended while these were read has its trace here
             // already, and may not be among them.
             traces.merge(loaded) { shown, _ in shown }

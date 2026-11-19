@@ -115,17 +115,20 @@ struct WorkTraceView: View {
         .scrollContentBackground(.hidden)
         .background(Color.aicovenSurface)
         .safeAreaInset(edge: .top, spacing: 0) {
-            Text(subtitle)
-                .font(.aicovenBodySmall)
-                .foregroundStyle(Color.aicovenTextSecondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, Spacing.md)
-                .padding(.vertical, Spacing.xs)
+            if let subtitle {
+                Text(subtitle)
+                    .font(.aicovenBodySmall)
+                    .foregroundStyle(Color.aicovenTextSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, Spacing.md)
+                    .padding(.vertical, Spacing.xs)
+            }
         }
     }
 
-    private var subtitle: String {
-        guard let trace else { return "Nothing to show yet." }
+    /// Nil where there is no trace: the list says so itself.
+    private var subtitle: String? {
+        guard let trace else { return nil }
         guard let finishedAt = trace.finishedAt else { return "Not finished · updates live" }
         return "Worked \(WorkTrace.durationWords(finishedAt.timeIntervalSince(trace.startedAt)))"
     }

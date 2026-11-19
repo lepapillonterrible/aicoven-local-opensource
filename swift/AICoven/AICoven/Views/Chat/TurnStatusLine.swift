@@ -49,9 +49,8 @@ struct TurnStatusLineView: View {
             Spacer(minLength: 0)
         }
         .accessibilityElement(children: .contain)
-        // A live region: VoiceOver hears each new status once, however many
-        // windows show this turn. A turn in a thread no window shows is not
-        // announced.
+        // VoiceOver hears each new status once, however many windows show
+        // this turn. A turn in a thread no window shows is not announced.
         .onChange(of: turn.message) { _, message in
             // The engine says "Stopping" itself, when Stop is pressed.
             guard !turn.isStopping else { return }

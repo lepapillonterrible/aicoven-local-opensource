@@ -298,7 +298,8 @@ final class DatabaseManager {
 
             // v8: one row for each reply the app starts, from the person's
             // message to its outcome, so a reply cut off by the app closing
-            // is known to have been running. A turn holds no content.
+            // is known to have been running. Its work trace (v9) is the only
+            // content a turn holds, and is encrypted.
             migrator.registerMigration("v8_turns") { db in
                 try db.create(table: "turns") { t in
                     t.column("id", .text).primaryKey()

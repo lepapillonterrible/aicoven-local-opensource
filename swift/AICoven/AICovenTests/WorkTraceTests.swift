@@ -93,4 +93,33 @@ final class WorkTraceTests: XCTestCase {
         await ThreadService.shared.reloadForCurrentUser()
         await DataEncryptionService.shared.lock()
     }
+
+    func testTraces_ofAnotherAccountsTurnsAreNotRead() async throws {
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        DatabaseManager.shared.configureIfNeeded()
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        let threadID = "theirs-\(UUID().uuidString)"
+        // Encrypted with the key in memory, so only whose turn it is keeps
+        // it from being read.
+        let trace = WorkTrace(startedAt: start, finishedAt: start.addingTimeInterval(9), reasoning: ["Looking it up"])
+        let ciphertext = try await DataEncryptionService.shared.encrypt(JSONEncoder().encode(trace), purpose: "turn_trace")
+        try await queue.write { [start] db in
+            try db.execute(
+                sql: "INSERT INTO threads (id, user_id, created_at) VALUES (?, ?, ?)",
+                arguments: [threadID, "another-user", start]
+            )
+            try db.execute(
+                sql: "INSERT INTO turns (id, user_id, thread_id, status, started_at, message_id, trace_ciphertext) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                arguments: ["turn-\(threadID)", "another-user", threadID, "completed", start, "reply-\(threadID)", ciphertext]
+            )
+        }
+
+        let loaded = try await ThreadRepository.shared.loadWorkTraces(threadID: threadID)
+
+        XCTAssertEqual(loaded, [:])
+        try await queue.write { db in
+            try db.execute(sql: "DELETE FROM threads WHERE id = ?", arguments: [threadID])
+        }
+        await DataEncryptionService.shared.lock()
+    }
 }
