@@ -89,6 +89,15 @@ struct AICovenApp: App {
                     isEncryptionUnlocked = false
                 }
             }
+            .onChange(of: authService.currentUser?.id) { previous, current in
+                // A direct switch from one account to another never signs
+                // out, so the first account's unlock would otherwise stand
+                // for the second.
+                if let previous, let current, previous != current {
+                    isEncryptionUnlocked = false
+                    Task { await DataEncryptionService.shared.lock() }
+                }
+            }
             // Expose the appearance and typography choices to every view.
             .environmentObject(themeManager)
             .environmentObject(typographyManager)
