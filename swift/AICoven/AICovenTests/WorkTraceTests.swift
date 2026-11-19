@@ -99,6 +99,12 @@ final class WorkTraceTests: XCTestCase {
         DatabaseManager.shared.configureIfNeeded()
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
         let threadID = "theirs-\(UUID().uuidString)"
+        addTeardownBlock {
+            try? await queue.write { db in
+                try db.execute(sql: "DELETE FROM threads WHERE id = ?", arguments: [threadID])
+            }
+            await DataEncryptionService.shared.lock()
+        }
         // Encrypted with the key in memory, so only whose turn it is keeps
         // it from being read.
         let trace = WorkTrace(startedAt: start, finishedAt: start.addingTimeInterval(9), reasoning: ["Looking it up"])
@@ -117,9 +123,5 @@ final class WorkTraceTests: XCTestCase {
         let loaded = try await ThreadRepository.shared.loadWorkTraces(threadID: threadID)
 
         XCTAssertEqual(loaded, [:])
-        try await queue.write { db in
-            try db.execute(sql: "DELETE FROM threads WHERE id = ?", arguments: [threadID])
-        }
-        await DataEncryptionService.shared.lock()
     }
 }

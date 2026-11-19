@@ -105,7 +105,6 @@ final class TurnEngine: ObservableObject {
             try await store.beginTurn(id: turnID, userMessage: userMessage)
         } catch {
             running[threadID] = nil
-            announced[turnID] = nil
             throw error
         }
         Task {
