@@ -131,10 +131,10 @@ struct AicovenTheme {
 // MARK: - Theme Palettes
 
 extension AicovenTheme {
-    /// The cloud app's stone palette. Every colour has a day and a dusk
-    /// value and follows the device's appearance; the theme pins no scheme.
-    /// Water marks what moves and what can be pressed, rust marks what
-    /// failed or destroys; stone has no third accent.
+    /// The cloud app's stone palette. Its colours, the overlay apart, have
+    /// a day and a dusk value and follow the device's appearance; the theme
+    /// pins no scheme. Water marks what moves and what can be pressed, rust
+    /// marks what failed or destroys; stone has no third accent.
     static let stone = AicovenTheme(
         variant: .stone,
         surface: .room(light: Color(hex: "#E8E2D6"), dark: Color(hex: "#2C2925")),
@@ -145,7 +145,10 @@ extension AicovenTheme {
         textPrimary: .room(light: Color(hex: "#29251F"), dark: Color(hex: "#EDE6D9")),
         textSecondary: .room(light: Color(hex: "#5C544A"), dark: Color(hex: "#B4AA9A")),
         textTertiary: .room(light: Color(hex: "#605849"), dark: Color(hex: "#ADA397")),
-        accentPrimary: .room(light: Color(hex: "#36625F"), dark: Color(hex: "#8FBDB6")),
+        // The app fills buttons with this accent under white labels, so
+        // dusk uses the darker water the cloud app keeps for fills under
+        // white (#517D79), not its text water (#8FBDB6).
+        accentPrimary: .room(light: Color(hex: "#36625F"), dark: Color(hex: "#517D79")),
         accentSecondary: .room(light: Color(hex: "#5A5248"), dark: Color(hex: "#CFC6B6")),
         accentTertiary: .room(light: Color(hex: "#8A4526"), dark: Color(hex: "#E0A183")),
         success: .room(light: Color(hex: "#36625F"), dark: Color(hex: "#8FBDB6")),
@@ -426,7 +429,7 @@ extension AicovenTheme {
     /// All themes in display order for the picker. Orchard appended after
     /// Observatory so the existing four-theme order is unchanged for
     /// users who memorised it; new theme lands at the end.
-    static let all: [AicovenTheme] = [.nebula, .apothecary, .grimoire, .observatory, .orchard]
+    static let all: [AicovenTheme] = [.stone, .nebula, .apothecary, .grimoire, .observatory, .orchard]
 
     /// Lookup helper.
     static func theme(for variant: ThemeVariant) -> AicovenTheme {
