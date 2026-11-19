@@ -1006,6 +1006,39 @@ final class MCPToolApprovalTests: XCTestCase {
         XCTAssertEqual(played.methods, [])
     }
 
+    func testAServerRemovedOrPointedElsewhereWhileItsToolWaited_isNotCalledThoughApproved() async throws {
+        let service = ConnectedAccountsService.shared
+
+        // Removed while the person was deciding.
+        let (removed, removedSlug, removedPlayed) = try await keptServer()
+        let removing = ToolExecutionService(toolService: NoChatTools(), ask: { _ in
+            try? await service.deleteMCPServer(id: removed.id)
+            return .approved
+        })
+        let removedSession = removedPlayed.session()
+        await removing.setMCPClient { MCPClient(server: $0, token: $1, session: removedSession, eras: MCPEraCache()) }
+        await removing.setWhitelist(for: "test", tools: ["mcp.\(removedSlug).send_note"])
+        let gone = await removing.execute(toolCall: ParsedToolCall(name: "mcp.\(removedSlug).send_note", args: [:]), agentType: "test", threadID: "thread-1")
+        XCTAssertEqual(gone.status, "error")
+        XCTAssertEqual(gone.error, "This MCP server was removed or changed while its tool was waiting to be approved: the tool was not called.")
+        XCTAssertEqual(removedPlayed.methods, [], "Nothing is sent to a server that is no longer connected")
+
+        // Pointed at another address: not what the approval showed.
+        let (edited, editedSlug, editedPlayed) = try await keptServer()
+        let editing = ToolExecutionService(toolService: NoChatTools(), ask: { _ in
+            var elsewhere = edited
+            elsewhere.serverUrl = "https://elsewhere.example.com/mcp"
+            try? await service.updateMCPServer(elsewhere)
+            return .approved
+        })
+        let editedSession = editedPlayed.session()
+        await editing.setMCPClient { MCPClient(server: $0, token: $1, session: editedSession, eras: MCPEraCache()) }
+        await editing.setWhitelist(for: "test", tools: ["mcp.\(editedSlug).send_note"])
+        let moved = await editing.execute(toolCall: ParsedToolCall(name: "mcp.\(editedSlug).send_note", args: [:]), agentType: "test", threadID: "thread-1")
+        XCTAssertEqual(moved.status, "error")
+        XCTAssertEqual(editedPlayed.methods, [])
+    }
+
     func testWhereAServerIs_isShownByItsHostOnly() {
         func account(_ url: String) -> MCPServerAccount {
             MCPServerAccount(id: "s", name: "S", serverUrl: url, transport: .streamableHttp, authType: .none, status: .connected, createdAt: Date(), updatedAt: Date())

@@ -433,7 +433,7 @@ actor ToolExecutionService {
             return slug == serverSlug
         }
 
-        guard let server = matchingServer else {
+        guard var server = matchingServer else {
             return await .error(tool: toolCall.name, message: "MCP server '\(serverSlug)' not found or not connected.")
         }
 
@@ -453,6 +453,18 @@ actor ToolExecutionService {
             if let refusal = await ToolExecutionResult.refusal(asked, tool: toolCall.name) {
                 return refusal
             }
+            // The person may have taken a while. What they approved is this
+            // tool on this server at this address: if the server has been
+            // removed or pointed elsewhere meanwhile, it is not that any more.
+            guard let current = await connectedAccountsService.getMCPServer(id: server.id),
+                  current.name == server.name, current.serverUrl == server.serverUrl else {
+                return await .error(
+                    tool: toolCall.name,
+                    message: "This MCP server was removed or changed while its tool was waiting to be approved: the tool was not called.",
+                    errorType: "mcp_server_changed"
+                )
+            }
+            server = current
         }
 
         let token = try? await connectedAccountsService.getMCPToken(forServerId: server.id)
@@ -969,9 +981,6 @@ actor ToolExecutionService {
 
     // MARK: - Approvals
 
-    /// Asks the person, in the thread the tool call came from, about what
-    /// `describe` says is about to happen, and waits for the answer. Without
-    /// a thread there is nowhere to ask and no one to answer.
     /// Where a server is, as an approval shows it: its host (and port, if
     /// it names one), without the path or anything else of its address,
     /// which can carry a key.
@@ -988,6 +997,9 @@ actor ToolExecutionService {
         mcpClient = make
     }
 
+    /// Asks the person, in the thread the tool call came from, about what
+    /// `describe` says is about to happen, and waits for the answer. Without
+    /// a thread there is nowhere to ask and no one to answer.
     private func answer(in threadID: String?, _ describe: @Sendable (_ threadID: String) -> ToolApproval) async -> ApprovalAnswer {
         guard let threadID else { return .notAsked }
         return await ask(describe(threadID))
