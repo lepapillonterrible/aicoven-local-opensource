@@ -386,6 +386,21 @@ actor ThreadRepository {
 
 // MARK: - Chat history
 
+/// How far a turn has got: running, or how it ended.
+enum TurnOutcome: String {
+    case running
+    case completed
+    case failed
+    /// The app closed while it was running.
+    case interrupted
+}
+
+/// What storing a message does to a turn, in the same write.
+private enum TurnChange {
+    case begin(id: String)
+    case end(id: String, outcome: TurnOutcome)
+}
+
 /// The account a write is for and the data key it starts under, which is
 /// that account's. A write encrypts and then stores, and waits in between;
 /// the account, or the key in memory, can change while it does.
@@ -481,24 +496,74 @@ extension ThreadRepository {
     /// order they are added, one at a time: storing one waits on encryption,
     /// and a later one must not get ahead of it.
     func appendChatMessage(_ message: ChatMessage) async throws {
+        _ = try await storeInOrder(message, turn: nil)
+    }
+
+    /// Stores the person's message and a running turn for it, together.
+    func beginTurn(id: String, userMessage: ChatMessage) async throws {
+        _ = try await storeInOrder(userMessage, turn: .begin(id: id))
+    }
+
+    /// Stores the message a turn ends with, the reply or what went wrong,
+    /// and the turn's outcome, together. A turn ends once: if it is not the
+    /// current account's running turn, nothing is stored, its state stands,
+    /// and the answer is false.
+    @discardableResult
+    func endTurn(id: String, outcome: TurnOutcome, message: ChatMessage) async throws -> Bool {
+        try await storeInOrder(message, turn: .end(id: id, outcome: outcome))
+    }
+
+    /// The ids of the current account's turns in a thread that are still
+    /// marked as running.
+    func runningTurnIDs(threadID: String) async throws -> [String] {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let currentUserId = await MainActor.run { UserScope.currentUserID }
+        return try await dbQueue.read { db in
+            try String.fetchAll(
+                db,
+                sql: "SELECT id FROM turns WHERE user_id = ? AND thread_id = ? AND status = ? ORDER BY started_at",
+                arguments: [currentUserId, threadID, TurnOutcome.running.rawValue]
+            )
+        }
+    }
+
+    /// False when the message was not stored because it ends a turn that
+    /// this account is not running.
+    private func storeInOrder(_ message: ChatMessage, turn: TurnChange?) async throws -> Bool {
         let previous = lastAppend
         let task = Task {
             await previous?.value
-            try await store(message)
+            return try await store(message, turn: turn)
         }
         lastAppend = Task { _ = await task.result }
-        try await task.value
+        return try await task.value
     }
 
-    private func store(_ message: ChatMessage) async throws {
+    private func store(_ message: ChatMessage, turn: TurnChange?) async throws -> Bool {
         try await LegacyChatHistoryImport.shared.importIfNeeded()
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         let session = try await beginWrite()
         let record = try await Self.record(for: message, userId: session.userID)
         try await confirm(session)
 
-        try await dbQueue.write { db in
+        return try await dbQueue.write { db in
+            switch turn {
+            case nil:
+                break
+            case let .begin(id):
+                try db.execute(
+                    sql: "INSERT INTO turns (id, user_id, thread_id, status, started_at) VALUES (?, ?, ?, ?, ?)",
+                    arguments: [id, session.userID, message.threadId, TurnOutcome.running.rawValue, Date()]
+                )
+            case let .end(id, outcome):
+                try db.execute(
+                    sql: "UPDATE turns SET status = ?, finished_at = ?, message_id = ? WHERE id = ? AND user_id = ? AND status = ?",
+                    arguments: [outcome.rawValue, Date(), message.id, id, session.userID, TurnOutcome.running.rawValue]
+                )
+                guard db.changesCount > 0 else { return false }
+            }
             try record.insert(db)
+            return true
         }
     }
 
