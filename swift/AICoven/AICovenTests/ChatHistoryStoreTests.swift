@@ -155,6 +155,21 @@ final class ChatHistoryStoreTests: XCTestCase {
         XCTAssertEqual(rows, 0)
     }
 
+    func testMessages_addedOneAfterAnotherAreStoredInThatOrder() async throws {
+        let thread = try await newThread(title: "Order \(UUID().uuidString)")
+        let sent = (1 ... 30).map { message("o\($0)-\(thread.id)", in: thread.id, content: "Message \($0)") }
+
+        // Started in order from the main actor, none waiting for the one
+        // before it to finish.
+        let adding = sent.map { message in Task { @MainActor in try await repository.appendChatMessage(message) } }
+        for task in adding {
+            try await task.value
+        }
+
+        let loaded = try await ChatService.shared.loadMessages(threadId: thread.id)
+        XCTAssertEqual(loaded.map(\.content), sent.map(\.content))
+    }
+
     func testMessages_pagePastOneThatCannotBeRead() async throws {
         let thread = try await newThread(title: "Damaged \(UUID().uuidString)")
         for number in 1 ... 5 {
@@ -279,6 +294,25 @@ final class ChatHistoryStoreTests: XCTestCase {
         XCTAssertEqual(kept.count, 2)
         let keptMessages = try XCTUnwrap(kept.first { $0.lastPathComponent.hasPrefix("messages.json.unreadable-") })
         XCTAssertEqual(try Data(contentsOf: keptMessages), written)
+    }
+
+    func testImport_keepsBothFilesWhenTheMessagesCannotBeSetAside() async throws {
+        let userID = UserScope.currentUserID
+        try Data("not-json".utf8).write(to: threadsFile)
+        let messages = ["some-thread": [message("stuck-\(UUID().uuidString)", in: "some-thread", content: "Still here")]]
+        try write(messages, to: messagesFile)
+        // A folder that cannot be written to refuses the move.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path) }
+
+        try await LegacyChatHistoryImport.importFiles(for: userID, threadsFile: threadsFile, messagesFile: messagesFile)
+
+        // Neither could be moved: both stay, so a later import still finds
+        // the threads file unreadable and deletes nothing.
+        XCTAssertTrue(FileManager.default.fileExists(atPath: threadsFile.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: messagesFile.path))
+        try await LegacyChatHistoryImport.importFiles(for: userID, threadsFile: threadsFile, messagesFile: messagesFile)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: messagesFile.path))
     }
 
     func testImport_storesMessagesOfAThreadThatIsAlreadyInTheDatabase() async throws {

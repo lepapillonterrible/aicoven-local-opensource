@@ -3,7 +3,8 @@ import Foundation
 /// Moves chat history out of the two plain JSON files earlier builds kept it
 /// in and into the encrypted database: once for each account, the first time
 /// its history is read after its data is unlocked. A file is deleted only
-/// after everything in it is stored.
+/// once the threads and messages in it are stored; messages of a thread that
+/// was deleted have no thread to go to and go with the file.
 actor LegacyChatHistoryImport {
     static let shared = LegacyChatHistoryImport()
 
@@ -42,33 +43,37 @@ actor LegacyChatHistoryImport {
         finished.insert(userID)
     }
 
-    /// Imports the two files as the account `userID`'s history. A file is
-    /// deleted only when what it held is stored or has nowhere to go: a
-    /// message whose thread is neither in the threads file nor already this
-    /// account's belongs to a thread that was deleted. When the threads file
-    /// cannot be read, which threads exist is not known, so the messages
-    /// file is set aside with it, unread.
+    /// Imports the two files as the account `userID`'s history. A message
+    /// is stored if its thread is in the threads file or already this
+    /// account's; any other belongs to a thread that was deleted. When the
+    /// threads file cannot be read, which threads exist is not known, so
+    /// nothing is imported and both files are set aside, the messages first:
+    /// while they lie beside a threads file that cannot be read, nothing
+    /// deletes them.
     static func importFiles(for userID: String, threadsFile: URL, messagesFile: URL) async throws {
         let fileManager = FileManager.default
         var threads: [Thread] = []
         if fileManager.fileExists(atPath: threadsFile.path) {
-            guard let decoded = read([Thread].self, at: threadsFile) else {
-                setAside(messagesFile)
+            do {
+                // The file is the account's own, but earlier builds could
+                // leave another account's threads in it.
+                threads = try JSONDecoder().decode([Thread].self, from: Data(contentsOf: threadsFile)).filter { $0.userId == userID }
+            } catch {
+                AppErrorReporter.log(error: error, context: "LegacyChatHistoryImport.read")
+                if setAside(messagesFile) {
+                    setAside(threadsFile)
+                }
                 return
             }
-            // The file is the account's own, but earlier builds could leave
-            // another account's threads in it; those are not this account's.
-            threads = decoded.filter { $0.userId == userID }
         }
-        let hadMessagesFile = fileManager.fileExists(atPath: messagesFile.path)
+        let hadThreadsFile = fileManager.fileExists(atPath: threadsFile.path)
         let messages = read([String: [ChatMessage]].self, at: messagesFile)
-        guard fileManager.fileExists(atPath: threadsFile.path) || messages != nil else { return }
+        guard hadThreadsFile || messages != nil else { return }
 
         try await ThreadRepository.shared.importChatHistory(threads: threads, messages: messages ?? [:], userID: userID)
 
         // A messages file that could not be read was set aside by `read`.
-        for file in [threadsFile, hadMessagesFile && messages != nil ? messagesFile : nil].compactMap(\.self)
-            where fileManager.fileExists(atPath: file.path) {
+        for file in [hadThreadsFile ? threadsFile : nil, messages == nil ? nil : messagesFile].compactMap(\.self) {
             do {
                 try fileManager.removeItem(at: file)
             } catch {
@@ -77,9 +82,8 @@ actor LegacyChatHistoryImport {
         }
     }
 
-    /// Decodes one of the files; `nil` when it is absent or cannot be read.
-    /// A file that cannot be read is logged and set aside, as earlier builds
-    /// started empty from it, so it neither blocks the import nor is deleted.
+    /// Decodes a file; `nil` when it is absent or cannot be read. One that
+    /// cannot be read is logged and set aside, never deleted.
     static func read<Value: Decodable>(_ type: Value.Type, at file: URL) -> Value? {
         guard FileManager.default.fileExists(atPath: file.path) else { return nil }
         do {
@@ -91,14 +95,18 @@ actor LegacyChatHistoryImport {
         }
     }
 
-    /// Moves a file, if it is there, to a name of its own beside it, where
-    /// no import reads it again. If it cannot be moved it stays where it is.
-    private static func setAside(_ file: URL) {
-        guard FileManager.default.fileExists(atPath: file.path) else { return }
+    /// Moves a file to a name of its own beside it, where no import reads it
+    /// again. False, and logged, if it is there and cannot be moved; it then
+    /// stays where it is.
+    @discardableResult
+    private static func setAside(_ file: URL) -> Bool {
+        guard FileManager.default.fileExists(atPath: file.path) else { return true }
         do {
             try FileManager.default.moveItem(at: file, to: file.appendingPathExtension("unreadable-\(UUID().uuidString)"))
+            return true
         } catch {
             AppErrorReporter.log(error: error, context: "LegacyChatHistoryImport.setAside")
+            return false
         }
     }
 

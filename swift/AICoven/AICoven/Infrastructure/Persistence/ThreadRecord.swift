@@ -459,6 +459,9 @@ extension ThreadRepository {
                 threads.append(thread)
             }
         }
+        // If the key changed hands while these were read, the ones read
+        // after it did were passed over as unreadable: none of it is kept.
+        try await requireKey(of: currentUserId)
         return threads
     }
 
@@ -545,6 +548,9 @@ extension ThreadRepository {
                     newestFirst.append(message)
                 }
             }
+            // As for threads: a key that changed hands mid-read makes the
+            // page incomplete, not shorter.
+            try await requireKey(of: currentUserId)
             guard rows.count == wanted, let oldest = rows.last else { break }
             olderThan = oldest["row_order"]
         }
@@ -581,8 +587,9 @@ extension ThreadRepository {
 
         let toWrite = (payloads, records)
         try await dbQueue.write { db in
-            var owned = stored
-            for (thread, payload) in toWrite.0 where !stored.contains(thread.id) {
+            // Read again: a thread can have been deleted while encrypting.
+            var owned = try Set(String.fetchAll(db, sql: "SELECT id FROM threads WHERE user_id = ?", arguments: [userID]))
+            for (thread, payload) in toWrite.0 where !owned.contains(thread.id) {
                 // A row another user owns keeps this id from being stored;
                 // this user's messages cannot go under it.
                 guard try ThreadRecord.fetchOne(db, key: thread.id) == nil else { continue }
