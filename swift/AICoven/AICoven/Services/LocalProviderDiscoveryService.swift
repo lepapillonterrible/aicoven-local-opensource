@@ -3,7 +3,8 @@ import Foundation
 /// A server found by `LocalProviderDiscoveryService`.
 nonisolated struct DetectedLocalProvider: Identifiable, Hashable {
     let id: String
-    /// The provider it is added as: "openai_compatible" or "ollama".
+    /// The provider it is added as: "openai_compatible", "ollama" or
+    /// "hermes".
     let provider: String
     let displayName: String
     let baseURL: String
@@ -91,6 +92,9 @@ nonisolated struct LocalProviderDiscoveryService {
         // Ollama keeps its own connection type, which lists its models with
         // their sizes.
         KnownEndpoint(port: 11434, provider: "ollama", displayName: "Ollama"),
+        // A Hermes agent's API server, which lists models as a server does
+        // and is added as an agent.
+        KnownEndpoint(port: 8642, provider: "hermes", displayName: "Hermes"),
     ]
 
     /// Short, so Detect feels instant when nothing listens on a port.

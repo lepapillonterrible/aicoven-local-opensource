@@ -50,6 +50,22 @@ final class OpenAICompatibleServerTests: XCTestCase {
         XCTAssertEqual(found.map(\.requiresKey), [false, true])
     }
 
+    func testDetect_findsAHermesAgentOnItsUsualPortAndOffersItAsAnAgent() async throws {
+        let transport = FakeTransport(answers: [
+            "http://127.0.0.1:8642/v1/models": .unauthorized,
+        ])
+        let discovery = LocalProviderDiscoveryService(transport: transport)
+
+        let found = await discovery.discover()
+
+        XCTAssertEqual(found.map(\.provider), ["hermes"], "A Hermes agent that asks for its key is still a Hermes agent")
+        XCTAssertEqual(found.map(\.displayName), ["Hermes"])
+        XCTAssertEqual(found.map(\.baseURL), ["http://127.0.0.1:8642"])
+        XCTAssertEqual(found.map(\.requiresKey), [true])
+        let typed = try XCTUnwrap(LocalProviderDiscoveryService.serverBaseURL(from: "8642"))
+        XCTAssertEqual(discovery.knownEndpoint(at: typed)?.provider, "hermes")
+    }
+
     func testDetect_findsNothingWhenNoPortAnswers() async {
         let found = await LocalProviderDiscoveryService(transport: FakeTransport(answers: [:])).discover()
 
