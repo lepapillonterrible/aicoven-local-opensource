@@ -1,15 +1,34 @@
 import SwiftUI
 
-/// Which work trace Details shows: the running turn's in a thread, which
-/// updates as it works, or a finished turn's.
+/// Which work trace Details shows: one running turn's, which updates as it
+/// works, or a finished turn's.
 enum WorkTraceTarget: Identifiable, Equatable {
-    case running(threadID: String)
+    case running(threadID: String, turnID: String)
     case finished(messageID: String, trace: WorkTrace)
 
     var id: String {
         switch self {
-        case let .running(threadID): "running:\(threadID)"
+        case let .running(_, turnID): "running:\(turnID)"
         case let .finished(messageID, _): "finished:\(messageID)"
+        }
+    }
+
+    /// The trace the engine holds for this target now. Nil for a running
+    /// target once the thread's next turn has ended: the engine keeps only
+    /// the last ending of a thread.
+    @MainActor
+    func trace(in turns: TurnEngine) -> WorkTrace? {
+        switch self {
+        case let .running(threadID, turnID):
+            if let running = turns.running[threadID], running.turnID == turnID {
+                return running.trace
+            }
+            if let ending = turns.endings[threadID], ending.turnID == turnID {
+                return ending.trace
+            }
+            return nil
+        case let .finished(_, trace):
+            return trace
         }
     }
 }
@@ -21,19 +40,24 @@ struct WorkTraceSheet: View {
     @ObservedObject private var turns = TurnEngine.shared
     @Environment(\.dismiss) private var dismiss
 
-    /// The trace to show. A running turn that ends while Details is open
-    /// leaves its finished trace here.
-    private var trace: WorkTrace? {
-        switch target {
-        case let .running(threadID): turns.running[threadID]?.trace ?? turns.endings[threadID]?.trace
-        case let .finished(_, trace): trace
-        }
+    /// The last trace seen for this turn. A turn that ends while Details is
+    /// open leaves its finished trace here, and it stays when a later turn
+    /// in the same thread takes its place in the engine.
+    @State private var kept: WorkTrace?
+
+    private var current: WorkTrace? {
+        target.trace(in: turns)
     }
 
     var body: some View {
         NavigationStack {
-            WorkTraceView(trace: trace)
+            WorkTraceView(trace: current ?? kept)
                 .navigationTitle("Details")
+                .onChange(of: current, initial: true) { _, trace in
+                    if let trace {
+                        kept = trace
+                    }
+                }
             #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
             #endif

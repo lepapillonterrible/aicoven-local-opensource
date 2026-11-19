@@ -73,6 +73,9 @@ final class TurnEngine: ObservableObject {
     /// and why, by thread id: given back when the thread is next opened.
     private var unsent: [String: (text: String, reason: String)] = [:]
 
+    /// The last status announced, and the turn it was of.
+    private var lastAnnounced: (turnID: String, message: String)?
+
     private let chat: ChatService
     private let store = ThreadRepository.shared
 
@@ -121,6 +124,17 @@ final class TurnEngine: ObservableObject {
         // Said here, once for the turn, whatever screen is showing: with
         // the keyboard shortcut, VoiceOver's focus can be anywhere.
         AccessibilityNotification.Announcement("Stopping").post()
+    }
+
+    /// Announces a turn's new status to VoiceOver, once: each window showing
+    /// the turn asks when its line changes, and only the first is said.
+    /// False when it had been said already.
+    @discardableResult
+    func announceStatus(_ message: String, of turnID: String) -> Bool {
+        guard lastAnnounced?.turnID != turnID || lastAnnounced?.message != message else { return false }
+        lastAnnounced = (turnID, message)
+        AccessibilityNotification.Announcement(message).post()
+        return true
     }
 
     /// Keeps the text of a send that could not be started, for a thread that

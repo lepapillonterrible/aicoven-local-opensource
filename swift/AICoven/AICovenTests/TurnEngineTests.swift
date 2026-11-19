@@ -134,6 +134,42 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertEqual(statuses?.contains("running"), false)
     }
 
+    // MARK: - Details and announcements
+
+    func testDetails_followsItsOwnTurnAndNotTheNextOneInTheThread() async throws {
+        let engine = makeEngine()
+        try await engine.start(with: question("First"), context: "First", roleID: nil, agentName: nil, attachments: nil)
+        let firstID = try XCTUnwrap(engine.running[threadID]?.turnID)
+        let details = WorkTraceTarget.running(threadID: threadID, turnID: firstID)
+        XCTAssertNil(details.trace(in: engine)?.finishedAt, "A running turn's trace is not finished")
+
+        provider.release()
+        await finished(engine)
+        let firstTrace = try XCTUnwrap(engine.endings[threadID]?.trace)
+        XCTAssertEqual(details.trace(in: engine), firstTrace)
+
+        // The thread's next turn, started from another window.
+        provider.hold()
+        try await engine.start(with: question("Second"), context: "Second", roleID: nil, agentName: nil, attachments: nil)
+        XCTAssertNotEqual(engine.running[threadID]?.turnID, firstID)
+        XCTAssertEqual(details.trace(in: engine), firstTrace, "Details still shows the turn it was opened on")
+
+        provider.release()
+        await finished(engine)
+        XCTAssertNil(details.trace(in: engine), "The next turn's trace is never shown in its place")
+    }
+
+    func testAStatus_isAnnouncedOnceHoweverManyWindowsShowIt() async {
+        await Task.yield()
+        let engine = makeEngine()
+
+        XCTAssertTrue(engine.announceStatus("Planning: the route", of: "turn-1"))
+        XCTAssertFalse(engine.announceStatus("Planning: the route", of: "turn-1"), "A second window showing the turn says nothing")
+        XCTAssertTrue(engine.announceStatus("Using tool web.search…", of: "turn-1"))
+        XCTAssertTrue(engine.announceStatus("Planning: the route", of: "turn-1"), "A status the turn returns to is said again")
+        XCTAssertTrue(engine.announceStatus("Planning: the route", of: "turn-2"), "Another turn's status is its own")
+    }
+
     func testTextOfAFailedSend_isKeptForItsThreadAndGivenBackOnce() async {
         // Makes this test a task, as every test that makes an engine must
         // be: a main-actor object released outside a task crashes on

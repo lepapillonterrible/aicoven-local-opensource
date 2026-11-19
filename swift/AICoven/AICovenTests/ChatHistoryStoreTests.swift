@@ -97,6 +97,27 @@ final class ChatHistoryStoreTests: XCTestCase {
         XCTAssertFalse(loaded.contains { $0.id == unreadable.id })
     }
 
+    func testAReadForAnAccount_stopsOnceItIsNoLongerTheCurrentOne() async throws {
+        // The key in memory is this account's, as it can still be for a
+        // moment after a switch to another.
+        try await repository.requireKey(of: UserScope.currentUserID)
+        do {
+            try await repository.requireKey(of: "another-user")
+            XCTFail("Nothing is read for an account that is not the current one")
+        } catch {
+            XCTAssertEqual(error as? RepositoryError, .accountChanged)
+        }
+
+        await DataEncryptionService.shared.lock()
+        do {
+            try await repository.requireKey(of: UserScope.currentUserID)
+            XCTFail("Nothing is read while the data is locked")
+        } catch {
+            XCTAssertEqual(error as? RepositoryError, .dataLocked)
+        }
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+    }
+
     func testAThreadOfAnotherAccount_isNotStoredUnderThisOne() async throws {
         let theirs = thread(id: "not-mine-\(UUID().uuidString)", userId: "another-user", title: "Theirs")
 

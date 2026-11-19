@@ -372,7 +372,7 @@ struct PersonalChatView: View {
 
                                 TurnStatusLineView(
                                     turn: runningTurn,
-                                    onDetails: { shownTrace = .running(threadID: thread.id) },
+                                    onDetails: { shownTrace = .running(threadID: thread.id, turnID: runningTurn.turnID) },
                                     onStop: { turns.stop(threadID: thread.id) }
                                 )
                             }
@@ -679,11 +679,15 @@ struct PersonalChatView: View {
     /// Loads the work traces of this thread's finished turns.
     private func loadTraces() async {
         let threadID = thread.id
+        let account = UserScope.currentUserID
         do {
             let loaded = try await ThreadRepository.shared.loadWorkTraces(threadID: threadID)
-            // The view can be showing another thread by now.
-            guard shownThreadID == threadID else { return }
-            traces = loaded
+            // The view can be showing another thread by now, or another
+            // account's.
+            guard shownThreadID == threadID, UserScope.currentUserID == account else { return }
+            // A turn that ended while these were read has its trace here
+            // already, and may not be among them.
+            traces.merge(loaded) { shown, _ in shown }
         } catch {
             AppErrorReporter.log(error: error, context: "PersonalContentView.loadTraces")
         }
