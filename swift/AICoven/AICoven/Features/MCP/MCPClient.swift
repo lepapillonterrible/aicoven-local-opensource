@@ -126,12 +126,14 @@ actor MCPClient {
             let result = try await request("tools/list", params: cursor.map { ["cursor": $0] } ?? [:])
             let page = try Self.decode(MCPListToolsResponse.self, from: result)
             tools += page.tools
-            // A missing cursor is the end; one already followed would go
-            // round for ever.
-            guard let next = page.nextCursor, seen.insert(next).inserted else { return tools }
+            // A missing cursor is the end.
+            guard let next = page.nextCursor else { return tools }
+            // One already followed would go round for ever: what was read
+            // is then not the whole list, and is not given as one.
+            guard seen.insert(next).inserted else { throw MCPClientError.invalidResponse("the tool list repeats") }
             cursor = next
         }
-        return tools
+        throw MCPClientError.invalidResponse("the tool list does not end")
     }
 
     /// Calls a tool. `tool` is its definition as the server listed it,
@@ -142,11 +144,13 @@ actor MCPClient {
         let params: [String: Any] = ["name": name, "arguments": arguments.mapValues(Self.plain)]
         let result = try await request("tools/call", params: params, name: name, parameterHeaders: Self.parameterHeaders(for: arguments, schema: tool?.inputSchema))
         let response = try Self.decode(MCPCallToolResponse.self, from: result)
-        var content = response.content
+        // Nothing a server says back is given on with this connection's
+        // token in it.
+        var content = response.content.map { MCPContentItem(type: $0.type, text: $0.text.map(withoutToken)) }
         // A tool that answers only with structured content is still read.
         if !content.contains(where: { $0.text?.isEmpty == false }), let structured = response.structuredContent,
            let data = try? JSONSerialization.data(withJSONObject: Self.plain(structured), options: [.fragmentsAllowed, .sortedKeys]) {
-            content.append(MCPContentItem(type: "text", text: String(decoding: data, as: UTF8.self)))
+            content.append(MCPContentItem(type: "text", text: withoutToken(String(decoding: data, as: UTF8.self))))
         }
         if response.isError == true {
             let said = content.compactMap(\.text).filter { !$0.isEmpty }.joined(separator: "\n")
@@ -158,7 +162,15 @@ actor MCPClient {
     /// Ends the session, where the server gave one. Nothing is kept open
     /// otherwise.
     func disconnect() async {
-        guard era == .legacy, let sessionID, let url = URL(string: server.serverUrl) else { return }
+        await endSession()
+    }
+
+    /// Tells the server its session is over, if it gave one, and forgets
+    /// it. A server may refuse to end sessions (405); either way it is
+    /// over here.
+    private func endSession() async {
+        guard let sessionID, let url = URL(string: server.serverUrl) else { return }
+        self.sessionID = nil
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
         request.setValue(sessionID, forHTTPHeaderField: "Mcp-Session-Id")
@@ -166,59 +178,67 @@ actor MCPClient {
             request.setValue(legacyVersion, forHTTPHeaderField: "MCP-Protocol-Version")
         }
         authorize(&request)
-        self.sessionID = nil
-        // A server may refuse to end sessions (405); either way it is over here.
         _ = try? await session.data(for: request)
     }
 
     // MARK: - Requests
 
+    /// How a request is put: as the current revision has it, as the
+    /// greeting of an earlier one, or as what follows that greeting.
+    private enum Form {
+        case modern
+        case greeting
+        case legacy
+    }
+
     /// One request and its result, in whichever protocol the server speaks.
     private func request(_ method: String, params: [String: Any], name: String? = nil, parameterHeaders: [String: String] = [:]) async throws -> [String: Any] {
-        try await settleEra()
-        var reply = try await post(method, params: params, name: name, parameterHeaders: parameterHeaders)
+        let era = try await settledEra()
+        let form: Form = era == .modern ? .modern : .legacy
+        var reply = try await post(method, params: params, as: form, name: name, parameterHeaders: parameterHeaders)
         // The session is gone: a new one is started, once, and the request
         // made again. It was not carried out without its session.
         if era == .legacy, reply.status == 404, sessionID != nil {
             sessionID = nil
+            // Nothing is settled again until the new greeting is answered.
+            self.era = nil
             try await initialize()
-            reply = try await post(method, params: params, name: name, parameterHeaders: parameterHeaders)
+            self.era = .legacy
+            reply = try await post(method, params: params, as: .legacy, name: name, parameterHeaders: parameterHeaders)
         }
         return try result(of: reply)
     }
 
-    /// Finds out which protocol the server speaks, once per server.
-    private func settleEra() async throws {
-        guard era == nil else { return }
+    /// Which protocol the server speaks, found out once per server. Set
+    /// only once it is known: a probe or a greeting that fails leaves
+    /// nothing settled, here or in the cache.
+    private func settledEra() async throws -> MCPEra {
+        if let era { return era }
         switch eras.era(of: server.serverUrl) {
         case .modern:
-            era = .modern
+            break
         case .legacy:
             try await initialize()
         case nil:
             try await probe()
         }
+        let settled: MCPEra = legacyVersion == nil ? .modern : .legacy
+        era = settled
+        eras.note(settled, for: server.serverUrl)
+        return settled
     }
 
     /// Asks the server to describe itself, as the current revision has it.
-    /// A server that does not know the question is an earlier one.
+    /// A server that does not know the question is an earlier one, and is
+    /// greeted.
     private func probe() async throws {
-        era = .modern
-        do {
-            try await discover()
-        } catch {
-            // Nothing is settled by a probe that failed.
-            if era == .modern { era = nil }
-            throw error
-        }
-    }
-
-    private func discover() async throws {
-        let reply = try await post("server/discover", params: [:])
-        if let result = reply.message?["result"] as? [String: Any], (200 ..< 300).contains(reply.status) {
+        let reply = try await post("server/discover", params: [:], as: .modern)
+        // A refusal is a refusal, whatever it says of itself.
+        guard reply.status != 401, reply.status != 403, reply.status < 500 else { throw MCPClientError.refused(status: reply.status) }
+        if (200 ..< 300).contains(reply.status), reply.error == nil, reply.message?["result"] != nil {
+            let result = try result(of: reply)
             let supported = result["supportedVersions"] as? [String] ?? [Self.modernVersion]
             guard supported.contains(Self.modernVersion) else { throw MCPClientError.unsupportedVersion(supported: supported) }
-            eras.note(.modern, for: server.serverUrl)
             return
         }
         if let error = reply.error {
@@ -227,66 +247,74 @@ actor MCPClient {
                 // A current server, of other versions than this one.
                 throw MCPClientError.unsupportedVersion(supported: error.supported)
             case -32020, -32021:
-                throw MCPClientError.serverError(code: error.code, message: error.message)
+                throw MCPClientError.serverError(code: error.code, message: withoutToken(error.message))
             default:
                 break
             }
         }
-        guard reply.status != 401, reply.status != 403, reply.status < 500 else { throw MCPClientError.refused(status: reply.status) }
         // Anything else (it does not know the method, or wants a session):
         // an earlier server, to be greeted first.
-        era = nil
         try await initialize()
     }
 
-    /// The handshake of the earlier revisions.
+    /// The handshake of the earlier revisions. On success the version and
+    /// the session (if the server gives one) are kept; on any failure
+    /// neither is, and a session the server did give is ended.
     private func initialize() async throws {
-        era = .legacy
         legacyVersion = nil
         sessionID = nil
         let reply = try await post("initialize", params: [
             "protocolVersion": Self.legacyVersions[0],
             "capabilities": [String: Any](),
             "clientInfo": Self.clientInfo,
-        ])
+        ], as: .greeting)
         guard let result = reply.message?["result"] as? [String: Any], (200 ..< 300).contains(reply.status) else {
-            era = nil
-            if let error = reply.error { throw MCPClientError.serverError(code: error.code, message: error.message) }
+            if let error = reply.error { throw MCPClientError.serverError(code: error.code, message: withoutToken(error.message)) }
             // No answer to `initialize` at this address: the old transport,
             // whose address only takes a GET.
             throw [400, 404, 405].contains(reply.status) ? MCPClientError.oldTransport : MCPClientError.refused(status: reply.status)
         }
-        guard let version = result["protocolVersion"] as? String, Self.legacyVersions.contains(version) else {
-            era = nil
-            throw MCPClientError.unsupportedVersion(supported: [result["protocolVersion"] as? String].compactMap(\.self))
-        }
-        legacyVersion = version
         sessionID = reply.sessionID
-        let acknowledged = try await post("notifications/initialized", params: nil, isNotification: true)
-        guard (200 ..< 300).contains(acknowledged.status) else {
-            era = nil
-            throw MCPClientError.refused(status: acknowledged.status)
+        do {
+            guard let version = result["protocolVersion"] as? String, Self.legacyVersions.contains(version) else {
+                throw MCPClientError.unsupportedVersion(supported: [result["protocolVersion"] as? String].compactMap(\.self))
+            }
+            legacyVersion = version
+            let acknowledged = try await post("notifications/initialized", params: nil, as: .legacy, isNotification: true)
+            guard (200 ..< 300).contains(acknowledged.status) else { throw MCPClientError.refused(status: acknowledged.status) }
+        } catch {
+            await endSession()
+            legacyVersion = nil
+            throw error
         }
-        eras.note(.legacy, for: server.serverUrl)
     }
 
     /// The result in a reply, or what the server said went wrong.
     private func result(of reply: Reply) throws -> [String: Any] {
         if let error = reply.error {
             if error.code == -32022 { throw MCPClientError.unsupportedVersion(supported: error.supported) }
-            throw MCPClientError.serverError(code: error.code, message: error.message)
+            throw MCPClientError.serverError(code: error.code, message: withoutToken(error.message))
         }
         guard (200 ..< 300).contains(reply.status) else { throw MCPClientError.refused(status: reply.status) }
         guard let result = reply.message?["result"] as? [String: Any] else {
             throw MCPClientError.invalidResponse("no result")
         }
         // The current revision says whether a result is whole. One that
-        // asks for input first cannot be answered here.
-        switch result["resultType"] as? String {
-        case nil, "complete": return result
+        // asks for input first cannot be answered here; anything else it
+        // might say is not a result this protocol has.
+        guard let type = result["resultType"] else { return result }
+        switch type as? String {
+        case "complete": return result
         case "input_required": throw MCPClientError.needsInput
         case let other?: throw MCPClientError.invalidResponse("result type \(other.prefix(40))")
+        case nil: throw MCPClientError.invalidResponse("result type")
         }
+    }
+
+    /// `text` without this connection's token, should a server say it back.
+    private func withoutToken(_ text: String) -> String {
+        guard let token, token.count >= 8 else { return text }
+        return text.replacingOccurrences(of: token, with: "[token]")
     }
 
     // MARK: - The wire
@@ -309,6 +337,7 @@ actor MCPClient {
     private func post(
         _ method: String,
         params: [String: Any]?,
+        as form: Form,
         name: String? = nil,
         parameterHeaders: [String: String] = [:],
         isNotification: Bool = false
@@ -326,7 +355,8 @@ actor MCPClient {
         var body: [String: Any] = ["jsonrpc": "2.0", "method": method]
         if !isNotification { body["id"] = id }
         var params = params
-        if era == .modern {
+        switch form {
+        case .modern:
             // Each request says the version it is in, and who asks.
             request.setValue(Self.modernVersion, forHTTPHeaderField: "MCP-Protocol-Version")
             request.setValue(method, forHTTPHeaderField: "Mcp-Method")
@@ -341,7 +371,9 @@ actor MCPClient {
             meta["io.modelcontextprotocol/clientInfo"] = Self.clientInfo
             meta["io.modelcontextprotocol/clientCapabilities"] = [String: Any]()
             params = (params ?? [:]).merging(["_meta": meta]) { _, new in new }
-        } else if method != "initialize" {
+        case .greeting:
+            break
+        case .legacy:
             if let legacyVersion {
                 request.setValue(legacyVersion, forHTTPHeaderField: "MCP-Protocol-Version")
             }
@@ -525,14 +557,14 @@ nonisolated struct MCPEventReader {
 
 // MARK: - MCP Models
 
-/// A tool as a server lists it: what is kept of it.
+/// A tool as this app keeps it, of what a server listed.
 struct MCPToolDefinition: Codable, Equatable, Identifiable {
     let name: String
     let description: String?
     let inputSchema: [String: AnyJSONValue]
     /// Whether the server marks the tool as one that changes nothing
-    /// (`annotations.readOnlyHint`). Only true counts: a tool not marked
-    /// is taken for one that changes things.
+    /// (`annotations.readOnlyHint` in its list). Only true counts: a tool
+    /// not marked is taken for one that changes things.
     let readOnlyHint: Bool
 
     var id: String {
@@ -546,17 +578,15 @@ struct MCPToolDefinition: Codable, Equatable, Identifiable {
         self.readOnlyHint = readOnlyHint
     }
 
-    /// From a server's list (the mark under `annotations`) or from what
-    /// this app kept of one (the mark beside the name). A tool listed
-    /// without a schema takes no arguments.
+    /// As the app stored it. One stored before the mark was kept reads as
+    /// not marked. (A server's list is read by `MCPListToolsResponse`,
+    /// where the mark is under `annotations`.)
     nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         name = try container.decode(String.self, forKey: .name)
         description = try container.decodeIfPresent(String.self, forKey: .description)
-        inputSchema = (try? container.decodeIfPresent([String: AnyJSONValue].self, forKey: .inputSchema)) ?? ["type": "object"]
-        let annotated = (try? container.decodeIfPresent([String: AnyJSONValue].self, forKey: .annotations))?["readOnlyHint"]
-        let kept = try? container.decodeIfPresent(Bool.self, forKey: .readOnlyHint)
-        readOnlyHint = kept ?? (annotated == .bool(true))
+        inputSchema = try container.decode([String: AnyJSONValue].self, forKey: .inputSchema)
+        readOnlyHint = try container.decodeIfPresent(Bool.self, forKey: .readOnlyHint) ?? false
     }
 
     nonisolated func encode(to encoder: Encoder) throws {
@@ -568,12 +598,15 @@ struct MCPToolDefinition: Codable, Equatable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case name, description, inputSchema, annotations, readOnlyHint
+        case name, description, inputSchema, readOnlyHint
     }
 }
 
-/// One page of a server's tools. A tool that cannot be read (it has no
-/// name) is left out, and the rest are still taken.
+/// One page of a server's tools, as the server sends it. A tool with no
+/// name is left out, and the rest are still taken. A tool listed with no
+/// input schema, or one that is not an object, is kept with the schema of
+/// an object that says nothing more. Whether a tool only reads is what
+/// its `annotations.readOnlyHint` says, and nothing else.
 struct MCPListToolsResponse: Decodable {
     let tools: [MCPToolDefinition]
     let nextCursor: String?
@@ -581,8 +614,23 @@ struct MCPListToolsResponse: Decodable {
     private struct Listed: Decodable {
         let tool: MCPToolDefinition?
 
+        enum CodingKeys: String, CodingKey {
+            case name, description, inputSchema, annotations
+        }
+
         nonisolated init(from decoder: Decoder) throws {
-            tool = try? MCPToolDefinition(from: decoder)
+            guard let container = try? decoder.container(keyedBy: CodingKeys.self),
+                  let name = try? container.decode(String.self, forKey: .name) else {
+                tool = nil
+                return
+            }
+            let annotations = try? container.decodeIfPresent([String: AnyJSONValue].self, forKey: .annotations)
+            tool = MCPToolDefinition(
+                name: name,
+                description: try? container.decodeIfPresent(String.self, forKey: .description),
+                inputSchema: (try? container.decodeIfPresent([String: AnyJSONValue].self, forKey: .inputSchema)) ?? ["type": "object"],
+                readOnlyHint: annotations?["readOnlyHint"] == .bool(true)
+            )
         }
     }
 
@@ -610,8 +658,8 @@ struct MCPContentItem: Decodable, Equatable {
 
     nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        type = (try? container.decode(String.self, forKey: .type)) ?? "unknown"
-        text = try? container.decodeIfPresent(String.self, forKey: .text)
+        type = try container.decode(String.self, forKey: .type)
+        text = try container.decodeIfPresent(String.self, forKey: .text)
     }
 
     /// What the model is given of it.
@@ -625,6 +673,8 @@ struct MCPContentItem: Decodable, Equatable {
     }
 }
 
+/// What a tool answered. A result that is not what the protocol has (its
+/// content not a list of typed pieces) is not read as an empty one.
 struct MCPCallToolResponse: Decodable {
     let content: [MCPContentItem]
     let isError: Bool?
@@ -632,9 +682,9 @@ struct MCPCallToolResponse: Decodable {
 
     nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        content = (try? container.decodeIfPresent([MCPContentItem].self, forKey: .content)) ?? []
-        isError = try? container.decodeIfPresent(Bool.self, forKey: .isError)
-        structuredContent = try? container.decodeIfPresent(AnyJSONValue.self, forKey: .structuredContent)
+        content = try container.decodeIfPresent([MCPContentItem].self, forKey: .content) ?? []
+        isError = try container.decodeIfPresent(Bool.self, forKey: .isError)
+        structuredContent = try container.decodeIfPresent(AnyJSONValue.self, forKey: .structuredContent)
     }
 
     enum CodingKeys: String, CodingKey {

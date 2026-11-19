@@ -322,8 +322,10 @@ final class MCPClientTests: XCTestCase {
         refusingDiscoverWith refusal: ScriptedMCPServer.Answer = .json(#"{"jsonrpc":"2.0","id":null,"error":{"code":-32000,"message":"Bad Request: Server not initialized"}}"#, status: 400),
         version: String = "2025-06-18",
         sessions: [String] = ["session-1", "session-2"],
-        losingTheSessionAt lost: Int? = nil
+        losingTheSessionAt lost: Int? = nil,
+        readyAnswers: [Int] = []
     ) -> ScriptedMCPServer {
+        let greeted = OSAllocatedUnfairLockBox(0)
         let given = OSAllocatedUnfairLockBox(0)
         return ScriptedMCPServer { asked, index in
             if asked.httpMethod == "DELETE" { return .status(405) }
@@ -334,7 +336,9 @@ final class MCPClientTests: XCTestCase {
                 let session = sessions[min(given.next(), sessions.count - 1)]
                 return .result(#"{"protocolVersion":"\#(version)","capabilities":{"tools":{}},"serverInfo":{"name":"Old","version":"1"}}"#, headers: ["Mcp-Session-Id": session])
             case "notifications/initialized":
-                return .status(202)
+                // The answers given in turn, then accepted.
+                let turn = greeted.next()
+                return .status(turn < readyAnswers.count ? readyAnswers[turn] : 202)
             case "tools/list":
                 if index == lost { return .status(404) }
                 return .result(#"{"tools":[{"name":"get_weather","inputSchema":{"type":"object"}}]}"#)
@@ -423,7 +427,7 @@ final class MCPClientTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? MCPClientError, .unsupportedVersion(supported: ["2023-01-01"]))
         }
-        XCTAssertEqual(ancient.methods, ["server/discover", "initialize"], "It is not told the client is ready")
+        XCTAssertEqual(ancient.methods, ["server/discover", "initialize", "DELETE"], "It is not told the client is ready")
 
         // An address that takes no POST at all: the old transport's.
         let old = ScriptedMCPServer { _, _ in .status(405) }
@@ -521,19 +525,165 @@ final class MCPClientTests: XCTestCase {
         XCTAssertEqual(MCPClient.parameterHeaders(for: ["half": 0.5], schema: ["properties": ["half": ["x-mcp-header": "Half"]]]), ["Mcp-Param-Half": "0.5"])
     }
 
-    func testAToolKeptByTheApp_keepsWhetherItOnlyReads() throws {
-        let listed = try JSONDecoder().decode(MCPToolDefinition.self, from: Data(#"{"name":"read_it","annotations":{"readOnlyHint":true}}"#.utf8))
-        XCTAssertTrue(listed.readOnlyHint)
-        let kept = try JSONDecoder().decode(MCPToolDefinition.self, from: JSONEncoder().encode(listed))
-        XCTAssertEqual(kept, listed)
-        XCTAssertTrue(kept.readOnlyHint, "Read back from what was kept, where the mark is beside the name")
+    func testWhetherAToolOnlyReads_isWhatTheServersAnnotationSays_andIsKeptWithTheTool() throws {
+        let page = try JSONDecoder().decode(MCPListToolsResponse.self, from: Data(#"""
+        {"tools":[
+          {"name":"marked","annotations":{"readOnlyHint":true}},
+          {"name":"says_so_beside_its_name","readOnlyHint":true},
+          {"name":"both","readOnlyHint":false,"annotations":{"readOnlyHint":true}},
+          {"name":"odd","description":7,"annotations":{"readOnlyHint":"yes"},"inputSchema":"none"},
+          {"name":"unmarked","inputSchema":{"type":"object","properties":{"q":{"type":"string"}}}},
+          "not a tool",
+          {"description":"no name"}
+        ]}
+        """#.utf8))
+        XCTAssertEqual(page.tools.map(\.name), ["marked", "says_so_beside_its_name", "both", "odd", "unmarked"], "Only what has no name is left out")
+        XCTAssertEqual(page.tools.map(\.readOnlyHint), [true, false, true, false, false], "Only the annotation counts, and only true")
+        XCTAssertEqual(page.tools[3].inputSchema, ["type": "object"])
+        XCTAssertNil(page.tools[3].description)
+        XCTAssertNil(page.nextCursor)
 
+        // As the app keeps a tool, the mark is beside the name.
+        let kept = try JSONDecoder().decode([MCPToolDefinition].self, from: JSONEncoder().encode(page.tools))
+        XCTAssertEqual(kept, page.tools)
         // Kept before the mark was: not marked.
         let before = try JSONDecoder().decode(MCPToolDefinition.self, from: Data(#"{"name":"old","description":"d","inputSchema":{"type":"object"}}"#.utf8))
         XCTAssertFalse(before.readOnlyHint)
-        let odd = try JSONDecoder().decode(MCPToolDefinition.self, from: Data(#"{"name":"odd","annotations":{"readOnlyHint":"yes"},"inputSchema":"none"}"#.utf8))
-        XCTAssertFalse(odd.readOnlyHint, "Only true counts")
-        XCTAssertEqual(odd.inputSchema, ["type": "object"])
+        XCTAssertEqual(before.description, "d")
+    }
+
+    // MARK: - What must not pass
+
+    func testAToolListThatDoesNotEnd_isNotTakenForAList() async {
+        let eras = MCPEraCache()
+        eras.note(.modern, for: "https://mcp.example.com/mcp")
+        let circling = ScriptedMCPServer { asked, _ in
+            let cursor = asked.params["cursor"] as? String
+            return .result(#"{"resultType":"complete","nextCursor":"\#(cursor == "a" ? "b" : "a")","tools":[{"name":"t"}]}"#)
+        }
+        do {
+            _ = try await client(circling, eras: eras).discoverTools()
+            XCTFail("It goes round")
+        } catch {
+            XCTAssertEqual(error as? MCPClientError, .invalidResponse("the tool list repeats"))
+        }
+        XCTAssertEqual(circling.methods.count, 3, "Stopped at the first cursor seen twice")
+
+        let endless = ScriptedMCPServer { _, index in .result(#"{"resultType":"complete","nextCursor":"page-\#(index)","tools":[]}"#) }
+        do {
+            _ = try await client(endless, eras: eras).discoverTools()
+            XCTFail("It does not end")
+        } catch {
+            XCTAssertEqual(error as? MCPClientError, .invalidResponse("the tool list does not end"))
+        }
+        XCTAssertEqual(endless.methods.count, MCPClient.mostPages)
+    }
+
+    func testARefusalIsARefusal_whateverItSaysOfItself_andAnOddAnswerToTheFirstQuestionIsNotASettledServer() async {
+        let eras = MCPEraCache()
+        let refusing = ScriptedMCPServer { _, _ in
+            .error(-32022, "Unsupported protocol version", status: 401, data: #"{"supported":["2027-01-15"]}"#)
+        }
+        do {
+            _ = try await client(refusing, eras: eras).discoverTools()
+            XCTFail("It refused")
+        } catch {
+            XCTAssertEqual(error as? MCPClientError, .refused(status: 401))
+        }
+
+        for (answer, expected) in [
+            (#"{"resultType":"input_required","requestState":"x"}"#, MCPClientError.needsInput),
+            (#"{"resultType":"partial"}"#, .invalidResponse("result type partial")),
+            (#"{"resultType":42}"#, .invalidResponse("result type")),
+        ] {
+            let odd = ScriptedMCPServer { _, _ in .result(answer) }
+            do {
+                _ = try await client(odd, eras: eras).discoverTools()
+                XCTFail("Not a whole answer")
+            } catch {
+                XCTAssertEqual(error as? MCPClientError, expected)
+            }
+            XCTAssertEqual(odd.methods, ["server/discover"], "Nothing more is asked of it")
+        }
+        XCTAssertNil(eras.era(of: "https://mcp.example.com/mcp"))
+    }
+
+    func testAToolsAnswerThatIsNotOne_isNotReadAsAnEmptyOne() async {
+        let eras = MCPEraCache()
+        eras.note(.modern, for: "https://mcp.example.com/mcp")
+        for malformed in [
+            #"{"resultType":"complete","content":[{"type":"text","text":"kept"},null]}"#,
+            #"{"resultType":"complete","content":"words"}"#,
+            #"{"resultType":"complete","content":[{"text":"no type"}]}"#,
+            #"{"resultType":"complete","content":[],"isError":"yes"}"#,
+            #"{"resultType":7,"content":[]}"#,
+        ] {
+            let server = modernServer(call: .result(malformed))
+            do {
+                _ = try await client(server, eras: eras).callTool(name: "get_weather", arguments: [:])
+                XCTFail("Not what the protocol has: \(malformed)")
+            } catch let MCPClientError.invalidResponse(what) {
+                XCTAssertFalse(what.isEmpty)
+            } catch {
+                XCTFail("\(error)")
+            }
+        }
+    }
+
+    func testWhatAServerSaysBack_isNotGivenOnWithTheConnectionsToken() async throws {
+        let eras = MCPEraCache()
+        eras.note(.modern, for: "https://mcp.example.com/mcp")
+        let token = "SECRET-TOKEN-123"
+
+        let echoing = modernServer(call: .error(-32603, "Bad header: Bearer \(token)", status: 500))
+        do {
+            _ = try await client(echoing, eras: eras, token: token, auth: .bearer).callTool(name: "get_weather", arguments: [:])
+            XCTFail("It failed")
+        } catch {
+            XCTAssertEqual(error as? MCPClientError, .serverError(code: -32603, message: "Bad header: Bearer [token]"))
+        }
+
+        let failing = modernServer(call: .result(#"{"resultType":"complete","content":[{"type":"text","text":"denied for \#(token)"}],"isError":true}"#))
+        do {
+            _ = try await client(failing, eras: eras, token: token, auth: .bearer).callTool(name: "get_weather", arguments: [:])
+            XCTFail("The tool failed")
+        } catch {
+            XCTAssertEqual(error as? MCPClientError, .toolFailed("denied for [token]"))
+        }
+
+        let telling = modernServer(call: .result(#"{"resultType":"complete","content":[{"type":"text","text":"you sent \#(token)"}],"structuredContent":{"sent":"\#(token)"}}"#))
+        let content = try await client(telling, eras: eras, token: token, auth: .bearer).callTool(name: "get_weather", arguments: [:])
+        XCTAssertEqual(content.map(\.shown), ["you sent [token]"])
+    }
+
+    func testAGreetingThatFails_leavesNothingSettledAndEndsTheSessionItWasGiven() async throws {
+        let eras = MCPEraCache()
+        // Ready is refused the first time, and taken the second.
+        let server = legacyServer(readyAnswers: [500])
+        let client = client(server, eras: eras)
+
+        do {
+            _ = try await client.discoverTools()
+            XCTFail("The server did not take the client as ready")
+        } catch {
+            XCTAssertEqual(error as? MCPClientError, .refused(status: 500))
+        }
+        XCTAssertEqual(server.methods, ["server/discover", "initialize", "notifications/initialized", "DELETE"], "The session it gave is ended")
+        XCTAssertEqual(server.asked.last?.header("Mcp-Session-Id"), "session-1")
+        XCTAssertNil(eras.era(of: "https://mcp.example.com/mcp"))
+
+        // The same client asked again starts from the beginning: it does
+        // not go on as if it had been greeted.
+        let tools = try await client.discoverTools()
+        XCTAssertEqual(tools.map(\.name), ["get_weather"])
+        XCTAssertEqual(Array(server.methods.dropFirst(4)), ["server/discover", "initialize", "notifications/initialized", "tools/list"])
+        XCTAssertEqual(server.asked.last?.header("Mcp-Session-Id"), "session-2")
+        XCTAssertEqual(eras.era(of: "https://mcp.example.com/mcp"), .legacy)
+
+        // A version not spoken, with a session given all the same.
+        let ancient = legacyServer(version: "2023-01-01")
+        _ = try? await self.client(ancient).discoverTools()
+        XCTAssertEqual(ancient.methods, ["server/discover", "initialize", "DELETE"], "Its session is ended too, and it is not told the client is ready")
     }
 }
 

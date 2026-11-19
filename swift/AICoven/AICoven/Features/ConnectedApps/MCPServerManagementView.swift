@@ -162,7 +162,12 @@ struct MCPServerManagementView: View {
                 await client.disconnect()
                 throw error
             }
-            var updated = server
+            // Onto the server as it is kept now, not as it was when the test
+            // began: it may have been edited, or removed, meanwhile.
+            guard var updated = await service.getAllMCPServers().first(where: { $0.id == server.id }) else {
+                await loadServers()
+                return
+            }
             updated.cachedTools = tools
             updated.toolsCachedAt = Date()
             updated.status = .connected
@@ -504,15 +509,27 @@ struct AddMCPServerSheet: View {
             Task.detached {
                 let client = MCPClient(server: newAccount, token: tokenToSave)
                 do {
-                    let tools = try await client.discoverTools()
-                    await client.disconnect()
-                    var updated = newAccount
+                    let tools: [MCPToolDefinition]
+                    do {
+                        tools = try await client.discoverTools()
+                        await client.disconnect()
+                    } catch {
+                        await client.disconnect()
+                        throw error
+                    }
+                    // Only if nothing has listed its tools since (a Test
+                    // run meanwhile is newer than this), and onto the
+                    // server as it is kept now.
+                    guard var updated = await service.getAllMCPServers().first(where: { $0.id == newAccount.id }),
+                          updated.toolsCachedAt == nil else { return }
                     updated.cachedTools = tools
                     updated.toolsCachedAt = Date()
                     updated.status = .connected
                     try await service.updateMCPServer(updated)
                 } catch {
-                    print("Initial MCP connection/tool discovery failed: \(error)")
+                    // What failed and its kind, never what a server said.
+                    let failure = error as NSError
+                    AppErrorReporter.log(message: "A new MCP server's tools could not be listed (\(failure.domain) \(failure.code)).", context: "MCPServerManagementView.add")
                 }
             }
 
