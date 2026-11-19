@@ -10,7 +10,9 @@ import Foundation
 /// ends, with the reply or what went wrong. A turn still recorded as running
 /// that this engine neither runs nor holds an ending for has no reply
 /// stored: the app closed on it, or before its ending could be stored.
-/// Opening its thread says so there.
+/// Opening its thread says so there, unless an agent of the person's own
+/// was running it: that run went on, and is picked up and followed to its
+/// end.
 @MainActor
 final class TurnEngine: ObservableObject {
     static let shared = TurnEngine(chat: .shared)
@@ -182,10 +184,11 @@ final class TurnEngine: ObservableObject {
         unsent.removeValue(forKey: threadID)
     }
 
-    /// Ends any turn in the thread that is recorded as running but is not,
-    /// and whose ending this engine does not hold: the thread gets a line
-    /// saying no reply was saved. An ending the engine holds unstored is
-    /// tried again first.
+    /// Settles any turn in the thread that is recorded as running but is
+    /// not, and whose ending this engine does not hold. One an agent of the
+    /// person's own was running is picked up and followed to its end; any
+    /// other is ended, and the thread gets a line saying no reply was saved.
+    /// An ending the engine holds unstored is tried again first.
     func settleInterruptedTurns(threadID: String) async {
         do {
             do {

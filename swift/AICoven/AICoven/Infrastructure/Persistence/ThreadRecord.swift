@@ -400,7 +400,9 @@ enum TurnOutcome: String {
 /// The run an agent of the person's own is making for a turn: enough to
 /// find it again there.
 nonisolated struct AgentRun: Codable, Equatable {
-    /// "hermes".
+    static let hermes = "hermes"
+
+    /// Whose run it is: `AgentRun.hermes`.
     let provider: String
     let runID: String
     /// The name the reply is shown under, as the turn was started with.
@@ -639,7 +641,9 @@ extension ThreadRepository {
                 )
             case let .end(id, outcome, _):
                 try db.execute(
-                    sql: "UPDATE turns SET status = ?, finished_at = ?, message_id = ?, trace_ciphertext = ? WHERE id = ? AND user_id = ? AND status = ?",
+                    // The run that was making it is no longer needed to find
+                    // it again, and is not kept.
+                    sql: "UPDATE turns SET status = ?, finished_at = ?, message_id = ?, trace_ciphertext = ?, run_ciphertext = NULL WHERE id = ? AND user_id = ? AND status = ?",
                     arguments: [outcome.rawValue, Date(), message.id, storedTrace, id, session.userID, TurnOutcome.running.rawValue]
                 )
                 guard db.changesCount > 0 else { return false }

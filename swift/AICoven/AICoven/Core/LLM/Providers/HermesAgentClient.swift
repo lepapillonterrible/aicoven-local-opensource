@@ -58,12 +58,16 @@ nonisolated enum HermesAgentError: LocalizedError, Equatable {
     case invalidAddress
     case refused(status: Int)
     case noRunID
+    /// A run kept with a turn cannot be followed: the agent is no longer
+    /// connected, or what was kept is not a run's id.
+    case cannotPickUp
 
     var errorDescription: String? {
         switch self {
         case .invalidAddress: "The Hermes address is not a web address."
         case let .refused(status): "Hermes answered with HTTP \(status)."
         case .noRunID: "Hermes started no run."
+        case .cannotPickUp: "The Hermes run this reply was waiting on can no longer be picked up."
         }
     }
 }

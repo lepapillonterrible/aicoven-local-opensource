@@ -47,7 +47,7 @@ nonisolated struct HermesTurn {
     /// ended, and it is followed from there. What it had answered before is
     /// not known here; a run that ends with an answer of its own shows it.
     func resume(runID: String, report: @escaping @Sendable (TurnState) -> Void) async throws {
-        guard let runID = HermesAgentClient.validRunID(runID) else { throw HermesAgentError.noRunID }
+        guard let runID = HermesAgentClient.validRunID(runID) else { throw HermesAgentError.cannotPickUp }
         try await follow(runID, lookFirst: true, report)
     }
 

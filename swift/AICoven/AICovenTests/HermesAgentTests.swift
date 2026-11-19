@@ -696,7 +696,7 @@ final class HermesAgentTests: XCTestCase {
             try await turn().resume(runID: "../other", report: { _ in })
             XCTFail("A run id that is not one is not looked for")
         } catch {
-            XCTAssertEqual(error as? HermesAgentError, .noRunID)
+            XCTAssertEqual(error as? HermesAgentError, .cannotPickUp)
         }
     }
 
@@ -754,6 +754,10 @@ final class HermesAgentTests: XCTestCase {
         XCTAssertEqual(messages.last?.metadata?["role_name"], AnyJSONValue("Hermes"))
         let left = try await store.runningTurns(threadID: threadID)
         XCTAssertEqual(left, [])
+        let after = try await DatabaseManager.shared.dbQueue?.read { db in
+            try Row.fetchOne(db, sql: "SELECT run_ciphertext FROM turns WHERE id = ?", arguments: [turnID])
+        }
+        XCTAssertNil(after?["run_ciphertext"] as Data?, "Once the turn has ended, its run is no longer kept")
     }
 
     @MainActor
@@ -790,15 +794,68 @@ final class HermesAgentTests: XCTestCase {
         XCTAssertTrue(HermesStub.requests.isEmpty)
 
         // A run is kept only with a turn that is still running.
-        let before = try await DatabaseManager.shared.dbQueue?.read { db in
-            try Row.fetchOne(db, sql: "SELECT status, run_ciphertext FROM turns WHERE id = ?", arguments: [turnID])
-        }
         try await store.keepRun(AgentRun(provider: "hermes", runID: "run_2"), forTurn: turnID)
         let after = try await DatabaseManager.shared.dbQueue?.read { db in
             try Row.fetchOne(db, sql: "SELECT status, run_ciphertext FROM turns WHERE id = ?", arguments: [turnID])
         }
         XCTAssertEqual(after?["status"] as String?, "interrupted")
-        XCTAssertEqual(after?["run_ciphertext"] as Data?, before?["run_ciphertext"] as Data?, "The run kept with it is as it was")
+        XCTAssertNil(after?["run_ciphertext"] as Data?, "An ended turn keeps no run, and is given none")
+    }
+
+    @MainActor
+    func testATurnStartedWithHermes_keepsItsRunWithTheNameItWasStartedUnder() async throws {
+        let defaults = UserDefaults.standard
+        let keys = ["llm_provider", "hermes_model_connections_converted.v1"].map(UserScope.scopedKey)
+        let saved = keys.map { defaults.object(forKey: $0) }
+        addTeardownBlock {
+            for (key, value) in zip(keys, saved) {
+                UserDefaults.standard.set(value, forKey: key)
+            }
+        }
+        defaults.set("hermes", forKey: keys[0])
+        defaults.set(true, forKey: keys[1])
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        DatabaseManager.shared.configureIfNeeded()
+        await ThreadService.shared.reloadForCurrentUser()
+        let threadID = try await ThreadService.shared.createThread(title: "Hermes \(UUID().uuidString)").id
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await ThreadService.shared.deleteThread(threadId: threadID)
+            await ThreadService.shared.reloadForCurrentUser()
+            await DataEncryptionService.shared.lock()
+        }
+        // Waiting on the person, so the run is under way when it is looked for.
+        HermesStub.answer("GET", events, with: (200, stream(#"{"event":"approval.request","command":"git push"}"#)))
+        HermesStub.answer("POST", "/v1/runs/run_1/stop", with: (200, "{}"))
+        let asking = HermesStub.expectRequest(to: events)
+        let agent = client
+        let engine = TurnEngine(chat: ChatService(
+            contextBuilder: ContextBuilder(limits: .init(maxRecentMessages: 4, maxRecentMemories: 4)),
+            modelRouter: HeuristicModelRouter(availableModels: []),
+            llmClients: [:],
+            threadStore: ThreadRepository.shared,
+            toolService: ToolService.shared,
+            shouldAutoRefreshEnvironment: false,
+            hermesAgent: { agent }
+        ))
+
+        try await engine.start(
+            with: TurnProgress.message(in: threadID, role: "user", content: "Push it"),
+            context: "Push it", roleID: nil, agentName: "Strix", attachments: nil
+        )
+        await fulfillment(of: [asking], timeout: 10)
+
+        let turns = try await ThreadRepository.shared.runningTurns(threadID: threadID)
+        XCTAssertEqual(turns.map(\.run), [AgentRun(provider: "hermes", runID: "run_1", agentName: "Strix")])
+
+        let ended = expectation(description: "The turn has ended")
+        ended.assertForOverFulfill = false
+        let watching = engine.$endings.sink { endings in
+            if endings[threadID] != nil { ended.fulfill() }
+        }
+        engine.stop(threadID: threadID)
+        await fulfillment(of: [ended], timeout: 10)
+        watching.cancel()
     }
 
     @MainActor
