@@ -1384,8 +1384,9 @@ actor ChatService {
             return ("hermes", "")
         }
         // Nor does OpenClaw need one where its connection names its
-        // Gateway: its turns are run there.
-        if savedProvider == "openclaw", openClawTurn("") != nil {
+        // Gateway: its turns are run there. With a client too, its model
+        // is chosen below as before, for what is asked of a model.
+        if savedProvider == "openclaw", !llmClients.keys.contains("openclaw"), openClawTurn("") != nil {
             return ("openclaw", "")
         }
 

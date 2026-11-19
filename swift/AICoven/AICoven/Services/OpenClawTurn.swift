@@ -16,8 +16,7 @@ nonisolated struct OpenClawTurn {
         try await OpenClawGateway.open($0, token: $1)
     }
 
-    /// How long a stopped turn waits for the Gateway to answer: for the run
-    /// it was asked for as the turn was stopped, and then for the stop.
+    /// How long a stopped turn waits for the Gateway to take the stop.
     var longestWaitToStop: TimeInterval = 5
 
     static let lostContact = "AICoven lost contact with OpenClaw before the run ended. It may still be running there."
@@ -85,10 +84,18 @@ nonisolated struct OpenClawTurn {
         do {
             let sent: [String: Any]
             do {
-                sent = try await Self.object(send(message, as: runID, in: sessionKey, through: gateway))
-            } catch OpenClawGatewayError.closed {
-                // The connection ended with the run asked for and not
-                // answered: it may have begun.
+                let answered = try await send(message, as: runID, in: sessionKey, through: gateway)
+                // An answer that says nothing of the run leaves it named
+                // as it was asked for.
+                sent = (try? Self.object(answered)) ?? [:]
+            } catch let error as OpenClawGatewayError where error != .closed {
+                // The Gateway refused the run, or it was not sent: no run began.
+                throw error
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // The connection ended, or failed, with the run asked for
+                // and not answered: it may have begun.
                 try Task.checkCancellation()
                 var state = TurnState(threadId: threadID)
                 return end(&state, as: .failed, saying: Self.lostContact, report)
@@ -146,22 +153,25 @@ nonisolated struct OpenClawTurn {
     }
 
     /// Asks the Gateway to start the run, and waits for its answer. Asked
-    /// from a task of its own: once asked for, the run is not taken back by
-    /// stopping the turn, so the stop that follows is of a run the Gateway
-    /// was asked for. A stopped turn waits `longestWaitToStop` for the
-    /// answer, then no longer.
+    /// from a task of its own, which stopping the turn does not stop: once
+    /// asked for, the request is sent, so the stop that follows it is of a
+    /// run the Gateway was asked for. A stopped turn no longer waits for
+    /// the answer.
     private func send(_ message: String, as runID: String, in sessionKey: String, through gateway: OpenClawGatewayConnection) async throws -> Data {
-        let sending = Task {
-            try await gateway.call("chat.send", ["sessionKey": sessionKey, "message": message, "idempotencyKey": runID])
-        }
-        return try await withTaskCancellationHandler {
-            try await sending.value
-        } onCancel: {
-            Task {
-                try await Task.sleep(nanoseconds: UInt64(longestWaitToStop * 1_000_000_000))
-                sending.cancel()
+        let (answers, answer) = AsyncThrowingStream<Data, Error>.makeStream()
+        Task {
+            do {
+                try await answer.yield(gateway.call("chat.send", ["sessionKey": sessionKey, "message": message, "idempotencyKey": runID]))
+                answer.finish()
+            } catch {
+                answer.finish(throwing: error)
             }
         }
+        for try await answered in answers {
+            return answered
+        }
+        // Ended with no answer: the turn was stopped while it waited.
+        throw CancellationError()
     }
 
     /// Tells the Gateway to stop a run. The run is OpenClaw's own: it goes

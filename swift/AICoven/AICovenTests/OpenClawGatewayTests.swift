@@ -14,6 +14,13 @@ final class ScriptedGatewaySocket: OpenClawSocket, @unchecked Sendable {
     private var sentWatchers: [(count: Int, seen: XCTestExpectation)] = []
     private var closed = false
     private var answers: (@Sendable ([String: Any]) -> [[String: Any]])?
+    private var sendFailure: Error?
+
+    /// From now on, nothing more can be sent: sending fails with `error`,
+    /// as a network that has gone would have it.
+    func failSending(with error: Error) {
+        lock.withLock { sendFailure = error }
+    }
 
     /// Plays the Gateway by rule: each frame sent to it is answered with
     /// the frames this gives, in order.
@@ -64,6 +71,7 @@ final class ScriptedGatewaySocket: OpenClawSocket, @unchecked Sendable {
         let frame = (try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]) ?? [:]
         let (met, rule): ([XCTestExpectation], (@Sendable ([String: Any]) -> [[String: Any]])?) = try lock.withLock {
             guard !closed else { throw OpenClawGatewayError.closed }
+            if let sendFailure { throw sendFailure }
             sentFrames.append(frame)
             let met = sentWatchers.filter { $0.count <= sentFrames.count }.map(\.seen)
             sentWatchers.removeAll { $0.count <= sentFrames.count }

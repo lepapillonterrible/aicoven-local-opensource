@@ -30,13 +30,22 @@ private actor AskedOfThePerson {
 private final class CountingChatModel: LLMClient, @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
+    private var asked: [String] = []
 
     var calls: Int {
         lock.withLock { count }
     }
 
-    func completeChat(messages _: [LLMMessage], model _: String, options _: ChatOptions) async throws -> LLMChatResponse {
-        lock.withLock { count += 1 }
+    /// The models it was asked for.
+    var models: [String] {
+        lock.withLock { asked }
+    }
+
+    func completeChat(messages _: [LLMMessage], model: String, options _: ChatOptions) async throws -> LLMChatResponse {
+        lock.withLock {
+            count += 1
+            asked.append(model)
+        }
         throw URLError(.badServerResponse)
     }
 
@@ -332,6 +341,11 @@ final class OpenClawTurnTests: XCTestCase {
         XCTAssertFalse(ToolApproval.openClaw(["kind": "exec", "commandText": padded, "allowedDecisions": ["allow-once", "deny"]], threadID: "t").canApprove)
         let fits = String(repeating: "a", count: HermesAgentClient.longestCommandShown)
         XCTAssertTrue(ToolApproval.openClaw(["kind": "exec", "commandText": fits, "allowedDecisions": ["allow-once", "deny"]], threadID: "t").canApprove)
+        // Nor does text that is nothing but white space pass its limit.
+        let blankWarning = ToolApproval.openClaw(["kind": "exec", "commandText": "ls", "warningText": String(repeating: " ", count: 501), "allowedDecisions": ["allow-once", "deny"]], threadID: "t")
+        XCTAssertFalse(blankWarning.canApprove)
+        let blankCommand = ToolApproval.openClaw(["kind": "exec", "commandText": String(repeating: " ", count: HermesAgentClient.longestCommandShown + 1), "title": "Tidy", "allowedDecisions": ["allow-once", "deny"]], threadID: "t")
+        XCTAssertFalse(blankCommand.canApprove)
         let paddedTitle = ToolApproval.openClaw(["kind": "plugin", "title": "Send" + String(repeating: " ", count: 160), "allowedDecisions": ["allow-once", "deny"]], threadID: "t")
         XCTAssertFalse(paddedTitle.canApprove)
         XCTAssertEqual(paddedTitle.details, "Send\nWhat OpenClaw sent is longer than can be shown here, so it can only be denied.")
@@ -383,14 +397,23 @@ final class OpenClawTurnTests: XCTestCase {
         // The Gateway says the request is settled, and the run ends.
         let settled = ScriptedGatewaySocket()
         let command: [String: Any] = ["kind": "exec", "commandText": "ls", "allowedDecisions": ["allow-once", "deny"]]
-        play(settled) { [self] runID in
-            [approval("approval:1", command), approval("approval:1", command, phase: "terminal"), chat("final", run: runID, ["finalText": "Done."])]
+        play(settled) { [self] _ in
+            [approval("approval:1", command), approval("approval:1", command, phase: "terminal")]
         }
+        let withdrawn = expectation(description: "The question is withdrawn while the run goes on")
         let after = TurnReports()
-        try await turn(over: settled) { _ in
+        let goingOn = try Task { [turn = turn(over: settled) { _ in
             try? await Task.sleep(nanoseconds: 60_000_000_000)
+            withdrawn.fulfill()
             return Task.isCancelled ? .withdrawn : .approved
-        }.run(message: "Go", report: after.add)
+        }] in
+            try await turn.run(message: "Go", report: after.add)
+        }
+        await fulfillment(of: [withdrawn], timeout: 10)
+        XCTAssertEqual(after.all, [], "The run has not ended")
+        let runID = (settled.sent.first { $0["method"] as? String == "chat.send" }?["params"] as? [String: Any])?["idempotencyKey"] as? String ?? ""
+        settled.push(chat("final", run: runID, ["finalText": "Done."]))
+        try await goingOn.value
         XCTAssertEqual(after.all.last?.answer, "Done.")
         XCTAssertFalse(settled.sent.contains { $0["method"] as? String == "approval.resolve" })
     }
@@ -415,6 +438,52 @@ final class OpenClawTurnTests: XCTestCase {
 
         XCTAssertEqual(reports.all.last?.status, .failed)
         XCTAssertEqual(reports.all.last?.answer, OpenClawTurn.lostContact)
+    }
+
+    func testWhenTheRunCannotBeKnownToHaveLeft_theTurnSaysTheRunMayBeGoing() async throws {
+        let socket = ScriptedGatewaySocket()
+        let session = session
+        socket.answer { [self] request in
+            switch request["method"] as? String {
+            case "connect":
+                return [ScriptedGatewaySocket.welcome(to: request["id"] as? String ?? "")]
+            case "sessions.messages.subscribe":
+                // The network goes as the run is about to be asked for.
+                socket.failSending(with: URLError(.networkConnectionLost))
+                return [answer(request, with: ["subscribed": true, "key": session])]
+            default:
+                return []
+            }
+        }
+        let reports = TurnReports()
+
+        try await turn(over: socket).run(message: "Go", report: reports.add)
+
+        XCTAssertEqual(reports.all.last?.status, .failed)
+        XCTAssertEqual(reports.all.last?.answer, OpenClawTurn.lostContact)
+    }
+
+    func testARunTheGatewayRefuses_failsWithWhatTheGatewaySaid() async throws {
+        let socket = ScriptedGatewaySocket()
+        let session = session
+        socket.answer { [self] request in
+            switch request["method"] as? String {
+            case "connect":
+                return [ScriptedGatewaySocket.welcome(to: request["id"] as? String ?? "")]
+            case "sessions.messages.subscribe":
+                return [answer(request, with: ["subscribed": true, "key": session])]
+            default:
+                return [["type": "res", "id": request["id"] ?? "", "ok": false, "error": ["code": "UNAVAILABLE", "message": "Busy"]]]
+            }
+        }
+
+        do {
+            try await turn(over: socket).run(message: "Go", report: { _ in XCTFail("No run began") })
+            XCTFail("A refused run does not end as a reply")
+        } catch {
+            XCTAssertEqual(error as? OpenClawGatewayError, .refused(code: "UNAVAILABLE", message: "Busy"))
+        }
+        XCTAssertFalse(socket.sent.contains { $0["method"] as? String == "chat.abort" })
     }
 
     // MARK: - Stop
@@ -629,6 +698,51 @@ final class OpenClawTurnTests: XCTestCase {
         _ = try? await chat.streamMessage(threadId: threadID, message: "Hello", onStateChange: { _ in })
 
         XCTAssertGreaterThan(model.calls, 0)
+        await DataEncryptionService.shared.lock()
+    }
+
+    func testWithAGatewayAndAModelClientBoth_whatIsAskedOfAModelStillNamesItsModel() async throws {
+        let defaults = UserDefaults.standard
+        let keys = ["llm_provider", "openclaw_model"].map(UserScope.scopedKey)
+        let saved = keys.map { defaults.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                defaults.set(value, forKey: key)
+            }
+        }
+        defaults.set("openclaw", forKey: keys[0])
+        defaults.set("claw-model", forKey: keys[1])
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        await MainActor.run { DatabaseManager.shared.configureIfNeeded() }
+        await ThreadService.shared.reloadForCurrentUser()
+        let threadID = try await ThreadService.shared.createThread(title: "OpenClaw \(UUID().uuidString)").id
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await ThreadService.shared.deleteThread(threadId: threadID)
+            await ThreadService.shared.reloadForCurrentUser()
+            await DataEncryptionService.shared.lock()
+        }
+        // A thread one of the app's own models answered.
+        try await ThreadRepository.shared.appendChatMessage(TurnProgress.message(in: threadID, role: "user", content: "Hello"))
+        let made = try turn(over: ScriptedGatewaySocket(), threadID: threadID)
+        let model = CountingChatModel()
+        let chat = ChatService(
+            contextBuilder: ContextBuilder(limits: .init(maxRecentMessages: 4, maxRecentMemories: 4)),
+            modelRouter: HeuristicModelRouter(availableModels: [ModelDescriptor(
+                providerID: "openclaw", modelID: "claw-model", maxContextTokens: 4096,
+                supportsTools: false, supportsEmbeddings: false, costClass: .cheap
+            )]),
+            llmClients: ["openclaw": model],
+            threadStore: ThreadRepository.shared,
+            toolService: ToolService.shared,
+            shouldAutoRefreshEnvironment: false,
+            hermesAgent: { nil },
+            openClawTurn: { _ in made }
+        )
+
+        await chat.updateThreadSummary(threadId: threadID)
+
+        XCTAssertEqual(model.models, ["claw-model"], "The summary is asked of the model chosen for OpenClaw, by its name")
         await DataEncryptionService.shared.lock()
     }
 

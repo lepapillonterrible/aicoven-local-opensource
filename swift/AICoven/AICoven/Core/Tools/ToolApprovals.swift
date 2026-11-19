@@ -366,9 +366,9 @@ nonisolated extension ToolApproval {
         var isCut = false
         func text(_ key: String, limit: Int) -> String? {
             guard let sent = presentation[key] as? String else { return nil }
+            isCut = isCut || sent.count > limit
             let value = sent.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !value.isEmpty else { return nil }
-            isCut = isCut || sent.count > limit
             return value.count > limit ? "\(value.prefix(limit))\n… and \(value.count - limit) more characters" : value
         }
         let sentCommand = presentation["commandText"] as? String ?? ""
@@ -379,7 +379,9 @@ nonisolated extension ToolApproval {
 
         var lines: [String] = []
         let whyNot: String?
-        if command.isEmpty {
+        if sentCommand.count > HermesAgentClient.longestCommandShown {
+            whyNot = "OpenClaw's command is too long to show here, so it can only be denied."
+        } else if command.isEmpty {
             lines = said
             whyNot = if said.isEmpty {
                 "OpenClaw did not say what it is for, so it can only be denied."
@@ -390,8 +392,6 @@ nonisolated extension ToolApproval {
             } else {
                 nil
             }
-        } else if sentCommand.count > HermesAgentClient.longestCommandShown {
-            whyNot = "OpenClaw's command is too long to show here, so it can only be denied."
         } else {
             lines = [command] + said + [host].compactMap(\.self)
             whyNot = if isCut {
