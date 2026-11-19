@@ -76,7 +76,12 @@ nonisolated struct ImageGenerationService {
         if let model, !model.isEmpty {
             candidates = [model]
         } else {
-            candidates = try await Self.candidates(among: listedImageModels())
+            do {
+                candidates = try await Self.candidates(among: listedImageModels())
+            } catch let error as URLError where error.code == .cancelled {
+                // Stopped while the models were being listed.
+                throw CancellationError()
+            }
             guard !candidates.isEmpty else { throw Failure.noImageModel }
         }
         var last: Error = Failure.noPicture

@@ -95,13 +95,12 @@ These are used in two main places:
 
 ### Image generation
 
-- `generateImage(prompt:)` is a simple, provider-backed image helper.
-- Today it delegates to an OpenAI chat model when available with a constrained system prompt that returns a data URL.
-- The app decodes the data URL locally and writes a PNG under the app's caches directory.
-- Returns a small `GeneratedImage` struct with an `id` and a local file `url`.
-- The UI attaches these as `FileAttachmentDetail` objects so they behave like regular attachments.
-
-In the future this may be upgraded to use first-class image generation endpoints for multiple providers, but the public API of `ToolService` is intended to remain stable.
+- Image generation is a tool a model calls, `image.generate` (`prompt`, and optionally `model`, `size`, `quality`), not a `ToolService` function.
+- It is offered to a chat turn only where an OpenAI key is stored, whichever model answers the turn. Agent runs are not offered it.
+- `ImageGenerationService` (`Infrastructure/Tools/ImageGenerationService.swift`) makes the image with that key at OpenAI's image endpoint (`POST /v1/images/generations`). With no model named, the key's image models are tried in order, four at most.
+- `ToolExecutionService` keeps the image in the app's encrypted attachment store (`AttachmentStore`) for the thread, only if the thread is the signed-in account's.
+- The turn gives it to its reply, which shows it like any attachment (`FileAttachmentDetail`): a thumbnail that opens in Quick Look. The model is told the person has the image, not where it is.
+- Only OpenAI makes images for now.
 
 ### File generation
 
@@ -115,7 +114,6 @@ The enhanced message composer in the personal chat view wires several of these t
 
 - **Web search** – Takes the current draft message as a query and appends a `[Web search results]` section with top results.
 - **Summarize attachments** – Runs `analyzeAttachment` for each attached file/image and appends an `[Attachment analysis]` section.
-- **Generate image from message** – Calls `generateImage` and attaches the resulting PNG.
 - **Generate file from message** – Calls `generateFile` to save the draft text as a `.txt` file and attaches it.
 
 When you hit send:

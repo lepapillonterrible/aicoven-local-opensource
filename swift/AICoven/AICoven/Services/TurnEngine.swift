@@ -583,7 +583,7 @@ struct TurnProgress {
     /// own in the attachment store, before it is stored: files not marked
     /// with a message are cleared as unsent. If they cannot be marked the
     /// reply is stored without them, not with files that would go from
-    /// under it.
+    /// under it, and those of them still unmarked are removed.
     static func keepingGeneratedFiles(of message: ChatMessage, inThread threadID: String, store: AttachmentStore = .shared) async -> ChatMessage {
         guard let kept = message.metadata, let files = FileAttachmentDetail.attachments(in: kept), !files.isEmpty else { return message }
         do {
@@ -592,6 +592,8 @@ struct TurnProgress {
         } catch {
             let failure = error as NSError
             AppErrorReporter.log(message: "A reply's generated files could not be kept with it (\(failure.domain) \(failure.code)).", context: "TurnEngine.keepingGeneratedFiles")
+            // What is no message's is not kept until the next launch clears it.
+            await store.removeUnsent(files.map(\.id))
             var metadata = kept
             for key in (FileAttachmentDetail.messageMetadata(for: files) ?? [:]).keys {
                 metadata[key] = nil

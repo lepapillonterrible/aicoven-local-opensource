@@ -219,6 +219,39 @@ final class ImageGenerationTests: XCTestCase {
         }
     }
 
+    func testAnOlderModelsLink_isFetchedWithoutTheKey_andOnlyOverHTTPS() async throws {
+        let asked = Asked()
+        let made = try png()
+        // OpenAI answers with where the picture is; that place answers
+        // with the picture.
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        MockURLProtocol.handler = { request in
+            asked.note(request)
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil))
+            return url.host == "files.example.com"
+                ? (response, made)
+                : (response, Data(#"{"data": [{"url": "https://files.example.com/made/1.png", "revised_prompt": "A lighthouse"}]}"#.utf8))
+        }
+        let fetching = try ImageGenerationService(apiKey: "TEST_KEY", baseURL: XCTUnwrap(URL(string: "https://example.com/v1")), session: URLSession(configuration: config))
+
+        let image = try await fetching.generate(prompt: "A lighthouse", model: "dall-e-3")
+
+        XCTAssertEqual(image.data, made)
+        XCTAssertEqual(image.revisedPrompt, "A lighthouse")
+        XCTAssertEqual(asked.requests.map(\.path), ["/v1/images/generations", "/made/1.png"])
+        XCTAssertEqual(asked.requests.map(\.key), ["Bearer TEST_KEY", nil], "The key goes to OpenAI only")
+
+        let plain = service(keeping: Asked()) { _ in (200, #"{"data": [{"url": "http://files.example.com/made/1.png"}]}"#) }
+        do {
+            _ = try await plain.generate(prompt: "A lighthouse", model: "dall-e-3")
+            XCTFail("A link that is not https is not followed")
+        } catch {
+            XCTAssertEqual(error as? ImageGenerationService.Failure, .noPicture)
+        }
+    }
+
     func testTheOrderOfModels_theQualityAskedFor_andWhatReadsAsASize() {
         XCTAssertEqual(
             ImageGenerationService.candidates(among: ["gpt-image-9", "GPT-Image-2.5-Sunburst", "gpt-image-2.6-flare", "dall-e-3", "gpt-image-1", "dall-e-2"]),
@@ -436,6 +469,12 @@ final class ImageGenerationTests: XCTestCase {
         XCTAssertEqual(broken.outcome, .failed)
         XCTAssertEqual(try FileAttachmentDetail.attachments(in: XCTUnwrap(broken.message.metadata)), [image])
 
+        // Told from one report to the next, not stored with a state.
+        let coded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(done)) as? [String: Any]
+        XCTAssertNil(coded?["generated_files"])
+        XCTAssertNil(coded?["generatedFiles"])
+        XCTAssertEqual(try JSONDecoder().decode(TurnState.self, from: JSONEncoder().encode(done)).generatedFiles, [])
+
         var plain = TurnProgress(agentName: nil)
         plain.note(TurnState(answer: "Nothing made.", status: .completed, phase: .finalizing))
         XCTAssertEqual(plain.ending(in: "t", thrown: nil).message.metadata, [:], "A reply with nothing made keeps nothing of the kind, as before")
@@ -459,6 +498,19 @@ final class ImageGenerationTests: XCTestCase {
         let without = await TurnProgress.keepingGeneratedFiles(of: TurnProgress.message(in: threadID, role: "assistant", content: "Here it is.", metadata: metadata), inThread: threadID)
         XCTAssertEqual(without.metadata, ["role_name": AnyJSONValue("Strix")], "Stored without what it could not keep")
         XCTAssertEqual(without.content, "Here it is.")
+
+        // One of two that cannot be marked: neither goes with the reply,
+        // and the one that was kept is not left for no message.
+        let other = try await AttachmentStore.shared.add(png(), named: "Generated image.png", mimeType: "image/png", toThread: threadID)
+        let both = TurnProgress.message(in: threadID, role: "assistant", content: "Two.", metadata: FileAttachmentDetail.messageMetadata(for: [other, gone]))
+        let neither = await TurnProgress.keepingGeneratedFiles(of: both, inThread: threadID)
+        XCTAssertNil(neither.metadata)
+        do {
+            _ = try await AttachmentStore.shared.data(of: other.id)
+            XCTFail("It was removed")
+        } catch {
+            XCTAssertEqual(error as? AttachmentStore.Failure, .missing)
+        }
 
         let plain = TurnProgress.message(in: threadID, role: "assistant", content: "Nothing made.")
         let same = await TurnProgress.keepingGeneratedFiles(of: plain, inThread: threadID)

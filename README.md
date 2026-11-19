@@ -118,7 +118,7 @@ The tools layer is provider-agnostic and designed to work with whatever keys you
 - **File read/write/list** (`file.read`, `file.write`, `file.list`) – Read, write, and list local files and directories.
 - **Shell commands** (`shell.execute`) – Execute local shell commands with a user-approval flow before execution.
 - **Attachment analysis** – Summarization/QA over attached files and images using the best available vision/chat model.
-- **Image generation** – Simple image generation using a chat model and local decoding; images are stored as local files and appear as attachments.
+- **Image generation** (`image.generate`) – A model can make an image with your OpenAI key; it is kept on the device, encrypted, and shown under the reply.
 - **Connected apps** – GitHub repository tools (read/write files, create branches/PRs, search code) and Google Drive file tools (list, read, upload, Sheets read/write), authenticated via user-provided tokens.
 - **MCP server tools** – Any tools exposed by connected [MCP](https://modelcontextprotocol.io) servers (e.g. email via Zapier, calendar, Slack). Tools are discovered automatically via `tools/list`, cached locally, and executed via JSON-RPC over HTTP or SSE. Semantic tool selection uses embedding-based matching when many tools are available.
 
