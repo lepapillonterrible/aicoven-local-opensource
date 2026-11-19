@@ -38,12 +38,23 @@ enum UserScope {
     ///
     /// Example: `scopedKey("provider_accounts.v1")` → `"abc123.provider_accounts.v1"`
     static func scopedKey(_ base: String) -> String {
-        "\(currentUserID).\(base)"
+        scopedKey(base, for: currentUserID)
     }
 
     /// Returns a Keychain service identifier scoped to the current user.
     static func scopedKeychainService(_ base: String) -> String {
-        "\(base).\(currentUserID)"
+        scopedKeychainService(base, for: currentUserID)
+    }
+
+    /// `scopedKey` for a named account: for work that waits and must stay
+    /// with the account it began for, whoever is signed in by then.
+    nonisolated static func scopedKey(_ base: String, for userID: String) -> String {
+        "\(userID).\(base)"
+    }
+
+    /// `scopedKeychainService` for a named account.
+    nonisolated static func scopedKeychainService(_ base: String, for userID: String) -> String {
+        "\(base).\(userID)"
     }
 
     /// Returns a filename scoped to the current user.
