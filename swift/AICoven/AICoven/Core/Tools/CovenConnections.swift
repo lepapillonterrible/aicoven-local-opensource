@@ -40,6 +40,61 @@ nonisolated struct CovenConnections: Codable, Hashable {
     }
 }
 
+nonisolated extension CovenConnections {
+    /// What a coven that has made no choice is living by: everything
+    /// connected, to read and make changes. Its first change in the
+    /// Connections screen starts from this, so that changing one thing
+    /// does not turn the others off.
+    static func everything(apps: [String], mcpServers: [String]) -> CovenConnections {
+        CovenConnections(
+            apps: Dictionary(apps.map { ($0, Access.readWrite) }, uniquingKeysWith: { first, _ in first }),
+            mcpServers: Dictionary(mcpServers.map { ($0, Access.readWrite) }, uniquingKeysWith: { first, _ in first })
+        )
+    }
+
+    /// This choice with an app turned on or off. One turned on starts on
+    /// read only; one already on keeps what it has.
+    func turning(app: String, on: Bool) -> CovenConnections {
+        var changed = self
+        changed.apps[app] = on ? (apps[app] ?? .readOnly) : nil
+        return changed
+    }
+
+    /// This choice with what agents can do with an app that is on. Nothing
+    /// changes for one that is off.
+    func setting(app: String, to access: Access) -> CovenConnections {
+        guard apps[app] != nil else { return self }
+        var changed = self
+        changed.apps[app] = access
+        return changed
+    }
+
+    /// As `turning(app:on:)`, for an MCP server.
+    func turning(mcpServer id: String, on: Bool) -> CovenConnections {
+        var changed = self
+        changed.mcpServers[id] = on ? (mcpServers[id] ?? .readOnly) : nil
+        return changed
+    }
+
+    /// As `setting(app:to:)`, for an MCP server.
+    func setting(mcpServer id: String, to access: Access) -> CovenConnections {
+        guard mcpServers[id] != nil else { return self }
+        var changed = self
+        changed.mcpServers[id] = access
+        return changed
+    }
+}
+
+nonisolated extension CovenConnections.Access {
+    /// As the Connections screen names it.
+    var label: String {
+        switch self {
+        case .readOnly: "Read"
+        case .readWrite: "Read and make changes"
+        }
+    }
+}
+
 /// What a coven's choice of connections allows of a tool. The rules are
 /// the cloud app's: a connection that is not on is not used; one on to
 /// read gives only what changes nothing (for a connected app, every tool

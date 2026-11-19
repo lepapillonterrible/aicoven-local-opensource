@@ -76,6 +76,7 @@ struct MobileChatsRootView: View {
     @State private var showStrixSettings = false
     @State private var selectedThread: Thread?
     @State private var showMemory = false
+    @State private var showConnections = false
     @State private var errorMessage: String?
 
     private var selectedCoven: Coven? {
@@ -119,6 +120,32 @@ struct MobileChatsRootView: View {
                             }
                             .buttonStyle(.plain)
                             .listRowBackground(Color.aicovenGlass)
+
+                            // What of the person's connections this
+                            // coven's agents may use. Strix uses them all.
+                            if selectedCoven != nil {
+                                Button {
+                                    selectedThread = nil
+                                    showStrixSettings = false
+                                    showConnections = true
+                                } label: {
+                                    HStack(spacing: Spacing.sm) {
+                                        Image(systemName: "link")
+                                            .foregroundColor(.aicovenTeal)
+                                        Text("Connections")
+                                            .font(.aicovenBody)
+                                            .foregroundColor(.aicovenTextPrimary)
+                                        Spacer()
+                                        Text(scopeTitle)
+                                            .font(.aicovenCaption)
+                                            .foregroundColor(.aicovenTextTertiary)
+                                    }
+                                    .padding(.vertical, Spacing.xs)
+                                }
+                                .buttonStyle(.plain)
+                                .listRowBackground(Color.aicovenGlass)
+                                .accessibilityIdentifier("coven-connections-open")
+                            }
                         }
 
                         Section {
@@ -230,6 +257,11 @@ struct MobileChatsRootView: View {
                             onEditAgent: { showStrixSettings = true },
                             onBack: { selectedThread = nil }
                         )
+                    }
+                }
+                .navigationDestination(isPresented: $showConnections) {
+                    if let selectedCoven {
+                        CovenConnectionsView(coven: selectedCoven)
                     }
                 }
                 .navigationDestination(isPresented: $showMemory) {

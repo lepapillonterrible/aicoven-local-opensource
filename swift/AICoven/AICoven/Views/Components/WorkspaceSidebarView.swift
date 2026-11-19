@@ -17,6 +17,8 @@ struct WorkspaceSidebarView: View {
     @State private var threads: [Thread] = []
     @State private var searchText = ""
     @State private var showNewCovenSheet = false
+    /// The coven whose Connections are open, if any.
+    @State private var connectionsCoven: Coven?
     @State private var isExpanded = true // Expanded by default so users can select covens
     @State private var threadsSectionExpanded = true
     @State private var rolesSectionExpanded = true
@@ -82,6 +84,38 @@ struct WorkspaceSidebarView: View {
                         .buttonStyle(.plain)
                         .foregroundColor(.aicovenTextPrimary)
 
+                        // What of the person's connections this coven's
+                        // agents may use. Strix (no coven) uses them all.
+                        if let coven = selectedCoven {
+                            Button {
+                                connectionsCoven = coven
+                            } label: {
+                                HStack(spacing: Spacing.xs) {
+                                    Image(systemName: "link")
+                                        .font(.system(size: 14, weight: .semibold))
+                                    Text("Connections")
+                                        .font(.aicovenBodyMedium)
+                                    Spacer()
+                                    Text(coven.name)
+                                        .font(.aicovenCaption)
+                                        .foregroundColor(.aicovenTextTertiary)
+                                        .lineLimit(1)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, Spacing.sm)
+                                .padding(.horizontal, Spacing.sm)
+                                .background(Color.aicovenGlass)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: BorderRadius.md)
+                                        .strokeBorder(Color.aicovenBorder, lineWidth: 1)
+                                )
+                                .cornerRadius(BorderRadius.md)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundColor(.aicovenTextPrimary)
+                            .accessibilityIdentifier("coven-connections-open")
+                        }
+
                         ThreadManagementView(
                             selectedCoven: $selectedCoven,
                             openTabs: $openTabs,
@@ -141,6 +175,19 @@ struct WorkspaceSidebarView: View {
                     await loadThreads(covenId: covenId)
                 }
             }
+        }
+        .sheet(item: $connectionsCoven) { coven in
+            NavigationStack {
+                CovenConnectionsView(coven: coven)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { connectionsCoven = nil }
+                        }
+                    }
+            }
+            #if os(macOS)
+            .frame(minWidth: 480, minHeight: 520)
+            #endif
         }
         .sheet(isPresented: $showNewCovenSheet) {
             NavigationStack {

@@ -53,7 +53,7 @@ enum LocalProviderAccountError: Error {
 enum KeychainHelper {
     /// Base Keychain service; scoped per-user at call sites via UserScope.
     private static var service: String {
-        UserScope.scopedKeychainService("AICovenProviderKeys")
+        service(for: UserScope.currentUserID)
     }
 
     /// The current account's Keychain service, to keep for work that waits:
@@ -63,8 +63,26 @@ enum KeychainHelper {
         service
     }
 
+    /// A named account's Keychain service.
+    nonisolated static func service(for userID: String) -> String {
+        UserScope.scopedKeychainService("AICovenProviderKeys", for: userID)
+    }
+
     static func save(key: String, value: String, service: String? = nil) throws {
-        let service = service ?? self.service
+        try save(key: key, value: value, in: service ?? self.service)
+    }
+
+    static func load(key: String, service: String? = nil) -> String? {
+        load(key: key, in: service ?? self.service)
+    }
+
+    static func delete(key: String, service: String? = nil) {
+        delete(key: key, in: service ?? self.service)
+    }
+
+    /// The three above with the service named, which can be called from
+    /// anywhere: nothing here looks at who is signed in.
+    nonisolated static func save(key: String, value: String, in service: String) throws {
         let data = Data(value.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -82,8 +100,7 @@ enum KeychainHelper {
         }
     }
 
-    static func load(key: String, service: String? = nil) -> String? {
-        let service = service ?? self.service
+    nonisolated static func load(key: String, in service: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -99,8 +116,7 @@ enum KeychainHelper {
         return String(data: data, encoding: .utf8)
     }
 
-    static func delete(key: String, service: String? = nil) {
-        let service = service ?? self.service
+    nonisolated static func delete(key: String, in service: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
