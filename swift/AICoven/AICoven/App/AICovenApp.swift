@@ -89,25 +89,14 @@ struct AICovenApp: App {
                     isEncryptionUnlocked = false
                 }
             }
-            // Expose the active theme + typography to every view. We re-
-            // apply `.id()` on a composite of both: without it, `Text` views
-            // that read static `Color.aicoven*` and `Font.aicoven*` computed
-            // vars get the OLD value captured at render time and never
-            // refresh on a switch (because most views don't observe
-            // `ThemeManager` / `TypographyManager`).
+            // Expose the appearance and typography choices to every view.
             .environmentObject(themeManager)
             .environmentObject(typographyManager)
-            .environment(\.aicovenTheme, themeManager.theme)
-            .preferredColorScheme(themeManager.theme.preferredColorScheme)
-            .animation(.easeOut(duration: 0.25), value: themeManager.theme.variant)
-            // Composite identity: theme variant, typography variant,
-            // (for `.custom`) the chosen font family, and the global text
-            // size scale. The latter components are what force a tree
-            // rebuild when the user picks a new family or size from
-            // Settings without changing variant — without them the
-            // captured `Font.aicoven*` values stick to the previous
-            // configuration until something else triggers a redraw.
-            .id("\(themeManager.theme.variant.rawValue)|\(typographyManager.variant.rawValue)|\(typographyManager.customFontFamily ?? "")|\(typographyManager.sizeScale.rawValue)")
+            .preferredColorScheme(themeManager.appearance.colorScheme)
+            // `Font.aicoven*` values are read when a view renders, and most
+            // views do not observe `TypographyManager`, so a new voice,
+            // family or size rebuilds the tree through this identity.
+            .id("\(typographyManager.variant.rawValue)|\(typographyManager.customFontFamily ?? "")|\(typographyManager.sizeScale.rawValue)")
         }
         #if os(macOS)
         .defaultSize(width: 820, height: 620)
@@ -137,9 +126,8 @@ struct AICovenApp: App {
             .environmentObject(StoreService.shared)
             .environmentObject(themeManager)
             .environmentObject(typographyManager)
-            .environment(\.aicovenTheme, themeManager.theme)
-            .preferredColorScheme(themeManager.theme.preferredColorScheme)
-            .id("\(themeManager.theme.variant.rawValue)|\(typographyManager.variant.rawValue)|\(typographyManager.customFontFamily ?? "")|\(typographyManager.sizeScale.rawValue)")
+            .preferredColorScheme(themeManager.appearance.colorScheme)
+            .id("\(typographyManager.variant.rawValue)|\(typographyManager.customFontFamily ?? "")|\(typographyManager.sizeScale.rawValue)")
         }
         #endif
     }

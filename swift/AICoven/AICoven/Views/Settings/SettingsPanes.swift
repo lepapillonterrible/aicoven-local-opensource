@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - Appearance
 
-/// Theme and typography. Each choice applies at once.
+/// Appearance and typography. Each choice applies at once.
 struct AppearanceSettingsPane: View {
     @ObservedObject private var themeManager = ThemeManager.shared
     @ObservedObject private var typographyManager = TypographyManager.shared
@@ -10,16 +10,16 @@ struct AppearanceSettingsPane: View {
     var body: some View {
         SettingsForm {
             Section {
-                Picker("Theme", selection: Binding(
-                    get: { themeManager.variant },
-                    set: { themeManager.setVariant($0) }
+                Picker("Appearance", selection: Binding(
+                    get: { themeManager.appearance },
+                    set: { themeManager.setAppearance($0) }
                 )) {
-                    ForEach(ThemeVariant.allCases) { variant in
-                        Text(variant.displayName).tag(variant)
+                    ForEach(RoomAppearance.allCases) { appearance in
+                        Text(appearance.displayName).tag(appearance)
                     }
                 }
             } footer: {
-                Text(themeManager.theme.tagline)
+                Text("System follows your device's light or dark appearance.")
             }
 
             Section {

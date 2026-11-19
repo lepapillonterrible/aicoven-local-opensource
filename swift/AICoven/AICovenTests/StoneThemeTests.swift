@@ -4,14 +4,13 @@ import XCTest
 
 #if os(macOS)
 final class StoneThemeTests: XCTestCase {
-    func testStoneSurface_isDayStoneInLightAndDuskStoneInDark() throws {
-        XCTAssertEqual(try hex(of: AicovenTheme.stone.surface, in: .aqua), "E8E2D6")
-        XCTAssertEqual(try hex(of: AicovenTheme.stone.surface, in: .darkAqua), "2C2925")
-        XCTAssertNil(AicovenTheme.stone.preferredColorScheme)
+    func testSurface_isDayStoneInLightAndDuskStoneInDark() throws {
+        XCTAssertEqual(try hex(of: .aicovenSurface, in: .aqua), "E8E2D6")
+        XCTAssertEqual(try hex(of: .aicovenSurface, in: .darkAqua), "2C2925")
     }
 
-    func testStoneAccentAtDusk_isTheFillWaterWhiteLabelsStayReadableOn() throws {
-        XCTAssertEqual(try hex(of: AicovenTheme.stone.accentPrimary, in: .darkAqua), "517D79")
+    func testAccentAtDusk_isTheFillWaterWhiteLabelsStayReadableOn() throws {
+        XCTAssertEqual(try hex(of: .aicovenTeal, in: .darkAqua), "517D79")
     }
 
     private func hex(of color: Color, in appearance: NSAppearance.Name) throws -> String {
