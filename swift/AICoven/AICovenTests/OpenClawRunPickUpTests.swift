@@ -252,6 +252,77 @@ final class OpenClawRunPickUpTests: XCTestCase {
         XCTAssertEqual(reports.last?.answer, OpenClawTurn.lostContact)
     }
 
+    func testWhenTheGatewayCannotBeReachedOrContactIsLostAsTheSessionIsAskedFor_theTurnSaysTheRunMayBeGoing() async throws {
+        // The Gateway is not there.
+        var unreachable = try turn(over: ScriptedGatewaySocket())
+        unreachable.open = { _, _ in throw URLError(.cannotConnectToHost) }
+        let none = PickUpReports()
+        try await unreachable.resume(runID: "run-1", report: none.add)
+        XCTAssertEqual(none.last?.status, .failed)
+        XCTAssertEqual(none.last?.answer, OpenClawTurn.lostContact)
+
+        // Contact is lost as the session is asked for.
+        let socket = ScriptedGatewaySocket()
+        socket.answer { request in
+            guard request["method"] as? String == "connect" else {
+                socket.close()
+                return []
+            }
+            return [ScriptedGatewaySocket.welcome(to: request["id"] as? String ?? "")]
+        }
+        let lost = PickUpReports()
+        try await turn(over: socket).resume(runID: "run-1", report: lost.add)
+        XCTAssertEqual(lost.last?.status, .failed)
+        XCTAssertEqual(lost.last?.answer, OpenClawTurn.lostContact)
+
+        // What the Gateway refuses is thrown as it is given.
+        let refusing = ScriptedGatewaySocket()
+        refusing.answer { request in
+            guard request["method"] as? String == "connect" else {
+                return [["type": "res", "id": request["id"] ?? "", "ok": false, "error": ["code": "UNAVAILABLE", "message": "Busy"]]]
+            }
+            return [ScriptedGatewaySocket.welcome(to: request["id"] as? String ?? "")]
+        }
+        do {
+            try await turn(over: refusing).resume(runID: "run-1", report: { _ in XCTFail("Nothing is known of the run") })
+            XCTFail("A refusal does not end as a reply")
+        } catch {
+            XCTAssertEqual(error as? OpenClawGatewayError, .refused(code: "UNAVAILABLE", message: "Busy"))
+        }
+    }
+
+    func testStoppingATurnPickedUpBeforeTheGatewayNamesItsSession_stillStopsTheRun() async throws {
+        let socket = ScriptedGatewaySocket()
+        let aborted = expectation(description: "The Gateway is told to stop the run")
+        socket.answer { [self] request in
+            switch request["method"] as? String {
+            case "connect":
+                return [ScriptedGatewaySocket.welcome(to: request["id"] as? String ?? "")]
+            case "chat.abort":
+                aborted.fulfill()
+                return [answer(request, with: ["ok": true, "aborted": true])]
+            default:
+                // The Gateway does not answer the subscribe.
+                return []
+            }
+        }
+        let turn = try turn(over: socket)
+        let running = Task { try await turn.resume(runID: "run-1", report: { _ in }) }
+        await fulfillment(of: [socket.expectSent(2)], timeout: 10)
+
+        running.cancel()
+        do {
+            try await running.value
+            XCTFail("A stopped turn does not end as a reply")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        await fulfillment(of: [aborted], timeout: 10)
+
+        let abort = socket.sent.first { $0["method"] as? String == "chat.abort" }?["params"] as? [String: String]
+        XCTAssertEqual(abort, ["sessionKey": "aicoven-local:thread-1", "runId": "run-1"], "Under the name the session was asked for with")
+    }
+
     func testStoppingATurnPickedUp_stopsTheRunInOpenClaw() async throws {
         let socket = ScriptedGatewaySocket()
         let aborted = expectation(description: "The Gateway is told to stop the run")
@@ -398,6 +469,45 @@ final class OpenClawRunPickUpTests: XCTestCase {
         XCTAssertEqual(messages.last?.metadata?["role_name"], AnyJSONValue("Claw"))
         let left = try await store.runningTurns(threadID: threadID)
         XCTAssertEqual(left, [])
+        await DataEncryptionService.shared.lock()
+    }
+
+    @MainActor
+    func testARunStoppedInOpenClawWhileTheAppWasClosed_keepsWhatItHadAnswered() async throws {
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        DatabaseManager.shared.configureIfNeeded()
+        await ThreadService.shared.reloadForCurrentUser()
+        let threadID = try await ThreadService.shared.createThread(title: "OpenClaw \(UUID().uuidString)").id
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await ThreadService.shared.deleteThread(threadId: threadID)
+            await ThreadService.shared.reloadForCurrentUser()
+            await DataEncryptionService.shared.lock()
+        }
+        let store = ThreadRepository.shared
+        let turnID = "turn-\(threadID)"
+        try await store.beginTurn(id: turnID, userMessage: TurnProgress.message(in: threadID, role: "user", content: "Tidy the repo"))
+        try await store.keepRun(AgentRun(provider: AgentRun.openClaw, runID: "run-1", origin: address), forTurn: turnID)
+        let socket = ScriptedGatewaySocket()
+        play(
+            socket, threadID: threadID,
+            wait: ["status": "ok", "endedAt": 1],
+            history: ["messages": [row("assistant", ["content": "Half the answer", "openclawAbort": ["aborted": true]])]]
+        )
+        let engine = try TurnEngine(chat: chatService(turn(over: socket, threadID: threadID)))
+
+        let ended = expectation(description: "The turn picked up has ended")
+        ended.assertForOverFulfill = false
+        let watching = engine.$endings.sink { endings in
+            if endings[threadID] != nil { ended.fulfill() }
+        }
+        await engine.settleInterruptedTurns(threadID: threadID)
+        await fulfillment(of: [ended], timeout: 10)
+        watching.cancel()
+
+        XCTAssertEqual(engine.endings[threadID]?.outcome, .cancelled)
+        let messages = try await store.loadChatMessages(threadID: threadID, limit: 10, before: nil)
+        XCTAssertEqual(messages.map(\.content), ["Tidy the repo", "Half the answer\n\n_Stopped here._"])
         await DataEncryptionService.shared.lock()
     }
 

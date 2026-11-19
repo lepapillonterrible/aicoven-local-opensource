@@ -56,7 +56,7 @@ nonisolated struct OpenClawTurn {
         report: @escaping @Sendable (TurnState) -> Void
     ) async throws {
         try await withGateway { gateway in
-            var following = try await subscribe(through: gateway)
+            let following = try await subscribe(through: gateway)
             // What was already waiting to be allowed was asked by an earlier
             // run, and is not this one's to ask about.
             following.settled = Set(following.waiting.compactMap { $0["id"] as? String })
@@ -96,7 +96,7 @@ nonisolated struct OpenClawTurn {
                     runID = named
                 }
                 await started(runID)
-                try await follow(runID, &following, through: gateway, report)
+                try await follow(runID, following, through: gateway, report)
             } catch {
                 if Task.isCancelled {
                     following.withdrawAll()
@@ -114,44 +114,58 @@ nonisolated struct OpenClawTurn {
     /// it is waiting to be allowed is asked again: the question the app was
     /// closed on went with it. Ends as `run` does.
     func resume(runID: String, report: @escaping @Sendable (TurnState) -> Void) async throws {
-        try await withGateway { gateway in
-            var following = try await subscribe(through: gateway)
-            defer { following.withdrawAll() }
-            do {
-                let ended: (status: TurnStatus, answer: String)?
+        do {
+            try await withGateway { gateway in
+                var following: Following?
+                defer { following?.withdrawAll() }
                 do {
-                    ended = try await ending(of: runID, in: following.sessionKey, through: gateway)
-                } catch let error as OpenClawGatewayError where error != .closed {
-                    // The Gateway's own refusal, or an answer that is not one.
-                    throw error
-                } catch is CancellationError {
-                    throw CancellationError()
+                    let session = try await subscribe(through: gateway)
+                    following = session
+                    if let ended = try await ending(of: runID, in: session.sessionKey, through: gateway) {
+                        var state = TurnState(threadId: threadID)
+                        if ended.status == .cancelled, !ended.answer.isEmpty {
+                            // What it had answered when it was stopped is
+                            // shown as an answer under way is, so the turn
+                            // keeps it when it ends as stopped.
+                            state.phase = .answering
+                            state.answer = ended.answer
+                            state.bumpVersion()
+                            report(state)
+                        }
+                        return end(&state, as: ended.status, saying: ended.answer, report)
+                    }
+                    for approval in session.waiting {
+                        consider(approval, phase: "pending", session, through: gateway)
+                    }
+                    try await follow(runID, session, through: gateway, report)
                 } catch {
-                    // The connection ended, or failed, as the run was
-                    // looked for.
-                    try Task.checkCancellation()
-                    ended = (.failed, Self.lostContact)
+                    // The run is there whatever this turn has got to: a
+                    // turn stopped before the Gateway named the session
+                    // stops the run under the name it asked with.
+                    if Task.isCancelled {
+                        following?.withdrawAll()
+                        await stop(runID, in: following?.sessionKey ?? Self.sessionKey(for: threadID), through: gateway)
+                    }
+                    throw error
                 }
-                if let ended {
-                    var state = TurnState(threadId: threadID)
-                    return end(&state, as: ended.status, saying: ended.answer, report)
-                }
-                for approval in following.waiting {
-                    consider(approval, phase: "pending", &following, through: gateway)
-                }
-                try await follow(runID, &following, through: gateway, report)
-            } catch {
-                if Task.isCancelled {
-                    following.withdrawAll()
-                    await stop(runID, in: following.sessionKey, through: gateway)
-                }
-                throw error
             }
+        } catch let error as OpenClawGatewayError where error != .closed {
+            // The Gateway's own refusal, or an answer that is not one.
+            throw error
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // The Gateway could not be reached, or the connection ended or
+            // failed, as the run was looked for.
+            try Task.checkCancellation()
+            var state = TurnState(threadId: threadID)
+            end(&state, as: .failed, saying: Self.lostContact, report)
         }
     }
 
-    /// What a turn holds of the session its run is in.
-    private struct Following {
+    /// What a turn holds of the session its run is in. Used by the turn's
+    /// own task only.
+    private final class Following {
         /// The Gateway's own name for the session: the one its events use.
         let sessionKey: String
         /// What was waiting to be allowed when the session was subscribed to.
@@ -161,7 +175,12 @@ nonisolated struct OpenClawTurn {
         /// What the person is being asked, by the Gateway's id for it.
         var asking: [String: Task<Void, Never>] = [:]
 
-        mutating func withdrawAll() {
+        init(sessionKey: String, waiting: [[String: Any]]) {
+            self.sessionKey = sessionKey
+            self.waiting = waiting
+        }
+
+        func withdrawAll() {
             asking.values.forEach { $0.cancel() }
             asking = [:]
         }
@@ -201,7 +220,7 @@ nonisolated struct OpenClawTurn {
     /// asks to be allowed. If the events end first, the turn ends failed.
     private func follow(
         _ runID: String,
-        _ following: inout Following,
+        _ following: Following,
         through gateway: OpenClawGatewayConnection,
         _ report: @Sendable (TurnState) -> Void
     ) async throws {
@@ -216,7 +235,7 @@ nonisolated struct OpenClawTurn {
                 case "session.approval":
                     let from = [payload["sessionKey"] as? String, payload["sourceSessionKey"] as? String]
                     guard from.contains(following.sessionKey), let approval = payload["approval"] as? [String: Any] else { continue }
-                    consider(approval, phase: payload["phase"] as? String, &following, through: gateway)
+                    consider(approval, phase: payload["phase"] as? String, following, through: gateway)
                 default:
                     continue
                 }
@@ -234,7 +253,7 @@ nonisolated struct OpenClawTurn {
     /// Takes what the Gateway says of a request to be allowed: one waiting
     /// is asked of the person, once; one settled there (answered elsewhere,
     /// or no longer wanted) is no longer asked here.
-    private func consider(_ approval: [String: Any], phase: String?, _ following: inout Following, through gateway: OpenClawGatewayConnection) {
+    private func consider(_ approval: [String: Any], phase: String?, _ following: Following, through gateway: OpenClawGatewayConnection) {
         guard let id = approval["id"] as? String else { return }
         switch phase {
         case "pending":
