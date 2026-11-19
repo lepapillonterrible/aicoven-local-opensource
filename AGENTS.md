@@ -199,6 +199,9 @@ This layer holds cross-cutting technical concerns:
   - `SecretsStore` protocol with `KeychainSecretsStore` implementation.
   - Securely stores API keys and encryption metadata using the system Keychain.
 
+- `Infrastructure/Attachments/`
+  - `AttachmentStore` keeps the files attached to messages on the device: a file is copied in when it is attached (at most 10 MB), encrypted with the account's data key in the app's own folder, with a row in `attachments` saying whose it is, its thread, and, once sent, its message. It goes when taken out of the composer unsent, with its thread, and with its account. `AttachmentImage` writes a still picture out afresh as it comes in: upright, without location or camera data, at most 4096 pixels on its longest edge (a picture that moves is kept as it is).
+
 - `Infrastructure/Tools/`
   - `ToolService` provides provider-agnostic tools (time, web search, attachment analysis, file/image generation).
   - All tools work with user-configured provider keys only; no custom backend required.
@@ -234,7 +237,7 @@ This directory contains a mix of active and legacy services:
 **Legacy cloud services (being refactored):**
 - `CovenService.swift`, `RoleService.swift`, `RoleTemplateService.swift` – Multi-user covens and roles from the original backend system. These make API calls that will fail in the local-only client.
 - `AuthService.swift` – Authentication stub with no-op methods.
-- `FileUploadService.swift`, `UploadService.swift` – Unimplemented file upload services referencing non-existent backend endpoints.
+- `FileUploadService.swift` – An unimplemented file upload service referencing non-existent backend endpoints. Attached files are kept by `Infrastructure/Attachments/AttachmentStore`.
 - `EncryptionService.swift` – Legacy encryption service; being replaced by `Infrastructure/Security/DataEncryptionService.swift`.
 
 **Note:** When adding new functionality, prefer working against `Core/LLM`, `Core/Context`, `Core/Routing`, and `Infrastructure/*` instead of extending legacy services. The services listed under "Legacy cloud services" should not be used in new code.

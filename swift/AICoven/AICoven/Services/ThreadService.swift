@@ -38,6 +38,11 @@ actor ThreadService {
             throw RepositoryError.dataLocked
         }
         guard loadedUserID != userID else { return }
+        // What a composer held attached and unsent when the app last
+        // closed is not kept. Cleared once in each run, and waited for
+        // here before the threads are handed to anyone, so no composer is
+        // used before it is done.
+        await AttachmentStore.shared.clearLeftovers(for: userID)
         let resetsAtStart = resets
         let threads = try await ThreadRepository.shared.loadChatThreads()
         // The data can be locked, the list reset, or the account changed
@@ -88,7 +93,8 @@ actor ThreadService {
         AppErrorReporter.log(message: "Removing \(testThreads.count) automated test threads", context: "ThreadService.cleanupTestThreads")
         for thread in testThreads {
             do {
-                try await ThreadRepository.shared.deleteThread(id: thread.id, for: thread.userId)
+                let attached = try await ThreadRepository.shared.deleteThread(id: thread.id, for: thread.userId)
+                await AttachmentStore.shared.deleteFiles(attached, for: thread.userId)
                 personalThreads.removeAll { $0.id == thread.id }
             } catch {
                 AppErrorReporter.log(error: error, context: "ThreadService.cleanupTestThreads")
@@ -243,7 +249,10 @@ actor ThreadService {
             AppErrorReporter.log(message: "Ignoring delete for unknown thread", context: "ThreadService.deleteThread")
             return
         }
-        try await ThreadRepository.shared.deleteThread(id: threadId, for: userID)
+        // The thread's attachments go with it: their rows with its row,
+        // their files once that is gone.
+        let attached = try await ThreadRepository.shared.deleteThread(id: threadId, for: userID)
+        await AttachmentStore.shared.deleteFiles(attached, for: userID)
         if isShowing(userID) {
             personalThreads.removeAll { $0.id == threadId }
         }

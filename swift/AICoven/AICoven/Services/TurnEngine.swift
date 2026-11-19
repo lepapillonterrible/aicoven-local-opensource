@@ -166,14 +166,23 @@ final class TurnEngine: ObservableObject {
         running[threadID] = Activity(turnID: turnID, message: TurnProgress.startingMessage, trace: WorkTrace(startedAt: Date()))
         // Answers left from a turn that never ended here are not this one's.
         approvals.forgetAnswers(threadID: threadID)
+        let files = (attachments ?? []).map(\.id)
         do {
             try await storeWaitingEnding(threadID: threadID)
+            // Its files are the thread's from here on. Marked before the
+            // message is stored: a message is not sent with files that
+            // could then be cleared as never sent.
+            try await AttachmentStore.shared.markSent(files, with: userMessage.id, inThread: threadID)
             try await store.beginTurn(id: turnID, userMessage: userMessage)
         } catch {
             running[threadID] = nil
             // What was set to wait for this turn, while it was being
             // started, has no turn to wait for.
             giveBackWaiting(threadID: threadID, because: error)
+            // Not sent after all: its files are unsent again. After the
+            // thread has stopped showing a turn, so nothing sent meanwhile
+            // is set to wait for one that is not there.
+            await AttachmentStore.shared.markUnsent(files, markedWith: userMessage.id)
             throw error
         }
         let chat = chat
@@ -251,7 +260,12 @@ final class TurnEngine: ObservableObject {
     /// being started: it is on its way.
     func removeWaiting(_ id: WaitingMessage.ID, threadID: String) {
         guard starting[threadID] != id else { return }
+        // Its files were never sent, and are not kept for no message.
+        let files = waiting[threadID]?.first { $0.id == id }?.attachments.map(\.id) ?? []
         drop(id, from: threadID)
+        if !files.isEmpty {
+            Task { await AttachmentStore.shared.removeUnsent(files) }
+        }
     }
 
     /// Edit: the waiting message leaves the queue and goes back to the

@@ -507,14 +507,24 @@ extension ThreadRepository {
     }
 
     /// Deletes a thread of the account `userID`'s, and with it its messages.
-    func deleteThread(id: String, for userID: String) async throws {
+    @discardableResult
+    func deleteThread(id: String, for userID: String) async throws -> [String] {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
-        try await dbQueue.write { db in
+        // The thread's attachments are listed as it is deleted, in the one
+        // write: none can be added in between, and the files of those
+        // listed are the caller's to delete now that their rows are gone.
+        return try await dbQueue.write { db in
+            let attached = try String.fetchAll(
+                db,
+                sql: "SELECT id FROM attachments WHERE thread_id = ? AND user_id = ?",
+                arguments: [id, userID]
+            )
             _ = try ThreadRecord
                 .filter(ThreadRecord.Columns.id == id)
                 .filter(ThreadRecord.Columns.userId == userID)
                 .deleteAll(db)
+            return attached
         }
     }
 

@@ -190,11 +190,14 @@ struct MessageComposer: View {
         }
         .fixedSize(horizontal: false, vertical: true)
         .onChange(of: messageText) { _, _ in suggestMentions() }
-        .onChange(of: attachFailure) { _, failure in
-            if let failure { AccessibilityNotification.Announcement(failure).post() }
-        }
         .onAppear(perform: takeReturned)
         .onChange(of: hasReturnedDraft) { _, _ in takeReturned() }
+        // The composer is gone (its thread view replaced or popped): what
+        // is still being chosen or attached for it is not taken.
+        .onDisappear {
+            attachingTask = nil
+            choosingFiles = nil
+        }
         .onChange(of: threadId) { _, _ in
             attachingTask = nil
             attachFailure = nil
@@ -218,7 +221,7 @@ struct MessageComposer: View {
             case let .failure(error):
                 choosingFiles = nil
                 Self.log("The file chooser failed", error)
-                attachFailure = "The file could not be opened."
+                say("The file could not be opened.", after: [])
             }
         }
         .onChange(of: isDisabled) { _, disabled in
@@ -237,8 +240,14 @@ struct MessageComposer: View {
                 AttachmentsListView(
                     attachments: attachments,
                     compact: true,
-                    onRemove: { id in attachments.removeAll { $0.id == id } },
-                    showRemove: true
+                    onRemove: { id in
+                        guard !isSubmittingSend else { return }
+                        attachments.removeAll { $0.id == id }
+                        // Taken out unsent: its copy is not kept.
+                        Task { await AttachmentStore.shared.removeUnsent([id]) }
+                    },
+                    // Not while a message is on its way with them.
+                    showRemove: !isSubmittingSend
                 )
             }
             HStack(alignment: .bottom, spacing: Spacing.xxs) {
@@ -433,16 +442,28 @@ struct MessageComposer: View {
         let task = UUID()
         attachingTask = task
         defer { if attachingTask == task { attachingTask = nil } }
+        var failures: [String] = []
         for url in urls {
             do {
-                let detail = try await UploadService.shared.upload(url: url, threadId: threadId)
-                // The composer can have moved to another thread meanwhile.
-                guard attachingTask == task else { return }
+                // Copied into the app's own store now, so it is there to
+                // send whatever becomes of the original.
+                let detail = try await AttachmentStore.shared.add(fileAt: url, toThread: threadId)
+                // The composer can have moved to another thread meanwhile:
+                // the file was attached for the thread it left, and is not
+                // kept for no message.
+                guard attachingTask == task else {
+                    await AttachmentStore.shared.removeUnsent([detail.id])
+                    return
+                }
                 attachments.append(detail)
             } catch {
                 Self.log("A file could not be attached", error)
                 guard attachingTask == task else { return }
-                attachFailure = "\(url.lastPathComponent) could not be attached."
+                // The store says why of what it refuses (too large, not
+                // readable); anything else is said plainly.
+                let failure = (error as? AttachmentStore.Failure)?.errorDescription ?? "\(url.lastPathComponent) could not be attached."
+                say(failure, after: failures)
+                failures.append(failure)
             }
         }
     }
@@ -551,6 +572,13 @@ struct MessageComposer: View {
             mentionQuery = ""
             showMentionSuggestions = false
         }
+    }
+
+    /// Shows a file's refusal above the box, under the ones before it, and
+    /// tells VoiceOver of this one.
+    private func say(_ failure: String, after earlier: [String]) {
+        attachFailure = (earlier + [failure]).joined(separator: "\n")
+        AccessibilityNotification.Announcement(failure).post()
     }
 
     /// Logs what failed and the error's kind, never its description: that
