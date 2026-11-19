@@ -7,6 +7,7 @@ internal import Combine
 /// under `aicoven_theme_id` so it survives app restarts without needing any
 /// backend change.
 enum ThemeVariant: String, CaseIterable, Identifiable, Codable {
+    case stone
     case nebula
     case apothecary
     case grimoire
@@ -19,6 +20,7 @@ enum ThemeVariant: String, CaseIterable, Identifiable, Codable {
 
     var displayName: String {
         switch self {
+        case .stone: "Stone"
         case .nebula: "Nebula"
         case .apothecary: "Apothecary"
         case .grimoire: "Grimoire"
@@ -35,6 +37,8 @@ enum ThemeVariant: String, CaseIterable, Identifiable, Codable {
     /// need to know which one belongs on their screen right now.
     var tagline: String {
         switch self {
+        case .stone:
+            "Stone by day, stone at dusk, following your device"
         case .nebula:
             "The original cosmic look"
         case .apothecary:
@@ -82,7 +86,9 @@ struct AicovenTheme {
     let error: Color
 
     // Behavior
-    let preferredColorScheme: ColorScheme
+    /// The scheme the theme is drawn in, or `nil` when it follows the
+    /// device's appearance.
+    let preferredColorScheme: ColorScheme?
     let usesGradientPrimaryButton: Bool
     let backgroundStyle: BackgroundStyle
     /// Font.Design used for display-size type (Display Large / Medium /
@@ -125,6 +131,35 @@ struct AicovenTheme {
 // MARK: - Theme Palettes
 
 extension AicovenTheme {
+    /// The cloud app's stone palette. Its colours, the overlay apart, have
+    /// a day and a dusk value and follow the device's appearance; the theme
+    /// pins no scheme. Water marks what moves and what can be pressed, rust
+    /// marks what failed or destroys; stone has no third accent.
+    static let stone = AicovenTheme(
+        variant: .stone,
+        surface: .room(light: Color(hex: "#E8E2D6"), dark: Color(hex: "#2C2925")),
+        surfaceElevated: .room(light: Color(hex: "#F0EBE2"), dark: Color(hex: "#37332D")),
+        glass: .room(light: Color(hex: "#DCD4C5"), dark: Color(hex: "#3B3630")),
+        border: .room(light: Color(hex: "#C9BFAD"), dark: Color(hex: "#4B453C")),
+        overlay: Color(hex: "#29251F").opacity(0.3),
+        textPrimary: .room(light: Color(hex: "#29251F"), dark: Color(hex: "#EDE6D9")),
+        textSecondary: .room(light: Color(hex: "#5C544A"), dark: Color(hex: "#B4AA9A")),
+        textTertiary: .room(light: Color(hex: "#605849"), dark: Color(hex: "#ADA397")),
+        // The app fills buttons with this accent under white labels, so
+        // dusk uses the darker water the cloud app keeps for fills under
+        // white (#517D79), not its text water (#8FBDB6).
+        accentPrimary: .room(light: Color(hex: "#36625F"), dark: Color(hex: "#517D79")),
+        accentSecondary: .room(light: Color(hex: "#5A5248"), dark: Color(hex: "#CFC6B6")),
+        accentTertiary: .room(light: Color(hex: "#8A4526"), dark: Color(hex: "#E0A183")),
+        success: .room(light: Color(hex: "#36625F"), dark: Color(hex: "#8FBDB6")),
+        warning: .room(light: Color(hex: "#8A4526"), dark: Color(hex: "#E0A183")),
+        error: .room(light: Color(hex: "#8A4526"), dark: Color(hex: "#E0A183")),
+        preferredColorScheme: nil,
+        usesGradientPrimaryButton: false,
+        backgroundStyle: .flat,
+        displayFontDesign: .default
+    )
+
     /// Legacy AICoven palette (teal / purple / pink on near‑black).
     ///
     /// Preserved for users who had already chosen it before the four-theme
@@ -391,14 +426,14 @@ extension AicovenTheme {
         displayFontDesign: .rounded
     )
 
-    /// All themes in display order for the picker. Orchard appended after
-    /// Observatory so the existing four-theme order is unchanged for
-    /// users who memorised it; new theme lands at the end.
-    static let all: [AicovenTheme] = [.nebula, .apothecary, .grimoire, .observatory, .orchard]
+    /// All themes, in the order of `ThemeVariant`: Stone, the default,
+    /// first, then the five earlier themes in their earlier order.
+    static let all: [AicovenTheme] = [.stone, .nebula, .apothecary, .grimoire, .observatory, .orchard]
 
     /// Lookup helper.
     static func theme(for variant: ThemeVariant) -> AicovenTheme {
         switch variant {
+        case .stone: .stone
         case .nebula: .nebula
         case .apothecary: .apothecary
         case .grimoire: .grimoire
@@ -431,14 +466,12 @@ final class ThemeManager: ObservableObject {
     }
 
     private init() {
-        // New installs land on Apothecary: a committed daytime palette that
-        // embodies the PRODUCT.md positioning (serious, deliberate, private)
-        // instead of the legacy Nebula look, which is the exact "AI SaaS"
-        // aesthetic this product explicitly rejects.
-        // Existing users who previously picked Nebula keep Nebula; only
-        // first-time installs with no stored selection get Apothecary.
+        // With no stored selection the theme is Stone, the cloud app's
+        // look. A stored selection is kept. Someone who never picked a
+        // theme has none stored, so they move from the earlier default,
+        // Apothecary, to Stone.
         let storedId = UserDefaults.standard.string(forKey: Self.storageKey)
-        let variant = storedId.flatMap { ThemeVariant(rawValue: $0) } ?? .apothecary
+        let variant = storedId.flatMap { ThemeVariant(rawValue: $0) } ?? .stone
         theme = .theme(for: variant)
     }
 

@@ -232,7 +232,7 @@ struct PersonalWorkspaceView: View {
                 )
             }
         }
-        .preferredColorScheme(.dark)
+        .themedColorScheme()
         .onChange(of: activeTabId) { _, newValue in
             guard
                 let id = newValue,
