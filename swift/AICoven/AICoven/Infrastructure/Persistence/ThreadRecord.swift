@@ -408,6 +408,9 @@ nonisolated struct AgentRun: Codable, Equatable {
     let runID: String
     /// The name the reply is shown under, as the turn was started with.
     var agentName: String?
+    /// Where the run is, for an agent that can be reached at more than one
+    /// place: the address of the OpenClaw Gateway it was started through.
+    var origin: String?
 }
 
 /// A turn still recorded as running.
