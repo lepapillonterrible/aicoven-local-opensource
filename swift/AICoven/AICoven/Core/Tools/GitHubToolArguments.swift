@@ -39,8 +39,10 @@ nonisolated enum GitHubToolArguments {
         let name: String
         switch parts.count {
         case 2:
-            // "owner/name" says it all; an `owner` beside it must agree.
-            if let apart, apart.caseInsensitiveCompare(parts[0]) != .orderedSame { return nil }
+            // "owner/name" says it all; an `owner` beside it must be a
+            // name too, and the same one (GitHub does not tell names
+            // apart by case).
+            if let apart, !isName(apart) || apart.lowercased() != parts[0].lowercased() { return nil }
             (owner, name) = (parts[0], parts[1])
         case 1:
             guard let apart else { return nil }

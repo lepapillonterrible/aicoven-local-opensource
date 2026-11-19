@@ -773,9 +773,7 @@ actor ChatService {
                 if let toolCall = toolCall?.remapped() {
                     // ── Context-aware repeat detection ────────────────────
                     // Build a stable signature from the tool name + normalized args.
-                    let rawInput = Self.inputForRepeatSignature(toolCall.input)
-                    let normalizedInputForSignature = Self.normalizeForDedupe(rawInput)
-                    let signature = "\(toolCall.tool.lowercased())|\(normalizedInputForSignature)"
+                    let signature = Self.repeatSignature(tool: toolCall.tool, input: toolCall.input)
 
                     // Hash the current accumulated context so we can tell
                     // whether anything changed between repeated calls.
@@ -1851,21 +1849,26 @@ extension ChatService {
     }
 
     /// What tells one call of a tool from another when repeats are looked
-    /// for. A call of nothing but a query is its query, as it has been.
-    /// Any other is all of its arguments, in a fixed order, so that the
-    /// second page of something, or another file, is not the first again.
-    nonisolated static func inputForRepeatSignature(_ input: AnyJSONValue?) -> String {
-        guard let input else { return "" }
+    /// for. A call of nothing but a query (or of text) is the tool and its
+    /// query loosely read, as it has been: two wordings of one search,
+    /// apart only in case or spacing, are one call. Any other is the tool
+    /// and all of its arguments exactly as given, in a fixed order, so
+    /// that the second page of something, or another file, is not the
+    /// first again.
+    nonisolated static func repeatSignature(tool: String, input: AnyJSONValue?) -> String {
+        let name = tool.lowercased()
+        guard let input else { return "\(name)|" }
         if let text = input.value as? String {
-            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return "\(name)|\(normalizeForDedupe(text))"
         }
-        guard let arguments = input.value as? [String: AnyJSONValue] else { return "" }
+        guard let arguments = input.value as? [String: AnyJSONValue] else { return "\(name)|" }
         if arguments.count == 1, let query = arguments["query"]?.value as? String ?? arguments["q"]?.value as? String {
-            return query.trimmingCharacters(in: .whitespacesAndNewlines)
+            return "\(name)|\(normalizeForDedupe(query))"
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        return (try? encoder.encode(arguments)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        let exact = (try? encoder.encode(arguments)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        return "\(name)|\(exact)"
     }
 
     /// Heuristic: if the user asked about weather and the model replied that it

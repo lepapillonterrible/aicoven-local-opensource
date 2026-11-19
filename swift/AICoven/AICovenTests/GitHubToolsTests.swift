@@ -35,6 +35,9 @@ final class GitHubToolsTests: XCTestCase {
         }
         XCTAssertNil(read(["owner": AnyJSONValue("octo/x"), "repo": AnyJSONValue("site")]))
         XCTAssertNil(read(["owner": AnyJSONValue(" octo"), "repo": AnyJSONValue("site")]), "Nothing is trimmed")
+        // The Kelvin sign compares equal to K when case is ignored, and is no letter of a name.
+        XCTAssertNil(read(["owner": AnyJSONValue("\u{212A}"), "repo": AnyJSONValue("K/site")]), "An owner beside a full name is a name too")
+        XCTAssertNil(read(["owner": AnyJSONValue("\u{212A}"), "repo": AnyJSONValue("site")]))
     }
 
     func testNumbersAreReadAsNumbersOrDigits_andPagesStayWithinWhatGitHubTakes() {
@@ -347,21 +350,27 @@ final class GitHubToolsTests: XCTestCase {
     // MARK: - Telling one call from another
 
     func testACallIsToldFromAnotherByAllItsArguments_andAQueryAloneIsItsQuery() {
-        func signature(_ arguments: [String: AnyJSONValue]) -> String {
-            ChatService.inputForRepeatSignature(.dictionary(arguments))
+        func signature(_ tool: String, _ arguments: [String: AnyJSONValue]) -> String {
+            ChatService.repeatSignature(tool: tool, input: .dictionary(arguments))
         }
-        XCTAssertEqual(signature(["query": AnyJSONValue("  swift concurrency ")]), "swift concurrency", "As it has been")
-        XCTAssertEqual(signature(["q": AnyJSONValue("swift")]), "swift")
-        XCTAssertEqual(ChatService.inputForRepeatSignature(.string(" ls -la ")), "ls -la")
-        XCTAssertEqual(ChatService.inputForRepeatSignature(nil), "")
+        func signature(_ arguments: [String: AnyJSONValue]) -> String {
+            signature("github.listPullRequestFiles", arguments)
+        }
+        XCTAssertEqual(signature("web_search", ["query": AnyJSONValue("  Swift   Concurrency? ")]), "web_search|swift concurrency", "A query alone, loosely read, as it has been")
+        XCTAssertEqual(signature("web_search", ["q": AnyJSONValue("swift")]), "web_search|swift")
+        XCTAssertEqual(ChatService.repeatSignature(tool: "Shell.Execute", input: .string(" ls  -la ")), "shell.execute|ls -la")
+        XCTAssertEqual(ChatService.repeatSignature(tool: "current_time", input: nil), "current_time|")
 
         let first = signature(["repo": AnyJSONValue("octo/site"), "pull_number": AnyJSONValue(7), "page": AnyJSONValue(1)])
         let second = signature(["page": AnyJSONValue(2), "pull_number": AnyJSONValue(7), "repo": AnyJSONValue("octo/site")])
-        XCTAssertEqual(first, #"{"page":1,"pull_number":7,"repo":"octo/site"}"#)
+        XCTAssertEqual(first, #"github.listpullrequestfiles|{"page":1,"pull_number":7,"repo":"octo/site"}"#)
         XCTAssertNotEqual(first, second, "The second page is not the first again")
         XCTAssertEqual(second, signature(["repo": AnyJSONValue("octo/site"), "pull_number": AnyJSONValue(7), "page": AnyJSONValue(2)]), "In whatever order the arguments came")
-        XCTAssertNotEqual(signature(["query": AnyJSONValue("swift"), "page": AnyJSONValue(1)]), signature(["query": AnyJSONValue("swift"), "page": AnyJSONValue(2)]))
-        XCTAssertNotEqual(signature(["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue("A.md")]), signature(["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue("B.md")]))
+        XCTAssertNotEqual(signature("github.searchCode", ["query": AnyJSONValue("swift"), "page": AnyJSONValue(1)]), signature("github.searchCode", ["query": AnyJSONValue("swift"), "page": AnyJSONValue(2)]))
+
+        // Arguments are told apart exactly: a path's case and spaces are part of it.
+        let paths = ["A.md", "a.md", "A.MD", "A .md", "A  .md"].map { signature("github.readFile", ["repo": AnyJSONValue("octo/site"), "path": AnyJSONValue($0)]) }
+        XCTAssertEqual(Set(paths).count, paths.count)
     }
 
     func testListFiles_tellsAFolderFromAFile_andTheTopOfARepositoryIsItsContents() async throws {
