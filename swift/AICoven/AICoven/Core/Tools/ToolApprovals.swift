@@ -18,10 +18,15 @@ nonisolated struct ToolApproval: Identifiable, Equatable {
     let toolName: String
 
     /// What the thread's line says was approved or denied: the first line
-    /// of what will happen (the command, the file, the branch).
+    /// of what will happen (the command, the file, the branch), or its
+    /// start when that line is very long. The line names what was asked;
+    /// the approval itself showed all of it.
     var subject: String {
-        details.split(whereSeparator: \.isNewline).first.map(String.init) ?? question
+        guard let first = details.split(whereSeparator: \.isNewline).first else { return question }
+        return first.count > Self.subjectLimit ? "\(first.prefix(Self.subjectLimit))…" : String(first)
     }
+
+    static let subjectLimit = 200
 
     init(threadID: String, question: String, details: String, toolName: String) {
         id = UUID().uuidString
@@ -182,11 +187,10 @@ final class ToolApprovals: ObservableObject {
         show(waiting.removeFirst())
     }
 
-    /// The answers given to a thread's turn, which are then no longer held
-    /// here: the turn that ends takes them with it, and a turn that starts
-    /// begins with none.
-    func takeAnswers(threadID: String) -> [WorkTrace.Approval] {
-        answered.removeValue(forKey: threadID) ?? []
+    /// Forgets the answers given to a thread's turn: a turn that has ended
+    /// keeps them itself, and a turn that starts begins with none.
+    func forgetAnswers(threadID: String) {
+        answered[threadID] = nil
     }
 
     // MARK: - Private

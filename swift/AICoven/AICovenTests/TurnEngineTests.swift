@@ -178,6 +178,29 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertEqual(stored[reply.id]?.approvals, kept)
     }
 
+    func testATurnWhoseEndingCannotBeStored_keepsItsAnswersWithIt() async throws {
+        let approvals = ToolApprovals { _, action in action() }
+        let engine = makeEngine(provider: provider, approvals: approvals)
+        try await engine.start(with: question("Push it"), context: "Push it", roleID: nil, agentName: nil, attachments: nil)
+        let asked = ToolApproval(threadID: threadID, question: "Run this command?", details: "git push\nIn /tmp", toolName: "shell.execute")
+        let asking = Task { await approvals.ask(asked) }
+        while approvals.showing?.approval.id != asked.id {
+            await Task.yield()
+        }
+        approvals.answer(asked.id, approve: true)
+        _ = await asking.value
+
+        // Locked while the turn runs: its ending cannot be encrypted.
+        await DataEncryptionService.shared.lock()
+        provider.release()
+        await finished(engine)
+
+        let unsaved = try XCTUnwrap(engine.endings[threadID])
+        XCTAssertFalse(unsaved.stored)
+        XCTAssertEqual(unsaved.trace.approvals, [WorkTrace.Approval(id: asked.id, subject: "git push", approved: true)])
+        XCTAssertNil(approvals.answered[threadID])
+    }
+
     // MARK: - Details and announcements
 
     func testDetails_followsItsOwnTurnAndNotTheNextOneInTheThread() async throws {

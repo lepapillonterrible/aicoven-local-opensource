@@ -105,7 +105,7 @@ final class TurnEngine: ObservableObject {
         // Marked before anything waits, so a second send cannot start too.
         running[threadID] = Activity(turnID: turnID, message: TurnProgress.startingMessage, trace: WorkTrace(startedAt: Date()))
         // Answers left from a turn that never ended here are not this one's.
-        _ = approvals.takeAnswers(threadID: threadID)
+        approvals.forgetAnswers(threadID: threadID)
         do {
             try await storeWaitingEnding(threadID: threadID)
             try await store.beginTurn(id: turnID, userMessage: userMessage)
@@ -244,8 +244,8 @@ final class TurnEngine: ObservableObject {
         replies[threadID] = nil
         settling.insert(turnID)
         var ending = progress.ending(in: threadID, thrown: thrown, stopped: running[threadID]?.isStopping == true)
-        // Left where they are until the thread has the ending to show them
-        // from: the thread shows a running turn's answers from there.
+        // Copied, and forgotten there only once the ending is published:
+        // until then the thread shows a running turn's answers from there.
         ending.trace.approvals = approvals.answered[threadID] ?? []
 
         do {
@@ -270,7 +270,7 @@ final class TurnEngine: ObservableObject {
         running[threadID] = nil
         settling.remove(turnID)
         announced[turnID] = nil
-        _ = approvals.takeAnswers(threadID: threadID)
+        approvals.forgetAnswers(threadID: threadID)
         if ending.outcome == .cancelled {
             // Once, when the turn has in fact stopped and Stop is gone.
             AccessibilityNotification.Announcement("Stopped").post()

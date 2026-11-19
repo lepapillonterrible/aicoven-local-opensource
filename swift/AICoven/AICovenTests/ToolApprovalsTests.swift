@@ -144,8 +144,8 @@ final class ToolApprovalsTests: XCTestCase {
             WorkTrace.Approval(id: second.id, subject: "/tmp/notes.txt", approved: false),
         ])
         XCTAssertNil(approvals.answered["thread-2"])
-        XCTAssertEqual(approvals.takeAnswers(threadID: "thread-1").count, 2)
-        XCTAssertEqual(approvals.takeAnswers(threadID: "thread-1"), [], "A turn takes its answers once")
+        approvals.forgetAnswers(threadID: "thread-1")
+        XCTAssertNil(approvals.answered["thread-1"])
     }
 
     func testTheSubjectOfAnApproval_isItsFirstLineWhateverEndsTheLine() {
@@ -153,6 +153,8 @@ final class ToolApprovalsTests: XCTestCase {
         XCTAssertEqual(windows.subject, "echo one")
         let none = ToolApproval(threadID: "t", question: "Run this command?", details: "", toolName: "shell.execute")
         XCTAssertEqual(none.subject, "Run this command?")
+        let long = ToolApproval.shell(command: String(repeating: "a", count: ToolApproval.subjectLimit + 50), directory: "/tmp", threadID: "t")
+        XCTAssertEqual(long.subject, String(repeating: "a", count: ToolApproval.subjectLimit) + "…")
     }
 
     // MARK: - A turn that stops
