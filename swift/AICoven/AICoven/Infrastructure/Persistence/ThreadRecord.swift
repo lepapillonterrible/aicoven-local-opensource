@@ -175,6 +175,10 @@ actor ThreadRepository {
         await MainActor.run { DatabaseManager.shared.dbQueue }
     }
 
+    /// The last message being added, which the next one waits for: messages
+    /// are read back in the order they were stored.
+    private var lastAppend: Task<Void, Never>?
+
     private init() {}
 
     // MARK: - Threads
@@ -445,10 +449,13 @@ extension ThreadRepository {
                 .compactMap(\.payloadCiphertext)
         }
 
+        guard !payloads.isEmpty else { return [] }
+        try await requireKey(of: currentUserId)
+        let decoder = JSONDecoder()
         var threads: [Thread] = []
         threads.reserveCapacity(payloads.count)
         for payload in payloads {
-            if let thread = try await Self.open(Thread.self, payload, purpose: "chat_thread", for: currentUserId) {
+            if let thread = try await open(Thread.self, payload, purpose: "chat_thread", with: decoder) {
                 threads.append(thread)
             }
         }
@@ -467,8 +474,20 @@ extension ThreadRepository {
         }
     }
 
-    /// Adds a message to the end of its thread.
+    /// Adds a message to the end of its thread. Messages are stored in the
+    /// order they are added, one at a time: storing one waits on encryption,
+    /// and a later one must not get ahead of it.
     func appendChatMessage(_ message: ChatMessage) async throws {
+        let previous = lastAppend
+        let task = Task {
+            await previous?.value
+            try await store(message)
+        }
+        lastAppend = Task { _ = await task.result }
+        try await task.value
+    }
+
+    private func store(_ message: ChatMessage) async throws {
         try await LegacyChatHistoryImport.shared.importIfNeeded()
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         let session = try await beginWrite()
@@ -502,6 +521,7 @@ extension ThreadRepository {
             guard olderThan != nil else { return [] }
         }
 
+        let decoder = JSONDecoder()
         var newestFirst: [ChatMessage] = []
         while newestFirst.count < limit {
             let wanted = limit - newestFirst.count
@@ -517,9 +537,11 @@ extension ThreadRepository {
                 arguments.append(wanted)
                 return try Row.fetchAll(db, sql: sql, arguments: StatementArguments(arguments))
             }
+            guard !rows.isEmpty else { break }
+            try await requireKey(of: currentUserId)
             for row in rows {
                 let ciphertext: Data = row["content_ciphertext"]
-                if let message = try await Self.open(ChatMessage.self, ciphertext, purpose: "chat_message", for: currentUserId) {
+                if let message = try await open(ChatMessage.self, ciphertext, purpose: "chat_message", with: decoder) {
                     newestFirst.append(message)
                 }
             }
@@ -529,57 +551,69 @@ extension ThreadRepository {
         return newestFirst.reversed()
     }
 
-    /// Stores the account `userID`'s threads and their messages together, or
-    /// not at all: the one write of chat history from the files that used to
-    /// hold it. A thread or message already stored is left as it is. Throws
-    /// if `userID` is not, or stops being, the current account.
+    /// Stores the account `userID`'s threads and messages together, or not at
+    /// all: the one write of chat history from the files that used to hold
+    /// it. A message is stored if its thread is one of `threads` or is
+    /// already this account's in the database; any other has no thread to
+    /// belong to. A thread or message already stored is left as it is.
+    /// Throws if `userID` is not, or stops being, the current account.
     func importChatHistory(threads: [Thread], messages: [String: [ChatMessage]], userID: String) async throws {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         let session = try await beginWrite()
         guard session.userID == userID else { throw RepositoryError.accountChanged }
 
-        var entries: [(thread: Thread, payload: Data, messages: [MessageRecord])] = []
+        let stored: Set<String> = try await dbQueue.read { db in
+            try Set(String.fetchAll(db, sql: "SELECT id FROM threads WHERE user_id = ?", arguments: [userID]))
+        }
+        var payloads: [(thread: Thread, payload: Data)] = []
         for thread in threads {
             let payload = try await DataEncryptionService.shared.encrypt(JSONEncoder().encode(thread), purpose: "chat_thread")
-            var records: [MessageRecord] = []
-            for message in messages[thread.id] ?? [] {
+            payloads.append((thread, payload))
+        }
+        let known = stored.union(threads.map(\.id))
+        var records: [MessageRecord] = []
+        for (threadID, threadMessages) in messages where known.contains(threadID) {
+            for message in threadMessages {
                 try await records.append(Self.record(for: message, userId: userID))
             }
-            entries.append((thread, payload, records))
         }
         try await confirm(session)
 
-        let toWrite = entries
+        let toWrite = (payloads, records)
         try await dbQueue.write { db in
-            for entry in toWrite {
-                if let stored = try ThreadRecord.fetchOne(db, key: entry.thread.id) {
-                    // A row another user owns cannot take this user's messages.
-                    guard stored.userId == userID else { continue }
-                } else {
-                    try Self.upsert(entry.thread, payload: entry.payload, userId: userID, in: db)
-                }
-                for record in entry.messages {
-                    try record.insert(db, onConflict: .ignore)
-                }
+            var owned = stored
+            for (thread, payload) in toWrite.0 where !stored.contains(thread.id) {
+                // A row another user owns keeps this id from being stored;
+                // this user's messages cannot go under it.
+                guard try ThreadRecord.fetchOne(db, key: thread.id) == nil else { continue }
+                try Self.upsert(thread, payload: payload, userId: userID, in: db)
+                owned.insert(thread.id)
+            }
+            for record in toWrite.1 where owned.contains(record.threadID) {
+                try record.insert(db, onConflict: .ignore)
             }
         }
     }
 
-    /// Decrypts and decodes one of the account `userID`'s stored records.
-    /// `nil`, and logged, when this record cannot be read with the account's
-    /// key or is not what it should be: one unreadable record must not hide
-    /// the rest. While the key in memory is not that account's, nothing of
-    /// its can be read, and that is thrown.
-    private static func open<Value: Decodable>(
+    /// Throws while the data key in memory is not the account `userID`'s:
+    /// nothing of that account's can then be read.
+    private func requireKey(of userID: String) async throws {
+        guard await DataEncryptionService.shared.isUnlocked(for: userID) else { throw RepositoryError.dataLocked }
+    }
+
+    /// Decrypts and decodes one stored record. `nil`, and logged, when this
+    /// record cannot be read with the key in memory or is not what it should
+    /// be: one unreadable record must not hide the rest. A locked key is
+    /// thrown.
+    private func open<Value: Decodable>(
         _ type: Value.Type,
         _ ciphertext: Data,
         purpose: String,
-        for userID: String
+        with decoder: JSONDecoder
     ) async throws -> Value? {
-        guard await DataEncryptionService.shared.isUnlocked(for: userID) else { throw RepositoryError.dataLocked }
         do {
             let plaintext = try await DataEncryptionService.shared.decrypt(ciphertext, purpose: purpose)
-            return try JSONDecoder().decode(type, from: plaintext)
+            return try decoder.decode(type, from: plaintext)
         } catch let error as CryptoKitError {
             AppErrorReporter.log(error: error, context: "ThreadRepository.open.\(purpose)")
             return nil

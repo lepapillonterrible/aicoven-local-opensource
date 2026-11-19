@@ -264,6 +264,38 @@ final class ChatHistoryStoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: threadsFile.path))
     }
 
+    func testImport_keepsTheMessagesWhenTheThreadsFileCannotBeRead() async throws {
+        let userID = UserScope.currentUserID
+        try Data("not-json".utf8).write(to: threadsFile)
+        let messages = ["some-thread": [message("kept-\(UUID().uuidString)", in: "some-thread", content: "Do not lose me")]]
+        try write(messages, to: messagesFile)
+        let written = try Data(contentsOf: messagesFile)
+
+        try await LegacyChatHistoryImport.importFiles(for: userID, threadsFile: threadsFile, messagesFile: messagesFile)
+
+        // Which threads exist is not known, so the messages are neither
+        // imported nor deleted: both files are kept under other names.
+        let kept = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+        XCTAssertEqual(kept.count, 2)
+        let keptMessages = try XCTUnwrap(kept.first { $0.lastPathComponent.hasPrefix("messages.json.unreadable-") })
+        XCTAssertEqual(try Data(contentsOf: keptMessages), written)
+    }
+
+    func testImport_storesMessagesOfAThreadThatIsAlreadyInTheDatabase() async throws {
+        let userID = UserScope.currentUserID
+        let stored = try await newThread(title: "Already here \(UUID().uuidString)")
+        try write([
+            stored.id: [message("late-\(stored.id)", in: stored.id, content: "Arrived later")],
+            "a-deleted-thread": [message("gone-\(stored.id)", in: "a-deleted-thread", content: "Orphan")],
+        ], to: messagesFile)
+
+        try await LegacyChatHistoryImport.importFiles(for: userID, threadsFile: threadsFile, messagesFile: messagesFile)
+
+        let loaded = try await ChatService.shared.loadMessages(threadId: stored.id)
+        XCTAssertEqual(loaded.map(\.content), ["Arrived later"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: messagesFile.path))
+    }
+
     func testImport_setsAsideAFileItCannotReadAndStillImportsTheOther() async throws {
         let userID = UserScope.currentUserID
         let mine = thread(id: "legacy-partial-\(UUID().uuidString)", userId: userID, title: "Readable")
