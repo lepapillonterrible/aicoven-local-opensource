@@ -50,7 +50,7 @@ final class ProviderKeysViewModel: ObservableObject {
 
     /// The delete confirmation's message.
     static func deleteMessage(for account: ProviderAccount) -> String {
-        let message = "AICoven removes this connection and its key from this device. This can't be undone."
+        let message = "AICoven removes this connection from this device, with any key saved for it. This can't be undone."
         // AICoven holds no OpenRouter management key, so deleting the account
         // here cannot revoke the key itself.
         guard account.provider.lowercased() == "openrouter" else { return message }

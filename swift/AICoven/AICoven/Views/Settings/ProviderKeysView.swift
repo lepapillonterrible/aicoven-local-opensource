@@ -143,7 +143,7 @@ struct ProviderAccountRow: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .disabled(testActionState == .testing)
-            .accessibilityLabel("Test")
+            .accessibilityLabel("Test \(account.displayName)")
             .accessibilityValue(testAccessibilityValue)
             .help(testActionState.resultMessage ?? "Test the connection")
         }
