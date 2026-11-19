@@ -5,7 +5,7 @@ import SwiftUI
 struct SettingsWorkspaceView: View {
     #if os(macOS)
     @EnvironmentObject private var appState: AppState
-    /// The request that opened Settings, when one named a place in it.
+    /// The last request for a legal page, which About opens on.
     @State private var request: WorkspaceTabType?
     /// The pane on screen, kept on this Mac: Settings reopens on it, and
     /// stays on it when a theme or typography change rebuilds this view.
@@ -50,8 +50,8 @@ struct SettingsWorkspaceView: View {
         guard let requested = appState.requestedSettingsPane else { return }
         appState.requestedSettingsPane = nil
         if let pane = SettingsPane(requested) {
-            request = requested
             if LegalPage(requested) != nil {
+                request = requested
                 requestCount += 1
             }
             selectedPaneID = pane.rawValue
