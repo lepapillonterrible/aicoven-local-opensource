@@ -426,9 +426,8 @@ extension AicovenTheme {
         displayFontDesign: .rounded
     )
 
-    /// All themes in display order for the picker. Orchard appended after
-    /// Observatory so the existing four-theme order is unchanged for
-    /// users who memorised it; new theme lands at the end.
+    /// All themes, in the order of `ThemeVariant`: Stone, the default,
+    /// first, then the five earlier themes in their earlier order.
     static let all: [AicovenTheme] = [.stone, .nebula, .apothecary, .grimoire, .observatory, .orchard]
 
     /// Lookup helper.

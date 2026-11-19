@@ -10,6 +10,10 @@ final class StoneThemeTests: XCTestCase {
         XCTAssertNil(AicovenTheme.stone.preferredColorScheme)
     }
 
+    func testStoneAccentAtDusk_isTheFillWaterWhiteLabelsStayReadableOn() throws {
+        XCTAssertEqual(try hex(of: AicovenTheme.stone.accentPrimary, in: .darkAqua), "517D79")
+    }
+
     private func hex(of color: Color, in appearance: NSAppearance.Name) throws -> String {
         var resolved: NSColor?
         try XCTUnwrap(NSAppearance(named: appearance)).performAsCurrentDrawingAppearance {
