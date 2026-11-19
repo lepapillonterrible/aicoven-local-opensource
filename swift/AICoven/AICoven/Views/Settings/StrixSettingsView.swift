@@ -46,6 +46,7 @@ struct StrixSettingsView: View {
         ("anthropic", "Anthropic"),
         ("google", "Google AI"),
         ("openrouter", "OpenRouter"),
+        ("openai_compatible", "OpenAI-compatible server"),
         ("mistral", "Mistral AI"),
         ("openclaw", "OpenClaw (Self-Hosted)"),
         ("hermes", "Hermes (Together AI / Self-Hosted)"),

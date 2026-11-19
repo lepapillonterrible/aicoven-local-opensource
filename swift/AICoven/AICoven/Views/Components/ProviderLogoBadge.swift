@@ -8,7 +8,7 @@ func providerLogoAssetName(slug: String) -> String {
     case "anthropic": "provider_claude"
     case "openclaw": "provider_openclaw"
     case "hermes": "provider_hermes"
-    case "ollama": ProviderLogoBadge.serverSymbolAssetName
+    case "ollama", "openai_compatible": ProviderLogoBadge.serverSymbolAssetName
     case "mlx": ProviderLogoBadge.deviceSymbolAssetName
     default: ""
     }
@@ -21,6 +21,7 @@ func providerDisplayName(slug: String) -> String {
     case "anthropic": "Anthropic"
     case "google", "gemini": "Google Gemini"
     case "openrouter": "OpenRouter"
+    case "openai_compatible": "OpenAI-compatible server"
     case "hermes": "Hermes"
     case "ollama": "Ollama"
     case "openclaw": "OpenClaw"

@@ -22,6 +22,10 @@ import Foundation
 final class OpenClawLLMClient: LLMClient, @unchecked Sendable {
     private let apiKey: String?
     let baseURL: URL
+    /// The provider this client answers as: OpenClaw, or any other server
+    /// that speaks the same API.
+    private let providerID: String
+    private let providerName: String
     private let urlSession: URLSession
 
     /// Default base URL for local OpenClaw instances.
@@ -60,12 +64,17 @@ final class OpenClawLLMClient: LLMClient, @unchecked Sendable {
     init(
         baseURL: URL? = nil,
         apiKey: String? = nil,
+        providerID: String = "openclaw",
+        providerName: String = "OpenClaw",
         urlSession: URLSession? = nil
     ) {
+        self.providerID = providerID
+        self.providerName = providerName
         // Resolve base URL
         if let providedURL = baseURL {
             self.baseURL = providedURL
-        } else if let envURL = ProcessInfo.processInfo.environment["OPENCLAW_BASE_URL"],
+        } else if providerID == "openclaw",
+                  let envURL = ProcessInfo.processInfo.environment["OPENCLAW_BASE_URL"],
                   let url = URL(string: envURL) {
             self.baseURL = url
         } else {
@@ -75,7 +84,8 @@ final class OpenClawLLMClient: LLMClient, @unchecked Sendable {
         // Resolve API key
         if let providedKey = apiKey {
             self.apiKey = providedKey
-        } else if let envKey = ProcessInfo.processInfo.environment["OPENCLAW_API_KEY"], !envKey.isEmpty {
+        } else if providerID == "openclaw",
+                  let envKey = ProcessInfo.processInfo.environment["OPENCLAW_API_KEY"], !envKey.isEmpty {
             self.apiKey = envKey
         } else {
             self.apiKey = nil
@@ -236,7 +246,7 @@ final class OpenClawLLMClient: LLMClient, @unchecked Sendable {
 
         let (data, response) = try await urlSession.data(for: request)
         if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-            let message = "OpenClaw HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
+            let message = "\(providerName) HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
             throw NSError(
                 domain: "OpenClawLLMClient",
                 code: http.statusCode,
@@ -247,7 +257,7 @@ final class OpenClawLLMClient: LLMClient, @unchecked Sendable {
             throw NSError(
                 domain: "OpenClawLLMClient",
                 code: -2,
-                userInfo: [NSLocalizedDescriptionKey: "OpenClaw returned an empty response body."]
+                userInfo: [NSLocalizedDescriptionKey: "\(providerName) returned an empty response body."]
             )
         }
 
@@ -281,7 +291,7 @@ final class OpenClawLLMClient: LLMClient, @unchecked Sendable {
 
         return LLMChatResponse(
             message: msg,
-            providerID: "openclaw",
+            providerID: providerID,
             modelID: decoded.model ?? model,
             usage: usage,
             toolCalls: toolCalls
@@ -315,7 +325,7 @@ final class OpenClawLLMClient: LLMClient, @unchecked Sendable {
 
         let (data, response) = try await urlSession.data(for: request)
         if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-            let message = "OpenClaw embeddings HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
+            let message = "\(providerName) embeddings HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
             throw NSError(
                 domain: "OpenClawLLMClient",
                 code: http.statusCode,
@@ -326,7 +336,7 @@ final class OpenClawLLMClient: LLMClient, @unchecked Sendable {
             throw NSError(
                 domain: "OpenClawLLMClient",
                 code: -2,
-                userInfo: [NSLocalizedDescriptionKey: "OpenClaw returned an empty embeddings response body."]
+                userInfo: [NSLocalizedDescriptionKey: "\(providerName) returned an empty embeddings response body."]
             )
         }
 

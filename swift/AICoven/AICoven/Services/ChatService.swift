@@ -1448,11 +1448,11 @@ actor ChatService {
         switch providerID {
         case "mlx", "ollama":
             return true
-        case "openclaw":
+        case "openclaw", "openai_compatible":
             if let client = llmClients[providerID] as? OpenClawLLMClient {
                 return client.isLocalEndpoint
             }
-            return true // Default assumption: OpenClaw is typically local
+            return true // Default assumption: these servers are typically local
         case "hermes":
             if let client = llmClients[providerID] as? HermesLLMClient {
                 return client.isLocalEndpoint
