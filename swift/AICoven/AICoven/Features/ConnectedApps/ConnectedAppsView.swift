@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// View for managing connected app integrations (GitHub, Google Drive).
+/// View for managing connected app integrations (GitHub, Google Drive, Figma).
 /// All OAuth tokens are stored locally in Keychain.
 struct ConnectedAppsView: View {
     @EnvironmentObject var storeService: StoreService
@@ -18,6 +18,9 @@ struct ConnectedAppsView: View {
     @State private var deviceUserCode: String = ""
     @State private var deviceVerificationUrl: String = ""
     @State private var deviceFlowTask: Task<Void, Never>?
+
+    /// The Figma token sheet, when it is asked for.
+    @State private var figmaToken: FigmaTokenRequest?
 
     // Google Picker state
     @State private var showingGooglePicker = false
@@ -53,7 +56,9 @@ struct ConnectedAppsView: View {
                                 isConnecting: connectingProvider == provider,
                                 onConnect: { await connect(provider: provider) },
                                 onDisconnect: { await disconnect(provider: provider) },
-                                onBrowseDrive: provider == .googleDrive ? { showingGooglePicker = true } : nil
+                                onBrowseDrive: provider == .googleDrive ? { showingGooglePicker = true } : nil,
+                                needsToken: provider.accountWaitingForAToken(in: accounts),
+                                onReplaceToken: { replaceToken(of: $0) }
                             )
                         }
                     }
@@ -135,10 +140,15 @@ struct ConnectedAppsView: View {
                 )
             }
         }
+        .sheet(item: $figmaToken) { request in
+            FigmaTokenSheet(request: request) {
+                Task { await loadAccounts() }
+            }
+        }
         .sheet(isPresented: $showUpsell) {
             FeatureUpsellView(
                 feature: upsellFeature,
-                featureDescription: "Connected Apps require the Tools Pack upgrade. Integrate GitHub and Google Drive to give your AI agent access to your files and repositories."
+                featureDescription: "Connected Apps require the Tools Pack upgrade. Integrate GitHub, Google Drive and Figma to give your AI agent access to your files, repositories and designs."
             )
             .environmentObject(storeService)
         }
@@ -175,7 +185,7 @@ struct ConnectedAppsView: View {
                     .fontWeight(.semibold)
                     .foregroundColor(.aicovenTextPrimary)
 
-                Text("OAuth tokens are stored securely in your device's Keychain")
+                Text("Tokens are stored securely in your device's Keychain")
                     .font(.aicovenCaption)
                     .foregroundColor(.aicovenTextSecondary)
             }
@@ -241,8 +251,18 @@ struct ConnectedAppsView: View {
     private func connect(provider: ConnectedAppProvider) async {
         // Gate connected apps behind the Tools Pack entitlement
         if !storeService.hasToolsPack {
-            upsellFeature = provider == .github ? .githubTool : .googleDriveTool
+            upsellFeature = switch provider {
+            case .github: .githubTool
+            case .googleDrive: .googleDriveTool
+            case .figma: .figmaTool
+            }
             showUpsell = true
+            return
+        }
+
+        // An app connected with a token asks for it in its own sheet.
+        if provider.connectsWithToken {
+            figmaToken = FigmaTokenRequest(replacing: nil)
             return
         }
 
@@ -292,6 +312,11 @@ struct ConnectedAppsView: View {
                 // Fetch user info
                 displayName = try await fetchGoogleEmail(token: tokenBundle.accessToken)
                 metadata["email"] = displayName
+
+            case .figma:
+                // Connected in its token sheet, above.
+                connectingProvider = nil
+                return
             }
 
             // Create account
@@ -321,9 +346,23 @@ struct ConnectedAppsView: View {
         }
     }
 
-    /// Disconnect from a provider
+    /// Asks for a new token for a connection whose token was refused,
+    /// behind the Tools Pack as connecting is.
+    private func replaceToken(of account: ConnectedAccount) {
+        if !storeService.hasToolsPack {
+            upsellFeature = .figmaTool
+            showUpsell = true
+            return
+        }
+        figmaToken = FigmaTokenRequest(replacing: account)
+    }
+
+    /// Disconnect from a provider: the connection its row shows. For an
+    /// app connected with a token that is, where none is connected, the
+    /// one that waits for a new token.
     private func disconnect(provider: ConnectedAppProvider) async {
-        guard let account = accounts.first(where: { $0.provider == provider && $0.status == .connected }) else {
+        let connected = accounts.first { $0.provider == provider && $0.status == .connected }
+        guard let account = connected ?? provider.accountWaitingForAToken(in: accounts) else {
             return
         }
 
@@ -377,6 +416,9 @@ struct ConnectedAppRow: View {
     let onConnect: () async -> Void
     let onDisconnect: () async -> Void
     let onBrowseDrive: (() -> Void)?
+    /// A connection whose token was refused and waits for a new one.
+    var needsToken: ConnectedAccount?
+    var onReplaceToken: (ConnectedAccount) -> Void = { _ in }
 
     var isConnected: Bool {
         account != nil
@@ -406,6 +448,18 @@ struct ConnectedAppRow: View {
                         Text(account.displayName)
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextSecondary)
+                        if provider.connectsWithToken {
+                            Text("Disconnecting deletes this app's copy of the token. Revoke the token in \(provider.displayName) too.")
+                                .font(.aicovenCaption)
+                                .foregroundColor(.aicovenTextTertiary)
+                        }
+                    } else if let needsToken {
+                        Text(needsToken.displayName)
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextSecondary)
+                        Text("Token refused. Needs a new token.")
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenError)
                     } else {
                         Text("Not connected")
                             .font(.aicovenCaption)
@@ -433,6 +487,15 @@ struct ConnectedAppRow: View {
                             Task { await onDisconnect() }
                         }
                         .buttonStyle(DisconnectButtonStyle())
+                    } else if let needsToken {
+                        Button("Replace Token") {
+                            onReplaceToken(needsToken)
+                        }
+                        .buttonStyle(ConnectButtonStyle())
+                        Button("Disconnect") {
+                            Task { await onDisconnect() }
+                        }
+                        .buttonStyle(DisconnectButtonStyle())
                     } else {
                         Button("Connect") {
                             Task { await onConnect() }
@@ -449,6 +512,7 @@ struct ConnectedAppRow: View {
         switch provider {
         case .github: .purple
         case .googleDrive: .blue
+        case .figma: .orange
         }
     }
 }
