@@ -686,6 +686,65 @@ final class OpenClawTurnTests: XCTestCase {
         await DataEncryptionService.shared.lock()
     }
 
+    func testAReplyByOpenClaw_isGivenWhatWasReadFromTheMessagesAttachments() async throws {
+        let defaults = UserDefaults.standard
+        let key = UserScope.scopedKey("llm_provider")
+        let saved = defaults.object(forKey: key)
+        defer { defaults.set(saved, forKey: key) }
+        defaults.set("openclaw", forKey: key)
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        await MainActor.run { DatabaseManager.shared.configureIfNeeded() }
+        await ThreadService.shared.reloadForCurrentUser()
+        let threadID = try await ThreadService.shared.createThread(title: "OpenClaw \(UUID().uuidString)").id
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await ThreadService.shared.deleteThread(threadId: threadID)
+            await ThreadService.shared.reloadForCurrentUser()
+            await DataEncryptionService.shared.lock()
+        }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("notes-\(UUID().uuidString).txt")
+        try Data("For OpenClaw.".utf8).write(to: file)
+        addTeardownBlock { try? FileManager.default.removeItem(at: file) }
+        let notes = FileAttachmentDetail(id: "notes", name: "notes.txt", mimeType: "text/plain", sizeBytes: nil, width: nil, height: nil, url: file)
+
+        let socket = ScriptedGatewaySocket()
+        let session = "agent:main:aicoven-local:\(threadID)"
+        socket.answer { [self] request in
+            let params = request["params"] as? [String: Any] ?? [:]
+            switch request["method"] as? String {
+            case "connect":
+                return [ScriptedGatewaySocket.welcome(to: request["id"] as? String ?? "")]
+            case "sessions.messages.subscribe":
+                return [answer(request, with: ["subscribed": true, "key": session])]
+            case "chat.send":
+                let runID = params["idempotencyKey"] as? String ?? ""
+                return [
+                    answer(request, with: ["runId": runID, "status": "started"]),
+                    ["type": "event", "event": "chat", "payload": ["sessionKey": session, "runId": runID, "state": "final", "finalText": "Read."]],
+                ]
+            default:
+                return []
+            }
+        }
+        let made = try turn(over: socket, threadID: threadID)
+        let chat = ChatService(
+            contextBuilder: ContextBuilder(limits: .init(maxRecentMessages: 4, maxRecentMemories: 4)),
+            modelRouter: HeuristicModelRouter(availableModels: []),
+            llmClients: [:],
+            threadStore: ThreadRepository.shared,
+            toolService: ToolService.shared,
+            shouldAutoRefreshEnvironment: false,
+            hermesAgent: { nil },
+            openClawTurn: { _ in made }
+        )
+
+        try await chat.streamMessage(threadId: threadID, message: "Sum this up", attachments: [notes], onStateChange: { _ in })
+
+        let send = try XCTUnwrap(socket.sent.first { $0["method"] as? String == "chat.send" }?["params"] as? [String: Any])
+        XCTAssertEqual(send["message"] as? String, "Sum this up\n\n[Attachment: notes.txt]\n```\nFor OpenClaw.\n```\n")
+        await DataEncryptionService.shared.lock()
+    }
+
     func testWithoutAGatewayOnItsConnection_OpenClawIsAModelLikeAnyOther() async throws {
         let defaults = UserDefaults.standard
         let key = UserScope.scopedKey("llm_provider")
@@ -782,6 +841,14 @@ final class OpenClawTurnTests: XCTestCase {
         XCTAssertFalse(cut.contains("Oldest"))
         XCTAssertTrue(cut.hasSuffix("user:\nAnd now?"))
         XCTAssertLessThanOrEqual(cut.count, OpenClawTurn.longestMessage)
+
+        // A message too long by itself keeps its start: what was typed
+        // comes before what was read from its attachments.
+        let tooLong = "Sum this up" + String(repeating: "b", count: OpenClawTurn.longestMessage)
+        let alone = OpenClawTurn.message(tooLong, after: [("user", "Oldest")])
+        XCTAssertTrue(alone.hasPrefix("user:\nSum this up"))
+        XCTAssertEqual(alone.count, OpenClawTurn.longestMessage)
+        XCTAssertEqual(OpenClawTurn.message(tooLong, after: []), String(tooLong.prefix(OpenClawTurn.longestMessage)))
 
         XCTAssertEqual(OpenClawTurn.finalText(in: ["message": ["content": [["type": "text", "text": "From "], ["type": "text", "text": "parts"]]]]), "From parts")
         XCTAssertEqual(OpenClawTurn.finalText(in: ["text": "Plain"]), "Plain")

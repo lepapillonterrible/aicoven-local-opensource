@@ -466,14 +466,16 @@ nonisolated struct OpenClawTurn {
 
     /// What a run is started with: the thread so far and the message, each
     /// under who said it, as the Gateway takes no history apart. If that is
-    /// longer than a run takes, the oldest of the thread is left out.
+    /// longer than a run takes, the oldest of the thread is left out; if
+    /// the message alone is, its end is (what was typed comes first, and
+    /// what was read from its attachments after it).
     static func message(_ message: String, after earlier: [(role: String, content: String)]) -> String {
         var parts = earlier.filter { !$0.content.isEmpty }.map { "\($0.role):\n\($0.content)" }
         parts.append(earlier.isEmpty ? message : "user:\n\(message)")
         while parts.count > 1, parts.joined(separator: "\n\n").count > longestMessage {
             parts.removeFirst()
         }
-        return String(parts.joined(separator: "\n\n").suffix(longestMessage))
+        return String(parts.joined(separator: "\n\n").prefix(longestMessage))
     }
 
     private static func object(_ data: Data) throws -> [String: Any] {

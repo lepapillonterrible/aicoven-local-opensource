@@ -652,6 +652,51 @@ final class HermesAgentTests: XCTestCase {
         await DataEncryptionService.shared.lock()
     }
 
+    func testAReplyByHermes_isGivenWhatWasReadFromTheMessagesAttachments() async throws {
+        let defaults = UserDefaults.standard
+        let keys = ["llm_provider", "hermes_model_connections_converted.v1"].map(UserScope.scopedKey)
+        let saved = keys.map { defaults.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                defaults.set(value, forKey: key)
+            }
+        }
+        defaults.set("hermes", forKey: keys[0])
+        defaults.set(true, forKey: keys[1])
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        await MainActor.run { DatabaseManager.shared.configureIfNeeded() }
+        HermesStub.answer("GET", events, with: (200, stream(#"{"event":"run.completed","output":"Read."}"#)))
+        let agent = client
+        let chat = ChatService(
+            contextBuilder: ContextBuilder(limits: .init(maxRecentMessages: 4, maxRecentMemories: 4)),
+            modelRouter: HeuristicModelRouter(availableModels: []),
+            llmClients: [:],
+            threadStore: ThreadRepository.shared,
+            toolService: ToolService.shared,
+            shouldAutoRefreshEnvironment: false,
+            hermesAgent: { agent }
+        )
+        await ThreadService.shared.reloadForCurrentUser()
+        let threadID = try await ThreadService.shared.createThread(title: "Hermes \(UUID().uuidString)").id
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await ThreadService.shared.deleteThread(threadId: threadID)
+            await ThreadService.shared.reloadForCurrentUser()
+            await DataEncryptionService.shared.lock()
+        }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("notes-\(UUID().uuidString).txt")
+        try Data("For Hermes.".utf8).write(to: file)
+        addTeardownBlock { try? FileManager.default.removeItem(at: file) }
+        let notes = FileAttachmentDetail(id: "notes", name: "notes.txt", mimeType: "text/plain", sizeBytes: nil, width: nil, height: nil, url: file)
+
+        try await chat.streamMessage(threadId: threadID, message: "Sum this up", attachments: [notes], onStateChange: { _ in })
+
+        let start = try XCTUnwrap(HermesStub.requests.first)
+        let sent = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(start.body.utf8)) as? [String: Any])
+        XCTAssertEqual(sent["input"] as? String, "Sum this up\n\n[Attachment: notes.txt]\n```\nFor Hermes.\n```\n")
+        await DataEncryptionService.shared.lock()
+    }
+
     // MARK: - A run the app was closed on
 
     func testARun_tellsItsIdAsSoonAsItHasOneSoItCanBeFoundAgain() async throws {
