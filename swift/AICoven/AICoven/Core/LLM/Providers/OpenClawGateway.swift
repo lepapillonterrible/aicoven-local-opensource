@@ -320,8 +320,9 @@ actor OpenClawGatewayConnection {
         return (id, answer)
     }
 
-    /// The answer, or nil if whoever waits for it was stopped first.
-    private nonisolated static func first(of answer: AsyncThrowingStream<Data, Error>) async throws -> Data? {
+    /// The answer to a request asked with `ask`, or nil if whoever waits
+    /// for it was stopped first.
+    nonisolated static func first(of answer: AsyncThrowingStream<Data, Error>) async throws -> Data? {
         for try await answered in answer {
             return answered
         }

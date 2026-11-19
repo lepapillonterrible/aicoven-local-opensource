@@ -1468,8 +1468,9 @@ actor ChatService {
         try await HermesTurn(client: agent, threadID: threadId).resume(runID: run.runID, report: onStateChange)
     }
 
-    /// How much of the thread a Hermes run is given: Hermes keeps its own
-    /// memory of the session as well.
+    /// How much of the thread an agent's run is given (a Hermes run, or an
+    /// OpenClaw run through its Gateway): the agent keeps its own memory
+    /// of the session as well.
     static let hermesHistoryLimit = 40
 
     /// What was said before the message an agent's run answers (a Hermes

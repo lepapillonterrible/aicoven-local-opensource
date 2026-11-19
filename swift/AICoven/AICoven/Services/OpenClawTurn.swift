@@ -19,6 +19,10 @@ nonisolated struct OpenClawTurn {
     /// How long a stopped turn waits for the Gateway to take the stop.
     var longestWaitToStop: TimeInterval = 5
 
+    /// The kinds of request a Gateway asks to be allowed: a command, a
+    /// plugin's action, an agent's own.
+    static let approvalKinds: Set<String> = ["exec", "plugin", "system-agent"]
+
     static let lostContact = "AICoven lost contact with OpenClaw before the run ended. It may still be running there."
     static let notFinished = "OpenClaw could not finish this run."
     /// The most text a run is started with.
@@ -89,13 +93,8 @@ nonisolated struct OpenClawTurn {
         do {
             let sent: [String: Any]
             do {
-                var answered: Data?
-                for try await payload in answer {
-                    answered = payload
-                    break
-                }
                 // No answer and no failure: the turn was stopped as it waited.
-                guard let answered else { throw CancellationError() }
+                guard let answered = try await OpenClawGatewayConnection.first(of: answer) else { throw CancellationError() }
                 // An answer that says nothing of the run leaves it named
                 // as it was asked for.
                 sent = (try? Self.object(answered)) ?? [:]
@@ -131,9 +130,18 @@ nonisolated struct OpenClawTurn {
                         switch payload["phase"] as? String {
                         case "pending":
                             guard settled.insert(id).inserted else { continue }
+                            // An answer names the kind of request it
+                            // answers. One of no kind this app knows cannot
+                            // be answered, and is not asked: as in the
+                            // cloud app, it is left to the Gateway.
+                            let presentation = approval["presentation"] as? [String: Any] ?? [:]
+                            guard let kind = presentation["kind"] as? String, Self.approvalKinds.contains(kind) else {
+                                AppErrorReporter.log(message: "An approval of a kind this app does not know was not asked.", context: "OpenClawTurn.approval")
+                                continue
+                            }
                             // Asked apart, so the run's events are still
                             // followed while the person decides.
-                            asking[id] = answering(approval, id: id, through: gateway)
+                            asking[id] = answering(presentation, id: id, kind: kind, through: gateway)
                         case "terminal":
                             // Settled there (answered elsewhere, or no
                             // longer wanted): no longer asked here.
@@ -234,10 +242,7 @@ nonisolated struct OpenClawTurn {
     /// gives the Gateway the answer: this once, or no. Where the person
     /// cannot be asked, the answer is no. Cancelling the task withdraws
     /// the question, and nothing is answered.
-    private func answering(_ approval: [String: Any], id: String, through gateway: OpenClawGatewayConnection) -> Task<Void, Never> {
-        let presentation = approval["presentation"] as? [String: Any] ?? [:]
-        // A command's, where the Gateway does not say: as the question is put.
-        let kind = (presentation["kind"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "exec"
+    private func answering(_ presentation: [String: Any], id: String, kind: String, through gateway: OpenClawGatewayConnection) -> Task<Void, Never> {
         let question = ToolApproval.openClaw(presentation, threadID: threadID)
         return Task { [ask] in
             let decision: String

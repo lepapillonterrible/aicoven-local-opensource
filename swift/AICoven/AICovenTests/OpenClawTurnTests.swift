@@ -289,6 +289,28 @@ final class OpenClawTurnTests: XCTestCase {
         }
     }
 
+    func testARequestOfAKindThisAppDoesNotKnow_isNotAskedAndNotAnswered() async throws {
+        let socket = ScriptedGatewaySocket()
+        play(socket) { [self] runID in
+            [
+                approval("approval:1", ["title": "Something", "allowedDecisions": ["allow-once", "deny"]]),
+                approval("approval:2", ["kind": "", "commandText": "ls", "allowedDecisions": ["allow-once", "deny"]]),
+                approval("approval:3", ["kind": "new-kind", "title": "Something", "allowedDecisions": ["allow-once", "deny"]]),
+                chat("final", run: runID, ["finalText": "Done."]),
+            ]
+        }
+        let asked = AskedOfThePerson()
+
+        try await turn(over: socket) { approval in
+            await asked.note(approval)
+            return .approved
+        }.run(message: "Go", report: { _ in })
+
+        let approvals = await asked.approvals
+        XCTAssertEqual(approvals, [])
+        XCTAssertFalse(socket.sent.contains { $0["method"] as? String == "approval.resolve" })
+    }
+
     func testWhatWasWaitingBeforeTheRunBegan_isNotThisRunsToAskAbout() async throws {
         let socket = ScriptedGatewaySocket()
         let session = session
