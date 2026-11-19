@@ -86,27 +86,46 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertEqual(messages.filter { $0.role == "user" }.map(\.content), ["First"])
     }
 
-    func testAReplyThatCannotBeStored_isStillShownWithWhyItWillNotLast() async throws {
+    func testAReplyThatCannotBeStored_isShownKeptAndStoredBeforeTheNextTurn() async throws {
         let engine = makeEngine()
-        _ = try await engine.start(threadID: threadID, text: "Hello", context: "Hello", roleID: nil, agentName: nil, attachments: nil)
+        _ = try await engine.start(threadID: threadID, text: "First", context: "First", roleID: nil, agentName: nil, attachments: nil)
         // Locked while the turn runs: however it ends, its ending cannot be
         // encrypted.
         await DataEncryptionService.shared.lock()
         provider.release()
         await finished(engine)
 
-        let ending = try XCTUnwrap(engine.endings[threadID])
-        XCTAssertFalse(ending.stored)
-        XCTAssertEqual(ending.messages.count, 2)
-        XCTAssertFalse(ending.messages[0].content.isEmpty)
-        XCTAssertTrue(ending.messages[1].content.hasPrefix("AICoven couldn't save this reply"))
+        let unsaved = try XCTUnwrap(engine.endings[threadID])
+        XCTAssertFalse(unsaved.stored)
+        XCTAssertEqual(unsaved.messages.count, 2)
+        XCTAssertTrue(unsaved.messages[1].content.hasPrefix("AICoven couldn't save this reply yet"))
 
-        // The engine still holds this ending, so opening the thread adds no
-        // line about a reply that was not saved; the turn stays as it is.
+        // While it still cannot be stored, nothing new starts in the thread
+        // and the ending is kept.
+        do {
+            _ = try await engine.start(threadID: threadID, text: "Too soon", context: "Too soon", roleID: nil, agentName: nil, attachments: nil)
+            XCTFail("A new turn must wait for the earlier ending to be stored")
+        } catch {}
+        XCTAssertEqual(engine.endings[threadID], unsaved)
+        XCTAssertNil(engine.running[threadID])
+
+        // Storable again: opening the thread keeps the turn, and the next
+        // send stores the earlier ending ahead of the new question.
         await DataEncryptionService.shared.unlockForTestingEphemeral()
-        await engine.settleInterruptedTurns(threadID: threadID)
-        let turn = try await storedTurn()
-        XCTAssertEqual(turn?.status, "running")
+        _ = try await engine.start(threadID: threadID, text: "Second", context: "Second", roleID: nil, agentName: nil, attachments: nil)
+        await finished(engine)
+
+        // The first question was stored under the key before the lock, so
+        // it is not among what the test key now reads.
+        let messages = try await ChatService.shared.loadMessages(threadId: threadID)
+        XCTAssertEqual(messages.count, 3)
+        XCTAssertEqual(messages[0], unsaved.messages[0])
+        XCTAssertEqual(messages[1].content, "Second")
+        XCTAssertEqual(messages[2].content, "The plan is ready.")
+        let statuses = try await DatabaseManager.shared.dbQueue?.read { [threadID] db in
+            try String.fetchAll(db, sql: "SELECT status FROM turns WHERE thread_id = ? ORDER BY started_at", arguments: [threadID])
+        }
+        XCTAssertEqual(statuses?.contains("running"), false)
     }
 
     // MARK: - A turn the app closed on

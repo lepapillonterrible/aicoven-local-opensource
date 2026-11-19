@@ -7,8 +7,9 @@ import Foundation
 ///
 /// A turn is recorded when it starts, with the person's message, and when it
 /// ends, with the reply or what went wrong. A turn still recorded as running
-/// that this engine is not running has no stored ending: the app closed on
-/// it, or its ending could not be stored. Opening its thread says so there.
+/// that this engine neither runs nor holds an ending for has no reply
+/// stored: the app closed on it, or before its ending could be stored.
+/// Opening its thread says so there.
 @MainActor
 final class TurnEngine: ObservableObject {
     static let shared = TurnEngine(chat: .shared)
@@ -43,6 +44,11 @@ final class TurnEngine: ObservableObject {
     /// its turn ended whether or not it could be stored.
     @Published private(set) var endings: [String: Ending] = [:]
 
+    /// An ending that could not be stored, by thread id. It is stored
+    /// before the thread's next turn starts, so nothing later is ever
+    /// stored ahead of it, and no later ending takes its place.
+    private var unstored: [String: (turnID: String, outcome: TurnOutcome, message: ChatMessage)] = [:]
+
     private let chat: ChatService
     private let store = ThreadRepository.shared
 
@@ -53,8 +59,8 @@ final class TurnEngine: ObservableObject {
     /// Starts a turn in a thread and returns the person's message as stored.
     /// `text` is what the person wrote and what the thread shows; `context`
     /// is what the model is sent, which can carry more. Throws, with nothing
-    /// started, if a turn is already running in the thread or the message
-    /// cannot be stored.
+    /// started, if a turn is already running in the thread, or the message,
+    /// or an earlier ending still waiting to be stored, cannot be stored.
     func start(
         threadID: String,
         text: String,
@@ -69,6 +75,7 @@ final class TurnEngine: ObservableObject {
         running[threadID] = Activity(turnID: turnID, message: TurnProgress.startingMessage)
         let userMessage = TurnProgress.message(in: threadID, role: "user", content: text)
         do {
+            try await storeWaitingEnding(threadID: threadID)
             try await store.beginTurn(id: turnID, userMessage: userMessage)
         } catch {
             running[threadID] = nil
@@ -82,11 +89,13 @@ final class TurnEngine: ObservableObject {
 
     /// Ends any turn in the thread that is recorded as running but is not,
     /// and whose ending this engine does not hold: the thread gets a line
-    /// saying its reply was not saved.
+    /// saying no reply was saved. An ending the engine holds unstored is
+    /// tried again first.
     func settleInterruptedTurns(threadID: String) async {
         do {
+            try? await storeWaitingEnding(threadID: threadID)
             for turnID in try await store.runningTurnIDs(threadID: threadID)
-                where running[threadID]?.turnID != turnID && endings[threadID]?.turnID != turnID {
+                where running[threadID]?.turnID != turnID && unstored[threadID]?.turnID != turnID {
                 try await store.endTurn(
                     id: turnID,
                     outcome: .interrupted,
@@ -96,6 +105,17 @@ final class TurnEngine: ObservableObject {
         } catch {
             AppErrorReporter.log(error: error, context: "TurnEngine.settleInterruptedTurns")
         }
+    }
+
+    /// Stores the thread's ending that could not be stored before, if there
+    /// is one. Throws if it still cannot be.
+    private func storeWaitingEnding(threadID: String) async throws {
+        guard let waiting = unstored[threadID] else { return }
+        try await store.endTurn(id: waiting.turnID, outcome: waiting.outcome, message: waiting.message)
+        // Another call can have stored it while this one waited.
+        guard unstored[threadID]?.turnID == waiting.turnID else { return }
+        unstored[threadID] = nil
+        endings[threadID] = Ending(turnID: waiting.turnID, messages: [waiting.message], stored: true)
     }
 
     private func run(
@@ -138,14 +158,16 @@ final class TurnEngine: ObservableObject {
             try await store.endTurn(id: turnID, outcome: ending.outcome, message: ending.message)
             endings[threadID] = Ending(turnID: turnID, messages: [ending.message], stored: true)
         } catch {
-            // The reply exists and the thread shows it, with why it will not
-            // be there later. The turn stays recorded as running, and a
-            // later launch says its reply was not saved.
+            // The reply exists and the thread shows it, with why it may not
+            // be there later. It is tried again before the thread's next
+            // turn; if the app closes first, the turn is still recorded as
+            // running, and the next launch says no reply was saved.
             AppErrorReporter.log(error: error, context: "TurnEngine.endTurn")
+            unstored[threadID] = (turnID, ending.outcome, ending.message)
             let notice = TurnProgress.message(
                 in: threadID,
                 role: "assistant",
-                content: "AICoven couldn't save this reply, so it will be gone when the app closes: \(error.localizedDescription)"
+                content: "AICoven couldn't save this reply yet. It will try again when you send your next message here; if the app closes first, the reply is lost. \(error.localizedDescription)"
             )
             endings[threadID] = Ending(turnID: turnID, messages: [ending.message, notice], stored: false)
         }
@@ -160,7 +182,7 @@ final class TurnEngine: ObservableObject {
 /// it runs and the message it ends with.
 struct TurnProgress {
     static let startingMessage = "Thinking through your request…"
-    static let interruptedNotice = "This reply was not saved: AICoven closed, or could not store it, before it was finished. Send your message again to get an answer."
+    static let interruptedNotice = "No reply to this message was saved. Send it again to get an answer."
 
     let agentName: String?
     /// The loader's line.
