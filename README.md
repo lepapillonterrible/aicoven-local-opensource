@@ -271,7 +271,7 @@ CI runs automatically on:
 - **Pushes** to `main` or `dev` branches
 
 The CI pipeline:
-1. Runs SwiftFormat (check mode)
+1. Runs SwiftFormat 0.61.1 (check mode), the version the repository is formatted with
 2. Runs SwiftLint (strict mode)
 3. Builds the project (Debug, macOS)
 4. Runs tests (if configured in the test plan)

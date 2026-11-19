@@ -59,8 +59,17 @@ jobs:
       - name: Install SwiftLint
         run: brew install swiftlint
 
-      - name: Install SwiftFormat
-        run: brew install swiftformat
+      - name: Install SwiftFormat 0.61.1
+        run: |
+          # The repository is formatted with this version. A newer one adds
+          # rules that fail files no change touched. The checksum is the
+          # release asset's published sha256.
+          curl -fsSL -o "$RUNNER_TEMP/swiftformat.zip" \
+            https://github.com/nicklockwood/SwiftFormat/releases/download/0.61.1/swiftformat.zip
+          echo "b990400779aceb7d7020796eb9ba814d4480543f671d38fc0ff48cb72f04c584  $RUNNER_TEMP/swiftformat.zip" | shasum -a 256 -c -
+          unzip -o -q "$RUNNER_TEMP/swiftformat.zip" -d "$RUNNER_TEMP/swiftformat"
+          chmod +x "$RUNNER_TEMP/swiftformat/swiftformat"
+          echo "$RUNNER_TEMP/swiftformat" >> "$GITHUB_PATH"
 
       - name: SwiftFormat version
         run: swiftformat --version
