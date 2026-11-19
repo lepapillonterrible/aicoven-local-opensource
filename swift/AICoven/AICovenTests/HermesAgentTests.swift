@@ -345,6 +345,18 @@ final class HermesAgentTests: XCTestCase {
         XCTAssertEqual(HermesStub.requests.count(where: { $0.path == "/v1/runs/run_1" }), 3, "As many looks as the turn is given")
     }
 
+    func testWhenHermesNoLongerHasTheRunAfterAnAnswerFailed_theTurnSaysSoAtOnce() async throws {
+        HermesStub.answer("GET", events, with: (200, stream(#"{"event":"approval.request","command":"git push"}"#)))
+        HermesStub.answer("POST", "/v1/runs/run_1/approval", with: (503, ""))
+        HermesStub.answer("GET", "/v1/runs/run_1", with: (404, "{}"))
+        let reports = Reports()
+
+        try await turn { _ in .approved }.run(input: "Push", history: [], report: reports.add)
+
+        XCTAssertEqual(reports.all.last?.answer, HermesTurn.runGone)
+        XCTAssertEqual(HermesStub.requests.count(where: { $0.path == "/v1/runs/run_1" }), 1)
+    }
+
     func testAnAnswerWhoseReplyWasLost_isNotSentAgainOnceTheRunHasMovedOn() async throws {
         // Hermes took the answer, but this app never heard so; by the time
         // it looks, the run is waiting on something else.

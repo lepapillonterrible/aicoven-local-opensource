@@ -206,7 +206,12 @@ nonisolated struct HermesTurn {
             var failedLooks = 0
             while true {
                 try await Task.sleep(for: lookAgainAfter)
-                guard let standing = try? await client.state(of: runID) else {
+                let standing: HermesRunState
+                do {
+                    standing = try await client.state(of: runID)
+                } catch HermesAgentError.refused(status: 404) {
+                    return Self.runGone
+                } catch {
                     try Task.checkCancellation()
                     failedLooks += 1
                     guard failedLooks < looksBeforeGivingUp else { return Self.lostContact }

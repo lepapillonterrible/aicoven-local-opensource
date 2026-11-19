@@ -412,11 +412,17 @@ actor ProviderAccountService {
             throw LocalProviderAccountError.accountNotFound
         }
         let models: [ProviderInitializationStatus.ModelMetadata]
-        do {
-            models = try await fetchRemoteModels(for: account)
-        } catch {
-            AppErrorReporter.log(error: error, context: "ProviderAccountService.getInitializationStatus.fetchRemoteModels")
+        if account.provider.lowercased() == "hermes" {
+            // A Hermes agent has no models to choose among, so the screens
+            // that list a connection's models do not ask it: only Test does.
             models = []
+        } else {
+            do {
+                models = try await fetchRemoteModels(for: account)
+            } catch {
+                AppErrorReporter.log(error: error, context: "ProviderAccountService.getInitializationStatus.fetchRemoteModels")
+                models = []
+            }
         }
         return ProviderInitializationStatus(
             providerAccountId: account.id,
