@@ -307,6 +307,7 @@ actor ChatService {
         roleId: String? = nil,
         providerAccountId: String? = nil,
         attachments: [FileAttachmentDetail]? = nil,
+        onAgentRun: (@Sendable (AgentRun) async -> Void)? = nil,
         onStateChange: @escaping (TurnState) -> Void
     ) async throws {
         var state = TurnState(threadId: threadId)
@@ -348,6 +349,7 @@ actor ChatService {
             try await HermesTurn(client: agent, threadID: threadId).run(
                 input: message,
                 history: Self.hermesHistory(from: earlier),
+                started: { await onAgentRun?(AgentRun(provider: AgentRun.hermes, runID: $0)) },
                 report: onStateChange
             )
             return
@@ -1424,6 +1426,21 @@ actor ChatService {
     }
 
     // MARK: - Deployment helpers
+
+    /// Whether a run an agent was making for a turn can be picked up again:
+    /// it is that agent's, and the agent is still connected.
+    func canResume(_ run: AgentRun) -> Bool {
+        run.provider == AgentRun.hermes && hermesAgent() != nil
+    }
+
+    /// Picks up a run an agent was making for a turn when this app was
+    /// closed on it, and follows it to its end as `streamMessage` would
+    /// have.
+    func resumeAgentRun(_ run: AgentRun, threadId: String, onStateChange: @escaping @Sendable (TurnState) -> Void) async throws {
+        guard run.provider == AgentRun.hermes, let agent = hermesAgent() else { throw HermesAgentError.cannotPickUp }
+        threadsLastAnsweredByHermes.insert(threadId)
+        try await HermesTurn(client: agent, threadID: threadId).resume(runID: run.runID, report: onStateChange)
+    }
 
     /// How much of the thread a Hermes run is given: Hermes keeps its own
     /// memory of the session as well.

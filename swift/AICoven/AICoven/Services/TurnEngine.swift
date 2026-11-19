@@ -10,7 +10,9 @@ import Foundation
 /// ends, with the reply or what went wrong. A turn still recorded as running
 /// that this engine neither runs nor holds an ending for has no reply
 /// stored: the app closed on it, or before its ending could be stored.
-/// Opening its thread says so there.
+/// Opening its thread says so there, unless an agent of the person's own
+/// was running it: that run went on, and is picked up and followed to its
+/// end.
 @MainActor
 final class TurnEngine: ObservableObject {
     static let shared = TurnEngine(chat: .shared)
@@ -73,6 +75,9 @@ final class TurnEngine: ObservableObject {
     /// and why, by thread id: given back when the thread is next opened.
     private var unsent: [String: (text: String, reason: String)] = [:]
 
+    /// The turns picked up since the app started, by id: each is picked up
+    /// once, and ends through that.
+    private var pickedUp: Set<String> = []
     /// The last status announced for each running turn, by turn id.
     private var announced: [String: String] = [:]
 
@@ -113,8 +118,31 @@ final class TurnEngine: ObservableObject {
             running[threadID] = nil
             throw error
         }
+        let chat = chat
+        let store = store
         Task {
-            await run(turnID: turnID, threadID: threadID, context: context, roleID: roleID, agentName: agentName, attachments: attachments)
+            await run(turnID: turnID, threadID: threadID, agentName: agentName) { report in
+                try await chat.streamMessage(
+                    threadId: threadID,
+                    message: context,
+                    roleId: roleID,
+                    attachments: attachments,
+                    onAgentRun: { run in
+                        // Kept with the turn, so the run can be picked up
+                        // again if this app closes on it. If it cannot be
+                        // kept, the turn goes on; it would then end as
+                        // interrupted after a relaunch, as it did before.
+                        var kept = run
+                        kept.agentName = agentName
+                        do {
+                            try await store.keepRun(kept, forTurn: turnID)
+                        } catch {
+                            AppErrorReporter.log(error: error, context: "TurnEngine.keepRun")
+                        }
+                    },
+                    onStateChange: report
+                )
+            }
         }
     }
 
@@ -156,10 +184,11 @@ final class TurnEngine: ObservableObject {
         unsent.removeValue(forKey: threadID)
     }
 
-    /// Ends any turn in the thread that is recorded as running but is not,
-    /// and whose ending this engine does not hold: the thread gets a line
-    /// saying no reply was saved. An ending the engine holds unstored is
-    /// tried again first.
+    /// Settles any turn in the thread that is recorded as running but is
+    /// not, and whose ending this engine does not hold. One an agent of the
+    /// person's own was running is picked up and followed to its end; any
+    /// other is ended, and the thread gets a line saying no reply was saved.
+    /// An ending the engine holds unstored is tried again first.
     func settleInterruptedTurns(threadID: String) async {
         do {
             do {
@@ -167,16 +196,49 @@ final class TurnEngine: ObservableObject {
             } catch {
                 AppErrorReporter.log(error: error, context: "TurnEngine.storeWaitingEnding")
             }
-            for turnID in try await store.runningTurnIDs(threadID: threadID)
-                where running[threadID]?.turnID != turnID && unstored[threadID]?.turnID != turnID {
+            for turn in try await store.runningTurns(threadID: threadID) where !isBeingSettled(turn.id, in: threadID) {
+                // A turn an agent of the person's own was running went on
+                // there: it is picked up, not ended. One at a time in a
+                // thread, as for any turn.
+                let canResume = if let run = turn.run { await chat.canResume(run) } else { false }
+                // The thread can be opened in two places at once: the other
+                // opener can have picked this turn up while this one waited,
+                // and it can have ended since. Either way it is not this
+                // opener's to pick up or to end.
+                guard !isBeingSettled(turn.id, in: threadID) else { continue }
+                if canResume, let run = turn.run, running[threadID] == nil {
+                    resume(turn, run, in: threadID)
+                    continue
+                }
                 try await store.endTurn(
-                    id: turnID,
+                    id: turn.id,
                     outcome: .interrupted,
                     message: TurnProgress.message(in: threadID, role: "assistant", content: TurnProgress.interruptedNotice)
                 )
             }
         } catch {
             AppErrorReporter.log(error: error, context: "TurnEngine.settleInterruptedTurns")
+        }
+    }
+
+    /// Whether this engine is running the turn, holds its ending, or has
+    /// picked it up: such a turn is settled by the engine's own run of it,
+    /// whatever an earlier reading of the stored turns says.
+    private func isBeingSettled(_ turnID: String, in threadID: String) -> Bool {
+        running[threadID]?.turnID == turnID || unstored[threadID]?.turnID == turnID || pickedUp.contains(turnID)
+    }
+
+    /// Takes up again a turn whose run went on in the agent while this app
+    /// was closed: the thread shows it as running, with Stop, and it ends
+    /// as any turn does.
+    private func resume(_ turn: RunningTurn, _ run: AgentRun, in threadID: String) {
+        pickedUp.insert(turn.id)
+        running[threadID] = Activity(turnID: turn.id, message: TurnProgress.pickingUpMessage, trace: WorkTrace(startedAt: turn.startedAt))
+        let chat = chat
+        Task {
+            await self.run(turnID: turn.id, threadID: threadID, agentName: run.agentName) { report in
+                try await chat.resumeAgentRun(run, threadId: threadID, onStateChange: report)
+            }
         }
     }
 
@@ -193,13 +255,14 @@ final class TurnEngine: ObservableObject {
         endings[threadID] = Ending(turnID: waiting.turnID, outcome: waiting.outcome, trace: waiting.trace, messages: [waiting.message], stored: true)
     }
 
+    /// Runs a turn's work to its end and stores how it ended. `work` makes
+    /// the reply, reporting each step as it goes: the app's own reply loop,
+    /// or the following of an agent's run.
     private func run(
         turnID: String,
         threadID: String,
-        context: String,
-        roleID: String?,
         agentName: String?,
-        attachments: [FileAttachmentDetail]?
+        work: @escaping @Sendable (_ report: @escaping @Sendable (TurnState) -> Void) async throws -> Void
     ) async {
         // The chat service reports each step from its own actor; the stream
         // keeps the steps in the order they were reported.
@@ -208,13 +271,7 @@ final class TurnEngine: ObservableObject {
         let reply = Task { () -> Error? in
             defer { continuation.finish() }
             do {
-                try await chat.streamMessage(
-                    threadId: threadID,
-                    message: context,
-                    roleId: roleID,
-                    attachments: attachments,
-                    onStateChange: { continuation.yield($0) }
-                )
+                try await work { continuation.yield($0) }
                 return nil
             } catch {
                 return error
@@ -286,6 +343,7 @@ final class TurnEngine: ObservableObject {
 struct TurnProgress {
     static let startingMessage = "Thinking through your request…"
     static let stoppingMessage = "Stopping…"
+    static let pickingUpMessage = "Picking up where your agent is…"
     static let interruptedNotice = "No reply to this message was saved. Send it again to get an answer."
 
     let agentName: String?
@@ -339,21 +397,24 @@ struct TurnProgress {
     ) -> (outcome: TurnOutcome, message: ChatMessage, trace: WorkTrace) {
         var trace = trace
         trace.finishedAt = now
+        // However the turn ended, its message is shown under the name it
+        // was started with.
+        let named = agentName.map { ["role_name": AnyJSONValue($0)] }
         // Stopped by the person, or by the agent that was running it.
         if (stopped && (thrown != nil || last?.status != .completed)) || (thrown == nil && last?.status == .cancelled) {
             let partial = MessageAdapter.sanitizeContentForDisplay(partialAnswer).trimmingCharacters(in: .whitespacesAndNewlines)
             let content = partial.isEmpty ? "Stopped before any reply." : "\(partial)\n\n_Stopped here._"
-            return (.cancelled, Self.message(in: threadID, role: "assistant", content: content), trace)
+            return (.cancelled, Self.message(in: threadID, role: "assistant", content: content, metadata: named), trace)
         }
         if let thrown {
             let text = "I ran into an error while contacting your provider: \(thrown.localizedDescription)"
-            return (.failed, Self.message(in: threadID, role: "assistant", content: text), trace)
+            return (.failed, Self.message(in: threadID, role: "assistant", content: text, metadata: named), trace)
         }
         // The chat service's last report is its outcome: the answer, or what
         // went wrong.
         let answer = last?.answer ?? ""
         guard last?.status != .failed else {
-            return (.failed, Self.message(in: threadID, role: "assistant", content: answer), trace)
+            return (.failed, Self.message(in: threadID, role: "assistant", content: answer, metadata: named), trace)
         }
 
         var metadata: [String: AnyJSONValue] = [:]
