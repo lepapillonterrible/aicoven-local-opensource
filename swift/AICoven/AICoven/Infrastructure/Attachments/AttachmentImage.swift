@@ -54,7 +54,11 @@ nonisolated enum AttachmentImage {
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
             throw Failure.cannotBeRewritten
         }
-        let hasAlpha = ![CGImageAlphaInfo.none, .noneSkipFirst, .noneSkipLast].contains(image.alphaInfo)
+        // Whether the picture itself can be seen through, as it says of
+        // itself: the redrawn copy can carry an alpha channel the source
+        // did not have, and a photo is not to be kept as a PNG for that.
+        let hasAlpha = (properties?[kCGImagePropertyHasAlpha] as? Bool)
+            ?? ![CGImageAlphaInfo.none, .noneSkipFirst, .noneSkipLast].contains(image.alphaInfo)
         let written: UTType = hasAlpha ? .png : .jpeg
         let output = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(output, written.identifier as CFString, 1, nil) else {

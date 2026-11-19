@@ -769,7 +769,7 @@ struct PersonalChatView: View {
     }
 
     /// Send a message with optional file attachments to the LLM.
-    /// Attachments are read from disk and their contents are injected into the context.
+    /// Attachments are read from the app's own store and their contents are injected into the context.
     /// True once the turn has started; false if nothing was sent, with the
     /// text back in the composer or kept for its thread.
     @MainActor

@@ -175,12 +175,14 @@ final class TurnEngine: ObservableObject {
             try await AttachmentStore.shared.markSent(files, with: userMessage.id, inThread: threadID)
             try await store.beginTurn(id: turnID, userMessage: userMessage)
         } catch {
-            // Not sent after all: its files are unsent again.
-            await AttachmentStore.shared.markUnsent(files, markedWith: userMessage.id)
             running[threadID] = nil
             // What was set to wait for this turn, while it was being
             // started, has no turn to wait for.
             giveBackWaiting(threadID: threadID, because: error)
+            // Not sent after all: its files are unsent again. After the
+            // thread has stopped showing a turn, so nothing sent meanwhile
+            // is set to wait for one that is not there.
+            await AttachmentStore.shared.markUnsent(files, markedWith: userMessage.id)
             throw error
         }
         let chat = chat

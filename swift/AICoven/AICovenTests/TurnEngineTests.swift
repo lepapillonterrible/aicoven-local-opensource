@@ -721,6 +721,53 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertNil(engine.additions["another-thread"])
     }
 
+    // MARK: - Attached files
+
+    private func messageID(of attachmentID: String) async throws -> String? {
+        try await DatabaseManager.shared.dbQueue?.read { db in
+            try String.fetchOne(db, sql: "SELECT message_id FROM attachments WHERE id = ?", arguments: [attachmentID])
+        }
+    }
+
+    func testATurnsFiles_areTheThreadsOnceItStarts_andUnsentAgainIfItCannotStart() async throws {
+        let engine = makeEngine()
+        let file = try await AttachmentStore.shared.add(Data("notes".utf8), named: "notes.txt", mimeType: "text/plain", toThread: threadID)
+
+        // A turn that cannot start (locked: its message cannot be stored)
+        // leaves the file unsent, to send again or take out.
+        await DataEncryptionService.shared.lock()
+        let unsent = question("With a file")
+        do {
+            try await engine.start(with: unsent, context: "With a file", roleID: nil, agentName: nil, attachments: [file])
+            XCTFail("The turn cannot start while its message cannot be stored")
+        } catch {}
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        let afterFailure = try await messageID(of: file.id)
+        XCTAssertNil(afterFailure)
+        XCTAssertNil(engine.running[threadID])
+
+        // A turn that starts marks it sent with its message.
+        let sent = question("With a file")
+        try await engine.start(with: sent, context: "With a file", roleID: nil, agentName: nil, attachments: [file])
+        let marked = try await messageID(of: file.id)
+        XCTAssertEqual(marked, sent.id)
+        provider.release()
+        await finished(engine)
+
+        // A message is not sent with a file that is no longer there.
+        let gone = try await AttachmentStore.shared.add(Data("gone".utf8), named: "gone.txt", mimeType: "text/plain", toThread: threadID)
+        await AttachmentStore.shared.removeUnsent([gone.id])
+        do {
+            try await engine.start(with: question("With a file that is gone"), context: "x", roleID: nil, agentName: nil, attachments: [gone])
+            XCTFail("Nothing is sent with a file that is gone")
+        } catch {
+            XCTAssertEqual(error as? AttachmentStore.Failure, .missing)
+        }
+        XCTAssertNil(engine.running[threadID])
+        let messages = try await ChatService.shared.loadMessages(threadId: threadID)
+        XCTAssertEqual(messages.filter { $0.role == "user" }.map(\.id), [sent.id], "And its message is not stored")
+    }
+
     // MARK: - Helpers
 
     private func question(_ text: String) -> ChatMessage {

@@ -237,7 +237,7 @@ This directory contains a mix of active and legacy services:
 **Legacy cloud services (being refactored):**
 - `CovenService.swift`, `RoleService.swift`, `RoleTemplateService.swift` – Multi-user covens and roles from the original backend system. These make API calls that will fail in the local-only client.
 - `AuthService.swift` – Authentication stub with no-op methods.
-- `FileUploadService.swift`, `UploadService.swift` – Unimplemented file upload services referencing non-existent backend endpoints.
+- `FileUploadService.swift` – An unimplemented file upload service referencing non-existent backend endpoints. Attached files are kept by `Infrastructure/Attachments/AttachmentStore`.
 - `EncryptionService.swift` – Legacy encryption service; being replaced by `Infrastructure/Security/DataEncryptionService.swift`.
 
 **Note:** When adding new functionality, prefer working against `Core/LLM`, `Core/Context`, `Core/Routing`, and `Infrastructure/*` instead of extending legacy services. The services listed under "Legacy cloud services" should not be used in new code.

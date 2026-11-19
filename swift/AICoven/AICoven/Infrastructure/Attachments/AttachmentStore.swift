@@ -48,9 +48,10 @@ actor AttachmentStore {
     // MARK: - Attaching
 
     /// Copies a file in as an attachment of the thread. Throws
-    /// `Failure.tooLarge` or `.unreadable` naming the file, or what the
-    /// store's own checks throw (locked data, a thread that is not the
-    /// current account's).
+    /// `Failure.tooLarge`, `.unreadable` or `.notKept` naming the file (the
+    /// last also for a thread that is not the current account's, whose row
+    /// is refused), or what the store's own checks throw while the data is
+    /// locked.
     func add(fileAt url: URL, toThread threadID: String) async throws -> FileAttachmentDetail {
         let name = url.lastPathComponent
         // A file chosen in the system's chooser is readable only between these.

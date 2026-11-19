@@ -1,5 +1,6 @@
 @testable import AICoven
 import CoreGraphics
+import CryptoKit
 import GRDB
 import ImageIO
 import UniformTypeIdentifiers
@@ -326,6 +327,29 @@ final class AttachmentStoreTests: XCTestCase {
         XCTAssertEqual(filesKept(), [])
     }
 
+    func testDeletingAThreadInTheApp_deletesItsAttachedFiles() async throws {
+        // Through the app's own store and thread service, as a person does.
+        let shared = AttachmentStore.shared
+        let attached = try await shared.add(Data("with the thread".utf8), named: "notes.txt", mimeType: "text/plain", toThread: threadID)
+        let read = try await shared.data(of: attached.id)
+        XCTAssertEqual(String(decoding: read, as: UTF8.self), "with the thread")
+        let userID = await MainActor.run { UserScope.currentUserID }
+        let base = await MainActor.run { DatabaseManager.shared.databaseURL.deletingLastPathComponent() }
+        let digest = SHA256.hash(data: Data(userID.utf8)).map { String(format: "%02x", $0) }.joined()
+        let file = base.appendingPathComponent("Attachments").appendingPathComponent(digest).appendingPathComponent(attached.id)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+
+        try await ThreadService.shared.deleteThread(threadId: threadID)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path), "Its file went with the thread")
+        do {
+            _ = try await shared.data(of: attached.id)
+            XCTFail("It is gone")
+        } catch {
+            XCTAssertEqual(error as? AttachmentStore.Failure, .missing)
+        }
+    }
+
     // MARK: - Pictures
 
     /// A picture as a camera writes it: `orientation` and where it was taken
@@ -391,6 +415,12 @@ final class AttachmentStoreTests: XCTestCase {
         XCTAssertEqual(large.width, AttachmentImage.longestEdge)
         XCTAssertEqual(large.height, AttachmentImage.longestEdge / 2)
         XCTAssertEqual(large.name, "pano.jpg")
+
+        // A photo whose redrawn copy would carry an alpha channel it never
+        // had is still a photo: kept as a JPEG, as it says of itself.
+        let opaque = try AttachmentImage.prepared(photo(width: 16, height: 16, type: .png), name: "scan.png", mimeType: "image/png")
+        XCTAssertEqual(opaque.mimeType, "image/jpeg")
+        XCTAssertEqual(opaque.name, "scan.jpg")
 
         // With no name of its own it still gets one.
         let unnamed = try AttachmentImage.prepared(photo(width: 8, height: 8), name: "", mimeType: nil)
