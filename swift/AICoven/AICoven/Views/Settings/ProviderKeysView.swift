@@ -668,11 +668,6 @@ struct EditProviderKeySheet: View {
         !account.isLocalProvider
     }
 
-    /// Hermes has an address of its own to fall back on; these two do not.
-    private var needsAddress: Bool {
-        slug == "ollama" || slug == "openclaw"
-    }
-
     private var addressPrompt: String {
         switch slug {
         case "ollama": "http://localhost:11434"
@@ -729,7 +724,7 @@ struct EditProviderKeySheet: View {
                     Button("Save") {
                         Task { await saveChanges() }
                     }
-                    .disabled(saving || displayName.isEmpty || (needsAddress && baseURL.isEmpty))
+                    .disabled(saving || displayName.isEmpty)
                 }
             }
         }

@@ -88,10 +88,15 @@ final class AIConnectionsTests: XCTestCase {
         let renamed = try await service.loadProviderAccounts().first
         XCTAssertEqual(renamed?.baseURL, "http://localhost:8642")
 
+        try await service.updateProviderAccount(id: "hermes-test", baseURL: "http://localhost:9000")
+        XCTAssertEqual(UserDefaults.standard.string(forKey: hermesAddressKey), "http://localhost:9000")
+
         try await service.updateProviderAccount(id: "hermes-test", baseURL: "")
         let cleared = try await service.loadProviderAccounts().first
         XCTAssertEqual(cleared?.displayName, "Renamed")
         XCTAssertNil(cleared?.baseURL)
+        // The chat client reads the address from here.
+        XCTAssertNil(UserDefaults.standard.object(forKey: hermesAddressKey))
     }
 
     // MARK: - The list

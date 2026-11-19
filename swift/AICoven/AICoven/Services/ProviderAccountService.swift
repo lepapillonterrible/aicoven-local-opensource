@@ -694,15 +694,13 @@ extension ProviderAccountService {
     private func updateProviderConfigCache(provider: String, baseURL: String? = nil) {
         let defaults = UserDefaults.standard
         clearLegacyAPIKeyCache(provider: provider)
-        switch provider.lowercased() {
-        case "ollama":
-            if let baseURL { defaults.set(baseURL, forKey: UserScope.scopedKey("ollama_base_url")) }
-        case "openclaw":
-            if let baseURL { defaults.set(baseURL, forKey: UserScope.scopedKey("openclaw_base_url")) }
-        case "hermes":
-            if let baseURL { defaults.set(baseURL, forKey: UserScope.scopedKey("hermes_base_url")) }
-        default:
-            break
+        guard let baseURL, ["ollama", "openclaw", "hermes"].contains(provider.lowercased()) else { return }
+        let key = UserScope.scopedKey("\(provider.lowercased())_base_url")
+        // An empty address is no address, as it is in the stored account.
+        if baseURL.isEmpty {
+            defaults.removeObject(forKey: key)
+        } else {
+            defaults.set(baseURL, forKey: key)
         }
     }
 
