@@ -540,9 +540,6 @@ extension ThreadRepository {
             }
         }
         try await requireKey(of: currentUserId)
-        // After a switch of account the earlier one's key can stay in memory
-        // for a moment: what it opened is not the new account's to see.
-        guard await MainActor.run(body: { UserScope.currentUserID }) == currentUserId else { throw RepositoryError.accountChanged }
         return traces
     }
 
@@ -657,6 +654,11 @@ extension ThreadRepository {
             guard rows.count == wanted, let oldest = rows.last else { break }
             olderThan = oldest["row_order"]
         }
+        // However the page was completed, including by a last look that
+        // found nothing more.
+        if !newestFirst.isEmpty {
+            try await requireKey(of: currentUserId)
+        }
         return newestFirst.reversed()
     }
 
@@ -705,10 +707,17 @@ extension ThreadRepository {
         }
     }
 
-    /// Throws while the data key in memory is not the account `userID`'s:
-    /// nothing of that account's can then be read.
-    private func requireKey(of userID: String) async throws {
+    /// Throws unless `userID` is still the current account and the data key
+    /// in memory is its own. A read checks before it decrypts and again
+    /// before it returns: after a switch of account the earlier one's key
+    /// can stay in memory for a moment, and what it opens is not the new
+    /// account's to see.
+    func requireKey(of userID: String) async throws {
+        guard await MainActor.run(body: { UserScope.currentUserID }) == userID else { throw RepositoryError.accountChanged }
         guard await DataEncryptionService.shared.isUnlocked(for: userID) else { throw RepositoryError.dataLocked }
+        // Again, because the account can have changed while the key was
+        // asked about. Whoever shows what was read checks once more.
+        guard await MainActor.run(body: { UserScope.currentUserID }) == userID else { throw RepositoryError.accountChanged }
     }
 
     /// Decrypts and decodes one stored record. `nil`, and logged, when this
