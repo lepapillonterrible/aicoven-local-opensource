@@ -94,6 +94,10 @@ final class ToolApprovals: ObservableObject {
     @Published private(set) var showing: Showing?
     /// Behind the one showing, in the order they were asked.
     @Published private(set) var waiting: [ToolApproval] = []
+    /// Asked while the person was composing, and not on screen yet: an
+    /// approval does not come up under what is being typed. They come in
+    /// when the person sends, pauses, or leaves the composer.
+    private(set) var held: [ToolApproval] = []
     /// The threads with a turn waiting on an answer.
     @Published private(set) var askingThreadIDs: Set<String> = []
     /// What each thread's running turn has been asked and has had answered,
@@ -115,7 +119,18 @@ final class ToolApprovals: ObservableObject {
     private var showingGeneration = 0
     private let schedule: Schedule
 
+    /// How long after the last change to the composer's text the person
+    /// still counts as composing.
+    let holdInterval: TimeInterval
+    private let now: () -> Date
+    private var composerFocused = false
+    private var keyboardUp = false
+    private var lastComposerChange: Date?
+    private var releaseCheckScheduled = false
+
     init(
+        holdInterval: TimeInterval = 3,
+        now: @escaping () -> Date = Date.init,
         schedule: @escaping Schedule = { delay, action in
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: UInt64(max(delay, 0) * 1_000_000_000))
@@ -123,7 +138,17 @@ final class ToolApprovals: ObservableObject {
             }
         }
     ) {
+        self.holdInterval = holdInterval
+        self.now = now
         self.schedule = schedule
+    }
+
+    /// Composing: the composer has focus and its text changed within
+    /// `holdInterval`, or the on-screen keyboard is up.
+    var isComposing: Bool {
+        if keyboardUp { return true }
+        guard composerFocused, let lastComposerChange else { return false }
+        return now().timeIntervalSince(lastComposerChange) < holdInterval
     }
 
     // MARK: - Asking
@@ -141,10 +166,11 @@ final class ToolApprovals: ObservableObject {
                 }
                 asked[approval.id] = continuation
                 askingThreadIDs.insert(approval.threadID)
-                if showing == nil {
-                    show(approval)
+                if isComposing {
+                    held.append(approval)
+                    releaseWhenComposingEnds()
                 } else {
-                    waiting.append(approval)
+                    enqueue(approval)
                 }
             }
         } onCancel: {
@@ -200,7 +226,64 @@ final class ToolApprovals: ObservableObject {
         answered[threadID] = nil
     }
 
+    // MARK: - Composing
+
+    /// The composer's text changed.
+    func noteComposerChanged() {
+        lastComposerChange = now()
+    }
+
+    /// The composer took, or lost, keyboard focus.
+    func composerFocusChanged(_ focused: Bool) {
+        composerFocused = focused
+        releaseWhenComposingEnds()
+    }
+
+    /// The on-screen keyboard came up or went down (iPhone and iPad).
+    func keyboardVisibilityChanged(_ visible: Bool) {
+        keyboardUp = visible
+        releaseWhenComposingEnds()
+    }
+
+    /// A message was sent: what was held comes in, even with the keyboard
+    /// still up.
+    func noteSent() {
+        lastComposerChange = nil
+        let released = held
+        held = []
+        released.forEach(enqueue)
+    }
+
     // MARK: - Private
+
+    /// Lets held approvals in once the person stops composing; while they
+    /// type, checks again when the hold would end. The keyboard going down
+    /// and focus changes call this themselves.
+    private func releaseWhenComposingEnds() {
+        guard !held.isEmpty else { return }
+        guard isComposing else {
+            let released = held
+            held = []
+            released.forEach(enqueue)
+            return
+        }
+        guard !releaseCheckScheduled, !keyboardUp, let lastComposerChange else { return }
+        releaseCheckScheduled = true
+        schedule(holdInterval - now().timeIntervalSince(lastComposerChange)) { [weak self] in
+            guard let self else { return }
+            releaseCheckScheduled = false
+            releaseWhenComposingEnds()
+        }
+    }
+
+    /// Shows the approval, or puts it behind the one showing.
+    private func enqueue(_ approval: ToolApproval) {
+        if showing == nil {
+            show(approval)
+        } else {
+            waiting.append(approval)
+        }
+    }
 
     /// The turn that asked has stopped: its approval leaves unanswered.
     private func withdraw(_ approvalID: String) {
@@ -209,7 +292,9 @@ final class ToolApprovals: ObservableObject {
         if showing?.approval.id == approvalID, showing?.phase == .asking {
             finishShowing(outcome: .noLongerWaiting)
         } else {
+            // Not on screen: it leaves unseen.
             waiting.removeAll { $0.id == approvalID }
+            held.removeAll { $0.id == approvalID }
             announced.remove(approvalID)
         }
     }
@@ -230,7 +315,7 @@ final class ToolApprovals: ObservableObject {
     /// Gives the waiting turn its answer, once.
     private func settle(_ approvalID: String, with answer: ApprovalAnswer) {
         guard let continuation = asked.removeValue(forKey: approvalID) else { return }
-        let stillAsking = Set(([showing?.approval].compactMap(\.self) + waiting).filter { asked[$0.id] != nil }.map(\.threadID))
+        let stillAsking = Set(([showing?.approval].compactMap(\.self) + waiting + held).filter { asked[$0.id] != nil }.map(\.threadID))
         askingThreadIDs = stillAsking
         continuation.resume(returning: answer)
     }

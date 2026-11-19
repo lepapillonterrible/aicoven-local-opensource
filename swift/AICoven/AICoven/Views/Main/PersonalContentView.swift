@@ -499,7 +499,10 @@ struct PersonalChatView: View {
                 // Once this thread's own draft is in the field: what was
                 // handed back before then comes with it.
                 hasReturnedDraft: turns.returned[thread.id] != nil && !isRestoringDraft && shownThreadID == thread.id,
-                takeReturnedDraft: { turns.takeReturned(threadID: thread.id) }
+                takeReturnedDraft: { turns.takeReturned(threadID: thread.id) },
+                // An approval does not come up under what is being typed.
+                onFocusChange: { approvals.composerFocusChanged($0) },
+                onSent: { approvals.noteSent() }
             )
             .padding(Spacing.md)
         }
@@ -546,7 +549,20 @@ struct PersonalChatView: View {
             await loadProviderKeys()
         }
         // What the composer holds is the thread's draft, kept as it changes.
-        .onChange(of: messageText) { _, _ in keepDraft() }
+        .onChange(of: messageText) { _, _ in
+            keepDraft()
+            // Typed, not put there as the thread's draft was read in.
+            if !isRestoringDraft { approvals.noteComposerChanged() }
+        }
+        #if os(iOS)
+        // With the on-screen keyboard up, the person is composing.
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            approvals.keyboardVisibilityChanged(true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            approvals.keyboardVisibilityChanged(false)
+        }
+        #endif
         .onChange(of: attachments) { _, _ in keepDraft() }
         // Leaving the foreground, or the thread: saved now, not a moment
         // later.
@@ -557,6 +573,10 @@ struct PersonalChatView: View {
         }
         .onDisappear {
             Task { await ComposerDrafts.shared.saveNow() }
+            // Nobody is composing in a composer that is gone: nothing it
+            // was told keeps an approval back.
+            approvals.composerFocusChanged(false)
+            approvals.keyboardVisibilityChanged(false)
         }
         // Files sent from this thread leave what this composer holds, also
         // when it was opened after the message was sent and before it was

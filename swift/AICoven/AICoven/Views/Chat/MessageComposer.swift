@@ -121,6 +121,11 @@ struct MessageComposer: View {
     /// its draft, from the parent.
     var hasReturnedDraft: Bool = false
     var takeReturnedDraft: (() -> ComposerDraft?)?
+    /// Told when the field takes or loses keyboard focus, and when a
+    /// message has been sent or set to wait: approvals are held back while
+    /// the person composes.
+    var onFocusChange: ((Bool) -> Void)?
+    var onSent: (() -> Void)?
 
     /// The attaching under way, if one is. Cleared when the composer moves
     /// to another thread, so files chosen for one thread are never taken
@@ -333,7 +338,8 @@ struct MessageComposer: View {
                 height: $macInputHeight,
                 isDisabled: isDisabled,
                 autoFocus: autoFocus,
-                onSend: send
+                onSend: send,
+                onFocusChange: onFocusChange
             )
             .frame(height: macInputHeight)
             if messageText.isEmpty {
@@ -355,6 +361,7 @@ struct MessageComposer: View {
             axis: .vertical
         )
         .focused($isTextFieldFocused)
+        .onChange(of: isTextFieldFocused) { _, focused in onFocusChange?(focused) }
         .font(.aicovenBody)
         .foregroundStyle(Color.aicovenTextPrimary)
         .lineLimit(1 ... 8)
@@ -501,6 +508,7 @@ struct MessageComposer: View {
             let accepted = await onSend(submitted)
             isSubmittingSend = false
             guard accepted else { return }
+            onSent?()
             attachFailure = nil
             #if os(macOS)
             macInputHeight = GrowingTextEditor.emptyHeight
