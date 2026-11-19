@@ -298,7 +298,8 @@ final class DatabaseManager {
 
             // v8: one row for each reply the app starts, from the person's
             // message to its outcome, so a reply cut off by the app closing
-            // is known to have been running. A turn holds no content.
+            // is known to have been running. Its work trace (v9) is the only
+            // content a turn holds, and is encrypted.
             migrator.registerMigration("v8_turns") { db in
                 try db.create(table: "turns") { t in
                     t.column("id", .text).primaryKey()
@@ -334,6 +335,14 @@ final class DatabaseManager {
                     SELECT RAISE(ABORT, 'turns.thread_id must reference a thread owned by the same user');
                 END;
                 """)
+            }
+
+            // v9: the work behind a turn's answer (its tools and reasoning,
+            // with their times), kept encrypted with the turn.
+            migrator.registerMigration("v9_turn_trace") { db in
+                try db.alter(table: "turns") { t in
+                    t.add(column: "trace_ciphertext", .blob)
+                }
             }
 
             try migrator.migrate(queue)

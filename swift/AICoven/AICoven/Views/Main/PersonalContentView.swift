@@ -264,6 +264,11 @@ struct PersonalChatView: View {
     /// The thread this view's state belongs to. The view is reused when the
     /// thread changes, so work that waited checks it before touching state.
     @State private var shownThreadID: String?
+    /// The work traces of this thread's finished turns, by the id of the
+    /// message each ended with: the receipt under a reply opens its trace.
+    @State private var traces: [String: WorkTrace] = [:]
+    /// The work trace Details is showing.
+    @State private var shownTrace: WorkTraceTarget?
     @State private var canEditAgent: Bool = true
 
     /// The reply on its way in this thread, if there is one.
@@ -341,42 +346,38 @@ struct PersonalChatView: View {
                                 onRejectToolCall: { _ in }
                             )
                             .id(em.id)
+                            // What it took: opens the steps behind the reply.
+                            if let trace = traces[em.id], let receipt = trace.receipt {
+                                Button(receipt) {
+                                    shownTrace = .finished(messageID: em.id, trace: trace)
+                                }
+                                .buttonStyle(.textLink)
+                                .font(.aicovenBodySmall)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityHint("Shows the steps behind this answer")
+                            }
                         }
 
-                        // Show thinking indicator when AI is responding
+                        // The reply on its way: one line saying what it
+                        // is doing, with Details and Stop.
                         if let runningTurn {
-                            HStack(alignment: .top) {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "sparkles")
-                                        // Show "Strix" for the default personal assistant
-                                        Text(thread.agentName ?? "Strix")
-                                    }
-                                    .font(.caption)
-                                    .foregroundStyle(Color.aicovenTeal)
-
-                                    CauldronLoadingView(message: runningTurn.message, size: 40)
-                                        .padding(16)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 12)
-                                                .fill(Color.aicovenSurfaceElevated)
-                                                .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
-                                        )
-
-                                    // Stop says "Stopping…" until the turn
-                                    // has in fact ended.
-                                    Button(runningTurn.isStopping ? "Stopping…" : "Stop") {
-                                        turns.stop(threadID: thread.id)
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
-                                    .disabled(runningTurn.isStopping)
-                                    .keyboardShortcut(".", modifiers: .command)
+                            VStack(alignment: .leading, spacing: Spacing.xs) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "sparkles")
+                                    // Show "Strix" for the default personal assistant
+                                    Text(thread.agentName ?? "Strix")
                                 }
-                                .frame(maxWidth: 800, alignment: .leading)
+                                .font(.caption)
+                                .foregroundStyle(Color.aicovenTeal)
 
-                                Spacer(minLength: 0)
+                                TurnStatusLineView(
+                                    turn: runningTurn,
+                                    onDetails: { shownTrace = .running(threadID: thread.id, turnID: runningTurn.turnID) },
+                                    onStop: { turns.stop(threadID: thread.id) }
+                                )
                             }
+                            .frame(maxWidth: 800, alignment: .leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             .id("thinking-indicator")
                         }
                     }
@@ -468,11 +469,16 @@ struct PersonalChatView: View {
         #if os(iOS)
         .background(NebulaBackground())
         #endif
+        .sheet(item: $shownTrace) { target in
+            WorkTraceSheet(target: target)
+        }
         // When the bound thread changes (e.g. user switches tabs on macOS),
         // reset and reload the messages/provider keys for the new thread.
         .task(id: thread.id) {
             shownThreadID = thread.id
             messages = []
+            traces = [:]
+            shownTrace = nil
             isInitialLoading = false
             didLoadInitialMessages = false
             isLoadingMore = false
@@ -483,6 +489,7 @@ struct PersonalChatView: View {
 
             await TurnEngine.shared.settleInterruptedTurns(threadID: thread.id)
             await loadInitialMessages()
+            await loadTraces()
             showLastEnding()
             if let unsent = TurnEngine.shared.takeUnsent(for: thread.id) {
                 giveBack(unsent.text, because: unsent.reason)
@@ -664,6 +671,26 @@ struct PersonalChatView: View {
         guard let ending = turns.endings[thread.id] else { return }
         let shown = Set(messages.map(\.id))
         messages.append(contentsOf: ending.messages.filter { !shown.contains($0.id) })
+        if let reply = ending.messages.first {
+            traces[reply.id] = ending.trace
+        }
+    }
+
+    /// Loads the work traces of this thread's finished turns.
+    private func loadTraces() async {
+        let threadID = thread.id
+        let account = UserScope.currentUserID
+        do {
+            let loaded = try await ThreadRepository.shared.loadWorkTraces(threadID: threadID)
+            // The view can be showing another thread by now, or another
+            // account's.
+            guard shownThreadID == threadID, UserScope.currentUserID == account else { return }
+            // A turn that ended while these were read has its trace here
+            // already, and may not be among them.
+            traces.merge(loaded) { shown, _ in shown }
+        } catch {
+            AppErrorReporter.log(error: error, context: "PersonalContentView.loadTraces")
+        }
     }
 
     /// Split the outgoing composer text into a user-visible question and
