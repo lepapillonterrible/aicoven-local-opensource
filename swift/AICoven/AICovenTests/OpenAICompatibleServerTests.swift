@@ -90,6 +90,16 @@ final class OpenAICompatibleServerTests: XCTestCase {
         XCTAssertEqual(address("https://example.com/llm/v1?x=1"), "https://example.com/llm")
         XCTAssertNil(address("https://"))
         XCTAssertNil(address("somewhere"))
+        XCTAssertNil(address("http://localhost:70000"))
+    }
+
+    func testProbe_followsARedirectOnlyWithinTheServerItAsked() {
+        let same = { LocalProviderDiscoveryService.isSameServer(URL(string: $0), URL(string: $1)) }
+
+        XCTAssertTrue(same("http://127.0.0.1:1234/v1/models", "http://127.0.0.1:1234/v1/models/"))
+        XCTAssertFalse(same("http://127.0.0.1:1234/v1/models", "http://127.0.0.1:11434/v1/models"))
+        XCTAssertFalse(same("http://127.0.0.1:1234/v1/models", "http://192.168.1.9:1234/v1/models"))
+        XCTAssertFalse(same("http://127.0.0.1:1234/v1/models", "https://127.0.0.1:1234/v1/models"))
     }
 
     // MARK: - A connected server

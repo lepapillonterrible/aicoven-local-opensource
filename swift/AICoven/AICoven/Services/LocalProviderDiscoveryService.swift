@@ -40,7 +40,7 @@ nonisolated extension URLSession: LocalProviderProbeTransport {
             request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
         }
         do {
-            let (stream, response) = try await bytes(for: request, delegate: RefuseRedirects())
+            let (stream, response) = try await bytes(for: request, delegate: StayOnServer())
             guard let http = response as? HTTPURLResponse else { return .unavailable }
             if http.statusCode == 401 || http.statusCode == 403 { return .unauthorized }
             guard (200 ..< 300).contains(http.statusCode) else { return .unavailable }
@@ -57,10 +57,12 @@ nonisolated extension URLSession: LocalProviderProbeTransport {
     }
 }
 
-/// Stops a probe at the address it asked. Followed, a redirect would let
-/// whatever listens on a known port send Detect to another machine and have
-/// that machine's answer shown as this Mac's.
-private final nonisolated class RefuseRedirects: NSObject, URLSessionTaskDelegate {
+/// Keeps a probe at the server it asked. A redirect to another host or
+/// port is refused: followed, it would let whatever listens on a known port
+/// send Detect to another machine and have that machine's answer shown as
+/// this Mac's. A redirect within the same server, such as to a path with a
+/// trailing slash, is followed.
+private final nonisolated class StayOnServer: NSObject, URLSessionTaskDelegate {
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
@@ -68,7 +70,8 @@ private final nonisolated class RefuseRedirects: NSObject, URLSessionTaskDelegat
         newRequest request: URLRequest,
         completionHandler: @escaping @Sendable (URLRequest?) -> Void
     ) {
-        completionHandler(nil)
+        let stays = LocalProviderDiscoveryService.isSameServer(task.originalRequest?.url, request.url)
+        completionHandler(stays ? request : nil)
     }
 }
 
@@ -99,6 +102,13 @@ nonisolated struct LocalProviderDiscoveryService {
     static let defaultHost = "127.0.0.1"
     /// The largest reply read. A model list is a few kilobytes.
     static let maxProbeResponseBytes = 512 * 1024
+
+    /// Whether two addresses are the same server: the same scheme, host and
+    /// port.
+    static func isSameServer(_ first: URL?, _ second: URL?) -> Bool {
+        guard let first, let second, let host = first.host else { return false }
+        return first.scheme == second.scheme && host == second.host && first.port == second.port
+    }
 
     /// Collects bytes up to `limit`, and returns `nil` once it is passed, so
     /// nothing larger is held. An over-long reply is unusable, not
@@ -277,6 +287,7 @@ nonisolated struct LocalProviderDiscoveryService {
             return parseManualEndpoint(value).flatMap { URL(string: $0.baseURL) }
         }
         guard var components = URLComponents(string: value), components.host?.isEmpty == false else { return nil }
+        if let port = components.port, !validPortRange.contains(port) { return nil }
         var path = components.path
         while path.hasSuffix("/") {
             path.removeLast()

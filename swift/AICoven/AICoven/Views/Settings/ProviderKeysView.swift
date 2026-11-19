@@ -242,6 +242,9 @@ struct AddProviderKeySheet: View {
     @State private var isCheckingAddress = false
     /// The found server whose form is open.
     @State private var chosenServer: DetectedLocalProvider?
+    /// False once the list is covered by a form or the sheet has closed, so
+    /// a check that finishes then says nothing over another screen.
+    @State private var listIsShowing = false
     #endif
 
     var body: some View {
@@ -280,6 +283,8 @@ struct AddProviderKeySheet: View {
                 }
             }
             #if os(macOS)
+            .onAppear { listIsShowing = true }
+            .onDisappear { listIsShowing = false }
             .navigationDestination(item: $chosenServer) { server in
                 AddProviderKeyStep2View(
                     selectedProvider: server.provider,
@@ -389,6 +394,7 @@ struct AddProviderKeySheet: View {
         defer { isDetecting = false }
         detectedServers = await LocalProviderDiscoveryService().discover()
         hasDetected = true
+        guard listIsShowing else { return }
         announce(
             detectedServers.isEmpty
                 ? "No server answered on the usual ports."
@@ -424,13 +430,13 @@ struct AddProviderKeySheet: View {
         guard let found else {
             let failure = LocalProviderDiscoveryService.ManualEntryCopy.noResponse(at: shownAddress)
             typedAddressFailure = failure
-            announce(failure)
+            if listIsShowing { announce(failure) }
             return
         }
         namedServers.removeAll { $0.id == found.id }
         namedServers.append(found)
         typedAddress = ""
-        announce("Found \(found.displayName).")
+        if listIsShowing { announce("Found \(found.displayName).") }
     }
     #endif
 }
@@ -445,8 +451,8 @@ private extension View {
         #endif
     }
 
-    /// Says a finished check's result to VoiceOver, which stays on the
-    /// button that started it.
+    /// Says a finished check's result to VoiceOver, whose focus stays on
+    /// the control that started it.
     func announce(_ message: String) {
         AccessibilityNotification.Announcement(message).post()
     }
@@ -494,6 +500,9 @@ private struct AddProviderKeyStep2View: View {
     @State private var connectionFailure: String?
     @State private var selectedMLXModelID = ""
     @State private var acceptedPrivacy = false
+    /// False once the form is left, so a Connect that finishes then says
+    /// nothing over another screen.
+    @State private var formIsShowing = false
     /// True when the form opened on a detected Ollama server, whose models
     /// it lists at once.
     private let connectsOnOpen: Bool
@@ -570,6 +579,8 @@ private struct AddProviderKeyStep2View: View {
         }
         .navigationTitle(providerName)
         .inlineNavigationTitle()
+        .onAppear { formIsShowing = true }
+        .onDisappear { formIsShowing = false }
         .task {
             if connectsOnOpen { await connectToOllama() }
         }
@@ -844,6 +855,9 @@ private struct AddProviderKeyStep2View: View {
         if !models.contains(where: { $0.name == selectedOllamaModel }) {
             selectedOllamaModel = models.first?.name ?? ""
         }
+        if formIsShowing {
+            announce(failure ?? (models.count == 1 ? "1 model listed." : "\(models.count) models listed."))
+        }
     }
 
     /// Lists the models of the server at the address in the field, with the
@@ -880,7 +894,9 @@ private struct AddProviderKeyStep2View: View {
         if !models.contains(selectedServerModel) {
             selectedServerModel = models.first ?? ""
         }
-        announce(failure ?? (models.count == 1 ? "1 model listed." : "\(models.count) models listed."))
+        if formIsShowing {
+            announce(failure ?? (models.count == 1 ? "1 model listed." : "\(models.count) models listed."))
+        }
     }
 
     private func saveProviderKey() async {
