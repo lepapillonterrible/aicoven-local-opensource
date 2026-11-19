@@ -81,6 +81,9 @@ struct GrowingTextEditor: NSViewRepresentable {
     var onSend: () -> Void
     /// The field became, or stopped being, where typing goes.
     var onFocusChange: ((Bool) -> Void)?
+    /// Files, and pictures as PNG bytes, pasted or dropped into the field,
+    /// to be attached. Nil pastes and drops as text.
+    var onAttach: ((_ files: [URL], _ pictures: [Data]) -> Void)?
 
     /// The editor's font, and the height of the empty editor: one line of
     /// it between the insets.
@@ -132,6 +135,7 @@ struct GrowingTextEditor: NSViewRepresentable {
         textView.setAccessibilityIdentifier("composer")
         textView.onSend = sendKeepingFocus(in: textView)
         textView.onFocusChange = onFocusChange
+        textView.onAttach = isDisabled ? nil : onAttach
 
         scrollView.documentView = textView
         context.coordinator.updateHeight(in: scrollView)
@@ -156,6 +160,7 @@ struct GrowingTextEditor: NSViewRepresentable {
         // Return must call this render's send: it reads the current state.
         textView.onSend = sendKeepingFocus(in: textView)
         textView.onFocusChange = onFocusChange
+        textView.onAttach = isDisabled ? nil : onAttach
 
         context.coordinator.parent = self
         context.coordinator.updateHeight(in: scrollView, publishHeightSynchronously: false)
@@ -249,6 +254,62 @@ struct GrowingTextEditor: NSViewRepresentable {
     final class ChatTextView: NSTextView {
         var onSend: (() -> Void)?
         var onFocusChange: ((Bool) -> Void)?
+        var onAttach: ((_ files: [URL], _ pictures: [Data]) -> Void)?
+
+        // MARK: Paste and drop
+
+        override func paste(_ sender: Any?) {
+            if attach(from: .general) { return }
+            super.paste(sender)
+        }
+
+        /// Paste is on only for what the field can read; files and picture
+        /// bytes are added so that ⌘V reaches `paste` when the clipboard
+        /// holds only those. After the text kinds, so text still wins
+        /// where both are there.
+        override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+            onAttach == nil ? super.readablePasteboardTypes : super.readablePasteboardTypes + Self.attachableTypes
+        }
+
+        /// Files and picture bytes can be dropped while the composer can
+        /// attach them.
+        override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
+            onAttach == nil ? super.acceptableDragTypes : super.acceptableDragTypes + Self.attachableTypes
+        }
+
+        override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            if attach(from: sender.draggingPasteboard) { return true }
+            return super.performDragOperation(sender)
+        }
+
+        private func attach(from pasteboard: NSPasteboard) -> Bool {
+            guard let onAttach, let found = Self.attachables(on: pasteboard) else { return false }
+            onAttach(found.files, found.pictures)
+            return true
+        }
+
+        static let attachableTypes: [NSPasteboard.PasteboardType] = [.fileURL, .png, .tiff]
+
+        /// What on the pasteboard is attached and not typed: its files
+        /// (not folders); else, where it holds no text, its picture, as
+        /// PNG bytes (a TIFF, which can hold the picture at several sizes,
+        /// as a PNG of the first). Copied cells or slides carry a picture of
+        /// themselves beside their text, and that text is what is meant.
+        /// Nil where there is nothing of the kind: it is then pasted or
+        /// dropped as text.
+        static func attachables(on pasteboard: NSPasteboard) -> (files: [URL], pictures: [Data])? {
+            let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+            let files = urls.filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true }
+            if !files.isEmpty { return (files, []) }
+            guard pasteboard.string(forType: .string) == nil else { return nil }
+            if let png = pasteboard.data(forType: .png) { return ([], [png]) }
+            guard let tiff = pasteboard.data(forType: .tiff), let png = png(from: tiff) else { return nil }
+            return ([], [png])
+        }
+
+        static func png(from picture: Data) -> Data? {
+            NSBitmapImageRep(data: picture)?.representation(using: .png, properties: [:])
+        }
 
         override func becomeFirstResponder() -> Bool {
             let became = super.becomeFirstResponder()

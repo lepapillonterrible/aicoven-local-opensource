@@ -101,5 +101,111 @@ final class MessageComposerTests: XCTestCase {
             NSRange(location: 4, length: 0)
         )
     }
+
+    // MARK: - Pasted and dropped on the Mac
+
+    /// A pasteboard of the test's own: the person's clipboard is not touched.
+    private func pasteboard() -> NSPasteboard {
+        let board = NSPasteboard(name: NSPasteboard.Name("composer-tests-\(UUID().uuidString)"))
+        addTeardownBlock { board.releaseGlobally() }
+        board.clearContents()
+        return board
+    }
+
+    private func tiff() throws -> Data {
+        let image = NSImage(size: NSSize(width: 8, height: 6), flipped: false) { rect in
+            NSColor.systemTeal.setFill()
+            rect.fill()
+            return true
+        }
+        return try XCTUnwrap(image.tiffRepresentation)
+    }
+
+    func testFilesOnThePasteboard_areAttachedAndFoldersAreNot() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("composer-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
+        let notes = folder.appendingPathComponent("notes.pdf")
+        let photo = folder.appendingPathComponent("photo.png")
+        try Data("pdf".utf8).write(to: notes)
+        try Data("png".utf8).write(to: photo)
+
+        let board = pasteboard()
+        // As Finder copies files: the files, and their names as text.
+        XCTAssertTrue(board.writeObjects([notes as NSURL, folder as NSURL, photo as NSURL]))
+        board.addTypes([.string], owner: nil)
+        board.setString("notes.pdf\nphoto.png", forType: .string)
+
+        let found = try XCTUnwrap(GrowingTextEditor.ChatTextView.attachables(on: board))
+        XCTAssertEqual(found.files.map(\.lastPathComponent), ["notes.pdf", "photo.png"], "Any file, in the order given; not the folder")
+        XCTAssertEqual(found.pictures, [])
+
+        let onlyAFolder = pasteboard()
+        XCTAssertTrue(onlyAFolder.writeObjects([folder as NSURL]))
+        XCTAssertNil(GrowingTextEditor.ChatTextView.attachables(on: onlyAFolder)?.files.first, "A folder alone is not attached")
+    }
+
+    func testAPictureOnThePasteboard_isAttachedOnlyWhereThereIsNoTextWithIt() throws {
+        let picture = try tiff()
+
+        let copied = pasteboard()
+        copied.setData(picture, forType: .tiff)
+        let found = try XCTUnwrap(GrowingTextEditor.ChatTextView.attachables(on: copied))
+        XCTAssertEqual(found.files, [])
+        XCTAssertEqual(found.pictures.count, 1)
+        XCTAssertEqual(found.pictures.first?.prefix(4), Data([0x89, 0x50, 0x4E, 0x47]), "As a PNG, whatever sizes the TIFF held it at")
+
+        let png = try XCTUnwrap(GrowingTextEditor.ChatTextView.png(from: picture))
+        let copiedAsPNG = pasteboard()
+        copiedAsPNG.setData(png, forType: .png)
+        copiedAsPNG.setData(picture, forType: .tiff)
+        XCTAssertEqual(GrowingTextEditor.ChatTextView.attachables(on: copiedAsPNG)?.pictures, [png], "Its PNG as it is, where it has one")
+
+        let notAPicture = pasteboard()
+        notAPicture.setData(Data("not a picture".utf8), forType: .tiff)
+        XCTAssertNil(GrowingTextEditor.ChatTextView.attachables(on: notAPicture))
+
+        // As a spreadsheet copies cells: their text, and a picture of them.
+        let cells = pasteboard()
+        cells.setString("1\t2", forType: .string)
+        cells.setData(picture, forType: .tiff)
+        XCTAssertNil(GrowingTextEditor.ChatTextView.attachables(on: cells), "The text is what is meant")
+
+        let text = pasteboard()
+        text.setString("Hello", forType: .string)
+        XCTAssertNil(GrowingTextEditor.ChatTextView.attachables(on: text))
+        XCTAssertNil(GrowingTextEditor.ChatTextView.attachables(on: pasteboard()), "Nothing on it")
+    }
+
+    func testTheMacField_takesFilesAndPicturesOnlyWhileTheComposerCanAttachThem() {
+        let field = GrowingTextEditor.ChatTextView()
+        let plain = (paste: field.readablePasteboardTypes, drop: field.acceptableDragTypes)
+        XCTAssertFalse(plain.paste.contains(.png))
+
+        field.onAttach = { _, _ in }
+        XCTAssertEqual(field.readablePasteboardTypes, plain.paste + [.fileURL, .png, .tiff], "After the text kinds, so text still wins")
+        XCTAssertEqual(field.acceptableDragTypes, plain.drop + [.fileURL, .png, .tiff])
+
+        field.onAttach = nil
+        XCTAssertEqual(field.readablePasteboardTypes, plain.paste)
+        XCTAssertEqual(field.acceptableDragTypes, plain.drop)
+    }
+
+    func testAPastedPicture_isKeptUnderANameWithTheKindItIsKeptAs() throws {
+        let name = ComposerRules.pastedPictureName
+        let png = try XCTUnwrap(GrowingTextEditor.ChatTextView.png(from: tiff()))
+        let kept = try AttachmentImage.prepared(png, name: name, mimeType: AttachmentImage.mimeType(forFileNamed: name))
+        XCTAssertTrue(["Pasted image.png", "Pasted image.jpg"].contains(kept.name), kept.name)
+        XCTAssertTrue(["image/png", "image/jpeg"].contains(kept.mimeType ?? ""))
+        XCTAssertEqual([kept.width, kept.height].compactMap(\.self).count, 2)
+    }
     #endif
+
+    func testAPhotoTakenOrPicked_isNamedByItsKind() {
+        XCTAssertEqual(ComposerRules.photoName(fileExtension: "heic"), "Photo.heic")
+        XCTAssertEqual(ComposerRules.photoName(fileExtension: "jpg"), "Photo.jpg")
+        XCTAssertEqual(ComposerRules.photoName(fileExtension: nil), "Photo")
+        XCTAssertEqual(ComposerRules.photoName(fileExtension: ""), "Photo")
+        XCTAssertEqual(ComposerRules.mostPhotosAtOnce, 10)
+    }
 }

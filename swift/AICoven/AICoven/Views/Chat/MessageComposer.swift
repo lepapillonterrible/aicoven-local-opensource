@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 #if os(macOS)
@@ -32,6 +33,20 @@ nonisolated struct ComposerDraft: Equatable {
 
 /// What the composer decides from its state, apart from how it draws it.
 nonisolated enum ComposerRules {
+    /// The most photos taken from the library at once.
+    static let mostPhotosAtOnce = 10
+
+    /// What a picture pasted or dropped as bytes is called; the store adds
+    /// the extension of the kind it is kept as.
+    static let pastedPictureName = "Pasted image"
+
+    /// What a photo taken or picked is called: the library and the camera
+    /// give it no name of its own.
+    static func photoName(fileExtension: String?) -> String {
+        guard let fileExtension, !fileExtension.isEmpty else { return "Photo" }
+        return "Photo.\(fileExtension)"
+    }
+
     /// What the trailing slot is.
     enum Slot: Equatable {
         case send
@@ -152,6 +167,15 @@ struct MessageComposer: View {
     /// another thread, which can happen under it (the Mac's panel does not
     /// block the window): what it then returns is not taken.
     @State private var choosingFiles: UUID?
+    /// The photo library or the camera open, if one is. Cleared like
+    /// `choosingFiles`; what was picked or taken for a thread the composer
+    /// has left is not taken.
+    @State private var choosingPictures: UUID?
+    @State private var showPhotoLibrary = false
+    @State private var pickedPhotos: [PhotosPickerItem] = []
+    #if os(iOS)
+    @State private var showCamera = false
+    #endif
 
     private var isAttaching: Bool {
         attachingTask != nil
@@ -197,14 +221,33 @@ struct MessageComposer: View {
         .onDisappear {
             attachingTask = nil
             choosingFiles = nil
+            choosingPictures = nil
         }
         .onChange(of: threadId) { _, _ in
             attachingTask = nil
             attachFailure = nil
             choosingFiles = nil
+            choosingPictures = nil
+            showPhotoLibrary = false
             #if os(iOS)
             showFileImporter = false
+            showCamera = false
             #endif
+        }
+        .photosPicker(
+            isPresented: $showPhotoLibrary,
+            selection: $pickedPhotos,
+            maxSelectionCount: ComposerRules.mostPhotosAtOnce,
+            selectionBehavior: .ordered,
+            matching: .images,
+            preferredItemEncoding: .current
+        )
+        .onChange(of: pickedPhotos) { _, picked in
+            guard !picked.isEmpty else { return }
+            pickedPhotos = []
+            // For the library that is open, or not taken.
+            guard let choosing = choosingPictures else { return }
+            Task { await attach(picked.map(AttachSource.photo), chosen: (.pictures, choosing)) }
         }
         #if os(iOS)
         .fileImporter(
@@ -217,12 +260,20 @@ struct MessageComposer: View {
             guard let choosing = choosingFiles else { return }
             switch result {
             case let .success(urls):
-                Task { await attach(urls, chosenIn: choosing) }
+                Task { await attach(urls.map(AttachSource.file), chosen: (.files, choosing)) }
             case let .failure(error):
                 choosingFiles = nil
                 Self.log("The file chooser failed", error)
                 say("The file could not be opened.", after: [])
             }
+        }
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraPicker { photo in
+                // For the camera that is open, or not taken.
+                guard let choosing = choosingPictures else { return }
+                Task { await attach([.picture(photo, name: ComposerRules.photoName(fileExtension: "jpg"))], chosen: (.pictures, choosing)) }
+            }
+            .ignoresSafeArea()
         }
         .onChange(of: isDisabled) { _, disabled in
             // The composer can render before it can be typed in; focus once
@@ -352,7 +403,8 @@ struct MessageComposer: View {
                 isDisabled: isDisabled,
                 autoFocus: autoFocus,
                 onSend: send,
-                onFocusChange: onFocusChange
+                onFocusChange: onFocusChange,
+                onAttach: attachPastedOrDropped
             )
             .frame(height: macInputHeight)
             if messageText.isEmpty {
@@ -399,15 +451,40 @@ struct MessageComposer: View {
 
     // MARK: - Attach
 
+    /// The (+): a photo taken now (where there is a camera), photos from
+    /// the library, or files.
     private var attachButton: some View {
-        Button {
-            attachFailure = nil
-            #if os(macOS)
-            chooseFiles()
-            #else
-            choosingFiles = UUID()
-            showFileImporter = true
+        Menu {
+            #if os(iOS)
+            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                Button {
+                    attachFailure = nil
+                    choosingPictures = UUID()
+                    showCamera = true
+                } label: {
+                    Label("Take Photo", systemImage: "camera")
+                }
+            }
             #endif
+            Button {
+                attachFailure = nil
+                pickedPhotos = []
+                choosingPictures = UUID()
+                showPhotoLibrary = true
+            } label: {
+                Label("Photo Library", systemImage: "photo")
+            }
+            Button {
+                attachFailure = nil
+                #if os(macOS)
+                chooseFiles()
+                #else
+                choosingFiles = UUID()
+                showFileImporter = true
+                #endif
+            } label: {
+                Label("Choose File…", systemImage: "doc")
+            }
         } label: {
             Group {
                 if isAttaching {
@@ -421,50 +498,116 @@ struct MessageComposer: View {
             .frame(width: iconControlWidth, height: controlSide)
             .contentShape(Rectangle())
         }
+        .menuIndicator(.hidden)
         .buttonStyle(.plain)
+        .frame(width: iconControlWidth, height: controlSide)
         .disabled(isBusy || isDisabled || isChoosingOnTheMac)
-        .accessibilityLabel("Attach a file")
+        .accessibilityLabel("Attach")
         .accessibilityIdentifier("composer-attach")
         #if os(macOS)
-            .help("Attach a file")
+            .help("Attach a photo or a file")
         #endif
     }
 
-    /// Takes the chosen files as attachments. One that cannot be taken is
-    /// said above the box; the rest are still taken.
+    /// What can be attached: a file, a photo picked in the library, or a
+    /// picture's bytes (taken with the camera, pasted or dropped).
+    private enum AttachSource {
+        case file(URL)
+        case photo(PhotosPickerItem)
+        case picture(Data, name: String)
+
+        /// What it is called when it cannot be attached.
+        var name: String {
+            switch self {
+            case let .file(url): url.lastPathComponent
+            case .photo: "A photo"
+            case let .picture(_, name): name
+            }
+        }
+    }
+
+    /// The choosers something to attach comes back from.
+    private enum Chooser {
+        case files
+        case pictures
+    }
+
+    /// Takes these as attachments. One that cannot be taken is said above
+    /// the box; the rest are still taken. What comes back from a chooser
+    /// (`chosen`) is taken only if that chooser is still the one open.
     @MainActor
-    private func attach(_ urls: [URL], chosenIn choosing: UUID) async {
+    private func attach(_ sources: [AttachSource], chosen: (chooser: Chooser, token: UUID)?) async {
         // Checked as the attaching starts, not as the chooser returned: the
         // composer can have moved to another thread in between, and then
-        // the files are not this thread's.
-        guard choosingFiles == choosing, attachingTask == nil else { return }
-        choosingFiles = nil
+        // what was chosen is not this thread's.
+        if let chosen {
+            switch chosen.chooser {
+            case .files:
+                guard choosingFiles == chosen.token else { return }
+                choosingFiles = nil
+            case .pictures:
+                guard choosingPictures == chosen.token else { return }
+                choosingPictures = nil
+            }
+        }
+        // Pasted or dropped while the (+) is off, or anything while an
+        // attaching is under way: not taken, and on the Mac said so with
+        // the system's sound.
+        guard attachingTask == nil, chosen != nil || !(isBusy || isDisabled) else {
+            #if os(macOS)
+            NSSound.beep()
+            #endif
+            return
+        }
         let task = UUID()
         attachingTask = task
         defer { if attachingTask == task { attachingTask = nil } }
         var failures: [String] = []
-        for url in urls {
+        for source in sources {
             do {
                 // Copied into the app's own store now, so it is there to
                 // send whatever becomes of the original.
-                let detail = try await AttachmentStore.shared.add(fileAt: url, toThread: threadId)
+                let detail = try await kept(source, while: task)
                 // The composer can have moved to another thread meanwhile:
-                // the file was attached for the thread it left, and is not
-                // kept for no message.
+                // it was attached for the thread it left, and is not kept
+                // for no message.
                 guard attachingTask == task else {
                     await AttachmentStore.shared.removeUnsent([detail.id])
                     return
                 }
                 attachments.append(detail)
+            } catch is CancellationError {
+                return
             } catch {
                 Self.log("A file could not be attached", error)
                 guard attachingTask == task else { return }
                 // The store says why of what it refuses (too large, not
                 // readable); anything else is said plainly.
-                let failure = (error as? AttachmentStore.Failure)?.errorDescription ?? "\(url.lastPathComponent) could not be attached."
+                let failure = (error as? AttachmentStore.Failure)?.errorDescription ?? "\(source.name) could not be attached."
                 say(failure, after: failures)
                 failures.append(failure)
             }
+        }
+    }
+
+    /// The source copied into the app's own store for this thread. Throws
+    /// `CancellationError` if the composer left the thread while a photo
+    /// was being fetched from the library: it is then not kept at all.
+    private func kept(_ source: AttachSource, while task: UUID) async throws -> FileAttachmentDetail {
+        switch source {
+        case let .file(url):
+            return try await AttachmentStore.shared.add(fileAt: url, toThread: threadId)
+        case let .picture(data, name):
+            return try await AttachmentStore.shared.add(data, named: name, mimeType: AttachmentImage.mimeType(forFileNamed: name), toThread: threadId)
+        case let .photo(item):
+            // Its bytes as the library has them; the store writes a still
+            // picture out afresh, upright and without where it was taken.
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                throw AttachmentStore.Failure.unreadable(name: source.name)
+            }
+            guard attachingTask == task else { throw CancellationError() }
+            let name = ComposerRules.photoName(fileExtension: item.supportedContentTypes.first?.preferredFilenameExtension)
+            return try await AttachmentStore.shared.add(data, named: name, mimeType: AttachmentImage.mimeType(forFileNamed: name), toThread: threadId)
         }
     }
 
@@ -478,8 +621,15 @@ struct MessageComposer: View {
         choosingFiles = choosing
         panel.begin { response in
             let urls = response == .OK ? panel.urls : []
-            Task { await attach(urls, chosenIn: choosing) }
+            Task { await attach(urls.map(AttachSource.file), chosen: (.files, choosing)) }
         }
+    }
+
+    /// Files and pictures pasted or dropped into the field.
+    private func attachPastedOrDropped(files: [URL], pictures: [Data]) {
+        attachFailure = nil
+        let sources = files.map(AttachSource.file) + pictures.map { AttachSource.picture($0, name: ComposerRules.pastedPictureName) }
+        Task { await attach(sources, chosen: nil) }
     }
     #endif
 
@@ -675,10 +825,52 @@ struct MessageComposer: View {
     }
 }
 
-/// Send and Stop: a rounded rectangle at least `side` square, corner
-/// `radius`, in the button fill, centred in a hit area at least `target`
-/// square. The radius is the box's less the slot's gap to the box's edge,
-/// never a circle.
+// Send and Stop: a rounded rectangle at least `side` square, corner
+// `radius`, in the button fill, centred in a hit area at least `target`
+// square. The radius is the box's less the slot's gap to the box's edge,
+// never a circle.
+#if os(iOS)
+/// The system's camera, for one photo: gives its bytes as a JPEG and
+/// closes, or closes with nothing if it is cancelled.
+private struct CameraPicker: UIViewControllerRepresentable {
+    @Environment(\.dismiss) private var dismiss
+    let onCapture: (Data) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.cameraCaptureMode = .photo
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_: UIImagePickerController, context _: Context) {}
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        private let parent: CameraPicker
+
+        init(parent: CameraPicker) {
+            self.parent = parent
+        }
+
+        func imagePickerController(_: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let image = info[.originalImage] as? UIImage, let data = image.jpegData(compressionQuality: 0.9) {
+                parent.onCapture(data)
+            }
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_: UIImagePickerController) {
+            parent.dismiss()
+        }
+    }
+}
+#endif
+
 private struct ComposerSlotStyle: ButtonStyle {
     let side: CGFloat
     let target: CGFloat
