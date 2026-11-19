@@ -853,6 +853,18 @@ final class HermesAgentTests: XCTestCase {
         watching.cancel()
         XCTAssertEqual(engine.endings[threadID]?.outcome, .cancelled)
         XCTAssertEqual(engine.endings[threadID]?.messages.first?.metadata?["role_name"], AnyJSONValue("Hermes"))
+
+        // Opened again once it has ended: it is not picked up a second time.
+        HermesStub.reset()
+        await engine.settleInterruptedTurns(threadID: threadID)
+        XCTAssertNil(engine.running[threadID])
+        XCTAssertTrue(HermesStub.requests.isEmpty)
+
+        // A turn that fails ends under its name too.
+        let progress = TurnProgress(agentName: "Hermes")
+        let failed = progress.ending(in: threadID, thrown: URLError(.timedOut))
+        XCTAssertEqual(failed.outcome, .failed)
+        XCTAssertEqual(failed.message.metadata?["role_name"], AnyJSONValue("Hermes"))
     }
 
     func testTheHistoryGivenToARun_leavesOutTheMessageItAnswersAndAnythingNotSaid() {

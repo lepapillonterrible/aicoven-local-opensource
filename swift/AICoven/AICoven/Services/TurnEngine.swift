@@ -73,6 +73,9 @@ final class TurnEngine: ObservableObject {
     /// and why, by thread id: given back when the thread is next opened.
     private var unsent: [String: (text: String, reason: String)] = [:]
 
+    /// The turns picked up since the app started, by id: each is picked up
+    /// once, and ends through that.
+    private var pickedUp: Set<String> = []
     /// The last status announced for each running turn, by turn id.
     private var announced: [String: String] = [:]
 
@@ -190,18 +193,20 @@ final class TurnEngine: ObservableObject {
             } catch {
                 AppErrorReporter.log(error: error, context: "TurnEngine.storeWaitingEnding")
             }
-            for turn in try await store.runningTurns(threadID: threadID)
-                where running[threadID]?.turnID != turn.id && unstored[threadID]?.turnID != turn.id {
+            for turn in try await store.runningTurns(threadID: threadID) where !isBeingSettled(turn.id, in: threadID) {
                 // A turn an agent of the person's own was running went on
                 // there: it is picked up, not ended. One at a time in a
                 // thread, as for any turn.
-                if let run = turn.run, await chat.canResume(run), running[threadID] == nil {
+                let canResume = if let run = turn.run { await chat.canResume(run) } else { false }
+                // The thread can be opened in two places at once: the other
+                // opener can have picked this turn up while this one waited,
+                // and it can have ended since. Either way it is not this
+                // opener's to pick up or to end.
+                guard !isBeingSettled(turn.id, in: threadID) else { continue }
+                if canResume, let run = turn.run, running[threadID] == nil {
                     resume(turn, run, in: threadID)
                     continue
                 }
-                // The thread can be opened in two places at once: the other
-                // can have picked this turn up while this one waited.
-                guard running[threadID]?.turnID != turn.id else { continue }
                 try await store.endTurn(
                     id: turn.id,
                     outcome: .interrupted,
@@ -213,10 +218,18 @@ final class TurnEngine: ObservableObject {
         }
     }
 
+    /// Whether this engine is running the turn, holds its ending, or has
+    /// picked it up: such a turn is settled by the engine's own run of it,
+    /// whatever an earlier reading of the stored turns says.
+    private func isBeingSettled(_ turnID: String, in threadID: String) -> Bool {
+        running[threadID]?.turnID == turnID || unstored[threadID]?.turnID == turnID || pickedUp.contains(turnID)
+    }
+
     /// Takes up again a turn whose run went on in the agent while this app
     /// was closed: the thread shows it as running, with Stop, and it ends
     /// as any turn does.
     private func resume(_ turn: RunningTurn, _ run: AgentRun, in threadID: String) {
+        pickedUp.insert(turn.id)
         running[threadID] = Activity(turnID: turn.id, message: TurnProgress.pickingUpMessage, trace: WorkTrace(startedAt: turn.startedAt))
         let chat = chat
         Task {
