@@ -163,7 +163,7 @@ final class AttachmentStoreTests: XCTestCase {
         }
         // Nor is another account's removed or marked.
         await store.removeUnsent([othersAttachment])
-        await store.markSent([othersAttachment], with: "message", inThread: othersThread)
+        try await store.markSent([othersAttachment], with: "message", inThread: othersThread)
         let untouched = try await row(othersAttachment)
         XCTAssertNotNil(untouched)
         XCTAssertNil(untouched?["message_id"] as String?)
@@ -184,7 +184,7 @@ final class AttachmentStoreTests: XCTestCase {
     func testAnAttachmentTakenOutUnsent_isNotKept_andOneSentStays() async throws {
         let unsent = try await store.add(Data("draft".utf8), named: "draft.txt", mimeType: "text/plain", toThread: threadID)
         let sent = try await store.add(Data("sent".utf8), named: "sent.txt", mimeType: "text/plain", toThread: threadID)
-        await store.markSent([sent.id], with: "message-1", inThread: threadID)
+        try await store.markSent([sent.id], with: "message-1", inThread: threadID)
         let marked = try await row(sent.id)
         XCTAssertEqual(marked?["message_id"], "message-1")
 
@@ -207,27 +207,70 @@ final class AttachmentStoreTests: XCTestCase {
         let userID = await MainActor.run { UserScope.currentUserID }
         let unsent = try await store.add(Data("draft".utf8), named: "draft.txt", mimeType: "text/plain", toThread: threadID)
         let sent = try await store.add(Data("sent".utf8), named: "sent.txt", mimeType: "text/plain", toThread: threadID)
-        await store.markSent([sent.id], with: "message-1", inThread: threadID)
+        try await store.markSent([sent.id], with: "message-1", inThread: threadID)
+        // And a file with no row: one whose thread went as it was written.
+        let strayFile = try XCTUnwrap(filesKept().first).deletingLastPathComponent().appendingPathComponent(UUID().uuidString)
+        try Data("nobody's".utf8).write(to: strayFile)
 
         // The next run of the app: a store that has cleared nothing yet.
         let nextRun = AttachmentStore(directory: folder)
-        await nextRun.clearUnsentFromEarlierRuns(for: userID)
-        XCTAssertEqual(filesKept().map(\.lastPathComponent), [sent.id])
+        await nextRun.clearLeftovers(for: userID)
+        XCTAssertEqual(filesKept().map(\.lastPathComponent), [sent.id], "Only what was sent is left")
         let cleared = try await row(unsent.id)
         XCTAssertNil(cleared)
 
-        // What is attached after that, in the same run, is left alone.
+        // What is attached after that, in the same run, is left alone,
+        // however often the clearing is asked for.
         let fresh = try await nextRun.add(Data("new".utf8), named: "new.txt", mimeType: "text/plain", toThread: threadID)
-        await nextRun.clearUnsentFromEarlierRuns(for: userID)
+        await nextRun.clearLeftovers(for: userID)
+        async let again: Void = nextRun.clearLeftovers(for: userID)
+        async let andAgain: Void = nextRun.clearLeftovers(for: userID)
+        _ = await (again, andAgain)
         XCTAssertEqual(Set(filesKept().map(\.lastPathComponent)), [sent.id, fresh.id])
+    }
+
+    func testAMessageThatWasNotStoredAfterAll_leavesItsFilesUnsent() async throws {
+        let file = try await store.add(Data("draft".utf8), named: "draft.txt", mimeType: "text/plain", toThread: threadID)
+        try await store.markSent([file.id], with: "message-1", inThread: threadID)
+
+        // Not the message it was marked with: nothing is taken back.
+        await store.markUnsent([file.id], markedWith: "another-message")
+        let stillMarked = try await row(file.id)
+        XCTAssertEqual(stillMarked?["message_id"], "message-1")
+
+        await store.markUnsent([file.id], markedWith: "message-1")
+        let unmarked = try await row(file.id)
+        XCTAssertNil(unmarked?["message_id"] as String?)
+        // Unsent again, it can be taken out of the composer.
+        await store.removeUnsent([file.id])
+        XCTAssertEqual(filesKept(), [])
+    }
+
+    func testAFileWhoseCopyCannotBeKept_isRefusedPlainlyAndLeavesNothing() async throws {
+        // Where the store would keep its files there is a file, not a folder.
+        let blocked = FileManager.default.temporaryDirectory.appendingPathComponent("blocked-\(UUID().uuidString)")
+        try Data().write(to: blocked)
+        defer { try? FileManager.default.removeItem(at: blocked) }
+        let unwritable = AttachmentStore(directory: blocked)
+
+        do {
+            _ = try await unwritable.add(Data("text".utf8), named: "notes.txt", mimeType: "text/plain", toThread: threadID)
+            XCTFail("Nothing is attached that could not be kept")
+        } catch {
+            XCTAssertEqual(error as? AttachmentStore.Failure, .notKept(name: "notes.txt"))
+            XCTAssertEqual(error.localizedDescription, "notes.txt could not be attached.", "It was read; it is not said to be unreadable")
+        }
+        let userID = await MainActor.run { UserScope.currentUserID }
+        let rows = try await store.ids(inThread: threadID, for: userID)
+        XCTAssertEqual(rows, [], "No row is left for a file that is not there")
     }
 
     func testAThreadsAttachments_goWithIt() async throws {
         let userID = await MainActor.run { UserScope.currentUserID }
         let first = try await store.add(Data("one".utf8), named: "one.txt", mimeType: "text/plain", toThread: threadID)
         let second = try await store.add(Data("two".utf8), named: "two.txt", mimeType: "text/plain", toThread: threadID)
-        await store.markSent([first.id], with: "message-1", inThread: threadID)
-        let ids = await store.ids(inThread: threadID, for: userID)
+        try await store.markSent([first.id], with: "message-1", inThread: threadID)
+        let ids = try await store.ids(inThread: threadID, for: userID)
         XCTAssertEqual(Set(ids), [first.id, second.id])
 
         // As deleting the thread does: its rows go with its row, then its files.

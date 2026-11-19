@@ -166,12 +166,17 @@ final class TurnEngine: ObservableObject {
         running[threadID] = Activity(turnID: turnID, message: TurnProgress.startingMessage, trace: WorkTrace(startedAt: Date()))
         // Answers left from a turn that never ended here are not this one's.
         approvals.forgetAnswers(threadID: threadID)
+        let files = (attachments ?? []).map(\.id)
         do {
             try await storeWaitingEnding(threadID: threadID)
+            // Its files are the thread's from here on. Marked before the
+            // message is stored: a message is not sent with files that
+            // could then be cleared as never sent.
+            try await AttachmentStore.shared.markSent(files, with: userMessage.id, inThread: threadID)
             try await store.beginTurn(id: turnID, userMessage: userMessage)
-            // Its files are the thread's from here on.
-            await AttachmentStore.shared.markSent((attachments ?? []).map(\.id), with: userMessage.id, inThread: threadID)
         } catch {
+            // Not sent after all: its files are unsent again.
+            await AttachmentStore.shared.markUnsent(files, markedWith: userMessage.id)
             running[threadID] = nil
             // What was set to wait for this turn, while it was being
             // started, has no turn to wait for.

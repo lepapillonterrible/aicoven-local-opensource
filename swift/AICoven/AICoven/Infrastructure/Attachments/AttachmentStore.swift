@@ -18,6 +18,9 @@ actor AttachmentStore {
     nonisolated enum Failure: LocalizedError, Equatable {
         case tooLarge(name: String)
         case unreadable(name: String)
+        /// Read, but its copy could not be kept (the store could not be
+        /// written, or its thread went while it was being attached).
+        case notKept(name: String)
         /// Not this account's, or no longer on this device.
         case missing
 
@@ -25,6 +28,7 @@ actor AttachmentStore {
             switch self {
             case let .tooLarge(name): "\(name) is larger than 10 MB and was not attached."
             case let .unreadable(name): "\(name) could not be read and was not attached."
+            case let .notKept(name): "\(name) could not be attached."
             case .missing: "This attachment is no longer on this device."
             }
         }
@@ -33,9 +37,9 @@ actor AttachmentStore {
     /// Where the files are kept; nil until first used, then beside the
     /// database.
     private var directory: URL?
-    /// The accounts whose unsent attachments from earlier runs of the app
-    /// have been cleared in this one.
-    private var clearedAccounts: Set<String> = []
+    /// The clearing of what earlier runs of the app left behind, by
+    /// account: started once in each run, and waited for by whoever asks.
+    private var clearing: [String: Task<Void, Never>] = [:]
 
     init(directory: URL? = nil) {
         self.directory = directory
@@ -92,14 +96,23 @@ actor AttachmentStore {
                 arguments: [detail.id, session.userID, threadID, meta, Date()]
             )
         }
+        var file: URL?
         do {
-            let file = try await fileURL(of: detail.id, for: session.userID, creatingFolder: true)
-            try body.write(to: file, options: .atomic)
+            let written = try await fileURL(of: detail.id, for: session.userID, creatingFolder: true)
+            file = written
+            try body.write(to: written, options: .atomic)
+            // Its thread can have been deleted while the file was written,
+            // and its row with it: the file is then nobody's, and not kept.
+            let isStillThere = try await queue.read { db in
+                try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM attachments WHERE id = ?)", arguments: [detail.id]) ?? false
+            }
+            guard isStillThere else { throw Failure.notKept(name: name) }
         } catch {
+            if let file { try? FileManager.default.removeItem(at: file) }
             _ = try? await queue.write { db in
                 try db.execute(sql: "DELETE FROM attachments WHERE id = ?", arguments: [detail.id])
             }
-            throw Failure.unreadable(name: name)
+            throw Failure.notKept(name: name)
         }
         return detail
     }
@@ -126,21 +139,39 @@ actor AttachmentStore {
     // MARK: - Sending and removing
 
     /// Marks attachments as sent with a message: they are the thread's from
-    /// here on, and are no longer cleared as unsent.
-    func markSent(_ ids: [String], with messageID: String, inThread threadID: String) async {
+    /// here on, and are no longer cleared as unsent. Throws if they cannot
+    /// be marked: a message is not sent with files that would be cleared
+    /// from under it.
+    func markSent(_ ids: [String], with messageID: String, inThread threadID: String) async throws {
+        guard !ids.isEmpty else { return }
+        guard let queue = await dbQueue() else { throw RepositoryError.databaseUnavailable }
+        let userID = await MainActor.run { UserScope.currentUserID }
+        try await queue.write { db in
+            for id in ids {
+                try db.execute(
+                    sql: "UPDATE attachments SET message_id = ? WHERE id = ? AND user_id = ? AND thread_id = ?",
+                    arguments: [messageID, id, userID, threadID]
+                )
+            }
+        }
+    }
+
+    /// Takes back the mark of a message that was not stored after all:
+    /// its attachments are unsent again, in the composer they came from.
+    func markUnsent(_ ids: [String], markedWith messageID: String) async {
         guard !ids.isEmpty, let queue = await dbQueue() else { return }
         let userID = await MainActor.run { UserScope.currentUserID }
         do {
             try await queue.write { db in
                 for id in ids {
                     try db.execute(
-                        sql: "UPDATE attachments SET message_id = ? WHERE id = ? AND user_id = ? AND thread_id = ?",
-                        arguments: [messageID, id, userID, threadID]
+                        sql: "UPDATE attachments SET message_id = NULL WHERE id = ? AND user_id = ? AND message_id = ?",
+                        arguments: [id, userID, messageID]
                     )
                 }
             }
         } catch {
-            Self.log("Attachments could not be marked as sent", error)
+            Self.log("Attachments could not be marked as unsent again", error)
         }
     }
 
@@ -167,30 +198,50 @@ actor AttachmentStore {
         }
     }
 
-    /// Clears what earlier runs of the app left attached and unsent for
-    /// this account: a composer's files are held only while the app runs.
-    /// Done once in each run, before any composer of the account's is used.
-    func clearUnsentFromEarlierRuns(for userID: String) async {
-        guard clearedAccounts.insert(userID).inserted, let queue = await dbQueue() else { return }
+    /// Clears what earlier runs of the app left behind for this account:
+    /// what was attached and never sent (a composer's files are held only
+    /// while the app runs), and any file left without a row. Done once in
+    /// each run; whoever asks waits until it has been done, so no composer
+    /// of the account's is used before.
+    func clearLeftovers(for userID: String) async {
+        if let underWay = clearing[userID] {
+            return await underWay.value
+        }
+        let task = Task { await self.clearLeftoversNow(for: userID) }
+        clearing[userID] = task
+        await task.value
+    }
+
+    private func clearLeftoversNow(for userID: String) async {
+        guard let queue = await dbQueue() else { return }
         do {
-            let removed = try await queue.write { db in
-                let ids = try String.fetchAll(db, sql: "SELECT id FROM attachments WHERE user_id = ? AND message_id IS NULL", arguments: [userID])
+            let (unsent, kept) = try await queue.write { db in
+                let unsent = try String.fetchAll(db, sql: "SELECT id FROM attachments WHERE user_id = ? AND message_id IS NULL", arguments: [userID])
                 try db.execute(sql: "DELETE FROM attachments WHERE user_id = ? AND message_id IS NULL", arguments: [userID])
-                return ids
+                let kept = try Set(String.fetchAll(db, sql: "SELECT id FROM attachments WHERE user_id = ?", arguments: [userID]))
+                return (unsent, kept)
             }
-            await deleteFiles(removed, for: userID)
+            await deleteFiles(unsent, for: userID)
+            // A file with no row is nobody's: one whose thread went while
+            // it was being written, or whose deletion was cut short.
+            guard let folder = try? await folder(for: userID),
+                  let files = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else { return }
+            for file in files where !kept.contains(file.lastPathComponent) {
+                try? FileManager.default.removeItem(at: file)
+            }
         } catch {
-            Self.log("Unsent attachments from earlier runs could not be cleared", error)
+            Self.log("What earlier runs left attached could not be cleared", error)
         }
     }
 
     /// The ids of a thread's attachments, to delete their files once the
-    /// thread, and with it their rows, is gone.
-    func ids(inThread threadID: String, for userID: String) async -> [String] {
-        guard let queue = await dbQueue() else { return [] }
-        return await (try? queue.read { db in
+    /// thread, and with it their rows, is gone. Throws if they cannot be
+    /// read: a thread is not deleted without knowing its files.
+    func ids(inThread threadID: String, for userID: String) async throws -> [String] {
+        guard let queue = await dbQueue() else { throw RepositoryError.databaseUnavailable }
+        return try await queue.read { db in
             try String.fetchAll(db, sql: "SELECT id FROM attachments WHERE thread_id = ? AND user_id = ?", arguments: [threadID, userID])
-        }) ?? []
+        }
     }
 
     /// Deletes the files of attachments whose rows are gone.

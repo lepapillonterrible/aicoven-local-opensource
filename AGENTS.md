@@ -200,7 +200,7 @@ This layer holds cross-cutting technical concerns:
   - Securely stores API keys and encryption metadata using the system Keychain.
 
 - `Infrastructure/Attachments/`
-  - `AttachmentStore` keeps the files attached to messages on the device: a file is copied in when it is attached (at most 10 MB), encrypted with the account's data key in the app's own folder, with a row in `attachments` saying whose it is, its thread, and, once sent, its message. It goes when taken out of the composer unsent, with its thread, and with its account. `AttachmentImage` writes a picture out afresh as it comes in: upright, without location or camera data, at most 4096 pixels on its longest edge.
+  - `AttachmentStore` keeps the files attached to messages on the device: a file is copied in when it is attached (at most 10 MB), encrypted with the account's data key in the app's own folder, with a row in `attachments` saying whose it is, its thread, and, once sent, its message. It goes when taken out of the composer unsent, with its thread, and with its account. `AttachmentImage` writes a still picture out afresh as it comes in: upright, without location or camera data, at most 4096 pixels on its longest edge (a picture that moves is kept as it is).
 
 - `Infrastructure/Tools/`
   - `ToolService` provides provider-agnostic tools (time, web search, attachment analysis, file/image generation).

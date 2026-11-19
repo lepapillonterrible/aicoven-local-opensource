@@ -2,10 +2,10 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-/// An attached file made ready to keep. A picture is written out afresh:
-/// upright, without what the camera or an editor wrote into it (where and
-/// when it was taken, on what), and no larger than a model takes. Anything
-/// else is kept as it is.
+/// An attached file made ready to keep. A still picture is written out
+/// afresh: upright, without what the camera or an editor wrote into it
+/// (where and when it was taken, on what), and no larger than a model
+/// takes. Anything else is kept as it is, a picture that moves included.
 nonisolated enum AttachmentImage {
     struct Prepared: Equatable {
         let data: Data

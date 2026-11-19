@@ -57,6 +57,7 @@ struct AttachmentsListView: View {
                             Image(systemName: "xmark.circle.fill")
                         }
                         .buttonStyle(.borderless)
+                        .accessibilityLabel("Remove \(a.name)")
                     }
                 }
             }

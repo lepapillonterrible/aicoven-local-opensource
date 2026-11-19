@@ -38,6 +38,11 @@ actor ThreadService {
             throw RepositoryError.dataLocked
         }
         guard loadedUserID != userID else { return }
+        // What a composer held attached and unsent when the app last
+        // closed is not kept. Cleared once in each run, and waited for
+        // here before the threads are handed to anyone, so no composer is
+        // used before it is done.
+        await AttachmentStore.shared.clearLeftovers(for: userID)
         let resetsAtStart = resets
         let threads = try await ThreadRepository.shared.loadChatThreads()
         // The data can be locked, the list reset, or the account changed
@@ -47,9 +52,6 @@ actor ThreadService {
         guard loadedUserID != userID else { return }
         personalThreads = threads.sorted { $0.createdAt < $1.createdAt }
         loadedUserID = userID
-        // What a composer held attached and unsent when the app last closed
-        // is not kept: once in each run, before any composer is used.
-        await AttachmentStore.shared.clearUnsentFromEarlierRuns(for: userID)
         await cleanupTestThreads()
     }
 
@@ -91,7 +93,7 @@ actor ThreadService {
         AppErrorReporter.log(message: "Removing \(testThreads.count) automated test threads", context: "ThreadService.cleanupTestThreads")
         for thread in testThreads {
             do {
-                let attached = await AttachmentStore.shared.ids(inThread: thread.id, for: thread.userId)
+                let attached = try await AttachmentStore.shared.ids(inThread: thread.id, for: thread.userId)
                 try await ThreadRepository.shared.deleteThread(id: thread.id, for: thread.userId)
                 await AttachmentStore.shared.deleteFiles(attached, for: thread.userId)
                 personalThreads.removeAll { $0.id == thread.id }
@@ -250,7 +252,7 @@ actor ThreadService {
         }
         // The thread's attachments go with it: their rows with its row,
         // their files once that is gone.
-        let attached = await AttachmentStore.shared.ids(inThread: threadId, for: userID)
+        let attached = try await AttachmentStore.shared.ids(inThread: threadId, for: userID)
         try await ThreadRepository.shared.deleteThread(id: threadId, for: userID)
         await AttachmentStore.shared.deleteFiles(attached, for: userID)
         if isShowing(userID) {
