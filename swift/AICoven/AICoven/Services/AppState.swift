@@ -19,10 +19,25 @@ class AppState: ObservableObject {
     @Published var selectedThread: Thread?
     @Published var threads: [Thread] = []
     @Published var pendingDeepLink: DeepLinkTarget?
+    /// The place in Settings a request names. The Settings window shows it
+    /// and clears this.
+    @Published var requestedSettingsPane: WorkspaceTabType?
+    /// Counts requests for the Settings window; the Mac's root view opens
+    /// the window for each.
+    @Published private(set) var settingsRequests = 0
     /// Whether the current user has completed the FTUE onboarding flow.
     @Published var hasCompletedOnboarding: Bool = false
 
     private init() {}
+
+    /// Asks for the Settings window when `type` is Settings or a place in
+    /// it. Returns false for any other type, and asks for nothing.
+    func openSettings(for type: WorkspaceTabType) -> Bool {
+        guard type == .settings || SettingsPane(type) != nil else { return false }
+        requestedSettingsPane = type == .settings ? nil : type
+        settingsRequests += 1
+        return true
+    }
 
     /// Handle incoming deep links.
     func handleDeepLink(_ url: URL) {

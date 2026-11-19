@@ -115,6 +115,33 @@ struct AICovenApp: App {
             // macOS-specific menu commands can be re-added later if needed.
         }
         #endif
+
+        #if os(macOS)
+        // The standard Settings window on ⌘,.
+        Settings {
+            Group {
+                if authService.isAuthenticated, isEncryptionUnlocked {
+                    SettingsWorkspaceView()
+                } else {
+                    ContentUnavailableView(
+                        "Sign in to change settings",
+                        systemImage: "gearshape",
+                        description: Text("Settings open once you're signed in and your local data is unlocked.")
+                    )
+                }
+            }
+            .frame(minWidth: 900, idealWidth: 960, minHeight: 520, idealHeight: 620)
+            .background(Color.aicovenSurface)
+            .environmentObject(authService)
+            .environmentObject(AppState.shared)
+            .environmentObject(StoreService.shared)
+            .environmentObject(themeManager)
+            .environmentObject(typographyManager)
+            .environment(\.aicovenTheme, themeManager.theme)
+            .preferredColorScheme(themeManager.theme.preferredColorScheme)
+            .id("\(themeManager.theme.variant.rawValue)|\(typographyManager.variant.rawValue)|\(typographyManager.customFontFamily ?? "")|\(typographyManager.sizeScale.rawValue)")
+        }
+        #endif
     }
 
     /// Configure global app appearance

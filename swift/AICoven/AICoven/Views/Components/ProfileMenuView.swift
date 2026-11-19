@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// Profile menu dropdown shown in top-right corner of the workspace
-/// Local-only version: no auth, no connected apps.
+/// The account menu in the top-right corner of the workspace. Its rows open
+/// Settings at the place they name.
 struct ProfileMenuView: View {
     var onOpenTab: ((WorkspaceTabType) -> Void)?
+    @EnvironmentObject private var authService: AuthService
 
     var body: some View {
         Menu {
-            // Profile section
             Button {
                 onOpenTab?(.profile)
             } label: {
@@ -16,37 +16,32 @@ struct ProfileMenuView: View {
 
             Divider()
 
-            // Settings
             Button {
                 onOpenTab?(.settings)
             } label: {
                 Label("Settings", systemImage: "gear")
             }
 
-            // Personal memories (local-only, no coven)
-            Button {
-                onOpenTab?(.memoryList(covenId: nil))
-            } label: {
-                Label("Personal Memory", systemImage: "brain")
-            }
-
-            Divider()
-
-            // Terms & Conditions
             Button {
                 onOpenTab?(.terms)
             } label: {
                 Label("Terms & Conditions", systemImage: "doc.text")
             }
 
-            // Privacy Policy
             Button {
                 onOpenTab?(.privacy)
             } label: {
                 Label("Privacy Policy", systemImage: "hand.raised")
             }
+
+            Divider()
+
+            Button(role: .destructive) {
+                try? authService.signOut()
+            } label: {
+                Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+            }
         } label: {
-            // User avatar button
             UserAvatarButton()
         }
         .menuStyle(.borderlessButton)
