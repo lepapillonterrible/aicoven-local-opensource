@@ -195,10 +195,13 @@ final class TurnEngine: ObservableObject {
                 // A turn an agent of the person's own was running went on
                 // there: it is picked up, not ended. One at a time in a
                 // thread, as for any turn.
-                if let run = turn.run, running[threadID] == nil, await chat.canResume(run), running[threadID] == nil {
+                if let run = turn.run, await chat.canResume(run), running[threadID] == nil {
                     resume(turn, run, in: threadID)
                     continue
                 }
+                // The thread can be opened in two places at once: the other
+                // can have picked this turn up while this one waited.
+                guard running[threadID]?.turnID != turn.id else { continue }
                 try await store.endTurn(
                     id: turn.id,
                     outcome: .interrupted,
@@ -378,21 +381,24 @@ struct TurnProgress {
     ) -> (outcome: TurnOutcome, message: ChatMessage, trace: WorkTrace) {
         var trace = trace
         trace.finishedAt = now
+        // However the turn ended, its message is shown under the name it
+        // was started with.
+        let named = agentName.map { ["role_name": AnyJSONValue($0)] }
         // Stopped by the person, or by the agent that was running it.
         if (stopped && (thrown != nil || last?.status != .completed)) || (thrown == nil && last?.status == .cancelled) {
             let partial = MessageAdapter.sanitizeContentForDisplay(partialAnswer).trimmingCharacters(in: .whitespacesAndNewlines)
             let content = partial.isEmpty ? "Stopped before any reply." : "\(partial)\n\n_Stopped here._"
-            return (.cancelled, Self.message(in: threadID, role: "assistant", content: content), trace)
+            return (.cancelled, Self.message(in: threadID, role: "assistant", content: content, metadata: named), trace)
         }
         if let thrown {
             let text = "I ran into an error while contacting your provider: \(thrown.localizedDescription)"
-            return (.failed, Self.message(in: threadID, role: "assistant", content: text), trace)
+            return (.failed, Self.message(in: threadID, role: "assistant", content: text, metadata: named), trace)
         }
         // The chat service's last report is its outcome: the answer, or what
         // went wrong.
         let answer = last?.answer ?? ""
         guard last?.status != .failed else {
-            return (.failed, Self.message(in: threadID, role: "assistant", content: answer), trace)
+            return (.failed, Self.message(in: threadID, role: "assistant", content: answer, metadata: named), trace)
         }
 
         var metadata: [String: AnyJSONValue] = [:]

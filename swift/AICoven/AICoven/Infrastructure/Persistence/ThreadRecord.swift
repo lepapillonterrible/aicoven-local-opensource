@@ -397,7 +397,6 @@ enum TurnOutcome: String {
     case interrupted
 }
 
-/// What storing a message does to a turn, in the same write.
 /// The run an agent of the person's own is making for a turn: enough to
 /// find it again there.
 nonisolated struct AgentRun: Codable, Equatable {
@@ -416,6 +415,7 @@ nonisolated struct RunningTurn: Equatable {
     let run: AgentRun?
 }
 
+/// What storing a message does to a turn, in the same write.
 private enum TurnChange {
     case begin(id: String)
     case end(id: String, outcome: TurnOutcome, trace: WorkTrace?)

@@ -22,7 +22,7 @@ nonisolated struct HermesTurn {
     static let answerNotTaken = "Hermes did not take the answer to what it asked to be allowed, so the run is still waiting there."
     static let runGone = "Hermes no longer has this run."
     static let notFinished = "Hermes could not finish this run."
-    static let finishedWhileAway = "Hermes finished this run while AICoven was closed, and gave no answer to show here. Its answer is in Hermes."
+    static let noAnswerToShow = "Hermes finished this run, which went on while AICoven was closed, and gave no answer to show here. Its answer is in Hermes."
 
     /// Starts the run and follows it to its end. The last report is the
     /// outcome: completed with the answer, failed with what went wrong, or
@@ -275,7 +275,7 @@ nonisolated struct HermesTurn {
         // after it ended may have neither to show.
         following.state.answer = output ?? following.state.answer
         if following.isPickedUp, following.state.answer.isEmpty {
-            following.state.answer = Self.finishedWhileAway
+            following.state.answer = Self.noAnswerToShow
         }
         following.state.phase = .finalizing
         following.state.status = .completed
