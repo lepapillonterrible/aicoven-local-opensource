@@ -539,18 +539,29 @@ struct PersonalChatView: View {
     private func loadInitialMessages() async {
         guard !isInitialLoading else { return }
         isInitialLoading = true
-        defer { isInitialLoading = false }
+        let threadID = thread.id
+        let account = UserScope.currentUserID
+        var page: [ChatMessage]?
         do {
-            let page = try await ChatService.shared.loadMessages(
-                threadId: thread.id,
+            page = try await ChatService.shared.loadMessages(
+                threadId: threadID,
                 limit: pageSize,
                 before: nil
             )
+        } catch {
+            AppErrorReporter.log(error: error, context: "PersonalContentView.loadInitialMessages")
+        }
+        // The view can be showing another thread by now, whose own load is
+        // under way: this one, read or failed, touches nothing of it.
+        guard shownThreadID == threadID else { return }
+        isInitialLoading = false
+        // Nor is anything of an earlier account's shown.
+        guard UserScope.currentUserID == account else { return }
+        if let page {
             messages = page
             oldestMessageId = page.first?.id
             hasMoreMessages = page.count == pageSize
-        } catch {
-            AppErrorReporter.log(error: error, context: "PersonalContentView.loadInitialMessages")
+        } else {
             hasMoreMessages = false
         }
         didLoadInitialMessages = true
@@ -571,33 +582,37 @@ struct PersonalChatView: View {
         }
 
         isLoadingMore = true
-        defer { isLoadingMore = false }
 
+        let threadID = thread.id
+        let account = UserScope.currentUserID
+        var page: [ChatMessage]?
         do {
-            let older = try await ChatService.shared.loadMessages(
-                threadId: thread.id,
+            page = try await ChatService.shared.loadMessages(
+                threadId: threadID,
                 limit: pageSize,
                 before: oldestId
             )
-            guard !older.isEmpty else {
-                hasMoreMessages = false
-                return
-            }
-            // Remember the first currently visible message so we can keep the
-            // scroll position stable after we prepend older messages.
-            let anchorId = enhancedMessages.first?.id
-            await MainActor.run {
-                if let anchorId {
-                    isPrependingMessages = true
-                    pendingScrollAnchorId = anchorId
-                }
-                messages.insert(contentsOf: older, at: 0)
-                oldestMessageId = messages.first?.id
-                hasMoreMessages = older.count == pageSize
-            }
         } catch {
             AppErrorReporter.log(error: error, context: "PersonalContentView.loadMoreMessagesIfNeeded")
         }
+        // As for the first page: a load for a thread the view has left
+        // touches nothing, and nothing of an earlier account's is shown.
+        guard shownThreadID == threadID else { return }
+        isLoadingMore = false
+        guard UserScope.currentUserID == account, let older = page else { return }
+        guard !older.isEmpty else {
+            hasMoreMessages = false
+            return
+        }
+        // Remember the first currently visible message so we can keep the
+        // scroll position stable after we prepend older messages.
+        if let anchorId = enhancedMessages.first?.id {
+            isPrependingMessages = true
+            pendingScrollAnchorId = anchorId
+        }
+        messages.insert(contentsOf: older, at: 0)
+        oldestMessageId = messages.first?.id
+        hasMoreMessages = older.count == pageSize
     }
 
     private func loadProviderKeys() async {

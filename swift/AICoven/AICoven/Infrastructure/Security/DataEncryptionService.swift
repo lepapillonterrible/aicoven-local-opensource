@@ -338,5 +338,13 @@ extension DataEncryptionService {
         // this is enough to exercise encryption/decryption paths.
         cachedDataKey = SymmetricKey(size: .bits256)
     }
+
+    /// As above, with the key belonging to the account `owner`: what is in
+    /// memory for a moment after a switch from that account to another.
+    func unlockForTestingEphemeral(ownedBy owner: String) {
+        guard Self.isRunningTests else { return }
+        cachedDataKey = SymmetricKey(size: .bits256)
+        keyOwnerID = owner
+    }
 }
 #endif

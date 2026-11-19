@@ -466,8 +466,8 @@ extension ThreadRepository {
                 .compactMap(\.payloadCiphertext)
         }
 
-        guard !payloads.isEmpty else { return [] }
         try await requireKey(of: currentUserId)
+        guard !payloads.isEmpty else { return [] }
         let decoder = JSONDecoder()
         var threads: [Thread] = []
         threads.reserveCapacity(payloads.count)
@@ -528,8 +528,8 @@ extension ThreadRepository {
                 arguments: [currentUserId, threadID]
             )
         }
-        guard !rows.isEmpty else { return [:] }
         try await requireKey(of: currentUserId)
+        guard !rows.isEmpty else { return [:] }
         let decoder = JSONDecoder()
         var traces: [String: WorkTrace] = [:]
         for row in rows {
@@ -540,9 +540,6 @@ extension ThreadRepository {
             }
         }
         try await requireKey(of: currentUserId)
-        // After a switch of account the earlier one's key can stay in memory
-        // for a moment: what it opened is not the new account's to see.
-        guard await MainActor.run(body: { UserScope.currentUserID }) == currentUserId else { throw RepositoryError.accountChanged }
         return traces
     }
 
@@ -624,7 +621,10 @@ extension ThreadRepository {
                     arguments: [before, threadID, currentUserId]
                 )
             }
-            guard olderThan != nil else { return [] }
+            guard olderThan != nil else {
+                try await requireKey(of: currentUserId)
+                return []
+            }
         }
 
         let decoder = JSONDecoder()
@@ -657,6 +657,9 @@ extension ThreadRepository {
             guard rows.count == wanted, let oldest = rows.last else { break }
             olderThan = oldest["row_order"]
         }
+        // However the page was completed, including by a last look that
+        // found nothing more, and when it is empty.
+        try await requireKey(of: currentUserId)
         return newestFirst.reversed()
     }
 
@@ -705,10 +708,18 @@ extension ThreadRepository {
         }
     }
 
-    /// Throws while the data key in memory is not the account `userID`'s:
-    /// nothing of that account's can then be read.
-    private func requireKey(of userID: String) async throws {
+    /// Throws unless `userID` is still the current account and the data key
+    /// in memory is its own. A read checks before it decrypts and before
+    /// every return, with or without anything read: after a switch of
+    /// account the earlier one's key can stay in memory for a moment, and
+    /// what it opens is not the new account's to see; and nothing is read,
+    /// not even that there is nothing, while the data is locked.
+    func requireKey(of userID: String) async throws {
+        guard await MainActor.run(body: { UserScope.currentUserID }) == userID else { throw RepositoryError.accountChanged }
         guard await DataEncryptionService.shared.isUnlocked(for: userID) else { throw RepositoryError.dataLocked }
+        // Again, because the account can have changed while the key was
+        // asked about. Whoever shows what was read checks once more.
+        guard await MainActor.run(body: { UserScope.currentUserID }) == userID else { throw RepositoryError.accountChanged }
     }
 
     /// Decrypts and decodes one stored record. `nil`, and logged, when this

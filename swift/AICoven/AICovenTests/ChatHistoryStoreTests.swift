@@ -97,6 +97,61 @@ final class ChatHistoryStoreTests: XCTestCase {
         XCTAssertFalse(loaded.contains { $0.id == unreadable.id })
     }
 
+    func testAReadForAnAccount_stopsOnceItIsNoLongerTheCurrentOne() async throws {
+        try await repository.requireKey(of: UserScope.currentUserID)
+
+        // A switch of account: the key in memory is still the earlier
+        // account's, and a read that began for it is still going.
+        await DataEncryptionService.shared.unlockForTestingEphemeral(ownedBy: "earlier-account")
+        do {
+            try await repository.requireKey(of: "earlier-account")
+            XCTFail("Nothing is read for an account that is not the current one, though its key is still in memory")
+        } catch {
+            XCTAssertEqual(error as? RepositoryError, .accountChanged)
+        }
+        // And nothing of the new account's is read with the earlier one's key.
+        do {
+            try await repository.requireKey(of: UserScope.currentUserID)
+            XCTFail("Nothing is read with another account's key")
+        } catch {
+            XCTAssertEqual(error as? RepositoryError, .dataLocked)
+        }
+
+        await DataEncryptionService.shared.lock()
+        do {
+            try await repository.requireKey(of: UserScope.currentUserID)
+            XCTFail("Nothing is read while the data is locked")
+        } catch {
+            XCTAssertEqual(error as? RepositoryError, .dataLocked)
+        }
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+    }
+
+    func testAReadThatFindsNothing_stillThrowsWhileTheDataIsLocked() async throws {
+        let empty = "empty-\(UUID().uuidString)"
+        await DataEncryptionService.shared.lock()
+
+        for read in [
+            { _ = try await self.repository.loadChatThreads() },
+            { _ = try await self.repository.loadChatMessages(threadID: empty, limit: 20, before: nil) },
+            { _ = try await self.repository.loadChatMessages(threadID: empty, limit: 20, before: "no-such-message") },
+            { _ = try await self.repository.loadWorkTraces(threadID: empty) },
+        ] as [() async throws -> Void] {
+            do {
+                try await read()
+                XCTFail("Nothing is read while the data is locked, not even that there is nothing")
+            } catch {
+                XCTAssertEqual(error as? RepositoryError, .dataLocked)
+            }
+        }
+
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        let messages = try await repository.loadChatMessages(threadID: empty, limit: 20, before: nil)
+        let traces = try await repository.loadWorkTraces(threadID: empty)
+        XCTAssertEqual(messages, [])
+        XCTAssertEqual(traces, [:])
+    }
+
     func testAThreadOfAnotherAccount_isNotStoredUnderThisOne() async throws {
         let theirs = thread(id: "not-mine-\(UUID().uuidString)", userId: "another-user", title: "Theirs")
 
