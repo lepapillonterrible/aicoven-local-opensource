@@ -214,6 +214,46 @@ final class ToolApprovalsTests: XCTestCase {
         _ = await askingOther.value
     }
 
+    func testAWaitingApprovalWhoseTurnHasJustStopped_isNotTheNextOneShown() async {
+        let approvals = makeApprovals()
+        let first = approval()
+        let second = approval(in: "thread-2", "Write this file?")
+        let third = approval(in: "thread-3", "Create this branch?")
+        let askingFirst = Task { await approvals.ask(first) }
+        await asked(approvals, 1)
+        let askingSecond = Task { await approvals.ask(second) }
+        await asked(approvals, 2)
+        let askingThird = Task { await approvals.ask(third) }
+        await asked(approvals, 3)
+
+        // The second's turn stops, and before the queue has been told, the
+        // person asks for the next one: it is the third.
+        askingSecond.cancel()
+        approvals.showNext()
+        XCTAssertEqual(approvals.showing?.approval, third)
+        XCTAssertEqual(approvals.waiting, [first])
+        _ = await askingSecond.value
+
+        // And when the one showing is answered, the stopped one is not next.
+        let stopping = makeApprovals()
+        let shown = approval()
+        let stoppedOne = approval(in: "thread-2")
+        let askingShown = Task { await stopping.ask(shown) }
+        await asked(stopping, 1)
+        let askingStopped = Task { await stopping.ask(stoppedOne) }
+        await asked(stopping, 2)
+        askingStopped.cancel()
+        stopping.answer(shown.id, approve: false)
+        runScheduled()
+        XCTAssertNil(stopping.showing)
+        _ = await askingShown.value
+        _ = await askingStopped.value
+        for task in [askingFirst, askingThird] {
+            task.cancel()
+            _ = await task.value
+        }
+    }
+
     func testFocusWithoutTyping_orTypingLongAgo_holdsNothingBack() async {
         let approvals = makeApprovals()
         approvals.composerFocusChanged(true)

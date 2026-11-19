@@ -126,6 +126,10 @@ struct MessageComposer: View {
     /// the person composes.
     var onFocusChange: ((Bool) -> Void)?
     var onSent: (() -> Void)?
+    /// Sets the field's text for the composer when it is not typed (what
+    /// was handed back), so the parent does not take it for typing; nil
+    /// sets it through the binding.
+    var putInTheField: ((String) -> Void)?
 
     /// The attaching under way, if one is. Cleared when the composer moves
     /// to another thread, so files chosen for one thread are never taken
@@ -528,7 +532,11 @@ struct MessageComposer: View {
     private func takeReturned() {
         guard hasReturnedDraft, let handedBack = takeReturnedDraft?() else { return }
         let merged = handedBack.followed(by: ComposerDraft(text: messageText, attachments: attachments))
-        messageText = merged.text
+        if let putInTheField {
+            putInTheField(merged.text)
+        } else {
+            messageText = merged.text
+        }
         attachments = merged.attachments
         // The field changes without being typed in, wherever focus is.
         AccessibilityNotification.Announcement("Your waiting message is back in the message field").post()

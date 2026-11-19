@@ -506,7 +506,8 @@ struct PersonalChatView: View {
                 takeReturnedDraft: { turns.takeReturned(threadID: thread.id) },
                 // An approval does not come up under what is being typed.
                 onFocusChange: { approvals.composerFocusChanged($0) },
-                onSent: { approvals.noteSent() }
+                onSent: { approvals.noteSent() },
+                putInTheField: { putInTheField($0) }
             )
             .padding(Spacing.md)
         }

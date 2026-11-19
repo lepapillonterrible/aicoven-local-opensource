@@ -220,6 +220,8 @@ final class ToolApprovals: ObservableObject {
 
     /// "N more waiting": the one showing goes to the back, the next shows.
     func showNext() {
+        // Not one whose turn has stopped: it leaves unseen.
+        waiting.removeAll { stopped.contains($0.id) }
         guard let current = showing, current.phase == .asking, !waiting.isEmpty else { return }
         waiting.append(current.approval)
         show(waiting.removeFirst())
