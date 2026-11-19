@@ -121,7 +121,7 @@ struct ToolExecutionResult: Codable {
     }
 
     /// Create a denied result (user declined approval).
-    nonisolated static func denied(tool: String, reason: String = "User denied execution") -> ToolExecutionResult {
+    nonisolated static func denied(tool: String, reason: String = "The person was asked and said no. Do not try this again unless they ask for it.") -> ToolExecutionResult {
         ToolExecutionResult(
             tool: tool,
             status: "denied",
@@ -234,7 +234,7 @@ enum ShellCommandRiskLevel: String, Codable {
     case high
 
     /// Determine risk level from a shell command string.
-    static func assess(command: String) -> ShellCommandRiskLevel {
+    nonisolated static func assess(command: String) -> ShellCommandRiskLevel {
         let lowercased = command.lowercased()
 
         // High-risk patterns

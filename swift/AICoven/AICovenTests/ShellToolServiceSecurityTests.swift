@@ -6,7 +6,8 @@ final class ShellToolServiceSecurityTests: XCTestCase {
         let result = await ShellToolService.shared.execute(
             command: "pwd",
             workingDir: nil,
-            timeoutSeconds: 1
+            timeoutSeconds: 1,
+            approve: { _, _ in true }
         )
 
         XCTAssertEqual(result.status, "denied")
@@ -18,7 +19,8 @@ final class ShellToolServiceSecurityTests: XCTestCase {
         let result = await ShellToolService.shared.execute(
             command: "pwd",
             workingDir: "   ",
-            timeoutSeconds: 1
+            timeoutSeconds: 1,
+            approve: { _, _ in true }
         )
 
         XCTAssertEqual(result.status, "denied")

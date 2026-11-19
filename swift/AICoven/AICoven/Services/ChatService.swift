@@ -537,7 +537,7 @@ actor ChatService {
                         onStateChange(state)
 
                         AnalyticsService.shared.trackToolUsed(toolName: invocation.tool, threadId: threadId)
-                        let (_, contextBlock) = try await executeChatToolCall(invocation)
+                        let (_, contextBlock) = try await executeChatToolCall(invocation, threadID: threadId)
 
                         state.toolsInProgress[toolID]?.status = "completed"
                         state.toolsInProgress[toolID]?.result = contextBlock
@@ -583,7 +583,7 @@ actor ChatService {
                     onStateChange(state)
 
                     AnalyticsService.shared.trackToolUsed(toolName: forcedNative.tool, threadId: threadId)
-                    let (_, contextBlock) = try await executeChatToolCall(forcedNative)
+                    let (_, contextBlock) = try await executeChatToolCall(forcedNative, threadID: threadId)
 
                     state.toolsInProgress[toolID]?.status = "completed"
                     state.toolsInProgress[toolID]?.result = contextBlock
@@ -613,7 +613,7 @@ actor ChatService {
                     onStateChange(state)
 
                     AnalyticsService.shared.trackToolUsed(toolName: forcedMCP.tool, threadId: threadId)
-                    let (_, contextBlock) = try await executeChatToolCall(forcedMCP)
+                    let (_, contextBlock) = try await executeChatToolCall(forcedMCP, threadID: threadId)
 
                     state.toolsInProgress[toolID]?.status = "completed"
                     state.toolsInProgress[toolID]?.result = contextBlock
@@ -808,7 +808,7 @@ actor ChatService {
                     state.bumpVersion()
                     onStateChange(state)
 
-                    let (summary, contextBlock) = try await executeChatToolCall(toolCall)
+                    let (summary, contextBlock) = try await executeChatToolCall(toolCall, threadID: threadId)
 
                     state.toolsInProgress[toolID]?.status = "completed"
                     state.toolsInProgress[toolID]?.result = contextBlock
@@ -866,7 +866,7 @@ actor ChatService {
                         state.bumpVersion()
                         onStateChange(state)
 
-                        let (summary, contextBlock) = try await executeChatToolCall(forcedCall)
+                        let (summary, contextBlock) = try await executeChatToolCall(forcedCall, threadID: threadId)
 
                         state.toolsInProgress[toolID]?.status = "completed"
                         state.toolsInProgress[toolID]?.result = contextBlock
@@ -949,7 +949,7 @@ actor ChatService {
                             state.bumpVersion()
                             onStateChange(state)
 
-                            let (summary, contextBlock) = try await executeChatToolCall(forcedCall)
+                            let (summary, contextBlock) = try await executeChatToolCall(forcedCall, threadID: threadId)
 
                             state.toolsInProgress[toolID]?.status = "completed"
                             state.toolsInProgress[toolID]?.result = contextBlock
@@ -1712,7 +1712,7 @@ extension ChatService {
     /// Execute a chat tool call using ToolExecutionService and return a short summary
     /// plus an optional context block that can be fed back into the context sandwich.
     /// This enhanced version routes through the central ToolExecutionService for all tools.
-    nonisolated func executeChatToolCall(_ call: ChatToolInvocation) async throws -> (summary: String, contextBlock: String?) {
+    nonisolated func executeChatToolCall(_ call: ChatToolInvocation, threadID: String?) async throws -> (summary: String, contextBlock: String?) {
         // A stopped turn starts no tool.
         try Task.checkCancellation()
         // Convert ChatToolInvocation to ParsedToolCall for ToolExecutionService
@@ -1742,7 +1742,7 @@ extension ChatService {
         let result = await ToolExecutionService.shared.execute(
             toolCall: parsedCall,
             agentType: "chat", // Chat context uses "chat" agent type
-            threadID: nil
+            threadID: threadID
         )
 
         // Convert ToolExecutionResult to summary/contextBlock format.

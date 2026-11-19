@@ -172,12 +172,16 @@ actor FileToolService {
     ///   - content: Text content to write.
     ///   - workingDir: Optional working directory for relative paths.
     ///   - createDirectories: Whether to create parent directories if they don't exist.
+    ///   - approve: Asks the person, once the write is known to be allowed:
+    ///     the file's full path, and whether a file is there to be replaced.
+    ///     Nothing is written or created unless it returns true.
     /// - Returns: ToolResult indicating success or error.
     func writeFile(
         path: String,
         content: String,
         workingDir: String? = nil,
-        createDirectories: Bool = true
+        createDirectories: Bool = true,
+        approve: @Sendable (_ resolvedPath: String, _ replaces: Bool) async -> Bool
     ) async -> ToolExecutionResult {
         let resolvedPath = resolvePath(path, workingDir: workingDir)
 
@@ -207,6 +211,10 @@ actor FileToolService {
 
         let fileManager = FileManager.default
         let url = URL(fileURLWithPath: resolvedPath)
+
+        guard await approve(resolvedPath, fileManager.fileExists(atPath: resolvedPath)) else {
+            return await .denied(tool: "file.write")
+        }
 
         // Create parent directories if needed
         if createDirectories {

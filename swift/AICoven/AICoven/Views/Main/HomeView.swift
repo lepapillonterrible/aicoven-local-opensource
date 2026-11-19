@@ -4,7 +4,6 @@ import SwiftUI
 struct HomeView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var authService: AuthService
-    @ObservedObject private var shellApprovalManager = ShellApprovalManager.shared
     #if os(macOS)
     @Environment(\.openSettings) private var openSettingsWindow
     #endif
@@ -96,14 +95,6 @@ struct HomeView: View {
                 Task { await loadCovens() }
             })
             .environmentObject(StoreService.shared)
-        }
-        .sheet(item: $shellApprovalManager.currentRequest) { request in
-            ShellApprovalView(
-                request: request,
-                onDecision: { decision in
-                    shellApprovalManager.handleDecision(decision)
-                }
-            )
         }
     }
 
