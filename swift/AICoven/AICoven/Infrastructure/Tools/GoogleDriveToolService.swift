@@ -8,9 +8,27 @@ actor GoogleDriveToolService {
     static let shared = GoogleDriveToolService()
 
     /// Connected accounts service for token management
-    private let accountsService = ConnectedAccountsService.shared
+    private let accountsService: ConnectedAccountsService
 
-    private init() {}
+    private let session: URLSession
+
+    /// The app's own; a test gives its own accounts and a session that
+    /// answers in Google's place.
+    init(accounts: ConnectedAccountsService = .shared, session: URLSession = .shared) {
+        accountsService = accounts
+        self.session = session
+    }
+
+    /// The address of a request, from its steps. An id or range given by
+    /// a model is one step, written so that it stays one (`RequestPath`);
+    /// `verb` is one of Google's own endings (":append"), put after the
+    /// last step as it is.
+    nonisolated static func address(_ host: String, _ steps: [String], verb: String = "") throws -> URL {
+        guard let path = RequestPath.path(of: steps), let url = URL(string: "https://\(host)\(path)\(verb)") else {
+            throw GoogleDriveError.invalidURL
+        }
+        return url
+    }
 
     // MARK: - HTTP Helpers
 
@@ -28,10 +46,12 @@ actor GoogleDriveToolService {
         let accessToken = try await accountsService.getAccessToken(forAccountId: accountId)
 
         // Build URL with query params
-        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            throw GoogleDriveError.invalidURL
+        }
         if let queryParams {
             let existingItems = components.queryItems ?? []
-            components.queryItems = existingItems + queryParams.map { URLQueryItem(name: $0.key, value: $0.value) }
+            components.queryItems = existingItems + queryParams.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
         }
 
         guard let finalURL = components.url else {
@@ -50,7 +70,7 @@ actor GoogleDriveToolService {
         }
 
         // Execute request
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw GoogleDriveError.invalidResponse
@@ -83,7 +103,7 @@ actor GoogleDriveToolService {
         pageSize: Int = 50,
         pageToken: String? = nil
     ) async throws -> DriveListResponse {
-        let url = URL(string: "https://www.googleapis.com/drive/v3/files")!
+        let url = try Self.address("www.googleapis.com", ["drive", "v3", "files"])
 
         var params: [String: String] = [
             "pageSize": String(min(pageSize, 100)),
@@ -118,11 +138,11 @@ actor GoogleDriveToolService {
 
         if let exportMimeType {
             // Use export endpoint for Google Workspace files
-            url = URL(string: "https://www.googleapis.com/drive/v3/files/\(fileId)/export")!
+            url = try Self.address("www.googleapis.com", ["drive", "v3", "files", fileId, "export"])
             params["mimeType"] = exportMimeType
         } else {
             // Use direct download for binary files
-            url = URL(string: "https://www.googleapis.com/drive/v3/files/\(fileId)")!
+            url = try Self.address("www.googleapis.com", ["drive", "v3", "files", fileId])
             params["alt"] = "media"
         }
 
@@ -188,7 +208,7 @@ actor GoogleDriveToolService {
 
     /// Get file metadata
     func getFile(accountId: String, fileId: String) async throws -> DriveFile {
-        let url = URL(string: "https://www.googleapis.com/drive/v3/files/\(fileId)")!
+        let url = try Self.address("www.googleapis.com", ["drive", "v3", "files", fileId])
         let params = ["fields": "id,name,mimeType,modifiedTime,owners,webViewLink,size"]
 
         let (data, response) = try await request(
@@ -209,7 +229,7 @@ actor GoogleDriveToolService {
 
     /// Read a Google Doc with full structure
     func readDocument(accountId: String, documentId: String) async throws -> [String: Any] {
-        let url = URL(string: "https://docs.googleapis.com/v1/documents/\(documentId)")!
+        let url = try Self.address("docs.googleapis.com", ["v1", "documents", documentId])
 
         let (data, response) = try await request(
             method: "GET",
@@ -244,16 +264,42 @@ actor GoogleDriveToolService {
         return text
     }
 
-    // MARK: - Google Sheets Operations
+    // MARK: - Google Slides Operations
 
-    /// Read spreadsheet metadata
-    func readSpreadsheet(accountId: String, spreadsheetId: String) async throws -> [String: Any] {
-        let url = URL(string: "https://sheets.googleapis.com/v4/spreadsheets/\(spreadsheetId)")!
+    /// Read a Google Slides presentation with its slides and what is on
+    /// them.
+    func readPresentation(accountId: String, presentationId: String) async throws -> [String: Any] {
+        let url = try Self.address("slides.googleapis.com", ["v1", "presentations", presentationId])
 
         let (data, response) = try await request(
             method: "GET",
             url: url,
             accountId: accountId
+        )
+
+        if response.statusCode != 200 {
+            throw parseError(statusCode: response.statusCode, data: data)
+        }
+
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw GoogleDriveError.invalidResponse
+        }
+
+        return json
+    }
+
+    // MARK: - Google Sheets Operations
+
+    /// Read spreadsheet metadata: all of it, or the `fields` asked for
+    /// (Google's own way of naming parts of an answer).
+    func readSpreadsheet(accountId: String, spreadsheetId: String, fields: String? = nil) async throws -> [String: Any] {
+        let url = try Self.address("sheets.googleapis.com", ["v4", "spreadsheets", spreadsheetId])
+
+        let (data, response) = try await request(
+            method: "GET",
+            url: url,
+            accountId: accountId,
+            queryParams: fields.map { ["fields": $0] }
         )
 
         if response.statusCode != 200 {
@@ -273,7 +319,7 @@ actor GoogleDriveToolService {
         spreadsheetId: String,
         range: String
     ) async throws -> [[String]] {
-        let url = URL(string: "https://sheets.googleapis.com/v4/spreadsheets/\(spreadsheetId)/values/\(range)")!
+        let url = try Self.address("sheets.googleapis.com", ["v4", "spreadsheets", spreadsheetId, "values", range])
 
         let (data, response) = try await request(
             method: "GET",
@@ -304,7 +350,7 @@ actor GoogleDriveToolService {
         values: [[String]],
         inputOption: String = "USER_ENTERED"
     ) async throws -> [String: Any] {
-        let url = URL(string: "https://sheets.googleapis.com/v4/spreadsheets/\(spreadsheetId)/values/\(range)")!
+        let url = try Self.address("sheets.googleapis.com", ["v4", "spreadsheets", spreadsheetId, "values", range])
         let params = ["valueInputOption": inputOption]
 
         let body: [String: Any] = [
@@ -342,7 +388,7 @@ actor GoogleDriveToolService {
         values: [[String]],
         inputOption: String = "USER_ENTERED"
     ) async throws -> [String: Any] {
-        let url = URL(string: "https://sheets.googleapis.com/v4/spreadsheets/\(spreadsheetId)/values/\(range):append")!
+        let url = try Self.address("sheets.googleapis.com", ["v4", "spreadsheets", spreadsheetId, "values", range], verb: ":append")
         let params = ["valueInputOption": inputOption, "insertDataOption": "INSERT_ROWS"]
 
         let body: [String: Any] = [

@@ -11,7 +11,7 @@ actor ToolExecutionService {
     private let shellService = ShellToolService.shared
     private let toolService: any ChatToolService
     private let githubService: GitHubToolService
-    private let googleDriveService = GoogleDriveToolService.shared
+    private let googleDriveService: GoogleDriveToolService
     private let connectedAccountsService: ConnectedAccountsService
 
     /// Whether the person has the Tools Pack.
@@ -30,6 +30,7 @@ actor ToolExecutionService {
         ask = Self.askInItsThread
         covenConnections = { await CovenService.shared.connections(forThread: $0) }
         githubService = .shared
+        googleDriveService = .shared
         connectedAccountsService = .shared
         hasToolsPack = Self.hasBoughtTheToolsPack
     }
@@ -37,15 +38,16 @@ actor ToolExecutionService {
     /// Test-friendly initializer that accepts a mock tool service, an
     /// answer to every approval in place of the person's, and a coven's
     /// choice of connections in place of the thread's (none made, unless
-    /// given). It can also be given its own connected accounts, a GitHub
-    /// service that asks a scripted server, and whether the Tools Pack
-    /// was bought.
+    /// given). It can also be given its own connected accounts, GitHub
+    /// and Google services that ask a scripted server, and whether the
+    /// Tools Pack was bought.
     init(
         toolService: any ChatToolService,
         ask: @escaping @Sendable (ToolApproval) async -> ApprovalAnswer = { _ in .denied },
         covenConnections: @escaping @Sendable (_ threadID: String) async -> CovenConnections? = { _ in nil },
         connectedAccounts: ConnectedAccountsService = .shared,
         githubService: GitHubToolService = .shared,
+        googleDriveService: GoogleDriveToolService = .shared,
         hasToolsPack: @escaping @Sendable () async -> Bool = ToolExecutionService.hasBoughtTheToolsPack
     ) {
         self.toolService = toolService
@@ -53,6 +55,7 @@ actor ToolExecutionService {
         self.covenConnections = covenConnections
         connectedAccountsService = connectedAccounts
         self.githubService = githubService
+        self.googleDriveService = googleDriveService
         self.hasToolsPack = hasToolsPack
     }
 
@@ -72,7 +75,7 @@ actor ToolExecutionService {
     // MARK: - Entitlement gating for paid tools
 
     /// Tool name prefixes that require the Tools Pack purchase.
-    private static let toolsPackPrefixes = ["shell.", "github.", "google_drive.", "google_sheets."]
+    private static let toolsPackPrefixes = ["shell.", "github.", "google_drive.", "google_docs.", "google_sheets.", "google_slides."]
 
     /// Returns true when the given tool name requires the Tools Pack entitlement.
     private func requiresToolsPack(_ toolName: String) -> Bool {
@@ -438,6 +441,15 @@ actor ToolExecutionService {
 
         case "google_drive.uploadFile", "google_drive.upload_file":
             return await executeGoogleDriveUploadFile(toolCall: toolCall, threadID: threadID)
+
+        case "google_docs.read":
+            return await executeGoogleDocsRead(toolCall: toolCall)
+
+        case "google_sheets.read":
+            return await executeGoogleSheetsRead(toolCall: toolCall)
+
+        case "google_slides.read":
+            return await executeGoogleSlidesRead(toolCall: toolCall)
 
         case "google_sheets.readValues", "google_sheets.read_values":
             return await executeGoogleSheetsReadValues(toolCall: toolCall)
@@ -1008,39 +1020,133 @@ actor ToolExecutionService {
             return .error(tool: toolCall.name, message: "Google Drive not connected. Please connect in Settings > \(SettingsPane.connectedApps.listedTitle).")
         }
 
-        let query = extractString(from: toolCall.args, key: "query")
+        let query = Self.given(extractString(from: toolCall.args, key: "query"))
+        // As many as asked for, between 1 and 100 (Google's most a page).
+        let pageSize = min(100, max(1, GitHubToolArguments.whole("page_size", in: toolCall.args) ?? 50))
 
         do {
-            let response = try await googleDriveService.listFiles(accountId: account.id, query: query)
-            let fileNames = response.files.map { "\($0.name) (\($0.mimeType ?? "unknown"))" }
-            let block = "[Google Drive Files]\n" + fileNames.joined(separator: "\n")
+            let response = try await googleDriveService.listFiles(accountId: account.id, query: query, pageSize: pageSize)
+            // Each file with its id: the other tools are asked by id.
+            let files = response.files.map { "\($0.name) (\($0.mimeType ?? "unknown")), id: \($0.id)" }
+            let block = "[Google Drive Files]\n"
+                + (files.isEmpty ? "(No files)" : files.joined(separator: "\n"))
+                + (response.nextPageToken == nil ? "" : "\n(There are more files than these. A narrower query finds the rest.)")
             return await .success(tool: toolCall.name, result: ["count": AnyJSONValue(response.files.count)], contextBlock: block)
         } catch {
             return await .error(tool: toolCall.name, message: error.localizedDescription)
         }
     }
 
-    /// Execute google_drive.readFile
+    /// Execute google_drive.readFile: a file's text. A file of Google's
+    /// own (a Doc, a Sheet, Slides) is exported as text; any other is read
+    /// as it is.
     private func executeGoogleDriveReadFile(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .googleDrive) else {
             return await .error(tool: toolCall.name, message: "Google Drive not connected.")
         }
 
-        guard let fileId = extractString(from: toolCall.args, key: "file_id") ?? extractString(from: toolCall.args, key: "fileId") else {
-            return await .validationError(tool: toolCall.name, message: "Missing required argument: 'file_id'")
+        guard let fileId = GoogleToolArguments.id(["file_id", "fileId"], in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: GoogleToolArguments.idMissing("file_id"), field: "file_id")
         }
 
-        let exportMimeType = extractString(from: toolCall.args, key: "export_mime_type") ?? "text/plain"
+        // What to export it as: what the call names (by the cloud app's
+        // name for it, or this app's older one), or what suits the file.
+        let named = Self.given(extractString(from: toolCall.args, key: "export_format")) ?? Self.given(extractString(from: toolCall.args, key: "export_mime_type"))
 
         do {
+            var exportMimeType = named
+            if exportMimeType == nil {
+                let file = try await googleDriveService.getFile(accountId: account.id, fileId: fileId)
+                if let type = file.mimeType, type.hasPrefix(GoogleToolArguments.ownTypePrefix) {
+                    guard let export = GoogleToolArguments.textExport(ofOwnType: type) else {
+                        return await .error(tool: toolCall.name, message: "'\(file.name)' is a \(type.dropFirst(GoogleToolArguments.ownTypePrefix.count)) in Google Drive, which has no text to read.")
+                    }
+                    exportMimeType = export
+                }
+            }
             let data = try await googleDriveService.downloadFile(
                 accountId: account.id,
                 fileId: fileId,
                 exportMimeType: exportMimeType
             )
-            let content = String(data: data, encoding: .utf8) ?? "<binary content>"
-            let block = "[Google Drive File: \(fileId)]\n\(content.prefix(5000))"
-            return await .success(tool: toolCall.name, result: ["file_id": AnyJSONValue(fileId)], contextBlock: block)
+            guard let content = String(data: data, encoding: .utf8) else {
+                // As the cloud app says it.
+                let block = "[Google Drive File: \(fileId)]\n[Binary file, \(data.count) bytes - cannot display as text]"
+                return await .success(tool: toolCall.name, result: ["file_id": AnyJSONValue(fileId), "size_bytes": AnyJSONValue(data.count)], contextBlock: block)
+            }
+            let block = "[Google Drive File: \(fileId)]\n\(GoogleToolArguments.cut(content))"
+            return await .success(tool: toolCall.name, result: ["file_id": AnyJSONValue(fileId), "size_bytes": AnyJSONValue(data.count)], contextBlock: block)
+        } catch {
+            return await .error(tool: toolCall.name, message: error.localizedDescription)
+        }
+    }
+
+    /// Execute google_docs.read: a document's title and text.
+    private func executeGoogleDocsRead(toolCall: ParsedToolCall) async -> ToolExecutionResult {
+        guard let account = await connectedAccountsService.getConnectedAccount(for: .googleDrive) else {
+            return await .error(tool: toolCall.name, message: "Google Drive not connected.")
+        }
+
+        guard let documentId = GoogleToolArguments.id(["document_id", "documentId"], in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: GoogleToolArguments.idMissing("document_id"), field: "document_id")
+        }
+
+        do {
+            let document = try await googleDriveService.readDocument(accountId: account.id, documentId: documentId)
+            let title = GoogleWorkspaceText.title(of: document) ?? documentId
+            let text = GoogleWorkspaceText.text(ofDocument: document)
+            let block = "[Google Doc: \(title)]\n" + (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "(The document is empty)" : GoogleToolArguments.cut(text))
+            return await .success(tool: toolCall.name, result: ["document_id": AnyJSONValue(documentId), "title": AnyJSONValue(title)], contextBlock: block)
+        } catch {
+            return await .error(tool: toolCall.name, message: error.localizedDescription)
+        }
+    }
+
+    /// Execute google_sheets.read: a spreadsheet's title and its sheets,
+    /// each with its size (their values are read with
+    /// google_sheets.readValues).
+    private func executeGoogleSheetsRead(toolCall: ParsedToolCall) async -> ToolExecutionResult {
+        guard let account = await connectedAccountsService.getConnectedAccount(for: .googleDrive) else {
+            return await .error(tool: toolCall.name, message: "Google Drive not connected.")
+        }
+
+        guard let spreadsheetId = GoogleToolArguments.id(["spreadsheet_id", "spreadsheetId"], in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: GoogleToolArguments.idMissing("spreadsheet_id"), field: "spreadsheet_id")
+        }
+
+        do {
+            let spreadsheet = try await googleDriveService.readSpreadsheet(
+                accountId: account.id,
+                spreadsheetId: spreadsheetId,
+                fields: "properties.title,sheets.properties(title,gridProperties(rowCount,columnCount))"
+            )
+            let title = GoogleWorkspaceText.title(of: spreadsheet) ?? spreadsheetId
+            let sheets = GoogleWorkspaceText.sheets(ofSpreadsheet: spreadsheet)
+            let block = "[Google Sheet: \(title)]\nSheets:\n" + (sheets.isEmpty ? "(None)" : sheets.map { "- \($0)" }.joined(separator: "\n"))
+            return await .success(tool: toolCall.name, result: ["spreadsheet_id": AnyJSONValue(spreadsheetId), "title": AnyJSONValue(title), "sheet_count": AnyJSONValue(sheets.count)], contextBlock: block)
+        } catch {
+            return await .error(tool: toolCall.name, message: error.localizedDescription)
+        }
+    }
+
+    /// Execute google_slides.read: a presentation's title and the text on
+    /// each of its slides.
+    private func executeGoogleSlidesRead(toolCall: ParsedToolCall) async -> ToolExecutionResult {
+        guard let account = await connectedAccountsService.getConnectedAccount(for: .googleDrive) else {
+            return await .error(tool: toolCall.name, message: "Google Drive not connected.")
+        }
+
+        guard let presentationId = GoogleToolArguments.id(["presentation_id", "presentationId"], in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: GoogleToolArguments.idMissing("presentation_id"), field: "presentation_id")
+        }
+
+        do {
+            let presentation = try await googleDriveService.readPresentation(accountId: account.id, presentationId: presentationId)
+            let title = GoogleWorkspaceText.title(of: presentation) ?? presentationId
+            let slides = (presentation["slides"] as? [[String: Any]])?.count ?? 0
+            let text = GoogleWorkspaceText.text(ofPresentation: presentation)
+            let block = "[Google Slides: \(title)]\n" + (slides == 0 ? "(The presentation has no slides)" : GoogleToolArguments.cut(text))
+            return await .success(tool: toolCall.name, result: ["presentation_id": AnyJSONValue(presentationId), "title": AnyJSONValue(title), "slide_count": AnyJSONValue(slides)], contextBlock: block)
         } catch {
             return await .error(tool: toolCall.name, message: error.localizedDescription)
         }
@@ -1083,9 +1189,11 @@ actor ToolExecutionService {
             return await .error(tool: toolCall.name, message: "Google Drive not connected.")
         }
 
-        guard let spreadsheetId = extractString(from: toolCall.args, key: "spreadsheet_id") ?? extractString(from: toolCall.args, key: "spreadsheetId"),
-              let range = extractString(from: toolCall.args, key: "range") else {
-            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'spreadsheet_id', 'range'")
+        guard let spreadsheetId = GoogleToolArguments.id(["spreadsheet_id", "spreadsheetId"], in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: GoogleToolArguments.idMissing("spreadsheet_id"), field: "spreadsheet_id")
+        }
+        guard let range = Self.given(extractString(from: toolCall.args, key: "range")) else {
+            return await .validationError(tool: toolCall.name, message: "Missing required argument: 'range'", field: "range")
         }
 
         do {
@@ -1108,9 +1216,11 @@ actor ToolExecutionService {
             return await .error(tool: toolCall.name, message: "Google Drive not connected.")
         }
 
-        guard let spreadsheetId = extractString(from: toolCall.args, key: "spreadsheet_id") ?? extractString(from: toolCall.args, key: "spreadsheetId"),
-              let range = extractString(from: toolCall.args, key: "range") else {
-            return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'spreadsheet_id', 'range'")
+        guard let spreadsheetId = GoogleToolArguments.id(["spreadsheet_id", "spreadsheetId"], in: toolCall.args) else {
+            return await .validationError(tool: toolCall.name, message: GoogleToolArguments.idMissing("spreadsheet_id"), field: "spreadsheet_id")
+        }
+        guard let range = Self.given(extractString(from: toolCall.args, key: "range")) else {
+            return await .validationError(tool: toolCall.name, message: "Missing required argument: 'range'", field: "range")
         }
 
         // Parse values from args - expecting array of arrays

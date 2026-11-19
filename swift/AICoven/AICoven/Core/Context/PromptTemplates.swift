@@ -233,20 +233,45 @@ enum PromptTemplates {
         // Google Drive tools
         ToolDefinition(
             name: "google_drive.listFiles",
-            description: "List files in Google Drive.",
+            description: "List files in Google Drive, each with its id (the other Google tools are asked by id).",
             parameters: [
-                ToolParameter(name: "query", type: "string", description: "Optional search query (Drive query syntax)", required: false)
+                ToolParameter(name: "query", type: "string", description: "Optional search query (Drive query syntax)", required: false),
+                ToolParameter(name: "page_size", type: "integer", description: "How many files to list (default 50, at most 100)", required: false)
             ],
             example: #"{"tool": "google_drive.listFiles", "input": {"query": "name contains 'report'"}, "reason": "Find report files"}"#
         ),
         ToolDefinition(
             name: "google_drive.readFile",
-            description: "Read/download a file from Google Drive.",
+            description: "Read the text of a file in Google Drive. A Google Doc, Sheet or Slides file is read as text; any other file is read as it is.",
             parameters: [
                 ToolParameter(name: "file_id", type: "string", description: "Google Drive file ID", required: true),
-                ToolParameter(name: "export_mime_type", type: "string", description: "Export format for Google Docs (e.g., text/plain)", required: false)
+                ToolParameter(name: "export_format", type: "string", description: "MIME type to export a Google Doc, Sheet or Slides file as (e.g. text/csv); chosen for you if left out", required: false)
             ],
             example: #"{"tool": "google_drive.readFile", "input": {"file_id": "abc123"}, "reason": "Read file contents"}"#
+        ),
+        ToolDefinition(
+            name: "google_docs.read",
+            description: "Read a Google Doc: its title and text.",
+            parameters: [
+                ToolParameter(name: "document_id", type: "string", description: "Document ID", required: true)
+            ],
+            example: #"{"tool": "google_docs.read", "input": {"document_id": "abc123"}, "reason": "Read the document"}"#
+        ),
+        ToolDefinition(
+            name: "google_slides.read",
+            description: "Read a Google Slides presentation: its title and the text on each slide.",
+            parameters: [
+                ToolParameter(name: "presentation_id", type: "string", description: "Presentation ID", required: true)
+            ],
+            example: #"{"tool": "google_slides.read", "input": {"presentation_id": "abc123"}, "reason": "Read the slides"}"#
+        ),
+        ToolDefinition(
+            name: "google_sheets.read",
+            description: "Read a Google Sheets spreadsheet's title and the names and sizes of its sheets. Use google_sheets.readValues for the values in a range.",
+            parameters: [
+                ToolParameter(name: "spreadsheet_id", type: "string", description: "Spreadsheet ID", required: true)
+            ],
+            example: #"{"tool": "google_sheets.read", "input": {"spreadsheet_id": "abc123"}, "reason": "See which sheets it has"}"#
         ),
         ToolDefinition(
             name: "google_drive.uploadFile",
@@ -660,10 +685,11 @@ enum PromptTemplates {
         "github.getPullRequest", "github.listPullRequestFiles"
     ]
 
-    /// Google Drive/Sheets tools.
+    /// Google tools: Drive, Docs, Sheets and Slides, of the one Google connection.
     static let googleDriveTools: Set<String> = [
         "google_drive.listFiles", "google_drive.readFile", "google_drive.uploadFile",
-        "google_sheets.readValues", "google_sheets.writeValues"
+        "google_docs.read", "google_slides.read",
+        "google_sheets.read", "google_sheets.readValues", "google_sheets.writeValues"
     ]
 
     /// Image generation, offered where there is an OpenAI key to make
