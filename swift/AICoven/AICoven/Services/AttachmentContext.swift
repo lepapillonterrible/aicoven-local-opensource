@@ -3,8 +3,8 @@ import PDFKit
 
 /// What a turn is told of the files attached to its message: for each, a
 /// part that starts `[Attachment: <name>]` and holds the text that could be
-/// read from it, put after the message. The parts read as the cloud app's
-/// do, so a model or an agent sees the same thing from either app.
+/// read from it, put after the message. The parts have the form the cloud
+/// app gives them.
 nonisolated enum AttachmentContext {
     /// The most characters of one attachment's text a turn is given.
     static let longestText = 20000
@@ -43,7 +43,8 @@ nonisolated enum AttachmentContext {
         return parts.joined()
     }
 
-    /// An attachment's bytes, from the app's own store.
+    /// An attachment's bytes: from the app's own store, or, for one that
+    /// names a file elsewhere, from that file.
     static func bytes(of attachment: FileAttachmentDetail) async throws -> Data {
         if let url = attachment.url {
             return try Data(contentsOf: url)
@@ -73,22 +74,24 @@ nonisolated enum AttachmentContext {
 
     /// The text of a PDF's pages, each followed by a new line, without
     /// white space around the whole, cut and marked at `longest`
-    /// characters; pages after the cut are not read. Empty for a PDF with
-    /// no text (a scan, or one that needs a password); nil if these bytes
-    /// are not a PDF that can be opened.
+    /// characters; pages after the one that passes the limit are not read.
+    /// Empty for a PDF with no text (a scan, or one that needs a
+    /// password); nil if these bytes are not a PDF that can be opened.
     static func text(ofPDF data: Data, longest: Int = longestText) -> String? {
         guard let document = PDFDocument(data: data) else { return nil }
         var text = ""
+        // What `text` holds apart from the white space it ends with, which
+        // is not given: reading goes on until that is over the limit, so
+        // that text is only whole when every page was read.
         var length = 0
         for index in 0 ..< document.pageCount {
             guard length <= longest, !Task.isCancelled else { break }
             let page = (document.page(at: index)?.string ?? "") + "\n"
             // Nothing is kept of the white space a document starts with.
-            let kept = text.isEmpty ? String(page.drop(while: \.isWhitespace)) : page
-            text += kept
-            length += kept.count
+            text += text.isEmpty ? String(page.drop(while: \.isWhitespace)) : page
+            length = text.count - text.reversed().prefix(while: \.isWhitespace).count
         }
-        return cut(text.trimmingCharacters(in: .whitespacesAndNewlines), at: longest)
+        return cut(String(text.prefix(length)), at: longest)
     }
 
     /// `text`, or its first `longest` characters and the mark that it was cut.

@@ -1048,7 +1048,7 @@ actor ChatService {
 
                 \(cappedToolResults)
 
-                The user's original question was: \(message)
+                The user's original question was: \(messageWithAttachments)
 
                 Using ONLY the data above, provide a helpful answer. The data has already been retrieved — do NOT say you cannot access external systems. Summarize and present the results clearly.
                 """

@@ -113,6 +113,13 @@ final class AttachmentContextTests: XCTestCase {
             "First page\nSeco\n...(truncated)...",
             "Cut at the limit, like any text"
         )
+        XCTAssertEqual(
+            AttachmentContext.text(ofPDF: data, longest: 10),
+            "First page\n...(truncated)...",
+            "Marked as cut where the limit falls at the end of a page and more pages follow"
+        )
+        XCTAssertEqual(AttachmentContext.text(ofPDF: data, longest: 33), "First page\nSecond page\nThird page", "Whole at the limit")
+        XCTAssertEqual(try AttachmentContext.text(ofPDF: pdf(pages: ["Only page", "", ""]), longest: 9), "Only page", "Pages with no text after it do not make it cut")
     }
 
     func testAPDFWithNoText_isSaidToHaveNone() throws {
@@ -244,6 +251,14 @@ final class AttachmentContextTests: XCTestCase {
             "Sum this up\n\n[Attachment: report.txt]\n```\n\(text.prefix(8000))\n...(truncated)...\n```",
             "A model on this device has less room"
         )
+
+        // A model on this device that a tool was run for is asked to answer
+        // from what the tool returned, and is still given what was read.
+        let asked = ListeningModel()
+        try await chat(with: asked, provider: "ollama").streamMessage(threadId: threadID, message: "What time is it now?", attachments: [report], onStateChange: { _ in })
+        let afterATool = try XCTUnwrap(asked.lastUserMessage)
+        XCTAssertTrue(afterATool.contains("A tool was executed on the user's behalf"), "The time was looked up for it")
+        XCTAssertTrue(afterATool.contains("What time is it now?\n\n[Attachment: report.txt]\n```\n\(text.prefix(8000))\n...(truncated)...\n```"))
         await DataEncryptionService.shared.lock()
     }
 }
