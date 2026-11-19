@@ -345,6 +345,15 @@ final class DatabaseManager {
                 }
             }
 
+            // v10: for a turn an agent of the person's own is running (a
+            // Hermes run), which run it is, kept encrypted with the turn: the
+            // run goes on when this app closes, and is picked up from this.
+            migrator.registerMigration("v10_turn_run") { db in
+                try db.alter(table: "turns") { t in
+                    t.add(column: "run_ciphertext", .blob)
+                }
+            }
+
             try migrator.migrate(queue)
             dbQueue = queue
         } catch {

@@ -22,20 +22,38 @@ nonisolated struct HermesTurn {
     static let answerNotTaken = "Hermes did not take the answer to what it asked to be allowed, so the run is still waiting there."
     static let runGone = "Hermes no longer has this run."
     static let notFinished = "Hermes could not finish this run."
+    static let finishedWhileAway = "Hermes finished this run while AICoven was closed, and gave no answer to show here. Its answer is in Hermes."
 
     /// Starts the run and follows it to its end. The last report is the
     /// outcome: completed with the answer, failed with what went wrong, or
     /// cancelled, with what had been answered, when Hermes says the run was
     /// stopped there. Throws `CancellationError` when the turn itself was
     /// stopped, and whatever starting the run threw.
+    /// `started` is told the run's id as soon as there is one, before
+    /// anything is followed: with it the run can be found again.
     func run(
         input: String,
         history: [HermesAgentClient.Message],
+        started: @Sendable (_ runID: String) async -> Void = { _ in },
         report: @escaping @Sendable (TurnState) -> Void
     ) async throws {
         let runID = try await client.startRun(input: input, history: history, sessionKey: threadID)
+        await started(runID)
+        try await follow(runID, lookFirst: false, report)
+    }
+
+    /// Picks up a run started earlier, which went on in Hermes while this
+    /// app was closed: where it stands is read first, since it may have
+    /// ended, and it is followed from there. What it had answered before is
+    /// not known here; a run that ends with an answer of its own shows it.
+    func resume(runID: String, report: @escaping @Sendable (TurnState) -> Void) async throws {
+        guard let runID = HermesAgentClient.validRunID(runID) else { throw HermesAgentError.noRunID }
+        try await follow(runID, lookFirst: true, report)
+    }
+
+    private func follow(_ runID: String, lookFirst: Bool, _ report: @escaping @Sendable (TurnState) -> Void) async throws {
         try await withTaskCancellationHandler {
-            var following = Following(state: TurnState(threadId: threadID))
+            var following = Following(state: TurnState(threadId: threadID), isPickedUp: lookFirst)
             try await follow(runID, &following, report)
         } onCancel: {
             // The run is Hermes's own: it goes on unless it is told to stop.
@@ -54,6 +72,9 @@ nonisolated struct HermesTurn {
     private struct Following {
         var state: TurnState
         var toolsStarted = 0
+        /// Picked up after this app was closed on it: its state is read
+        /// before its events, and it may have nothing to show for an answer.
+        var isPickedUp = false
         /// Whether the request last answered may still be sent again: until
         /// the run has moved on, the same request is not asked twice.
         var approvalPending = false
@@ -64,18 +85,22 @@ nonisolated struct HermesTurn {
 
     private func follow(_ runID: String, _ following: inout Following, _ report: @Sendable (TurnState) -> Void) async throws {
         var failedLooks = 0
+        var lookFirst = following.isPickedUp
         while true {
             try Task.checkCancellation()
-            do {
-                for try await event in client.events(of: runID) {
-                    if try await take(event, of: runID, &following, report) { return }
+            if !lookFirst {
+                do {
+                    for try await event in client.events(of: runID) {
+                        if try await take(event, of: runID, &following, report) { return }
+                    }
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    // The stream was lost, not the run: where it stands is
+                    // read back below.
                 }
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                // The stream was lost, not the run: where it stands is read
-                // back below.
             }
+            lookFirst = false
             try Task.checkCancellation()
             do {
                 let standing = try await client.state(of: runID)
@@ -246,8 +271,12 @@ nonisolated struct HermesTurn {
 
     private func finish(_ following: inout Following, with output: String?, _ report: @Sendable (TurnState) -> Void) {
         // What Hermes gives as the run's output is the answer; the text it
-        // reported on the way is, where it gives none.
+        // reported on the way is, where it gives none. A run picked up
+        // after it ended may have neither to show.
         following.state.answer = output ?? following.state.answer
+        if following.isPickedUp, following.state.answer.isEmpty {
+            following.state.answer = Self.finishedWhileAway
+        }
         following.state.phase = .finalizing
         following.state.status = .completed
         following.state.bumpVersion()

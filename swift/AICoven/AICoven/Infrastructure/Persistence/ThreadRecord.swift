@@ -398,6 +398,24 @@ enum TurnOutcome: String {
 }
 
 /// What storing a message does to a turn, in the same write.
+/// The run an agent of the person's own is making for a turn: enough to
+/// find it again there.
+nonisolated struct AgentRun: Codable, Equatable {
+    /// "hermes".
+    let provider: String
+    let runID: String
+    /// The name the reply is shown under, as the turn was started with.
+    var agentName: String?
+}
+
+/// A turn still recorded as running.
+nonisolated struct RunningTurn: Equatable {
+    let id: String
+    let startedAt: Date
+    /// The agent's run making it, if one is.
+    let run: AgentRun?
+}
+
 private enum TurnChange {
     case begin(id: String)
     case end(id: String, outcome: TurnOutcome, trace: WorkTrace?)
@@ -543,16 +561,45 @@ extension ThreadRepository {
         return traces
     }
 
-    /// The ids of the current account's turns in a thread that are still
-    /// marked as running.
-    func runningTurnIDs(threadID: String) async throws -> [String] {
+    /// The current account's turns in a thread that are still marked as
+    /// running, oldest first, each with the agent's run making it, if one
+    /// is. A run that cannot be read is given as none.
+    func runningTurns(threadID: String) async throws -> [RunningTurn] {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         let currentUserId = await MainActor.run { UserScope.currentUserID }
-        return try await dbQueue.read { db in
-            try String.fetchAll(
+        let rows: [Row] = try await dbQueue.read { db in
+            try Row.fetchAll(
                 db,
-                sql: "SELECT id FROM turns WHERE user_id = ? AND thread_id = ? AND status = ? ORDER BY started_at",
+                sql: "SELECT id, started_at, run_ciphertext FROM turns WHERE user_id = ? AND thread_id = ? AND status = ? ORDER BY started_at",
                 arguments: [currentUserId, threadID, TurnOutcome.running.rawValue]
+            )
+        }
+        try await requireKey(of: currentUserId)
+        let decoder = JSONDecoder()
+        var turns: [RunningTurn] = []
+        for row in rows {
+            var run: AgentRun?
+            if let ciphertext: Data = row["run_ciphertext"] {
+                run = try await open(AgentRun.self, ciphertext, purpose: "turn_run", with: decoder)
+            }
+            turns.append(RunningTurn(id: row["id"], startedAt: row["started_at"], run: run))
+        }
+        try await requireKey(of: currentUserId)
+        return turns
+    }
+
+    /// Keeps, with a running turn, the agent's run that is making it.
+    /// Nothing is kept for a turn that is not the current account's running
+    /// turn.
+    func keepRun(_ run: AgentRun, forTurn id: String) async throws {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let session = try await beginWrite()
+        let ciphertext = try await DataEncryptionService.shared.encrypt(JSONEncoder().encode(run), purpose: "turn_run")
+        try await confirm(session)
+        try await dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE turns SET run_ciphertext = ? WHERE id = ? AND user_id = ? AND status = ?",
+                arguments: [ciphertext, id, session.userID, TurnOutcome.running.rawValue]
             )
         }
     }

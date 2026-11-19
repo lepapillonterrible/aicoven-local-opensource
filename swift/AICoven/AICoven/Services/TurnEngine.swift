@@ -113,8 +113,31 @@ final class TurnEngine: ObservableObject {
             running[threadID] = nil
             throw error
         }
+        let chat = chat
+        let store = store
         Task {
-            await run(turnID: turnID, threadID: threadID, context: context, roleID: roleID, agentName: agentName, attachments: attachments)
+            await run(turnID: turnID, threadID: threadID, agentName: agentName) { report in
+                try await chat.streamMessage(
+                    threadId: threadID,
+                    message: context,
+                    roleId: roleID,
+                    attachments: attachments,
+                    onAgentRun: { run in
+                        // Kept with the turn, so the run can be picked up
+                        // again if this app closes on it. If it cannot be
+                        // kept, the turn goes on; it would then end as
+                        // interrupted after a relaunch, as it did before.
+                        var kept = run
+                        kept.agentName = agentName
+                        do {
+                            try await store.keepRun(kept, forTurn: turnID)
+                        } catch {
+                            AppErrorReporter.log(error: error, context: "TurnEngine.keepRun")
+                        }
+                    },
+                    onStateChange: report
+                )
+            }
         }
     }
 
@@ -167,16 +190,36 @@ final class TurnEngine: ObservableObject {
             } catch {
                 AppErrorReporter.log(error: error, context: "TurnEngine.storeWaitingEnding")
             }
-            for turnID in try await store.runningTurnIDs(threadID: threadID)
-                where running[threadID]?.turnID != turnID && unstored[threadID]?.turnID != turnID {
+            for turn in try await store.runningTurns(threadID: threadID)
+                where running[threadID]?.turnID != turn.id && unstored[threadID]?.turnID != turn.id {
+                // A turn an agent of the person's own was running went on
+                // there: it is picked up, not ended. One at a time in a
+                // thread, as for any turn.
+                if let run = turn.run, running[threadID] == nil, await chat.canResume(run), running[threadID] == nil {
+                    resume(turn, run, in: threadID)
+                    continue
+                }
                 try await store.endTurn(
-                    id: turnID,
+                    id: turn.id,
                     outcome: .interrupted,
                     message: TurnProgress.message(in: threadID, role: "assistant", content: TurnProgress.interruptedNotice)
                 )
             }
         } catch {
             AppErrorReporter.log(error: error, context: "TurnEngine.settleInterruptedTurns")
+        }
+    }
+
+    /// Takes up again a turn whose run went on in the agent while this app
+    /// was closed: the thread shows it as running, with Stop, and it ends
+    /// as any turn does.
+    private func resume(_ turn: RunningTurn, _ run: AgentRun, in threadID: String) {
+        running[threadID] = Activity(turnID: turn.id, message: TurnProgress.pickingUpMessage, trace: WorkTrace(startedAt: turn.startedAt))
+        let chat = chat
+        Task {
+            await self.run(turnID: turn.id, threadID: threadID, agentName: run.agentName) { report in
+                try await chat.resumeAgentRun(run, threadId: threadID, onStateChange: report)
+            }
         }
     }
 
@@ -193,13 +236,14 @@ final class TurnEngine: ObservableObject {
         endings[threadID] = Ending(turnID: waiting.turnID, outcome: waiting.outcome, trace: waiting.trace, messages: [waiting.message], stored: true)
     }
 
+    /// Runs a turn's work to its end and stores how it ended. `work` makes
+    /// the reply, reporting each step as it goes: the app's own reply loop,
+    /// or the following of an agent's run.
     private func run(
         turnID: String,
         threadID: String,
-        context: String,
-        roleID: String?,
         agentName: String?,
-        attachments: [FileAttachmentDetail]?
+        work: @escaping @Sendable (_ report: @escaping @Sendable (TurnState) -> Void) async throws -> Void
     ) async {
         // The chat service reports each step from its own actor; the stream
         // keeps the steps in the order they were reported.
@@ -208,13 +252,7 @@ final class TurnEngine: ObservableObject {
         let reply = Task { () -> Error? in
             defer { continuation.finish() }
             do {
-                try await chat.streamMessage(
-                    threadId: threadID,
-                    message: context,
-                    roleId: roleID,
-                    attachments: attachments,
-                    onStateChange: { continuation.yield($0) }
-                )
+                try await work { continuation.yield($0) }
                 return nil
             } catch {
                 return error
@@ -286,6 +324,7 @@ final class TurnEngine: ObservableObject {
 struct TurnProgress {
     static let startingMessage = "Thinking through your request…"
     static let stoppingMessage = "Stopping…"
+    static let pickingUpMessage = "Picking up where your agent is…"
     static let interruptedNotice = "No reply to this message was saved. Send it again to get an answer."
 
     let agentName: String?
