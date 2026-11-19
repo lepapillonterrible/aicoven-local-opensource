@@ -305,6 +305,8 @@ final class HermesAgentTests: XCTestCase {
         let request = #"{"event":"approval.request","approval_id":"a1","command":"git push"}"#
         HermesStub.answer("GET", events, with: (200, stream(request, request, #"{"event":"run.completed","output":"Pushed."}"#)))
         HermesStub.answer("POST", "/v1/runs/run_1/approval", with: (503, ""), (200, "{}"))
+        // Still waiting on that request: the answer was not taken.
+        HermesStub.answer("GET", "/v1/runs/run_1", with: (200, #"{"status":"waiting_for_approval","pending_approval":{"approval_id":"a1","command":"git push"}}"#))
         let asked = Asked()
 
         try await turn { approval in
@@ -320,6 +322,7 @@ final class HermesAgentTests: XCTestCase {
     func testAnAnswerHermesNeverTakes_endsTheTurnSayingTheRunIsStillWaiting() async throws {
         HermesStub.answer("GET", events, with: (200, stream(#"{"event":"approval.request","command":"git push"}"#)))
         HermesStub.answer("POST", "/v1/runs/run_1/approval", with: (503, ""))
+        HermesStub.answer("GET", "/v1/runs/run_1", with: (200, #"{"status":"waiting_for_approval","pending_approval":{"command":"git push"}}"#))
         let reports = Reports()
 
         try await turn { _ in .approved }.run(input: "Push", history: [], report: reports.add)
@@ -327,6 +330,43 @@ final class HermesAgentTests: XCTestCase {
         XCTAssertEqual(reports.all.last?.status, .failed)
         XCTAssertEqual(reports.all.last?.answer, HermesTurn.answerNotTaken)
         XCTAssertEqual(HermesStub.requests.count(where: { $0.path.hasSuffix("/approval") }), 3)
+    }
+
+    func testAnAnswerWhoseReplyWasLost_isNotSentAgainOnceTheRunHasMovedOn() async throws {
+        // Hermes took the answer, but this app never heard so; by the time
+        // it looks, the run is waiting on something else.
+        HermesStub.answer("GET", events, with: (200, stream(
+            #"{"event":"approval.request","command":"git add ."}"#,
+            #"{"event":"approval.request","command":"git push --force"}"#,
+            #"{"event":"run.completed","output":"Done."}"#
+        )))
+        HermesStub.answer("POST", "/v1/runs/run_1/approval", with: (503, ""), (200, "{}"))
+        HermesStub.answer("GET", "/v1/runs/run_1", with: (200, #"{"status":"waiting_for_approval","pending_approval":{"command":"git push --force"}}"#))
+        let asked = Asked()
+
+        try await turn { approval in
+            await asked.note(approval)
+            return approval.details == "git add ." ? .approved : .denied
+        }.run(input: "Ship it", history: [], report: { _ in })
+
+        let approvals = await asked.approvals
+        XCTAssertEqual(approvals.map(\.details), ["git add .", "git push --force"], "The second request is shown and asked, not approved by a resend")
+        XCTAssertEqual(
+            HermesStub.requests.filter { $0.path.hasSuffix("/approval") }.map(\.body),
+            [#"{"choice":"once"}"#, #"{"choice":"deny"}"#],
+            "The approval of the first is not sent a second time"
+        )
+    }
+
+    func testRequestsWithLongNames_areToldApart() {
+        let long = String(repeating: "x", count: 300)
+        let first = HermesAgentClient.approvalRequest(from: ["approval_id": long + "1", "command": "ls"])
+        let second = HermesAgentClient.approvalRequest(from: ["approval_id": long + "2", "command": "ls"])
+        XCTAssertFalse(first.isSame(as: second))
+        XCTAssertTrue(first.isSame(as: first))
+        // With no name on one side, what they ask decides.
+        XCTAssertTrue(first.isSame(as: HermesAgentClient.approvalRequest(from: ["command": "ls"])))
+        XCTAssertFalse(first.isSame(as: HermesAgentClient.approvalRequest(from: ["command": "rm"])))
     }
 
     func testADeniedApprovalAndOneThatCannotBeAsked_areBothGivenToHermesAsNo() async throws {

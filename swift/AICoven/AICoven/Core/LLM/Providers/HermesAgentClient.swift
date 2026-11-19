@@ -26,6 +26,16 @@ nonisolated struct HermesApprovalRequest: Equatable {
     /// `isTooLongToShow` says so: it is never shown in part.
     var command: String?
     var isTooLongToShow = false
+
+    /// Whether `other` is this same request, as far as Hermes says: by
+    /// their names where both have one, else by what they ask.
+    func isSame(as other: HermesApprovalRequest) -> Bool {
+        if let id, let otherID = other.id {
+            return id == otherID
+        }
+        return command == other.command && isTooLongToShow == other.isTooLongToShow && tool == other.tool
+    }
+
     var description: String?
     var tool: String?
 }
@@ -233,9 +243,9 @@ nonisolated struct HermesAgentClient {
         let id = whole(["approval_id"])
         let description = whole(["description", "preview", "message", "title", "summary"])
         return HermesApprovalRequest(
-            // A name too long to be one is no name: cut short, two could
-            // be taken for the same request.
-            id: id.flatMap { $0.count <= 240 ? $0 : nil },
+            // Whole, whatever its length: cut short or dropped, two
+            // requests could be taken for one.
+            id: id,
             command: command.flatMap { $0.count <= longestCommandShown ? $0 : nil },
             isTooLongToShow: (command?.count ?? 0) > longestCommandShown,
             description: description.map { $0.count > 2000 ? "\($0.prefix(2000))…" : $0 },

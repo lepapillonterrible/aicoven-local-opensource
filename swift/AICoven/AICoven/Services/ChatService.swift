@@ -1269,9 +1269,12 @@ actor ChatService {
         // Ensure environment is ready before routing summarization calls.
         await ensureEnvironment()
         do {
+            // Checked again after each wait, up to the sending and the
+            // keeping: a Hermes turn can have started in the thread since.
+            guard !threadsLastAnsweredByHermes.contains(threadId) else { return }
             // Use the same history seen by the chat UI.
             let history = try await loadMessages(threadId: threadId, limit: maxContextMessages)
-            guard !history.isEmpty else { return }
+            guard !history.isEmpty, !threadsLastAnsweredByHermes.contains(threadId) else { return }
 
             var messages: [LLMMessage] = []
             messages.append(
@@ -1313,7 +1316,7 @@ actor ChatService {
                 options: options
             )
             let summary = response.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !summary.isEmpty else { return }
+            guard !summary.isEmpty, !threadsLastAnsweredByHermes.contains(threadId) else { return }
 
             try await threadStore.updateSummary(forThreadID: threadId, summary: summary)
 
