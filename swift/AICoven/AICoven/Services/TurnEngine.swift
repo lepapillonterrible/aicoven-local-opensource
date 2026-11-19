@@ -73,8 +73,8 @@ final class TurnEngine: ObservableObject {
     /// and why, by thread id: given back when the thread is next opened.
     private var unsent: [String: (text: String, reason: String)] = [:]
 
-    /// The last status announced, and the turn it was of.
-    private var lastAnnounced: (turnID: String, message: String)?
+    /// The last status announced for each running turn, by turn id.
+    private var announced: [String: String] = [:]
 
     private let chat: ChatService
     private let store = ThreadRepository.shared
@@ -126,13 +126,14 @@ final class TurnEngine: ObservableObject {
         AccessibilityNotification.Announcement("Stopping").post()
     }
 
-    /// Announces a turn's new status to VoiceOver, once: each window showing
-    /// the turn asks when its line changes, and only the first is said.
-    /// False when it had been said already.
+    /// Announces a running turn's new status to VoiceOver, once: each window
+    /// showing the turn asks when its line changes, and only the first is
+    /// said, whatever other turns say in between. False when it had been
+    /// said already, or the turn is no longer running.
     @discardableResult
     func announceStatus(_ message: String, of turnID: String) -> Bool {
-        guard lastAnnounced?.turnID != turnID || lastAnnounced?.message != message else { return false }
-        lastAnnounced = (turnID, message)
+        guard running.values.contains(where: { $0.turnID == turnID }), announced[turnID] != message else { return false }
+        announced[turnID] = message
         AccessibilityNotification.Announcement(message).post()
         return true
     }
@@ -259,6 +260,7 @@ final class TurnEngine: ObservableObject {
         }
         running[threadID] = nil
         settling.remove(turnID)
+        announced[turnID] = nil
         if ending.outcome == .cancelled {
             // Once, when the turn has in fact stopped and Stop is gone.
             AccessibilityNotification.Announcement("Stopped").post()

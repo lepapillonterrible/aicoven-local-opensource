@@ -654,6 +654,11 @@ extension ThreadRepository {
             guard rows.count == wanted, let oldest = rows.last else { break }
             olderThan = oldest["row_order"]
         }
+        // However the page was completed, including by a last look that
+        // found nothing more.
+        if !newestFirst.isEmpty {
+            try await requireKey(of: currentUserId)
+        }
         return newestFirst.reversed()
     }
 
@@ -710,6 +715,9 @@ extension ThreadRepository {
     func requireKey(of userID: String) async throws {
         guard await MainActor.run(body: { UserScope.currentUserID }) == userID else { throw RepositoryError.accountChanged }
         guard await DataEncryptionService.shared.isUnlocked(for: userID) else { throw RepositoryError.dataLocked }
+        // Again, because the account can have changed while the key was
+        // asked about. Whoever shows what was read checks once more.
+        guard await MainActor.run(body: { UserScope.currentUserID }) == userID else { throw RepositoryError.accountChanged }
     }
 
     /// Decrypts and decodes one stored record. `nil`, and logged, when this

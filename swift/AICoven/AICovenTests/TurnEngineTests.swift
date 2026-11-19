@@ -159,15 +159,29 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertNil(details.trace(in: engine), "The next turn's trace is never shown in its place")
     }
 
-    func testAStatus_isAnnouncedOnceHoweverManyWindowsShowIt() async {
-        await Task.yield()
+    func testAStatus_isAnnouncedOnceHoweverManyWindowsShowItAndWhateverOtherTurnsSay() async throws {
         let engine = makeEngine()
+        let otherThread = try await ThreadService.shared.createThread(title: "Turns \(UUID().uuidString)").id
+        addTeardownBlock { try? await ThreadService.shared.deleteThread(threadId: otherThread) }
+        try await engine.start(with: question("First"), context: "First", roleID: nil, agentName: nil, attachments: nil)
+        try await engine.start(
+            with: TurnProgress.message(in: otherThread, role: "user", content: "Other"),
+            context: "Other", roleID: nil, agentName: nil, attachments: nil
+        )
+        let one = try XCTUnwrap(engine.running[threadID]?.turnID)
+        let two = try XCTUnwrap(engine.running[otherThread]?.turnID)
 
-        XCTAssertTrue(engine.announceStatus("Planning: the route", of: "turn-1"))
-        XCTAssertFalse(engine.announceStatus("Planning: the route", of: "turn-1"), "A second window showing the turn says nothing")
-        XCTAssertTrue(engine.announceStatus("Using tool web.search…", of: "turn-1"))
-        XCTAssertTrue(engine.announceStatus("Planning: the route", of: "turn-1"), "A status the turn returns to is said again")
-        XCTAssertTrue(engine.announceStatus("Planning: the route", of: "turn-2"), "Another turn's status is its own")
+        XCTAssertTrue(engine.announceStatus("Planning: the route", of: one))
+        XCTAssertTrue(engine.announceStatus("Using tool web.search…", of: two), "Another turn's status is its own")
+        XCTAssertFalse(engine.announceStatus("Planning: the route", of: one), "A second window showing the turn says nothing")
+        XCTAssertFalse(engine.announceStatus("Using tool web.search…", of: two))
+        XCTAssertTrue(engine.announceStatus("Using tool web.search…", of: one))
+        XCTAssertTrue(engine.announceStatus("Planning: the route", of: one), "A status the turn returns to is said again")
+
+        provider.release()
+        await finished(engine)
+        await finished(engine, in: otherThread)
+        XCTAssertFalse(engine.announceStatus("Planning: the route", of: one), "A turn that has ended has no status to say")
     }
 
     func testTextOfAFailedSend_isKeptForItsThreadAndGivenBackOnce() async {
@@ -432,9 +446,11 @@ final class TurnEngineTests: XCTestCase {
     }
 
     /// Waits until the engine has no turn running in the thread.
-    private func finished(_ engine: TurnEngine) async {
+    private func finished(_ engine: TurnEngine, in thread: String? = nil) async {
+        let threadID = thread ?? threadID
         let done = expectation(description: "The turn ended")
-        let watching = engine.$running.sink { [threadID] running in
+        done.assertForOverFulfill = false
+        let watching = engine.$running.sink { running in
             if running[threadID] == nil { done.fulfill() }
         }
         await fulfillment(of: [done], timeout: 10)
