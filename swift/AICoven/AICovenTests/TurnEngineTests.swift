@@ -219,6 +219,26 @@ final class TurnEngineTests: XCTestCase {
         }
     }
 
+    func testStop_worksOnATurnStartedRightAfterAnotherEnded() async throws {
+        let engine = makeEngine()
+        try await engine.start(with: question("First"), context: "First", roleID: nil, agentName: nil, attachments: nil)
+        provider.release()
+        await finished(engine)
+        // The first turn's summary is still to be asked for, or is waiting on
+        // the provider, when the next turn starts.
+        provider.hold()
+        try await engine.start(with: question("Second"), context: "Second", roleID: nil, agentName: nil, attachments: nil)
+
+        engine.stop(threadID: threadID)
+        XCTAssertEqual(engine.running[threadID]?.isStopping, true)
+        await finished(engine)
+
+        let statuses = try await DatabaseManager.shared.dbQueue?.read { [threadID] db in
+            try String.fetchAll(db, sql: "SELECT status FROM turns WHERE thread_id = ? ORDER BY started_at", arguments: [threadID])
+        }
+        XCTAssertEqual(statuses, ["completed", "cancelled"])
+    }
+
     func testStop_doesNothingWhereNoTurnRuns() {
         let engine = makeEngine()
 
@@ -442,6 +462,11 @@ private final class ScriptedProvider: LLMClient, @unchecked Sendable {
 
     func fail(with message: String) {
         lock.withLock { failure = message }
+    }
+
+    /// Makes the provider wait again before it answers.
+    func hold() {
+        lock.withLock { released = false }
     }
 
     func release() {
