@@ -20,7 +20,7 @@ nonisolated struct ToolApproval: Identifiable, Equatable {
     /// What the thread's line says was approved or denied: the first line
     /// of what will happen (the command, the file, the branch).
     var subject: String {
-        details.split(separator: "\n").first.map(String.init) ?? question
+        details.split(whereSeparator: \.isNewline).first.map(String.init) ?? question
     }
 
     init(threadID: String, question: String, details: String, toolName: String) {

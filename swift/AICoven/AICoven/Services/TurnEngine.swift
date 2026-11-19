@@ -244,7 +244,9 @@ final class TurnEngine: ObservableObject {
         replies[threadID] = nil
         settling.insert(turnID)
         var ending = progress.ending(in: threadID, thrown: thrown, stopped: running[threadID]?.isStopping == true)
-        ending.trace.approvals = approvals.takeAnswers(threadID: threadID)
+        // Left where they are until the thread has the ending to show them
+        // from: the thread shows a running turn's answers from there.
+        ending.trace.approvals = approvals.answered[threadID] ?? []
 
         do {
             guard try await store.endTurn(id: turnID, outcome: ending.outcome, message: ending.message, trace: ending.trace) else {
@@ -268,6 +270,7 @@ final class TurnEngine: ObservableObject {
         running[threadID] = nil
         settling.remove(turnID)
         announced[turnID] = nil
+        _ = approvals.takeAnswers(threadID: threadID)
         if ending.outcome == .cancelled {
             // Once, when the turn has in fact stopped and Stop is gone.
             AccessibilityNotification.Announcement("Stopped").post()

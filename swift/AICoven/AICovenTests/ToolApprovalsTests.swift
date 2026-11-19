@@ -148,6 +148,13 @@ final class ToolApprovalsTests: XCTestCase {
         XCTAssertEqual(approvals.takeAnswers(threadID: "thread-1"), [], "A turn takes its answers once")
     }
 
+    func testTheSubjectOfAnApproval_isItsFirstLineWhateverEndsTheLine() {
+        let windows = ToolApproval.shell(command: "echo one\r\necho two", directory: "/tmp", threadID: "t")
+        XCTAssertEqual(windows.subject, "echo one")
+        let none = ToolApproval(threadID: "t", question: "Run this command?", details: "", toolName: "shell.execute")
+        XCTAssertEqual(none.subject, "Run this command?")
+    }
+
     // MARK: - A turn that stops
 
     func testAnApprovalWhoseTurnStops_isRefusedAndSaysItIsNoLongerWaiting() async {
@@ -205,6 +212,7 @@ final class ToolApprovalsTests: XCTestCase {
         let answer = await asking.value
 
         XCTAssertEqual(answer, .withdrawn)
+        XCTAssertNil(approvals.answered["thread-1"], "An answer the turn did not take leaves no line")
         XCTAssertEqual(approvals.showing?.phase, .answered(.noLongerWaiting), "The block says what in fact happened")
         runScheduled()
         XCTAssertNil(approvals.showing)

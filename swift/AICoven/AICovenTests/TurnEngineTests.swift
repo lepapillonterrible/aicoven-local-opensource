@@ -157,10 +157,20 @@ final class TurnEngineTests: XCTestCase {
         }
         approvals.answer(asked.id, approve: false)
         _ = await asking.value
+        // What the approvals still hold at the moment the ending is there to
+        // show: the thread shows the lines from one or the other, with no gap.
+        var heldWhenEnded: [WorkTrace.Approval]?
+        let watching = engine.$endings.sink { [threadID] endings in
+            if endings[threadID] != nil, heldWhenEnded == nil {
+                heldWhenEnded = approvals.answered[threadID]
+            }
+        }
         provider.release()
         await finished(engine)
+        watching.cancel()
 
         let kept = [WorkTrace.Approval(id: asked.id, subject: "git push", approved: false)]
+        XCTAssertEqual(heldWhenEnded, kept)
         XCTAssertEqual(engine.endings[threadID]?.trace.approvals, kept)
         XCTAssertNil(approvals.answered[threadID], "The turn took its answers with it")
         let reply = try XCTUnwrap(engine.endings[threadID]?.messages.first)
