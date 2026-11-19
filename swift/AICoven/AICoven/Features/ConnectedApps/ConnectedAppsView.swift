@@ -57,8 +57,8 @@ struct ConnectedAppsView: View {
                                 onConnect: { await connect(provider: provider) },
                                 onDisconnect: { await disconnect(provider: provider) },
                                 onBrowseDrive: provider == .googleDrive ? { showingGooglePicker = true } : nil,
-                                needsToken: provider.connectsWithToken ? accounts.first { $0.provider == provider && $0.status == .error } : nil,
-                                onReplaceToken: { figmaToken = FigmaTokenRequest(replacing: $0) }
+                                needsToken: provider.accountWaitingForAToken(in: accounts),
+                                onReplaceToken: { replaceToken(of: $0) }
                             )
                         }
                     }
@@ -148,7 +148,7 @@ struct ConnectedAppsView: View {
         .sheet(isPresented: $showUpsell) {
             FeatureUpsellView(
                 feature: upsellFeature,
-                featureDescription: "Connected Apps require the Tools Pack upgrade. Integrate GitHub and Google Drive to give your AI agent access to your files and repositories."
+                featureDescription: "Connected Apps require the Tools Pack upgrade. Integrate GitHub, Google Drive and Figma to give your AI agent access to your files, repositories and designs."
             )
             .environmentObject(storeService)
         }
@@ -185,7 +185,7 @@ struct ConnectedAppsView: View {
                     .fontWeight(.semibold)
                     .foregroundColor(.aicovenTextPrimary)
 
-                Text("OAuth tokens are stored securely in your device's Keychain")
+                Text("Tokens are stored securely in your device's Keychain")
                     .font(.aicovenCaption)
                     .foregroundColor(.aicovenTextSecondary)
             }
@@ -346,13 +346,23 @@ struct ConnectedAppsView: View {
         }
     }
 
+    /// Asks for a new token for a connection whose token was refused,
+    /// behind the Tools Pack as connecting is.
+    private func replaceToken(of account: ConnectedAccount) {
+        if !storeService.hasToolsPack {
+            upsellFeature = .figmaTool
+            showUpsell = true
+            return
+        }
+        figmaToken = FigmaTokenRequest(replacing: account)
+    }
+
     /// Disconnect from a provider: the connection its row shows. For an
     /// app connected with a token that is, where none is connected, the
     /// one that waits for a new token.
     private func disconnect(provider: ConnectedAppProvider) async {
         let connected = accounts.first { $0.provider == provider && $0.status == .connected }
-        let waiting = provider.connectsWithToken ? accounts.first { $0.provider == provider && $0.status == .error } : nil
-        guard let account = connected ?? waiting else {
+        guard let account = connected ?? provider.accountWaitingForAToken(in: accounts) else {
             return
         }
 

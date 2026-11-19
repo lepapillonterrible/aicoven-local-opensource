@@ -65,9 +65,10 @@ actor ConnectedAccountsService {
     ///
     /// A method that changes something waits for nothing after this: the
     /// lists and tokens it reads and writes are all this one account's,
-    /// under names spelled from it, whoever signs in meanwhile. The one
-    /// that must wait (`refreshAccessToken`, for the provider) asks again
-    /// afterwards and keeps nothing if the account is another by then.
+    /// under names spelled from it, whoever signs in meanwhile. The two
+    /// that must wait (`refreshAccessToken` and `connectFigma`, each for
+    /// its provider) ask again afterwards and keep nothing if the account
+    /// is another by then.
     @discardableResult
     private func ensureAccountsLoaded() async -> String {
         let user = await currentUser()
@@ -286,7 +287,7 @@ actor ConnectedAccountsService {
     /// for a new one; nil if there is none.
     func figmaAccountNeedingAToken() async -> ConnectedAccount? {
         await ensureAccountsLoaded()
-        return accountsCache?.first { $0.provider == .figma && $0.status == .error }
+        return ConnectedAppProvider.figma.accountWaitingForAToken(in: accountsCache ?? [])
     }
 
     // MARK: - MCP Server Management

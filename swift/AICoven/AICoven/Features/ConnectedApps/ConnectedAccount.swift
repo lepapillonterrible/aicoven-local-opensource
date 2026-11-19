@@ -78,6 +78,13 @@ enum ConnectedAppProvider: String, Codable, CaseIterable {
         self == .figma
     }
 
+    /// Of `accounts`, this app's connection whose token was refused and
+    /// which waits for a new one; nil for an app that signs in.
+    func accountWaitingForAToken(in accounts: [ConnectedAccount]) -> ConnectedAccount? {
+        guard connectsWithToken else { return nil }
+        return accounts.first { $0.provider == self && $0.status == .error }
+    }
+
     /// Default OAuth scopes to request
     var defaultScopes: [String] {
         switch self {
