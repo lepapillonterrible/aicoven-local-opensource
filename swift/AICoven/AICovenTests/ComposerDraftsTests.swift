@@ -1,4 +1,5 @@
 @testable import AICoven
+internal import Combine
 import GRDB
 import XCTest
 
@@ -8,6 +9,8 @@ import XCTest
 private final class KeptDrafts {
     var texts: [String: String] = [:]
     var saves: [(text: String, threadID: String)] = []
+    /// How many saves have been asked of the store, finished or not.
+    var savesStarted = 0
     var loads: [String] = []
     var failsToSave = false
     var account = "account-a"
@@ -45,6 +48,7 @@ private final class KeptDrafts {
     }
 
     private func keep(_ text: String, _ threadID: String) async throws {
+        savesStarted += 1
         if holdsSaves {
             await withCheckedContinuation { continuation in
                 heldSaves.append(continuation)
@@ -183,8 +187,11 @@ final class ComposerDraftsTests: XCTestCase {
         let first = Task { await drafts.draft(for: "a") }
         await fulfillment(of: [kept.loadIsWaiting].compactMap(\.self), timeout: 10)
         let second = Task { await drafts.draft(for: "a") }
-        // The second asks while the first is still reading.
-        await Task.yield()
+        // The second asks while the first is still reading: the read is
+        // held open until this, queued on the main actor behind the
+        // second's start, has run.
+        await Task { @MainActor in }.value
+        XCTAssertEqual(kept.loads, ["a"], "The second asks nothing of the store")
         kept.letLoadsGo()
         let (one, two) = await (first.value, second.value)
 
@@ -221,10 +228,13 @@ final class ComposerDraftsTests: XCTestCase {
         let earlier = Task { await drafts.saveNow() }
         await fulfillment(of: [kept.saveIsWaiting].compactMap(\.self), timeout: 10)
 
-        // Changed, and saved again, while the earlier save is under way.
+        // Changed, and saved again, while the earlier save is under way:
+        // the later one is asked for, and waits its turn.
         kept.saveIsWaiting = nil
         drafts.set(ComposerDraft(text: "Later"), for: "a")
         let later = Task { await drafts.saveNow() }
+        await Task { @MainActor in }.value
+        XCTAssertEqual(kept.savesStarted, 1, "No second save is asked of the store while the first is under way")
         kept.letSavesGo()
         await earlier.value
         await later.value
@@ -243,11 +253,44 @@ final class ComposerDraftsTests: XCTestCase {
         // cleared, the files still there, and another chosen since.
         drafts.set(ComposerDraft(text: "", attachments: [sent, added]), for: "a")
 
+        // A composer opened on the thread meanwhile is told, to take them
+        // out of what it holds.
+        var told: [(threadID: String, ids: Set<String>)] = []
+        let listening = drafts.attachmentsRemoved.sink { told.append($0) }
         drafts.removeAttachments([sent], from: "a")
         drafts.removeAttachments([sent], from: "never-opened")
+        drafts.removeAttachments([], from: "a")
+        listening.cancel()
 
         let draft = await drafts.draft(for: "a")
         XCTAssertEqual(draft.attachments, [added])
+        XCTAssertEqual(told.map(\.threadID), ["a", "never-opened"])
+        XCTAssertEqual(told.first?.ids, ["sent"])
+    }
+
+    func testWhatOneAccountTypedOrRead_isNotHandedToAnother() async {
+        let kept = KeptDrafts()
+        kept.texts["a"] = "Kept for the first account"
+        let drafts = kept.makeDrafts()
+        _ = await drafts.draft(for: "a")
+        drafts.set(ComposerDraft(text: "Typed by the first account"), for: "a")
+
+        // Another account signs in: the store has nothing of that thread
+        // for it, and nothing held for the first is handed on.
+        kept.account = "account-b"
+        kept.texts["a"] = nil
+        let other = await drafts.draft(for: "a")
+        XCTAssertEqual(other, ComposerDraft())
+        XCTAssertEqual(kept.loads, ["a", "a"], "Read again, as the second account")
+
+        // Nor is the first account's text saved as the second.
+        await drafts.saveNow()
+        XCTAssertEqual(kept.saves.count, 0)
+        kept.account = "account-a"
+        await drafts.saveNow()
+        XCTAssertEqual(kept.saves.map(\.text), ["Typed by the first account"])
+        let back = await drafts.draft(for: "a")
+        XCTAssertEqual(back.text, "Typed by the first account")
     }
 
     func testATextThatCouldNotBeSaved_isTriedAgainWithTheNextSave() async {

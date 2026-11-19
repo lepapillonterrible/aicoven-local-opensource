@@ -558,6 +558,13 @@ struct PersonalChatView: View {
         .onDisappear {
             Task { await ComposerDrafts.shared.saveNow() }
         }
+        // Files sent from this thread leave what this composer holds, also
+        // when it was opened after the message was sent and before it was
+        // accepted.
+        .onReceive(ComposerDrafts.shared.attachmentsRemoved) { removed in
+            guard removed.threadID == thread.id else { return }
+            attachments.removeAll { removed.ids.contains($0.id) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .providerKeysUpdated)) { _ in
             Task {
                 await loadProviderKeys()

@@ -1,3 +1,4 @@
+internal import Combine
 import Foundation
 
 /// What each thread's composer holds unsent: its text and its attachments.
@@ -5,7 +6,8 @@ import Foundation
 /// thread is opened again, in this run of the app or the next; while it
 /// changes it is saved at most once every `saveDelay`, not on every
 /// keystroke, and at once when asked. Attachments are kept while the app
-/// runs.
+/// runs. Everything held here is held for the account it was read or typed
+/// under, and is not handed to another.
 @MainActor
 final class ComposerDrafts {
     static let shared = ComposerDrafts()
@@ -17,13 +19,23 @@ final class ComposerDrafts {
     /// has become by then.
     static let saveDelay: TimeInterval = 0.8
 
-    /// The drafts read or set since the app started, by thread id.
-    private var drafts: [String: ComposerDraft] = [:]
-    /// The reads of kept text under way, by thread id: a thread opened in
-    /// two places at once is read once.
-    private var reads: [String: Task<String?, Never>] = [:]
+    /// A thread, as one account's.
+    private struct Key: Hashable {
+        let account: String
+        let threadID: String
+    }
+
+    /// The drafts read or set since the app started, by account and
+    /// thread.
+    private var drafts: [Key: ComposerDraft] = [:]
+    /// The reads of kept text under way: a thread opened in two places at
+    /// once is read once.
+    private var reads: [Key: Task<String?, Never>] = [:]
     /// The threads whose text has changed since it was last saved.
-    private var unsaved: Set<String> = []
+    private var unsaved: Set<Key> = []
+    /// Sent files taken out of a thread's draft: a composer showing that
+    /// thread takes them out of what it holds too.
+    let attachmentsRemoved = PassthroughSubject<(threadID: String, ids: Set<String>), Never>()
     private var saveIsScheduled = false
     /// The last save started. Each waits for the one before, so a text
     /// saved later is stored later.
@@ -56,9 +68,9 @@ final class ComposerDrafts {
     /// text kept with the thread. Empty when there is none, it cannot be
     /// read, or the account changed while it was read.
     func draft(for threadID: String) async -> ComposerDraft {
-        if let known = drafts[threadID] { return known }
-        let account = currentAccount()
-        let reading = reads[threadID] ?? Task { [load] in
+        let key = Key(account: currentAccount(), threadID: threadID)
+        if let known = drafts[key] { return known }
+        let reading = reads[key] ?? Task { [load] in
             do {
                 return try await load(threadID)
             } catch {
@@ -66,28 +78,30 @@ final class ComposerDrafts {
                 return nil
             }
         }
-        reads[threadID] = reading
+        reads[key] = reading
         let kept = await reading.value
-        if reads[threadID] == reading { reads[threadID] = nil }
-        // Nothing of an earlier account's is handed on, read or set.
-        guard currentAccount() == account else { return ComposerDraft() }
+        if reads[key] == reading { reads[key] = nil }
+        // Nothing of an earlier account's is handed on, read or set: what
+        // was read was read as the account that asked.
+        guard currentAccount() == key.account else { return ComposerDraft() }
         // What was set while the kept text was read is newer than it.
-        if let known = drafts[threadID] { return known }
+        if let known = drafts[key] { return known }
         let draft = ComposerDraft(text: kept ?? "")
-        drafts[threadID] = draft
+        drafts[key] = draft
         return draft
     }
 
     /// Takes what the thread's composer now holds. A change of its text is
     /// saved within `saveDelay`.
     func set(_ draft: ComposerDraft, for threadID: String) {
+        let key = Key(account: currentAccount(), threadID: threadID)
         // An empty composer says nothing of a thread whose kept text has
         // not been read: that text stands.
-        guard drafts[threadID] != nil || !draft.isEmpty else { return }
-        let textChanged = drafts[threadID]?.text != draft.text
-        drafts[threadID] = draft
+        guard drafts[key] != nil || !draft.isEmpty else { return }
+        let textChanged = drafts[key]?.text != draft.text
+        drafts[key] = draft
         guard textChanged else { return }
-        unsaved.insert(threadID)
+        unsaved.insert(key)
         guard !saveIsScheduled else { return }
         saveIsScheduled = true
         schedule(Self.saveDelay) { [weak self] in
@@ -101,10 +115,16 @@ final class ComposerDrafts {
     /// composer is by now: a message can be accepted after its thread has
     /// left the screen, and its files are not to go with another.
     func removeAttachments(_ sent: [FileAttachmentDetail], from threadID: String) {
-        guard !sent.isEmpty, var draft = drafts[threadID] else { return }
+        guard !sent.isEmpty else { return }
         let ids = Set(sent.map(\.id))
-        draft.attachments.removeAll { ids.contains($0.id) }
-        drafts[threadID] = draft
+        let key = Key(account: currentAccount(), threadID: threadID)
+        if var draft = drafts[key] {
+            draft.attachments.removeAll { ids.contains($0.id) }
+            drafts[key] = draft
+        }
+        // A composer opened on the thread since the message was sent holds
+        // them too.
+        attachmentsRemoved.send((threadID, ids))
     }
 
     /// Saves every text that has changed since it was last saved, now: the
@@ -128,14 +148,18 @@ final class ComposerDrafts {
     private func saveChanged() async {
         let changed = unsaved
         unsaved = []
-        for threadID in changed {
+        // Only what the account signed in typed: another's waits for it.
+        for key in changed where key.account != currentAccount() {
+            unsaved.insert(key)
+        }
+        for key in changed where key.account == currentAccount() {
             do {
-                try await save(drafts[threadID]?.text ?? "", threadID)
+                try await save(drafts[key]?.text ?? "", key.threadID)
             } catch {
                 // Tried again with the next save, unless it has changed
                 // again by then and is waiting already.
                 Self.log("A draft could not be saved", error)
-                unsaved.insert(threadID)
+                unsaved.insert(key)
             }
         }
     }
