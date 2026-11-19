@@ -48,6 +48,9 @@ final class GitHubToolsTests: XCTestCase {
         XCTAssertNil(GitHubToolArguments.pullNumber(in: ["pull_number": AnyJSONValue(-3)]))
         XCTAssertNil(GitHubToolArguments.pullNumber(in: ["pull_number": AnyJSONValue(7.5)]))
         XCTAssertNil(GitHubToolArguments.pullNumber(in: ["pull_number": AnyJSONValue("7/files")]))
+        for notDigits in ["+7", " 7", "7 ", "-7", "", "٧"] {
+            XCTAssertNil(GitHubToolArguments.pullNumber(in: ["pull_number": AnyJSONValue(notDigits)]), "'\(notDigits)' is not digits")
+        }
         XCTAssertNil(GitHubToolArguments.pullNumber(in: [:]))
 
         XCTAssertEqual(GitHubToolArguments.page(in: [:]), 1)
@@ -334,7 +337,9 @@ final class GitHubToolsTests: XCTestCase {
         XCTAssertEqual(result.contextBlock, "[GitHub Code Search: ContentView extension:swift repo:octo/site]\nocto/site: Sources/A.swift\nB.swift\n(Page 2, 2 of 12 results)")
 
         // As before: a query alone, sent as it was written, the first page.
-        _ = await world.call("github.searchCode", ["query": AnyJSONValue(" ContentView ")])
+        // A repository given as null is one left out.
+        let alone = await world.call("github.searchCode", ["query": AnyJSONValue(" ContentView "), "repo": .null])
+        XCTAssertEqual(alone.status, "ok")
         XCTAssertEqual(world.asked.requests.last?.query, ["q": " ContentView ", "page": "1", "per_page": "30"])
     }
 

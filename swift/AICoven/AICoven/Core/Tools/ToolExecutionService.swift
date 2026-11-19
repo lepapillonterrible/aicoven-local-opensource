@@ -819,7 +819,8 @@ actor ToolExecutionService {
         // cloud app adds it. (A query that names repositories of its own
         // still searches those too: this is no limit on where it looks.)
         var query = asked
-        if toolCall.args["repo"] != nil {
+        // (One given as null is one left out, as models write it.)
+        if let given = toolCall.args["repo"], !(given.value is NSNull) {
             guard let repository = GitHubToolArguments.repository(in: toolCall.args) else {
                 return await .validationError(tool: toolCall.name, message: GitHubToolArguments.repositoryMissing, field: "repo")
             }

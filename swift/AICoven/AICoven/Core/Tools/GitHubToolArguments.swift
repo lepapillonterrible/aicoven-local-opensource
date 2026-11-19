@@ -95,8 +95,8 @@ nonisolated enum GitHubToolArguments {
             number
         case let number as Double:
             Int(exactly: number)
-        case let digits as String:
-            Int(digits.trimmingCharacters(in: .whitespacesAndNewlines))
+        case let digits as String where !digits.isEmpty && digits.utf8.allSatisfy { (UInt8(ascii: "0") ... UInt8(ascii: "9")).contains($0) }:
+            Int(digits)
         default:
             nil
         }
