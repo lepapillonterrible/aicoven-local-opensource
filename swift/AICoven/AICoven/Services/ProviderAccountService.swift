@@ -743,6 +743,18 @@ extension ProviderAccountService {
         return HermesAgentClient(baseURL: baseURL, apiKey: key?.isEmpty == false ? key : nil)
     }
 
+    /// The OpenClaw Gateway the app runs OpenClaw turns through: that of
+    /// the first OpenClaw connection, if it names one, with that
+    /// connection's token.
+    static func openClawGateway() -> (address: URL, token: String?)? {
+        guard let account = loadLocalAccountsFromDefaults().first(where: { $0.provider.lowercased() == "openclaw" }),
+              let address = account.gatewayURL.flatMap(OpenClawGatewayConnection.address) else {
+            return nil
+        }
+        let token = KeychainHelper.load(key: keychainKey(forAccountId: account.id))
+        return (address, token?.isEmpty == false ? token : nil)
+    }
+
     /// The OpenAI-compatible server chat reaches: the first connected, with
     /// its own key. Both come from the same connection, so one server's key
     /// is never sent to another.

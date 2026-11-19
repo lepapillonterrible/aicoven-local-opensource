@@ -150,12 +150,16 @@ struct ApprovalBlock: View {
             .textSelection(.enabled)
     }
 
+    /// Absent for something that can only be denied.
+    @ViewBuilder
     private var approveButton: some View {
-        Button(action: onApprove) {
-            Text("Approve").frame(maxWidth: isCompact ? .infinity : nil)
+        if approval.canApprove {
+            Button(action: onApprove) {
+                Text("Approve").frame(maxWidth: isCompact ? .infinity : nil)
+            }
+            .buttonStyle(ApprovalButtonStyle(isPrimary: true, minHeight: buttonMinHeight))
+            .accessibilityLabel(Text("Approve: \(approval.question)"))
         }
-        .buttonStyle(ApprovalButtonStyle(isPrimary: true, minHeight: buttonMinHeight))
-        .accessibilityLabel(Text("Approve: \(approval.question)"))
     }
 
     private var denyButton: some View {

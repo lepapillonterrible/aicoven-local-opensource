@@ -401,8 +401,9 @@ enum TurnOutcome: String {
 /// find it again there.
 nonisolated struct AgentRun: Codable, Equatable {
     static let hermes = "hermes"
+    static let openClaw = "openclaw"
 
-    /// Whose run it is: `AgentRun.hermes`.
+    /// Whose run it is: `AgentRun.hermes` or `AgentRun.openClaw`.
     let provider: String
     let runID: String
     /// The name the reply is shown under, as the turn was started with.

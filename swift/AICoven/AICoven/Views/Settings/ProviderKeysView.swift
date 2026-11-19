@@ -1265,7 +1265,7 @@ struct OpenClawGatewayField: View {
         } header: {
             Text("Gateway (optional)")
         } footer: {
-            Text("The address of OpenClaw's native Gateway, if you use it. On this device it starts with ws://; anywhere else it must be secure and start with wss://.")
+            Text("With its Gateway address, OpenClaw runs each turn itself, with its own tools, and asks here before it acts. On this device the address starts with ws://; anywhere else it must be secure and start with wss://.")
                 .font(.aicovenBodySmall)
         }
     }

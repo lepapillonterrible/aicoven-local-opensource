@@ -13,6 +13,13 @@ final class ScriptedGatewaySocket: OpenClawSocket, @unchecked Sendable {
     private var sentFrames: [[String: Any]] = []
     private var sentWatchers: [(count: Int, seen: XCTestExpectation)] = []
     private var closed = false
+    private var answers: (@Sendable ([String: Any]) -> [[String: Any]])?
+
+    /// Plays the Gateway by rule: each frame sent to it is answered with
+    /// the frames this gives, in order.
+    func answer(_ rule: @escaping @Sendable (_ request: [String: Any]) -> [[String: Any]]) {
+        lock.withLock { answers = rule }
+    }
 
     /// The Gateway sends a frame.
     func push(_ object: [String: Any]) {
@@ -54,14 +61,16 @@ final class ScriptedGatewaySocket: OpenClawSocket, @unchecked Sendable {
     }
 
     func send(_ text: String) async throws {
-        let met: [XCTestExpectation] = try lock.withLock {
+        let frame = (try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]) ?? [:]
+        let (met, rule): ([XCTestExpectation], (@Sendable ([String: Any]) -> [[String: Any]])?) = try lock.withLock {
             guard !closed else { throw OpenClawGatewayError.closed }
-            sentFrames.append((try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]) ?? [:])
+            sentFrames.append(frame)
             let met = sentWatchers.filter { $0.count <= sentFrames.count }.map(\.seen)
             sentWatchers.removeAll { $0.count <= sentFrames.count }
-            return met
+            return (met, answers)
         }
         met.forEach { $0.fulfill() }
+        rule?(frame).forEach(push)
     }
 
     func receive() async throws -> String {
