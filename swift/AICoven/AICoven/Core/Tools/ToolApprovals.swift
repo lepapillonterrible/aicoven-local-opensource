@@ -451,6 +451,24 @@ nonisolated extension ToolApproval {
         )
     }
 
+    /// A tool of an MCP server that is not marked as only reading: which
+    /// tool, on which server and where that is, and what it is given, in
+    /// full up to the limit. Nothing of what the server says of the tool
+    /// is shown: only what will be sent.
+    static func mcp(server: String, address: String, tool: String, arguments: [String: AnyJSONValue], threadID: String) -> ToolApproval {
+        var given = "Nothing is given to it."
+        if !arguments.isEmpty,
+           let data = try? JSONSerialization.data(withJSONObject: arguments.mapValues(MCPClient.plain), options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) {
+            given = shown(String(decoding: data, as: UTF8.self))
+        }
+        return ToolApproval(
+            threadID: threadID,
+            question: "Use this tool on \(server)?",
+            details: "\(tool) on \(server)\nAt \(address)\n\n\(given)",
+            toolName: "mcp.\(tool)"
+        )
+    }
+
     /// What a Hermes run is waiting to be allowed, in Hermes's own words:
     /// the command whole where it gives one, then what it says about it.
     static func hermes(_ request: HermesApprovalRequest, threadID: String) -> ToolApproval {

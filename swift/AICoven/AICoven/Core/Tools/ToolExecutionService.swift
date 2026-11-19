@@ -241,7 +241,7 @@ actor ToolExecutionService {
 
         // 4. MCP Toll Routing
         if toolCall.name.hasPrefix("mcp.") {
-            return await executeMCPTool(toolCall: toolCall)
+            return await executeMCPTool(toolCall: toolCall, threadID: threadID)
         }
 
         // 5. Built-in Routing
@@ -414,7 +414,7 @@ actor ToolExecutionService {
 
     // MARK: - MCP Tool Implementations
 
-    private func executeMCPTool(toolCall: ParsedToolCall) async -> ToolExecutionResult {
+    private func executeMCPTool(toolCall: ParsedToolCall, threadID: String?) async -> ToolExecutionResult {
         // e.g. "mcp.my_server.tool_name"
         let parts = toolCall.name.split(separator: ".", maxSplits: 2)
         guard parts.count == 3 else {
@@ -437,13 +437,48 @@ actor ToolExecutionService {
             return await .error(tool: toolCall.name, message: "MCP server '\(serverSlug)' not found or not connected.")
         }
 
-        // Fetch the stored auth token (Bearer/API key) from keychain so
-        // runtime tool calls use the same auth path as MCP connection tests.
+        // A tool the server marks as only reading is used without asking.
+        // Any other (one it does not mark, or does not list) may change
+        // something on the person's behalf, so they are asked first.
+        let wasMarkedReadOnly = server.cachedTools?.first { $0.name == actionName }?.readOnlyHint == true
+        if !wasMarkedReadOnly {
+            let asked = await answer(in: threadID) {
+                .mcp(server: server.name, address: Self.shownAddress(of: server), tool: actionName, arguments: toolCall.args, threadID: $0)
+            }
+            if let refusal = await ToolExecutionResult.refusal(asked, tool: toolCall.name) {
+                return refusal
+            }
+        }
+
+        // The stored auth token (Bearer/API key), as connection tests use it.
         let token = try? await connectedAccountsService.getMCPToken(forServerId: server.id)
-        let client = MCPClient(server: server, token: token)
-        // The tool as the server listed it: the current protocol sends the
-        // arguments its schema marks for it as headers too.
-        let listed = server.cachedTools?.first { $0.name == actionName }
+
+        // The last thing before the call, with nothing waited for after
+        // it: the server as it is stored now. The person may have taken a
+        // while, and what they approved (or what needed no asking) is this
+        // tool on this server at this address. If the server has been
+        // removed, renamed or pointed elsewhere, or a tool that needed no
+        // asking is no longer marked as only reading, it is not that any
+        // more, and the tool is not called.
+        guard let current = await connectedAccountsService.getMCPServer(id: server.id),
+              current.name == server.name, current.serverUrl == server.serverUrl else {
+            return .error(
+                tool: toolCall.name,
+                message: "This MCP server was removed or changed before its tool could be called: the tool was not called.",
+                errorType: "mcp_server_changed"
+            )
+        }
+        // The tool as the server lists it now: the current protocol sends
+        // the arguments its schema marks for it as headers too.
+        let listed = current.cachedTools?.first { $0.name == actionName }
+        guard wasMarkedReadOnly == false || listed?.readOnlyHint == true else {
+            return .error(
+                tool: toolCall.name,
+                message: "This tool is no longer marked as read-only by its MCP server: the tool was not called. Ask again to be asked first.",
+                errorType: "mcp_server_changed"
+            )
+        }
+        let client = mcpClient(current, token)
 
         do {
             let items = try await client.callTool(name: actionName, arguments: toolCall.args, tool: listed)
@@ -955,6 +990,24 @@ actor ToolExecutionService {
     }
 
     // MARK: - Approvals
+
+    /// Where a server is, as an approval shows it: its host (and port, if
+    /// it names one), without the path or anything else of its address,
+    /// which can carry a key.
+    nonisolated static func shownAddress(of server: MCPServerAccount) -> String {
+        guard let url = URL(string: server.serverUrl), let named = url.host, !named.isEmpty else { return "an address that cannot be read" }
+        // An IPv6 address is written between brackets, as in an address.
+        let host = named.contains(":") ? "[\(named)]" : named
+        return url.port.map { "\(host):\($0)" } ?? host
+    }
+
+    /// Makes the client a server's tool is called with; tests give one
+    /// that answers from a script.
+    private var mcpClient: @Sendable (MCPServerAccount, String?) -> MCPClient = { MCPClient(server: $0, token: $1) }
+
+    func setMCPClient(_ make: @escaping @Sendable (MCPServerAccount, String?) -> MCPClient) {
+        mcpClient = make
+    }
 
     /// Asks the person, in the thread the tool call came from, about what
     /// `describe` says is about to happen, and waits for the answer. Without

@@ -152,6 +152,7 @@ The app supports the [Model Context Protocol (MCP)](https://modelcontextprotocol
 ### Architecture
 
 - `MCPClient` (actor, `Features/MCP/MCPClient.swift`) handles JSON-RPC 2.0 over Streamable HTTP. It speaks the current revision of the protocol (2026-07-28: no handshake, each request saying its version) and falls back to the earlier ones (`initialize`, a session id); it asks a server which it speaks once per run. Answers are read as plain JSON or as a stream of events (`text/event-stream`). The deprecated HTTP+SSE transport is not spoken.
+- A tool call asks the person first (`ToolApprovals`), showing the tool, the server's name and host, and the arguments, unless the server marks the tool as read-only (`annotations.readOnlyHint`).
 - `MCPServerAccount` (`Features/ConnectedApps/MCPServerAccount.swift`) stores per-server configuration: URL, transport type (`sse` or `streamable_http`), auth type (`none`, `bearer`, `api_key`), and cached tool definitions.
 - `ConnectedAccountsService` persists server configs in `UserDefaults` and stores auth tokens in Keychain.
 - `MCPServerManagementView` provides the settings UI for managing servers.
