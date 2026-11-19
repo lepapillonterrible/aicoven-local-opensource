@@ -146,6 +146,7 @@ struct ProviderAccountCard: View {
         case "openai": ("🤖", "OpenAI", .aicovenTeal)
         case "google": ("🔵", "Google AI", .blue)
         case "anthropic": ("🟣", "Anthropic", .aicovenPurple)
+        case "openrouter": ("🔀", "OpenRouter", .aicovenTeal)
         case "cohere": ("🧠", "Cohere", .aicovenPink)
         case "mistral": ("🌬️", "Mistral AI", .cyan)
         case "ollama": ("🦙", "Ollama (Local)", .orange)
@@ -356,6 +357,7 @@ struct AddProviderKeySheet: View {
         ("openai", "OpenAI", "🤖"),
         ("anthropic", "Anthropic Claude", "🟣"),
         ("google", "Google Gemini", "🔵"),
+        ("openrouter", "OpenRouter", "🔀"),
         ("hermes", "Hermes", "🪽"),
         ("ollama", "Ollama (Local)", "🦙"),
         ("openclaw", "OpenClaw (Local)", "🦅"),
@@ -900,6 +902,7 @@ private struct AddProviderKeyStep2View: View {
         case "openai": "OpenAI"
         case "anthropic": "Anthropic Claude"
         case "google": "Google Gemini"
+        case "openrouter": "OpenRouter"
         case "ollama": "Ollama (Local)"
         case "mlx": "MLX (On-Device)"
         case "openclaw": "OpenClaw"

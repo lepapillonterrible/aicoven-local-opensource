@@ -112,6 +112,10 @@ actor ProviderAccountService {
         UserScope.scopedKey("provider_accounts.v1")
     }
 
+    /// OpenRouter's model list is public and about 1 MB, and every chat turn
+    /// rebuilds the model list, so one download is reused for 15 minutes.
+    private var openRouterModels: (fetchedAt: Date, models: [ProviderInitializationStatus.ModelMetadata])?
+
     private init() {}
 
     // MARK: - Public API
@@ -432,7 +436,16 @@ actor ProviderAccountService {
                 continue
             }
 
-            for modelMeta in metadata {
+            // The router picks by a coarse cost class, which cannot rank
+            // OpenRouter's whole catalog, so it sees one OpenRouter model: the
+            // one chosen in Strix settings, or the catalog's default.
+            var routed = metadata
+            if providerID == "openrouter" {
+                let chosen = UserDefaults.standard.string(forKey: UserScope.scopedKey("openrouter_model"))
+                routed = (metadata.first { $0.id == chosen } ?? metadata.first).map { [$0] } ?? []
+            }
+
+            for modelMeta in routed {
                 let context = modelMeta.contextLength ?? 128_000
                 let cost: ModelDescriptor.CostClass
                 let lowerID = modelMeta.id.lowercased()
@@ -788,6 +801,19 @@ extension ProviderAccountService {
                     contextLength: nil
                 )
             }
+        case "openrouter":
+            if let cached = openRouterModels, Date().timeIntervalSince(cached.fetchedAt) < 15 * 60 {
+                return cached.models
+            }
+            var request = URLRequest(url: OpenAILLMClient.openRouterBaseURL.appendingPathComponent("models"))
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
+                throw Self.sanitizedHTTPError(provider: "OpenRouter", statusCode: http.statusCode)
+            }
+            let models = try Self.openRouterToolModels(from: data)
+            openRouterModels = (Date(), models)
+            return models
         case "anthropic":
             guard let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) else {
                 throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing Anthropic API key for account \(account.id)"])
@@ -826,6 +852,44 @@ extension ProviderAccountService {
             // Other providers: fall back to static metadata for now.
             throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "No remote model fetch implemented for provider \(provider)"])
         }
+    }
+
+    /// The models in OpenRouter's catalog that support tool calling, default
+    /// model first. A chat turn may carry tools, and OpenRouter refuses a
+    /// request with tools for a model that does not support them, so the other
+    /// models are not offered.
+    ///
+    /// The default is the first Claude Sonnet, else GPT, else Gemini model in
+    /// the catalog. An id with a `:` suffix is a variant of a model (`:free`,
+    /// `:batch`) with its own limits, so it is never the default.
+    static func openRouterToolModels(from data: Data) throws -> [ProviderInitializationStatus.ModelMetadata] {
+        struct Catalog: Decodable {
+            struct Model: Decodable {
+                let id: String
+                let name: String?
+                let context_length: Int?
+                let supported_parameters: [String]?
+            }
+
+            let data: [Model]
+        }
+        var models = try JSONDecoder().decode(Catalog.self, from: data).data
+            .filter { $0.supported_parameters?.contains("tools") == true }
+            .map { model in
+                ProviderInitializationStatus.ModelMetadata(
+                    id: model.id,
+                    name: model.name ?? model.id,
+                    provider: "openrouter",
+                    contextLength: model.context_length
+                )
+            }
+        for prefix in ["anthropic/claude-sonnet", "openai/gpt-", "google/gemini-"] {
+            if let index = models.firstIndex(where: { $0.id.hasPrefix(prefix) && !$0.id.contains(":") }) {
+                models.insert(models.remove(at: index), at: 0)
+                break
+            }
+        }
+        return models
     }
 
     /// Heuristic filter to decide whether a model ID represents a chat model

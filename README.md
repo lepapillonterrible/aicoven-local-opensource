@@ -17,7 +17,7 @@ For the cloud version of the app go to https://aicoven.ai/
 
 This repo started as an extraction of the original multi-tenant AICoven app and is being reshaped into a **standalone, local-first client**. The current codebase already includes:
 
-- A provider-agnostic `LLMClient` + `ModelRouter` used for all LLM calls, supporting OpenAI, Anthropic, Google Gemini, Ollama, and on-device MLX models.
+- A provider-agnostic `LLMClient` + `ModelRouter` used for all LLM calls, supporting OpenAI, Anthropic, Google Gemini, OpenRouter, Ollama, and on-device MLX models.
 - Encrypted local context storage (threads, memories, settings) backed by SQLite/GRDB.
 - A "context sandwich" builder that composes system contract, policies, time, memories, history, and the current turn — with device-aware context limits for iPhones.
 - A tools layer (`ToolEnvironment` + `ToolService`) that exposes web search, file/image analysis, and local file/image generation using only your provider keys.

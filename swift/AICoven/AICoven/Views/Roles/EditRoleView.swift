@@ -45,6 +45,7 @@ struct EditRoleView: View {
         ("openai", "OpenAI"),
         ("anthropic", "Anthropic"),
         ("google", "Google AI"),
+        ("openrouter", "OpenRouter"),
         ("ollama", "Ollama (Local)"),
         ("mlx", "MLX (On-Device)")
     ]
