@@ -64,6 +64,14 @@ final class OpenAICompatibleServerTests: XCTestCase {
         XCTAssertEqual(found.map(\.requiresKey), [true])
         let typed = try XCTUnwrap(LocalProviderDiscoveryService.serverBaseURL(from: "8642"))
         XCTAssertEqual(discovery.knownEndpoint(at: typed)?.provider, "hermes")
+        let onAnotherMachine = try XCTUnwrap(LocalProviderDiscoveryService.serverBaseURL(from: "http://studio.local:8642"))
+        XCTAssertEqual(discovery.knownEndpoint(at: onAnotherMachine)?.provider, "hermes")
+
+        // One that answers without a key is found the same way.
+        let open = LocalProviderDiscoveryService(transport: FakeTransport(answers: ["http://127.0.0.1:8642/v1/models": .success(modelList)]))
+        let answered = await open.discover()
+        XCTAssertEqual(answered.map(\.provider), ["hermes"])
+        XCTAssertEqual(answered.map(\.requiresKey), [false])
     }
 
     func testDetect_findsNothingWhenNoPortAnswers() async {

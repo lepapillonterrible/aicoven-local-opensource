@@ -667,6 +667,8 @@ private struct AddProviderKeyStep2View: View {
         } else if isHermes {
             Section {
                 FormAddressField(label: "Address", text: $baseURL, prompt: HermesAgentClient.usualAddress)
+                    // What Detect found is about the address it asked.
+                    .onChange(of: baseURL) { _, _ in connectionFailure = nil }
             } header: {
                 Text("Hermes agent")
             } footer: {
