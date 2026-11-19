@@ -16,6 +16,10 @@ nonisolated struct OpenClawTurn {
         try await OpenClawGateway.open($0, token: $1)
     }
 
+    /// How long a stopped turn waits for the Gateway to answer: for the run
+    /// it was asked for as the turn was stopped, and then for the stop.
+    var longestWaitToStop: TimeInterval = 5
+
     static let lostContact = "AICoven lost contact with OpenClaw before the run ended. It may still be running there."
     static let notFinished = "OpenClaw could not finish this run."
     /// The most text a run is started with.
@@ -42,60 +46,17 @@ nonisolated struct OpenClawTurn {
             await gateway.close()
             throw OpenClawGatewayError.notSupported(missing)
         }
-        let running = Running()
         do {
-            try await follow(gateway, running, message: message, started: started, report)
+            try await follow(gateway, message: message, started: started, report)
         } catch {
-            let stopped = Task.isCancelled
-            if stopped, let run = running.run {
-                await Self.stop(run, through: gateway)
-            }
             await gateway.close()
-            throw stopped ? CancellationError() : error
+            throw Task.isCancelled ? CancellationError() : error
         }
         await gateway.close()
     }
 
-    /// How long a stopped turn waits for the Gateway to take the stop.
-    static let longestWaitToStop: TimeInterval = 5
-
-    /// Tells the Gateway to stop a run. The run is OpenClaw's own: it goes
-    /// on unless it is told to stop. Asked from a task of its own, as the
-    /// turn's task is cancelled and what it asks is dropped.
-    private static func stop(_ run: (sessionKey: String, id: String), through gateway: OpenClawGatewayConnection) async {
-        let asking = Task {
-            do {
-                _ = try await gateway.call("chat.abort", ["sessionKey": run.sessionKey, "runId": run.id])
-            } catch {
-                // The turn has stopped here; the run may not have there.
-                AppErrorReporter.log(error: error, context: "OpenClawTurn.stop")
-            }
-        }
-        let givingUp = Task {
-            try await Task.sleep(nanoseconds: UInt64(longestWaitToStop * 1_000_000_000))
-            // Ends the wait for an answer.
-            await gateway.close()
-        }
-        await asking.value
-        givingUp.cancel()
-    }
-
-    /// The run a turn has started, for stopping it.
-    private final class Running: @unchecked Sendable {
-        // Set by the turn's task as the run is started, and read once the
-        // turn has ended: under the lock.
-        private let lock = NSLock()
-        private var started: (sessionKey: String, id: String)?
-
-        var run: (sessionKey: String, id: String)? {
-            get { lock.withLock { started } }
-            set { lock.withLock { started = newValue } }
-        }
-    }
-
     private func follow(
         _ gateway: OpenClawGatewayConnection,
-        _ running: Running,
         message: String,
         started: @Sendable (String) async -> Void,
         _ report: @Sendable (TurnState) -> Void
@@ -112,43 +73,127 @@ nonisolated struct OpenClawTurn {
         // run, and is not this one's to ask about.
         let replayed = (subscribed["approvalReplay"] as? [String: Any])?["approvals"] as? [[String: Any]] ?? []
         var settled = Set(replayed.compactMap { $0["id"] as? String })
+        // What the person is being asked, by the Gateway's id for it.
+        var asking: [String: Task<Void, Never>] = [:]
+        // Whatever is still asked when the turn ends is withdrawn.
+        defer { asking.values.forEach { $0.cancel() } }
 
-        let asked = UUID().uuidString
-        try Task.checkCancellation()
         // The Gateway names the run by what it was asked with, so a turn
         // stopped before the Gateway answers can still stop the run.
-        running.run = (sessionKey, asked)
-        let sent = try await Self.object(gateway.call("chat.send", ["sessionKey": sessionKey, "message": message, "idempotencyKey": asked]))
-        let runID = (sent["runId"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? asked
-        running.run = (sessionKey, runID)
-        await started(runID)
-
-        var state = TurnState(threadId: threadID)
-        do {
-            for try await event in gateway.events {
-                let payload = try Self.object(event.payload)
-                switch event.name {
-                case "chat":
-                    guard payload["sessionKey"] as? String == sessionKey, payload["runId"] as? String == runID else { continue }
-                    if take(payload, into: &state, report) { return }
-                case "session.approval":
-                    let from = [payload["sessionKey"] as? String, payload["sourceSessionKey"] as? String]
-                    guard from.contains(sessionKey), payload["phase"] as? String == "pending",
-                          let approval = payload["approval"] as? [String: Any],
-                          let id = approval["id"] as? String, settled.insert(id).inserted else { continue }
-                    try await answer(approval, id: id, through: gateway)
-                default:
-                    continue
-                }
-            }
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            try Task.checkCancellation()
-        }
-        // The events ended before the run did.
+        var runID = UUID().uuidString
         try Task.checkCancellation()
-        end(&state, as: .failed, saying: Self.lostContact, report)
+        do {
+            let sent: [String: Any]
+            do {
+                sent = try await Self.object(send(message, as: runID, in: sessionKey, through: gateway))
+            } catch OpenClawGatewayError.closed {
+                // The connection ended with the run asked for and not
+                // answered: it may have begun.
+                try Task.checkCancellation()
+                var state = TurnState(threadId: threadID)
+                return end(&state, as: .failed, saying: Self.lostContact, report)
+            }
+            if let named = sent["runId"] as? String, !named.isEmpty {
+                runID = named
+            }
+            await started(runID)
+
+            var state = TurnState(threadId: threadID)
+            do {
+                for try await event in gateway.events {
+                    let payload = try Self.object(event.payload)
+                    switch event.name {
+                    case "chat":
+                        guard payload["sessionKey"] as? String == sessionKey, payload["runId"] as? String == runID else { continue }
+                        if take(payload, into: &state, report) { return }
+                    case "session.approval":
+                        let from = [payload["sessionKey"] as? String, payload["sourceSessionKey"] as? String]
+                        guard from.contains(sessionKey), let approval = payload["approval"] as? [String: Any],
+                              let id = approval["id"] as? String else { continue }
+                        switch payload["phase"] as? String {
+                        case "pending":
+                            guard settled.insert(id).inserted else { continue }
+                            // Asked apart, so the run's events are still
+                            // followed while the person decides.
+                            asking[id] = answering(approval, id: id, through: gateway)
+                        case "terminal":
+                            // Settled there (answered elsewhere, or no
+                            // longer wanted): no longer asked here.
+                            settled.insert(id)
+                            asking.removeValue(forKey: id)?.cancel()
+                        default:
+                            continue
+                        }
+                    default:
+                        continue
+                    }
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                try Task.checkCancellation()
+            }
+            // The events ended before the run did.
+            try Task.checkCancellation()
+            end(&state, as: .failed, saying: Self.lostContact, report)
+        } catch {
+            if Task.isCancelled {
+                asking.values.forEach { $0.cancel() }
+                await stop(runID, in: sessionKey, through: gateway)
+            }
+            throw error
+        }
+    }
+
+    /// Asks the Gateway to start the run, and waits for its answer. Asked
+    /// from a task of its own: once asked for, the run is not taken back by
+    /// stopping the turn, so the stop that follows is of a run the Gateway
+    /// was asked for. A stopped turn waits `longestWaitToStop` for the
+    /// answer, then no longer.
+    private func send(_ message: String, as runID: String, in sessionKey: String, through gateway: OpenClawGatewayConnection) async throws -> Data {
+        let sending = Task {
+            try await gateway.call("chat.send", ["sessionKey": sessionKey, "message": message, "idempotencyKey": runID])
+        }
+        return try await withTaskCancellationHandler {
+            try await sending.value
+        } onCancel: {
+            Task {
+                try await Task.sleep(nanoseconds: UInt64(longestWaitToStop * 1_000_000_000))
+                sending.cancel()
+            }
+        }
+    }
+
+    /// Tells the Gateway to stop a run. The run is OpenClaw's own: it goes
+    /// on unless it is told to stop. Asked from a task of its own, as the
+    /// turn's task is cancelled and what it asks is dropped.
+    private func stop(_ runID: String, in sessionKey: String, through gateway: OpenClawGatewayConnection) async {
+        let asking = Task {
+            do {
+                _ = try await gateway.call("chat.abort", ["sessionKey": sessionKey, "runId": runID])
+            } catch {
+                // The turn has stopped here; the run may not have there.
+                AppErrorReporter.log(message: "The Gateway did not take the stop (\(Self.kind(of: error))).", context: "OpenClawTurn.stop")
+            }
+        }
+        let givingUp = Task { [longestWaitToStop] in
+            try await Task.sleep(nanoseconds: UInt64(longestWaitToStop * 1_000_000_000))
+            // Ends the wait for an answer.
+            await gateway.close()
+        }
+        await asking.value
+        givingUp.cancel()
+    }
+
+    /// What kind of failure, for the log: never what the Gateway said,
+    /// which can carry what a run was about.
+    private static func kind(of error: Error) -> String {
+        switch error {
+        case OpenClawGatewayError.refused: "refused"
+        case OpenClawGatewayError.closed: "closed"
+        case is CancellationError: "stopped"
+        default: String(describing: type(of: error))
+        }
     }
 
     /// Takes one of the run's `chat` events into what the thread shows.
@@ -188,17 +233,27 @@ nonisolated struct OpenClawTurn {
 
     /// Asks the person about what OpenClaw is waiting to be allowed, and
     /// gives the Gateway the answer: this once, or no. Where the person
-    /// cannot be asked, the answer is no.
-    private func answer(_ approval: [String: Any], id: String, through gateway: OpenClawGatewayConnection) async throws {
+    /// cannot be asked, the answer is no. Cancelling the task withdraws
+    /// the question, and nothing is answered.
+    private func answering(_ approval: [String: Any], id: String, through gateway: OpenClawGatewayConnection) -> Task<Void, Never> {
         let presentation = approval["presentation"] as? [String: Any] ?? [:]
         let kind = presentation["kind"] as? String ?? "exec"
-        let decision: String
-        switch await ask(.openClaw(presentation, threadID: threadID)) {
-        case .approved: decision = "allow-once"
-        case .denied, .notAsked: decision = "deny"
-        case .withdrawn: throw CancellationError()
+        let question = ToolApproval.openClaw(presentation, threadID: threadID)
+        return Task { [ask] in
+            let decision: String
+            switch await ask(question) {
+            case .approved: decision = "allow-once"
+            case .denied, .notAsked: decision = "deny"
+            case .withdrawn: return
+            }
+            do {
+                _ = try await gateway.call("approval.resolve", ["id": id, "kind": kind, "decision": decision])
+            } catch {
+                // What becomes of the run is the Gateway's to say, in its
+                // events.
+                AppErrorReporter.log(message: "The Gateway did not take the answer (\(Self.kind(of: error))).", context: "OpenClawTurn.answer")
+            }
         }
-        _ = try await gateway.call("approval.resolve", ["id": id, "kind": kind, "decision": decision])
     }
 
     // MARK: - Reading what the Gateway sends

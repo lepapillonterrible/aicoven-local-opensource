@@ -1383,6 +1383,11 @@ actor ChatService {
         if savedProvider == "hermes", hermesAgent() != nil {
             return ("hermes", "")
         }
+        // Nor does OpenClaw need one where its connection names its
+        // Gateway: its turns are run there.
+        if savedProvider == "openclaw", openClawTurn("") != nil {
+            return ("openclaw", "")
+        }
 
         // If the saved provider isn't actually configured (e.g. no API key),
         // or if no provider was ever saved, fall back intelligently to what's available.

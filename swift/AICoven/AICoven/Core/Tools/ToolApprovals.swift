@@ -359,38 +359,56 @@ nonisolated extension ToolApproval {
     /// a command, whole, or a plugin's or an agent's own title and
     /// description. It can be approved only if the Gateway takes an
     /// approval for this once and says what it would be an approval of,
-    /// and all of that is shown.
+    /// and all of that is shown; otherwise its last line says why not.
+    /// Each text is measured as the Gateway sent it, and shown without the
+    /// white space around it.
     static func openClaw(_ presentation: [String: Any], threadID: String) -> ToolApproval {
         var isCut = false
         func text(_ key: String, limit: Int) -> String? {
-            guard let value = (presentation[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
-            guard value.count > limit else { return value }
-            isCut = true
-            return "\(value.prefix(limit))\n… and \(value.count - limit) more characters"
+            guard let sent = presentation[key] as? String else { return nil }
+            let value = sent.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty else { return nil }
+            isCut = isCut || sent.count > limit
+            return value.count > limit ? "\(value.prefix(limit))\n… and \(value.count - limit) more characters" : value
         }
-        let command = (presentation["commandText"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let showsCommand = command.map { !$0.isEmpty && $0.count <= HermesAgentClient.longestCommandShown } ?? false
+        let sentCommand = presentation["commandText"] as? String ?? ""
+        let command = sentCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         let said = [text("title", limit: 160), text("description", limit: 2000), text("warningText", limit: 500)].compactMap(\.self)
         let host = text("host", limit: 160).map { "On \($0)" }
-        var lines: [String] = []
-        if showsCommand, let command {
-            lines = [command] + said + [host].compactMap(\.self)
-        } else if command?.isEmpty == false {
-            lines = ["OpenClaw's command is too long to show here, so it can only be denied."]
-        } else {
-            lines = said
-        }
-        if isCut {
-            lines.append("Not all of what OpenClaw said fits here, so it can only be denied.")
-        }
         let allowsOnce = (presentation["allowedDecisions"] as? [String])?.contains("allow-once") == true
+
+        var lines: [String] = []
+        let whyNot: String?
+        if command.isEmpty {
+            lines = said
+            whyNot = if said.isEmpty {
+                "OpenClaw did not say what it is for, so it can only be denied."
+            } else if isCut {
+                "What OpenClaw sent is longer than can be shown here, so it can only be denied."
+            } else if !allowsOnce {
+                "OpenClaw does not take an approval for this, so it can only be denied."
+            } else {
+                nil
+            }
+        } else if sentCommand.count > HermesAgentClient.longestCommandShown {
+            whyNot = "OpenClaw's command is too long to show here, so it can only be denied."
+        } else {
+            lines = [command] + said + [host].compactMap(\.self)
+            whyNot = if isCut {
+                "What OpenClaw sent is longer than can be shown here, so it can only be denied."
+            } else if !allowsOnce {
+                "OpenClaw does not take an approval for this, so it can only be denied."
+            } else {
+                nil
+            }
+        }
         var approval = ToolApproval(
             threadID: threadID,
-            question: command?.isEmpty == false ? "Let OpenClaw run this command?" : "Let OpenClaw do this?",
-            details: lines.isEmpty ? "OpenClaw did not say what it is for, so it can only be denied." : lines.joined(separator: "\n"),
+            question: command.isEmpty ? "Let OpenClaw do this?" : "Let OpenClaw run this command?",
+            details: (lines + [whyNot].compactMap(\.self)).joined(separator: "\n"),
             toolName: (presentation["kind"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(40)) } ?? "openclaw"
         )
-        approval.canApprove = allowsOnce && !isCut && (command?.isEmpty != false ? !said.isEmpty : showsCommand)
+        approval.canApprove = whyNot == nil
         return approval
     }
 

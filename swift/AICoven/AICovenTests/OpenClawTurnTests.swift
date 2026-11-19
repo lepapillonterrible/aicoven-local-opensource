@@ -77,7 +77,9 @@ final class OpenClawTurnTests: XCTestCase {
                 let gateway = OpenClawGatewayConnection(socket: socket, identity: identity, token: token)
                 socket.push(ScriptedGatewaySocket.challenge)
                 return try await (gateway, gateway.open())
-            }
+            },
+            // Not the five seconds a person is given.
+            longestWaitToStop: 0.2
         )
     }
 
@@ -315,7 +317,7 @@ final class OpenClawTurnTests: XCTestCase {
         // The Gateway takes no approval for this once.
         let denyOnly = ToolApproval.openClaw(["kind": "exec", "commandText": "ls", "allowedDecisions": ["deny"]], threadID: "t")
         XCTAssertFalse(denyOnly.canApprove)
-        XCTAssertEqual(denyOnly.details, "ls")
+        XCTAssertEqual(denyOnly.details, "ls\nOpenClaw does not take an approval for this, so it can only be denied.")
         // It does not say what it is for.
         let unexplained = ToolApproval.openClaw(["kind": "plugin", "allowedDecisions": ["allow-once", "deny"]], threadID: "t")
         XCTAssertFalse(unexplained.canApprove)
@@ -325,10 +327,18 @@ final class OpenClawTurnTests: XCTestCase {
         let tooLong = ToolApproval.openClaw(["kind": "exec", "commandText": long, "allowedDecisions": ["allow-once", "deny"]], threadID: "t")
         XCTAssertFalse(tooLong.canApprove)
         XCTAssertFalse(tooLong.details.contains("aaaa"))
+        // Measured as it was sent: white space around it does not make it fit.
+        let padded = String(repeating: "a", count: HermesAgentClient.longestCommandShown) + " "
+        XCTAssertFalse(ToolApproval.openClaw(["kind": "exec", "commandText": padded, "allowedDecisions": ["allow-once", "deny"]], threadID: "t").canApprove)
+        let fits = String(repeating: "a", count: HermesAgentClient.longestCommandShown)
+        XCTAssertTrue(ToolApproval.openClaw(["kind": "exec", "commandText": fits, "allowedDecisions": ["allow-once", "deny"]], threadID: "t").canApprove)
+        let paddedTitle = ToolApproval.openClaw(["kind": "plugin", "title": "Send" + String(repeating: " ", count: 160), "allowedDecisions": ["allow-once", "deny"]], threadID: "t")
+        XCTAssertFalse(paddedTitle.canApprove)
+        XCTAssertEqual(paddedTitle.details, "Send\nWhat OpenClaw sent is longer than can be shown here, so it can only be denied.")
         // Not all of what it says fits.
         let wordy = ToolApproval.openClaw(["kind": "plugin", "title": "Send", "description": String(repeating: "b", count: 2001), "allowedDecisions": ["allow-once", "deny"]], threadID: "t")
         XCTAssertFalse(wordy.canApprove)
-        XCTAssertTrue(wordy.details.hasSuffix("Not all of what OpenClaw said fits here, so it can only be denied."))
+        XCTAssertTrue(wordy.details.hasSuffix("What OpenClaw sent is longer than can be shown here, so it can only be denied."))
         // A plugin's request that says what it is can be approved.
         let plugin = ToolApproval.openClaw(["kind": "plugin", "title": "Send the email", "description": "To Sam", "allowedDecisions": ["allow-once", "deny"]], threadID: "t")
         XCTAssertTrue(plugin.canApprove)
@@ -349,7 +359,124 @@ final class OpenClawTurnTests: XCTestCase {
         XCTAssertEqual(answer, .denied)
     }
 
+    func testAnApprovalStillAsked_isWithdrawnWhenContactIsLostOrTheGatewaySettlesIt() async throws {
+        // Contact is lost while the person is asked.
+        let lost = ScriptedGatewaySocket()
+        play(lost) { [self] _ in [approval("approval:1", ["kind": "exec", "commandText": "ls", "allowedDecisions": ["allow-once", "deny"]])] }
+        let asked = expectation(description: "The person is asked")
+        let reports = TurnReports()
+        let running = try Task { [turn = turn(over: lost) { _ in
+            asked.fulfill()
+            // Waits to be answered; only stopping the question ends it.
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+            return Task.isCancelled ? .withdrawn : .approved
+        }] in
+            try await turn.run(message: "Go", report: reports.add)
+        }
+        await fulfillment(of: [asked], timeout: 10)
+        lost.close()
+        try await running.value
+        XCTAssertEqual(reports.all.last?.status, .failed)
+        XCTAssertEqual(reports.all.last?.answer, OpenClawTurn.lostContact)
+        XCTAssertFalse(lost.sent.contains { $0["method"] as? String == "approval.resolve" })
+
+        // The Gateway says the request is settled, and the run ends.
+        let settled = ScriptedGatewaySocket()
+        let command: [String: Any] = ["kind": "exec", "commandText": "ls", "allowedDecisions": ["allow-once", "deny"]]
+        play(settled) { [self] runID in
+            [approval("approval:1", command), approval("approval:1", command, phase: "terminal"), chat("final", run: runID, ["finalText": "Done."])]
+        }
+        let after = TurnReports()
+        try await turn(over: settled) { _ in
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+            return Task.isCancelled ? .withdrawn : .approved
+        }.run(message: "Go", report: after.add)
+        XCTAssertEqual(after.all.last?.answer, "Done.")
+        XCTAssertFalse(settled.sent.contains { $0["method"] as? String == "approval.resolve" })
+    }
+
+    func testWhenContactIsLostWithTheRunAskedForAndNotAnswered_theTurnSaysTheRunMayBeGoing() async throws {
+        let socket = ScriptedGatewaySocket()
+        let session = session
+        socket.answer { [self] request in
+            switch request["method"] as? String {
+            case "connect":
+                return [ScriptedGatewaySocket.welcome(to: request["id"] as? String ?? "")]
+            case "sessions.messages.subscribe":
+                return [answer(request, with: ["subscribed": true, "key": session])]
+            default:
+                socket.close()
+                return []
+            }
+        }
+        let reports = TurnReports()
+
+        try await turn(over: socket).run(message: "Go", report: reports.add)
+
+        XCTAssertEqual(reports.all.last?.status, .failed)
+        XCTAssertEqual(reports.all.last?.answer, OpenClawTurn.lostContact)
+    }
+
     // MARK: - Stop
+
+    func testStoppingTheTurnBeforeTheGatewaySaysTheRunStarted_stillStopsTheRunItWasAskedFor() async throws {
+        let socket = ScriptedGatewaySocket()
+        let session = session
+        let aborted = expectation(description: "The Gateway is told to stop the run")
+        socket.answer { [self] request in
+            switch request["method"] as? String {
+            case "connect":
+                return [ScriptedGatewaySocket.welcome(to: request["id"] as? String ?? "")]
+            case "sessions.messages.subscribe":
+                return [answer(request, with: ["subscribed": true, "key": session])]
+            case "chat.abort":
+                aborted.fulfill()
+                return [answer(request, with: ["ok": true, "aborted": true])]
+            default:
+                // The run is asked for, and the Gateway does not answer.
+                return []
+            }
+        }
+        let turn = try turn(over: socket)
+        let running = Task { try await turn.run(message: "Go", report: { _ in }) }
+        await fulfillment(of: [socket.expectSent(3)], timeout: 10)
+
+        running.cancel()
+        do {
+            try await running.value
+            XCTFail("A stopped turn does not end as a reply")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        await fulfillment(of: [aborted], timeout: 10)
+
+        XCTAssertEqual(socket.sent.map { $0["method"] as? String }, ["connect", "sessions.messages.subscribe", "chat.send", "chat.abort"])
+        let asked = (socket.sent[2]["params"] as? [String: Any])?["idempotencyKey"] as? String
+        XCTAssertEqual(socket.sent[3]["params"] as? [String: String], ["sessionKey": session, "runId": asked ?? ""])
+        XCTAssertTrue(socket.isClosed)
+    }
+
+    func testStoppingTheTurnBeforeARunWasAskedFor_asksForNoneAndStopsNone() async throws {
+        let socket = ScriptedGatewaySocket()
+        socket.answer { request in
+            // The Gateway does not answer the subscribe.
+            request["method"] as? String == "connect" ? [ScriptedGatewaySocket.welcome(to: request["id"] as? String ?? "")] : []
+        }
+        let turn = try turn(over: socket)
+        let running = Task { try await turn.run(message: "Go", report: { _ in }) }
+        await fulfillment(of: [socket.expectSent(2)], timeout: 10)
+
+        running.cancel()
+        do {
+            try await running.value
+            XCTFail("A stopped turn does not end as a reply")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+
+        XCTAssertEqual(socket.sent.map { $0["method"] as? String }, ["connect", "sessions.messages.subscribe"])
+        XCTAssertTrue(socket.isClosed)
+    }
 
     func testStoppingTheTurn_stopsTheRunInOpenClawAndEndsAsStopped() async throws {
         let socket = ScriptedGatewaySocket()
@@ -427,11 +554,13 @@ final class OpenClawTurnTests: XCTestCase {
         let model = CountingChatModel()
         let chat = ChatService(
             contextBuilder: ContextBuilder(limits: .init(maxRecentMessages: 4, maxRecentMemories: 4)),
+            // The Gateway is all the connection needs: there is no
+            // OpenClaw model client here, and another provider's is.
             modelRouter: HeuristicModelRouter(availableModels: [ModelDescriptor(
-                providerID: "openclaw", modelID: "openclaw", maxContextTokens: 4096,
+                providerID: "openai", modelID: "gpt", maxContextTokens: 4096,
                 supportsTools: false, supportsEmbeddings: false, costClass: .cheap
             )]),
-            llmClients: ["openclaw": model],
+            llmClients: ["openai": model],
             threadStore: ThreadRepository.shared,
             toolService: ToolService.shared,
             shouldAutoRefreshEnvironment: false,
