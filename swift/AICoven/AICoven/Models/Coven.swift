@@ -88,6 +88,18 @@ struct CovenSettings: Codable, Hashable {
         self.autoRouteEnabled = autoRouteEnabled
         self.connections = connections
     }
+
+    /// As stored. A choice of connections that cannot be read does not
+    /// hide the other settings: it reads here as none, and is refused
+    /// where it matters (`CovenRepository.connections(ofCoven:for:)`, which
+    /// reads what is stored and grants nothing of what it cannot read).
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        defaultMemoryPolicy = try container.decodeIfPresent([String: String].self, forKey: .defaultMemoryPolicy)
+        budgetCaps = try container.decodeIfPresent([String: Double].self, forKey: .budgetCaps)
+        autoRouteEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoRouteEnabled)
+        connections = try? container.decodeIfPresent(CovenConnections.self, forKey: .connections)
+    }
 }
 
 /// AI role/agent configuration

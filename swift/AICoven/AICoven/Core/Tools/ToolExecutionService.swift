@@ -462,7 +462,7 @@ actor ToolExecutionService {
         // marked as read-only if it is on to read.
         if let threadID {
             let decision = await CovenConnectionRules.decision(forToolMarkedReadOnly: wasMarkedReadOnly, ofMCPServer: server.id, in: covenConnections(threadID))
-            if let refusal = CovenConnectionRules.refusal(decision, tool: toolCall.name, connection: server.name) {
+            if let refusal = CovenConnectionRules.refusal(decision, tool: toolCall.name, connection: server.name, isOfAnMCPServer: true) {
                 return .error(tool: toolCall.name, message: refusal.message, errorType: refusal.code)
             }
         }
@@ -511,7 +511,7 @@ actor ToolExecutionService {
         // tool as it is marked now.
         if threadID != nil {
             let decision = CovenConnectionRules.decision(forToolMarkedReadOnly: listed?.readOnlyHint == true, ofMCPServer: current.id, in: connectionsNow)
-            if let refusal = CovenConnectionRules.refusal(decision, tool: toolCall.name, connection: current.name) {
+            if let refusal = CovenConnectionRules.refusal(decision, tool: toolCall.name, connection: current.name, isOfAnMCPServer: true) {
                 return .error(tool: toolCall.name, message: refusal.message, errorType: refusal.code)
             }
         }

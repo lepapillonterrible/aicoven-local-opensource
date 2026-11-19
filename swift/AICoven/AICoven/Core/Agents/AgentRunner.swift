@@ -84,10 +84,9 @@ final class AgentRunner {
         var toolContextLog = ""
         var stepHistory: [String] = [] // Track tool signatures for loop detection
 
-        // Dynamically build the tool config so every connected tool and MCP
-        // server is available to the agent by default.
-        // Of the person's connections, a run is offered what its thread's
-        // coven lets its agents use; a run with no thread yet is in no coven.
+        // The tool config is built as the run starts. Of the person's
+        // connections, a run is offered what its thread's coven lets its
+        // agents use; a run with no thread yet is in no coven.
         var connections: CovenConnections?
         if let threadID {
             connections = await CovenService.shared.connections(forThread: threadID)

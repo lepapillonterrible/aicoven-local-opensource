@@ -58,7 +58,11 @@ final class CovenConnectionsTests: XCTestCase {
         XCTAssertEqual(CovenConnectionRules.refusal(.notOn, tool: "github.readFile", connection: "GitHub")?.code, "connection_not_on")
         XCTAssertEqual(
             CovenConnectionRules.refusal(.readOnly, tool: "github.createPR", connection: "GitHub")?.message,
-            "GitHub is on to read only in this coven, and 'github.createPR' changes something (or is not marked as read-only). The person can allow changes in this coven's Connections."
+            "GitHub is on to read only in this coven, and 'github.createPR' changes something. The person can allow changes in this coven's Connections."
+        )
+        XCTAssertEqual(
+            CovenConnectionRules.refusal(.readOnly, tool: "mcp.notes.send", connection: "Notes", isOfAnMCPServer: true)?.message,
+            "Notes is on to read only in this coven, and 'mcp.notes.send' is not marked as read-only by the server. The person can allow changes in this coven's Connections."
         )
     }
 
@@ -106,6 +110,11 @@ final class CovenConnectionsTests: XCTestCase {
 
         let odd = try JSONDecoder().decode(CovenConnections.self, from: Data(#"{"apps":{"github":"admin","google_drive":"read_write"},"mcp_servers":"all"}"#.utf8))
         XCTAssertEqual(odd, CovenConnections(apps: ["google_drive": .readWrite]), "What does not read as an access is left out")
+
+        // A choice that is not one does not hide the coven's other settings.
+        let withABadChoice = try JSONDecoder().decode(CovenSettings.self, from: Data(#"{"budget_caps":{"monthly":5},"connections":"all"}"#.utf8))
+        XCTAssertEqual(withABadChoice.budgetCaps, ["monthly": 5])
+        XCTAssertNil(withABadChoice.connections)
     }
 
     func testAThreadsConnections_areItsCovensChoice() async throws {

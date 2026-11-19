@@ -118,14 +118,18 @@ nonisolated enum CovenConnectionRules {
     }
 
     /// What the model is told when the coven's choice refuses a tool.
-    static func refusal(_ decision: Decision, tool: String, connection: String) -> (message: String, code: String)? {
+    /// `isOfAnMCPServer` says which kind of connection it is: a connected
+    /// app's tool is refused for changing something, an MCP server's for
+    /// not being marked as read-only by its server.
+    static func refusal(_ decision: Decision, tool: String, connection: String, isOfAnMCPServer: Bool = false) -> (message: String, code: String)? {
         switch decision {
         case .allowed:
-            nil
+            return nil
         case .notOn:
-            ("\(connection) is not turned on in this coven, so '\(tool)' cannot be used here. The person can turn it on in this coven's Connections.", "connection_not_on")
+            return ("\(connection) is not turned on in this coven, so '\(tool)' cannot be used here. The person can turn it on in this coven's Connections.", "connection_not_on")
         case .readOnly:
-            ("\(connection) is on to read only in this coven, and '\(tool)' changes something (or is not marked as read-only). The person can allow changes in this coven's Connections.", "connection_read_only")
+            let why = isOfAnMCPServer ? "is not marked as read-only by the server" : "changes something"
+            return ("\(connection) is on to read only in this coven, and '\(tool)' \(why). The person can allow changes in this coven's Connections.", "connection_read_only")
         }
     }
 }
