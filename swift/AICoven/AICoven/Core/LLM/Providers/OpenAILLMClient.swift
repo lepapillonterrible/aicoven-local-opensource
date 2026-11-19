@@ -1,24 +1,35 @@
 import Foundation
 
-/// OpenAI-compatible implementation of LLMClient.
+/// OpenAI-compatible implementation of LLMClient: OpenAI itself, and
+/// OpenRouter, which serves the same chat completions API at its own address.
 /// Marked @unchecked Sendable because all stored properties are immutable
 /// after init and URLSession is thread-safe.
 final class OpenAILLMClient: LLMClient, @unchecked Sendable {
+    static let openRouterBaseURL = URL(string: "https://openrouter.ai/api/v1")!
+
     private let apiKey: String
     private let baseURL: URL
+    private let providerID: String
+    private let providerName: String
     private let urlSession: URLSession
 
     /// - Parameters:
-    ///   - apiKey: OpenAI API key.
-    ///   - baseURL: Base URL for the API (overridable for testing).
+    ///   - apiKey: The provider's API key.
+    ///   - baseURL: Base URL for the API.
+    ///   - providerID: The provider slug reported on each response.
+    ///   - providerName: The provider's name in error messages.
     ///   - urlSession: Optional custom URLSession used primarily for tests.
     init(
         apiKey: String,
         baseURL: URL = URL(string: "https://api.openai.com/v1")!,
+        providerID: String = "openai",
+        providerName: String = "OpenAI",
         urlSession: URLSession? = nil
     ) {
         self.apiKey = apiKey
         self.baseURL = baseURL
+        self.providerID = providerID
+        self.providerName = providerName
         if let urlSession {
             self.urlSession = urlSession
         } else {
@@ -105,6 +116,7 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
         }
 
         // Convert LLMToolDefinition → OpenAI native format
+        var wireToOriginalName: [String: String] = [:]
         let toolDefs: [ToolDef]? = options.tools?.isEmpty == false ? options.tools!.map { tool in
             var props: [String: FunctionProperty] = [:]
             var requiredParams: [String] = []
@@ -112,10 +124,20 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
                 props[param.name] = FunctionProperty(type: param.type, description: param.description)
                 if param.required { requiredParams.append(param.name) }
             }
+
+            // Function names must match ^[a-zA-Z0-9_-]{1,64}$, which excludes
+            // the dot in names such as `file.read`. Two names that differ only
+            // by a dot and an underscore get distinct wire names.
+            var wireName = tool.name.replacingOccurrences(of: ".", with: "_")
+            while wireToOriginalName[wireName] != nil {
+                wireName += "_"
+            }
+            wireToOriginalName[wireName] = tool.name
+
             return ToolDef(
                 type: "function",
                 function: FunctionDef(
-                    name: tool.name,
+                    name: wireName,
                     description: tool.description,
                     parameters: FunctionParameters(type: "object", properties: props, required: requiredParams)
                 )
@@ -132,7 +154,7 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
 
         let (data, response) = try await urlSession.data(for: request)
         if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-            let message = "OpenAI HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
+            let message = "\(providerName) HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
             throw NSError(
                 domain: "OpenAILLMClient",
                 code: http.statusCode,
@@ -143,12 +165,12 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
             throw NSError(
                 domain: "OpenAILLMClient",
                 code: -2,
-                userInfo: [NSLocalizedDescriptionKey: "OpenAI returned an empty response body."]
+                userInfo: [NSLocalizedDescriptionKey: "\(providerName) returned an empty response body."]
             )
         }
         let decoded = try JSONDecoder().decode(ResponseBody.self, from: data)
         guard let first = decoded.choices.first else {
-            throw NSError(domain: "OpenAILLMClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No choices in response"])
+            throw NSError(domain: "OpenAILLMClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "\(providerName) returned no choices."])
         }
 
         let msg = LLMMessage(role: .assistant, content: first.message.content ?? "")
@@ -162,17 +184,18 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
         var toolCalls: [LLMToolCall]? = nil
         if let nativeCalls = first.message.tool_calls, !nativeCalls.isEmpty {
             toolCalls = nativeCalls.compactMap { tc in
+                let name = wireToOriginalName[tc.function.name] ?? tc.function.name
                 guard let argsData = tc.function.arguments.data(using: .utf8),
                       let argsDict = try? JSONDecoder().decode([String: AnyJSONValue].self, from: argsData) else {
-                    return LLMToolCall(name: tc.function.name, arguments: [:])
+                    return LLMToolCall(name: name, arguments: [:])
                 }
-                return LLMToolCall(name: tc.function.name, arguments: argsDict)
+                return LLMToolCall(name: name, arguments: argsDict)
             }
         }
 
         return LLMChatResponse(
             message: msg,
-            providerID: "openai",
+            providerID: providerID,
             modelID: decoded.model,
             usage: usage,
             toolCalls: toolCalls
@@ -200,7 +223,7 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
 
         let (data, response) = try await urlSession.data(for: request)
         if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-            let message = "OpenAI embeddings HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
+            let message = "\(providerName) embeddings HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
             throw NSError(
                 domain: "OpenAILLMClient",
                 code: http.statusCode,
@@ -211,7 +234,7 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
             throw NSError(
                 domain: "OpenAILLMClient",
                 code: -2,
-                userInfo: [NSLocalizedDescriptionKey: "OpenAI returned an empty embeddings response body."]
+                userInfo: [NSLocalizedDescriptionKey: "\(providerName) returned an empty embeddings response body."]
             )
         }
         let decoded = try JSONDecoder().decode(EmbeddingResponse.self, from: data)

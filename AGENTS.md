@@ -121,7 +121,7 @@ This is the local-first backbone intended to replace many backend-oriented servi
 - `Core/LLM/`
   - Defines `LLMClient`, a provider-agnostic protocol for chat completions and embeddings.
   - `ToolEnvironment` inspects configured providers and derives per-provider capabilities.
-  - Provider implementations for OpenAI, Anthropic, Gemini, Ollama, and MLX (on-device via Apple Silicon).
+  - Provider implementations for OpenAI, Anthropic, Gemini, OpenRouter (through the OpenAI client at OpenRouter's address), Ollama, and MLX (on-device via Apple Silicon).
   - **`OpenClawLLMClient`** – OpenAI-compatible self-hosted proxy client. Exposes `isLocalEndpoint` (checks `baseURL` against loopback/RFC1918 ranges) and adjusts timeouts (300s/600s for local, 60s/120s for cloud). `baseURL` is `internal` so `ChatService` can inspect it for `isLocalDeployment()` decisions.
   - **`HermesLLMClient`** – Nous Research Hermes model client. Supports both Together AI (cloud) and self-hosted (LM Studio, llama.cpp). `apiKey` is `Optional<String>` — no key needed for self-hosted; `Authorization: Bearer` header is only injected if present. Uses `OpenClawLLMClient.isLocalAddress()` for endpoint detection.
   - `MLXLLMClient` runs models locally via Apple's MLX framework. Handles iOS memory pressure (model eviction after inference, GPU cache limits, `autoreleasepool` for generation). System messages are folded into the first user message for compatibility with strict chat templates (Gemma 2, Phi, etc.).

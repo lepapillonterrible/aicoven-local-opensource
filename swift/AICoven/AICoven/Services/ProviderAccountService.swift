@@ -112,6 +112,12 @@ actor ProviderAccountService {
         UserScope.scopedKey("provider_accounts.v1")
     }
 
+    /// OpenRouter's model list is public and about 1 MB, and every chat turn
+    /// rebuilds the model list, so one download is reused for 15 minutes from
+    /// its start, by callers that arrive while it runs too. A failed download
+    /// is not kept.
+    private var openRouterCatalog: (startedAt: Date, download: Task<[ProviderInitializationStatus.ModelMetadata], Error>)?
+
     private init() {}
 
     // MARK: - Public API
@@ -381,6 +387,25 @@ actor ProviderAccountService {
         )
     }
 
+    /// Ask OpenRouter whether it accepts an account's stored key, without
+    /// running a model. OpenRouter's model list is public, so listing models
+    /// cannot tell a refused key from a working one.
+    func checkOpenRouterKey(accountId: String) async throws {
+        guard let apiKey = KeychainHelper.load(key: keychainKey(for: accountId)) else {
+            throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing OpenRouter API key for account \(accountId)"])
+        }
+        var request = URLRequest(url: OpenAILLMClient.openRouterBaseURL.appendingPathComponent("key"))
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        let (_, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
+            throw NSError(
+                domain: "ProviderAccountService",
+                code: http.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "OpenRouter key check HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."]
+            )
+        }
+    }
+
     /// Run initialization for a provider account. In the local-only client we
     /// simply return static model metadata without performing network calls.
     @discardableResult
@@ -432,7 +457,25 @@ actor ProviderAccountService {
                 continue
             }
 
-            for modelMeta in metadata {
+            // The router picks by a coarse cost class, which cannot rank
+            // OpenRouter's whole catalog, so it sees one OpenRouter model: the
+            // one chosen in Strix settings, whether or not the catalog still
+            // lists it, or the catalog's default when none is chosen.
+            var routed = metadata
+            if providerID == "openrouter" {
+                if let chosen = UserDefaults.standard.string(forKey: UserScope.scopedKey("openrouter_model")) {
+                    routed = [metadata.first { $0.id == chosen } ?? ProviderInitializationStatus.ModelMetadata(
+                        id: chosen,
+                        name: chosen,
+                        provider: "openrouter",
+                        contextLength: nil
+                    )]
+                } else {
+                    routed = Array(metadata.prefix(1))
+                }
+            }
+
+            for modelMeta in routed {
                 let context = modelMeta.contextLength ?? 128_000
                 let cost: ModelDescriptor.CostClass
                 let lowerID = modelMeta.id.lowercased()
@@ -788,6 +831,28 @@ extension ProviderAccountService {
                     contextLength: nil
                 )
             }
+        case "openrouter":
+            if let cached = openRouterCatalog, Date().timeIntervalSince(cached.startedAt) < 15 * 60 {
+                return try await cached.download.value
+            }
+            let download = Task {
+                var request = URLRequest(url: OpenAILLMClient.openRouterBaseURL.appendingPathComponent("models"))
+                request.setValue("application/json", forHTTPHeaderField: "Accept")
+                let (data, response) = try await URLSession.shared.data(for: request)
+                if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
+                    throw Self.sanitizedHTTPError(provider: "OpenRouter", statusCode: http.statusCode)
+                }
+                return try Self.openRouterToolModels(from: data)
+            }
+            openRouterCatalog = (Date(), download)
+            do {
+                return try await download.value
+            } catch {
+                if openRouterCatalog?.download == download {
+                    openRouterCatalog = nil
+                }
+                throw error
+            }
         case "anthropic":
             guard let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) else {
                 throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing Anthropic API key for account \(account.id)"])
@@ -826,6 +891,47 @@ extension ProviderAccountService {
             // Other providers: fall back to static metadata for now.
             throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "No remote model fetch implemented for provider \(provider)"])
         }
+    }
+
+    /// The models in OpenRouter's catalog that a chat turn can use, default
+    /// model first: those served at the chat completions endpoint (a `:batch`
+    /// variant is served only at the batch endpoint) that support tool
+    /// calling. A chat turn may carry tools, and OpenRouter refuses a request
+    /// with tools for a model that does not support them.
+    ///
+    /// The default is the first Claude Sonnet, else GPT, else Gemini model in
+    /// the catalog. An id with a `:` suffix is a variant of a model (`:free`,
+    /// `:batch`) with its own limits, so it is never the default.
+    static func openRouterToolModels(from data: Data) throws -> [ProviderInitializationStatus.ModelMetadata] {
+        struct Catalog: Decodable {
+            struct Model: Decodable {
+                let id: String
+                let name: String?
+                let context_length: Int?
+                let supported_parameters: [String]?
+                let endpoints: [String]?
+            }
+
+            let data: [Model]
+        }
+        var models = try JSONDecoder().decode(Catalog.self, from: data).data
+            .filter { $0.supported_parameters?.contains("tools") == true }
+            .filter { $0.endpoints?.contains("/api/v1/chat/completions") == true }
+            .map { model in
+                ProviderInitializationStatus.ModelMetadata(
+                    id: model.id,
+                    name: model.name ?? model.id,
+                    provider: "openrouter",
+                    contextLength: model.context_length
+                )
+            }
+        for prefix in ["anthropic/claude-sonnet", "openai/gpt-", "google/gemini-"] {
+            if let index = models.firstIndex(where: { $0.id.hasPrefix(prefix) && !$0.id.contains(":") }) {
+                models.insert(models.remove(at: index), at: 0)
+                break
+            }
+        }
+        return models
     }
 
     /// Heuristic filter to decide whether a model ID represents a chat model

@@ -146,6 +146,7 @@ struct ProviderAccountCard: View {
         case "openai": ("🤖", "OpenAI", .aicovenTeal)
         case "google": ("🔵", "Google AI", .blue)
         case "anthropic": ("🟣", "Anthropic", .aicovenPurple)
+        case "openrouter": ("🔀", "OpenRouter", .aicovenTeal)
         case "cohere": ("🧠", "Cohere", .aicovenPink)
         case "mistral": ("🌬️", "Mistral AI", .cyan)
         case "ollama": ("🦙", "Ollama (Local)", .orange)
@@ -307,6 +308,9 @@ struct ProviderAccountCard: View {
         defer { isTesting = false }
 
         do {
+            if account.provider.lowercased() == "openrouter" {
+                try await ProviderAccountService.shared.checkOpenRouterKey(accountId: account.id)
+            }
             let status = try await ProviderAccountService.shared.getInitializationStatus(accountId: account.id)
             let modelCount = status.modelMetadata.count
             if modelCount > 0 {
@@ -356,6 +360,7 @@ struct AddProviderKeySheet: View {
         ("openai", "OpenAI", "🤖"),
         ("anthropic", "Anthropic Claude", "🟣"),
         ("google", "Google Gemini", "🔵"),
+        ("openrouter", "OpenRouter", "🔀"),
         ("hermes", "Hermes", "🪽"),
         ("ollama", "Ollama (Local)", "🦙"),
         ("openclaw", "OpenClaw (Local)", "🦅"),
@@ -579,9 +584,13 @@ private struct AddProviderKeyStep2View: View {
                             .fontWeight(.semibold)
                             .foregroundColor(.aicovenTextPrimary)
 
-                        Text("\(providerDisplayName) — subject to their privacy policy. AICoven does not store or access your message content on its servers.")
-                            .font(.aicovenCaption)
-                            .foregroundColor(.aicovenTextSecondary)
+                        Text(
+                            selectedProvider == "openrouter"
+                                ? "OpenRouter, and the provider of the model you choose, to which OpenRouter passes your content. Each is subject to its own privacy policy. AICoven does not store or access your message content on its servers."
+                                : "\(providerDisplayName) — subject to their privacy policy. AICoven does not store or access your message content on its servers."
+                        )
+                        .font(.aicovenCaption)
+                        .foregroundColor(.aicovenTextSecondary)
                     }
                     .padding(Spacing.md)
                     .background(Color.aicovenGlass)
@@ -900,6 +909,7 @@ private struct AddProviderKeyStep2View: View {
         case "openai": "OpenAI"
         case "anthropic": "Anthropic Claude"
         case "google": "Google Gemini"
+        case "openrouter": "OpenRouter"
         case "ollama": "Ollama (Local)"
         case "mlx": "MLX (On-Device)"
         case "openclaw": "OpenClaw"

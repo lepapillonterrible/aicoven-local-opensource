@@ -150,6 +150,8 @@ actor StrixSettingsService {
                     defaults.set(model, forKey: UserScope.scopedKey("anthropic_model"))
                 case "google", "gemini":
                     defaults.set(model, forKey: UserScope.scopedKey("gemini_model"))
+                case "openrouter":
+                    defaults.set(model, forKey: UserScope.scopedKey("openrouter_model"))
                 default:
                     defaults.set(model, forKey: UserScope.scopedKey("openai_model"))
                 }

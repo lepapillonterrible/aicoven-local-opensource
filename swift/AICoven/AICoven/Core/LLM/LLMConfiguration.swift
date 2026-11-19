@@ -32,6 +32,15 @@ enum LLMConfiguration {
             result["google"] = GeminiLLMClient(apiKey: geminiKey)
         }
 
+        if let openRouterKey = ProviderAccountService.apiKeyFromKeychain(forProvider: "openrouter"), !openRouterKey.isEmpty {
+            result["openrouter"] = OpenAILLMClient(
+                apiKey: openRouterKey,
+                baseURL: OpenAILLMClient.openRouterBaseURL,
+                providerID: "openrouter",
+                providerName: "OpenRouter"
+            )
+        }
+
         // Ollama: no API key needed, just a base URL (defaults to localhost:11434).
         if let ollamaURL = defaults.string(forKey: UserScope.scopedKey("ollama_base_url")), !ollamaURL.isEmpty {
             result["ollama"] = OllamaLLMClient(baseURL: URL(string: ollamaURL) ?? OllamaLLMClient.defaultBaseURL)
