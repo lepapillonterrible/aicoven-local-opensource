@@ -1928,7 +1928,9 @@ extension ChatService {
         case "image.generate": "Image Generation"
         case _ where tool.hasPrefix("github."): "GitHub"
         case _ where tool.hasPrefix("google_drive"): "Google Drive"
+        case _ where tool.hasPrefix("google_docs"): "Google Docs"
         case _ where tool.hasPrefix("google_sheets"): "Google Sheets"
+        case _ where tool.hasPrefix("google_slides"): "Google Slides"
         default: tool
         }
     }
@@ -1946,7 +1948,9 @@ extension ChatService {
         case "image.generate": "🎨 Making an image…"
         case _ where tool.hasPrefix("github."): "🐙 Working with GitHub…"
         case _ where tool.hasPrefix("google_drive"): "📁 Accessing Google Drive…"
+        case _ where tool.hasPrefix("google_docs"): "📝 Working with Docs…"
         case _ where tool.hasPrefix("google_sheets"): "📊 Working with Sheets…"
+        case _ where tool.hasPrefix("google_slides"): "🖼️ Working with Slides…"
         default: "⚙️ Using \(tool)…"
         }
     }

@@ -106,8 +106,8 @@ nonisolated enum CovenConnectionRules {
     static func app(of tool: String) -> String? {
         let name = tool.lowercased()
         if name.hasPrefix("github.") { return "github" }
-        // One Google connection carries Drive and Sheets.
-        if name.hasPrefix("google_drive.") || name.hasPrefix("google_sheets.") { return "google_drive" }
+        // One Google connection carries Drive, Docs, Sheets and Slides.
+        if ["google_drive.", "google_docs.", "google_sheets.", "google_slides."].contains(where: name.hasPrefix) { return "google_drive" }
         return nil
     }
 

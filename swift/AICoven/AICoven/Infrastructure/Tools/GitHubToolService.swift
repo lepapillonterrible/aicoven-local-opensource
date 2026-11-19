@@ -83,13 +83,7 @@ actor GitHubToolService {
     /// add a step, a query or a fragment, nor climb out with "." or "..".
     /// Nil if a step is empty or is one of those two.
     nonisolated static func path(of steps: [String]) -> String? {
-        let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
-        var written: [String] = []
-        for step in steps {
-            guard !step.isEmpty, step != ".", step != "..", let encoded = step.addingPercentEncoding(withAllowedCharacters: unreserved) else { return nil }
-            written.append(encoded)
-        }
-        return "/" + written.joined(separator: "/")
+        RequestPath.path(of: steps)
     }
 
     /// The steps of a path within a repository, or of a branch's name:
