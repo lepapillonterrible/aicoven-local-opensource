@@ -66,8 +66,8 @@ struct CovenSettings: Codable, Hashable {
     let defaultMemoryPolicy: [String: String]?
     let budgetCaps: [String: Double]?
     let autoRouteEnabled: Bool?
-    /// Which connections the coven's agents may use; nil until the coven
-    /// has made a choice, and then everything connected is used.
+    /// Which connections the coven's agents may use. Nil until the coven
+    /// has made a choice: until then everything connected is used.
     let connections: CovenConnections?
 
     enum CodingKeys: String, CodingKey {

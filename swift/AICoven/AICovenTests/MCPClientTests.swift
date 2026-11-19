@@ -862,6 +862,11 @@ private final class OSAllocatedUnfairLockBox: @unchecked Sendable {
             return value
         }
     }
+
+    /// The value as it is.
+    func peek() -> Int {
+        lock.withLock { value }
+    }
 }
 
 /// What the person was asked, and the answer the test gives.
@@ -1127,6 +1132,35 @@ final class MCPToolApprovalTests: XCTestCase {
         // With no thread there is no coven to say.
         let unthreaded = await off.execute(toolCall: read, agentType: "test", threadID: nil)
         XCTAssertEqual(unthreaded.status, "ok")
+    }
+
+    func testACovenSwitchedToReadOnlyOrOffWhileTheToolWaited_isNotWrittenToThoughApproved() async throws {
+        for after in [CovenConnections.Access.readOnly, nil] {
+            let (account, slug, played) = try await keptServer()
+            // What the coven lets, changed by the person while they decide.
+            let choice = OSAllocatedUnfairLockBox(0)
+            let executor = ToolExecutionService(
+                toolService: NoChatTools(),
+                ask: { _ in
+                    _ = choice.next()
+                    return .approved
+                },
+                covenConnections: { _ in
+                    choice.peek() == 0
+                        ? CovenConnections(mcpServers: [account.id: .readWrite])
+                        : CovenConnections(mcpServers: after.map { [account.id: $0] } ?? [:])
+                }
+            )
+            let session = played.session()
+            await executor.setMCPClient { MCPClient(server: $0, token: $1, session: session, eras: MCPEraCache()) }
+            await executor.setWhitelist(for: "test", tools: ["mcp.\(slug).send_note"])
+
+            let result = await executor.execute(toolCall: ParsedToolCall(name: "mcp.\(slug).send_note", args: [:]), agentType: "test", threadID: "thread-1")
+
+            XCTAssertEqual(result.status, "error")
+            XCTAssertEqual(result.errorType, after == nil ? "connection_not_on" : "connection_read_only")
+            XCTAssertEqual(played.methods, [], "Nothing is sent")
+        }
     }
 
     func testAConnectedAppsTool_isRefusedAsTheCovenSays_beforeAnythingElse() async {

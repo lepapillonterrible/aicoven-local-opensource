@@ -239,14 +239,9 @@ actor ToolExecutionService {
 
         // 3. A connected app's tool is used only as the thread's coven
         // lets its agents use that app, whatever else would be said of it.
-        // (An MCP server's is checked where the server is found.) Without
-        // a thread there is no coven.
-        if CovenConnectionRules.app(of: toolCall.name) != nil, let threadID {
-            let decision = await CovenConnectionRules.decision(forAppTool: toolCall.name, in: covenConnections(threadID))
-            let connection = CovenConnectionRules.app(of: toolCall.name) == "github" ? "GitHub" : "Google Drive"
-            if let refusal = CovenConnectionRules.refusal(decision, tool: toolCall.name, connection: connection) {
-                return .error(tool: toolCall.name, message: refusal.message, errorType: refusal.code)
-            }
+        // (An MCP server's is checked where the server is found.)
+        if let refusal = await covenRefusal(ofAppTool: toolCall.name, in: threadID) {
+            return refusal
         }
 
         // 4. Entitlement Check – shell, GitHub, Google Drive require Tools Pack
@@ -505,6 +500,14 @@ actor ToolExecutionService {
         // The tool as the server lists it now: the current protocol sends
         // the arguments its schema marks for it as headers too.
         let listed = current.cachedTools?.first { $0.name == actionName }
+        // And as the thread's coven lets its server be used now: it may
+        // have been switched to read-only or off while the person decided.
+        if let threadID {
+            let decision = await CovenConnectionRules.decision(forToolMarkedReadOnly: listed?.readOnlyHint == true, ofMCPServer: current.id, in: covenConnections(threadID))
+            if let refusal = CovenConnectionRules.refusal(decision, tool: toolCall.name, connection: current.name) {
+                return .error(tool: toolCall.name, message: refusal.message, errorType: refusal.code)
+            }
+        }
         guard wasMarkedReadOnly == false || listed?.readOnlyHint == true else {
             return .error(
                 tool: toolCall.name,
@@ -598,7 +601,7 @@ actor ToolExecutionService {
         let branch = extractString(from: toolCall.args, key: "branch")
         let sha = extractString(from: toolCall.args, key: "sha")
 
-        if let refusal = await ToolExecutionResult.refusal(answer(in: threadID) { .gitHubWriteFile(owner: owner, repo: repo, path: path, branch: branch, message: message, content: content, threadID: $0) }, tool: toolCall.name) {
+        if let refusal = await refusal(ofAppChange: toolCall, in: threadID, { .gitHubWriteFile(owner: owner, repo: repo, path: path, branch: branch, message: message, content: content, threadID: $0) }) {
             return refusal
         }
 
@@ -663,7 +666,7 @@ actor ToolExecutionService {
             return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo', 'base_branch', 'new_branch'")
         }
 
-        if let refusal = await ToolExecutionResult.refusal(answer(in: threadID) { .gitHubCreateBranch(owner: owner, repo: repo, newBranch: newBranch, baseBranch: baseBranch, threadID: $0) }, tool: toolCall.name) {
+        if let refusal = await refusal(ofAppChange: toolCall, in: threadID, { .gitHubCreateBranch(owner: owner, repo: repo, newBranch: newBranch, baseBranch: baseBranch, threadID: $0) }) {
             return refusal
         }
 
@@ -701,7 +704,7 @@ actor ToolExecutionService {
 
         let body = extractString(from: toolCall.args, key: "body")
 
-        if let refusal = await ToolExecutionResult.refusal(answer(in: threadID) { .gitHubCreatePR(owner: owner, repo: repo, title: title, head: head, base: base, body: body, threadID: $0) }, tool: toolCall.name) {
+        if let refusal = await refusal(ofAppChange: toolCall, in: threadID, { .gitHubCreatePR(owner: owner, repo: repo, title: title, head: head, base: base, body: body, threadID: $0) }) {
             return refusal
         }
 
@@ -944,7 +947,7 @@ actor ToolExecutionService {
 
         let mimeType = extractString(from: toolCall.args, key: "mime_type") ?? "text/plain"
 
-        if let refusal = await ToolExecutionResult.refusal(answer(in: threadID) { .driveUpload(name: name, mimeType: mimeType, content: content, threadID: $0) }, tool: toolCall.name) {
+        if let refusal = await refusal(ofAppChange: toolCall, in: threadID, { .driveUpload(name: name, mimeType: mimeType, content: content, threadID: $0) }) {
             return refusal
         }
 
@@ -1005,7 +1008,7 @@ actor ToolExecutionService {
 
         let values = valuesArg.map { row in row.map { String(describing: $0) } }
 
-        if let refusal = await ToolExecutionResult.refusal(answer(in: threadID) { .sheetsWrite(spreadsheetID: spreadsheetId, range: range, values: values, threadID: $0) }, tool: toolCall.name) {
+        if let refusal = await refusal(ofAppChange: toolCall, in: threadID, { .sheetsWrite(spreadsheetID: spreadsheetId, range: range, values: values, threadID: $0) }) {
             return refusal
         }
 
@@ -1041,6 +1044,28 @@ actor ToolExecutionService {
 
     func setMCPClient(_ make: @escaping @Sendable (MCPServerAccount, String?) -> MCPClient) {
         mcpClient = make
+    }
+
+    /// Why a connected app's tool may not be used in the thread, as its
+    /// coven's choice of connections has it now; nil if it may, or it is
+    /// no connected app's tool. Without a thread there is no coven.
+    private func covenRefusal(ofAppTool tool: String, in threadID: String?) async -> ToolExecutionResult? {
+        guard let threadID, let app = CovenConnectionRules.app(of: tool) else { return nil }
+        let decision = await CovenConnectionRules.decision(forAppTool: tool, in: covenConnections(threadID))
+        let connection = app == "github" ? "GitHub" : "Google Drive"
+        guard let refusal = CovenConnectionRules.refusal(decision, tool: tool, connection: connection) else { return nil }
+        return .error(tool: tool, message: refusal.message, errorType: refusal.code)
+    }
+
+    /// Asks the person about a connected app's change and, if they approve
+    /// it, looks again at what the thread's coven lets: they may have
+    /// taken a while, and a coven switched to read-only or off meanwhile
+    /// is not written to. Nil means go ahead.
+    private func refusal(ofAppChange toolCall: ParsedToolCall, in threadID: String?, _ describe: @Sendable (_ threadID: String) -> ToolApproval) async -> ToolExecutionResult? {
+        if let refused = await ToolExecutionResult.refusal(answer(in: threadID, describe), tool: toolCall.name) {
+            return refused
+        }
+        return await covenRefusal(ofAppTool: toolCall.name, in: threadID)
     }
 
     /// Asks the person, in the thread the tool call came from, about what

@@ -57,15 +57,18 @@ nonisolated enum CovenConnectionRules {
     }
 
     /// The connected-app tools that change something, as the cloud app
-    /// lists them, compared without regard to case or underscores (the
-    /// executor takes `github.createPR` and `github.create_pr` alike).
+    /// lists them, in exactly the spellings the executor takes (camel case
+    /// or with underscores).
     static let writeTools: Set<String> = [
-        "github.writefile", "github.createbranch", "github.createpr",
-        "googledrive.uploadfile", "googlesheets.writevalues",
+        "github.writeFile", "github.write_file",
+        "github.createBranch", "github.create_branch",
+        "github.createPR", "github.create_pr",
+        "google_drive.uploadFile", "google_drive.upload_file",
+        "google_sheets.writeValues", "google_sheets.write_values",
     ]
 
     static func isWriteTool(_ tool: String) -> Bool {
-        writeTools.contains(tool.lowercased().replacingOccurrences(of: "_", with: ""))
+        writeTools.contains(tool)
     }
 
     /// What the coven's choice says of using a tool.

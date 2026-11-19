@@ -1,4 +1,5 @@
 @testable import AICoven
+import GRDB
 import XCTest
 
 /// A coven chooses which of the person's connections its agents may use,
@@ -27,6 +28,10 @@ final class CovenConnectionsTests: XCTestCase {
             XCTAssertTrue(CovenConnectionRules.isWriteTool(tool), tool)
         }
         for tool in ["github.readFile", "github.listRepos", "github.searchCode", "github.getPR", "github.listPRFiles", "google_drive.listFiles", "google_drive.readFile", "google_sheets.readValues", "file.write"] {
+            XCTAssertFalse(CovenConnectionRules.isWriteTool(tool), tool)
+        }
+        // Only the spellings the executor takes: anything else is no tool of its.
+        for tool in ["github.create__pr", "googledrive.uploadFile", "GitHub.createPR", "github.createpr", "github.writefile_"] {
             XCTAssertFalse(CovenConnectionRules.isWriteTool(tool), tool)
         }
     }
@@ -132,6 +137,7 @@ final class CovenConnectionsTests: XCTestCase {
         XCTAssertNil(stillNone)
         let kept = try await CovenService.shared.loadCovens().first { $0.id == coven.id }
         XCTAssertEqual(kept?.name, coven.name, "The rest of the coven as it was")
+        XCTAssertEqual(kept?.settings?.connections, choice)
 
         try await CovenService.shared.setConnections(CovenConnections(), forCoven: coven.id)
         let nothingOn = await CovenService.shared.connections(forThread: inCoven)
@@ -147,6 +153,76 @@ final class CovenConnectionsTests: XCTestCase {
             try await CovenService.shared.setConnections(choice, forCoven: "no-such-coven")
             XCTFail("There is no such coven")
         } catch {}
+
+        // An agent run's own thread is kept without a chat thread's stored
+        // form and carries no coven: it is a personal one.
+        let ofARun = try await ThreadRepository.shared.createThread(title: "A run \(UUID().uuidString)").id
+        addTeardownBlock { try? await ThreadRepository.shared.deleteThread(id: ofARun, for: UserScope.currentUserID) }
+        let forTheRun = await CovenService.shared.connections(forThread: ofARun)
+        XCTAssertNil(forTheRun)
+        await DataEncryptionService.shared.lock()
+    }
+
+    func testACovensOtherSettings_areKeptAsStored_andSettingsThatCannotBeReadGrantNothing() async throws {
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        await MainActor.run { DatabaseManager.shared.configureIfNeeded() }
+        await ThreadService.shared.reloadForCurrentUser()
+        let coven = try await CovenService.shared.createCoven(name: "Settings \(UUID().uuidString)")
+        let thread = try await ThreadService.shared.createThread(title: "In it \(UUID().uuidString)", covenId: coven.id).id
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await ThreadService.shared.deleteThread(threadId: thread)
+            try? await CovenService.shared.deleteCoven(id: coven.id)
+            await ThreadService.shared.reloadForCurrentUser()
+            await DataEncryptionService.shared.lock()
+        }
+        let found = await MainActor.run { DatabaseManager.shared.dbQueue }
+        let queue = try XCTUnwrap(found)
+        func store(_ settings: String?) async throws {
+            try await queue.write { db in try db.execute(sql: "UPDATE covens SET settings = ? WHERE id = ?", arguments: [settings, coven.id]) }
+        }
+        func stored() async throws -> [String: Any]? {
+            let text = try await queue.read { db in try String.fetchOne(db, sql: "SELECT settings FROM covens WHERE id = ?", arguments: [coven.id]) }
+            return try text.map { try JSONSerialization.jsonObject(with: Data($0.utf8)) } as? [String: Any]
+        }
+
+        // Other settings, one this app does not know of included.
+        try await store(#"{"budget_caps":{"monthly":5},"auto_route_enabled":true,"something_newer":{"a":1}}"#)
+        let choice = CovenConnections(apps: ["github": .readOnly])
+        try await CovenService.shared.setConnections(choice, forCoven: coven.id)
+        var kept = try await stored()
+        XCTAssertEqual(kept?["budget_caps"] as? [String: Int], ["monthly": 5])
+        XCTAssertEqual(kept?["auto_route_enabled"] as? Bool, true)
+        XCTAssertEqual(kept?["something_newer"] as? [String: Int], ["a": 1], "Kept as stored, known to this app or not")
+        XCTAssertEqual((kept?["connections"] as? [String: Any])?["apps"] as? [String: String], ["github": "read_only"])
+        try await CovenService.shared.setConnections(nil, forCoven: coven.id)
+        kept = try await stored()
+        XCTAssertNil(kept?["connections"])
+        XCTAssertEqual(kept?["budget_caps"] as? [String: Int], ["monthly": 5])
+
+        // A choice that is not one: nothing is on, rather than everything.
+        for unreadable in [#"{"connections":[],"budget_caps":{"monthly":5}}"#, #"{"connections":"all"}"#, "not settings at all", "[1,2]"] {
+            try await store(unreadable)
+            let granted = await CovenService.shared.connections(forThread: thread)
+            XCTAssertEqual(granted, CovenConnections(), unreadable)
+        }
+        // Settings that cannot be read are not written over.
+        try await store("not settings at all")
+        do {
+            try await CovenService.shared.setConnections(choice, forCoven: coven.id)
+            XCTFail("They cannot be read")
+        } catch {
+            XCTAssertEqual(error as? CovenRepositoryError, .settingsUnreadable)
+        }
+        let untouched = try await queue.read { db in try String.fetchOne(db, sql: "SELECT settings FROM covens WHERE id = ?", arguments: [coven.id]) }
+        XCTAssertEqual(untouched, "not settings at all")
+
+        // No settings at all, or a null choice: none made.
+        for none in [nil, "", #"{"connections":null}"#, "{}"] as [String?] {
+            try await store(none)
+            let granted = await CovenService.shared.connections(forThread: thread)
+            XCTAssertNil(granted, none ?? "nil")
+        }
         await DataEncryptionService.shared.lock()
     }
 }

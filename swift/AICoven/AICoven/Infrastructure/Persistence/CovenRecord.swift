@@ -282,12 +282,17 @@ actor CovenRepository {
         return coven
     }
 
-    /// Sets which connections the coven's agents may use, keeping the rest
-    /// of its settings as they are. `nil` takes the choice away. Only the
-    /// current account's coven is changed.
+    /// Sets which connections the coven's agents may use, keeping
+    /// everything else in its settings as it is stored. `nil` takes the
+    /// choice away. Only `userID`'s coven is changed, and only while
+    /// `userID` is still the account signed in. Settings that cannot be
+    /// read are not written over: that throws.
     func setConnections(_ connections: CovenConnections?, forCoven id: String) async throws {
-        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         let uid = await MainActor.run { UserScope.currentUserID }
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        // The account can have changed while the database was waited for.
+        guard await MainActor.run(body: { UserScope.currentUserID }) == uid else { throw RepositoryError.accountChanged }
+        let chosen = try connections.map { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) }
         try await dbQueue.write { db in
             guard var record = try CovenRecord
                 .filter(CovenRecord.Columns.id == id)
@@ -295,17 +300,42 @@ actor CovenRepository {
                 .fetchOne(db) else {
                 throw CovenRepositoryError.covenNotFound
             }
-            let stored = record.settings.flatMap { $0.data(using: .utf8) }.flatMap { try? JSONDecoder().decode(CovenSettings.self, from: $0) }
-            let settings = CovenSettings(
-                defaultMemoryPolicy: stored?.defaultMemoryPolicy,
-                budgetCaps: stored?.budgetCaps,
-                autoRouteEnabled: stored?.autoRouteEnabled,
-                connections: connections
-            )
-            record.settings = try String(data: JSONEncoder().encode(settings), encoding: .utf8)
+            var settings = try Self.storedSettings(of: record)
+            settings["connections"] = chosen
+            record.settings = try String(data: JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys]), encoding: .utf8)
             record.updatedAt = Date()
             try record.update(db)
         }
+    }
+
+    /// The coven's choice of connections as it is stored: nil if it has
+    /// made none. Throws if the coven is not `userID`'s, or its settings
+    /// or its choice cannot be read: what is not read is not taken for no
+    /// choice.
+    func connections(ofCoven id: String, for userID: String) async throws -> CovenConnections? {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let stored: Any? = try await dbQueue.read { db in
+            guard let record = try CovenRecord
+                .filter(CovenRecord.Columns.id == id)
+                .filter(CovenRecord.Columns.userId == userID)
+                .fetchOne(db) else {
+                throw CovenRepositoryError.covenNotFound
+            }
+            return try Self.storedSettings(of: record)["connections"]
+        }
+        guard let stored, !(stored is NSNull) else { return nil }
+        guard stored is [String: Any] else { throw CovenRepositoryError.settingsUnreadable }
+        return try JSONDecoder().decode(CovenConnections.self, from: JSONSerialization.data(withJSONObject: stored))
+    }
+
+    /// A coven's settings as they are stored: an object, empty if there
+    /// are none. Throws if what is stored is not one.
+    private static func storedSettings(of record: CovenRecord) throws -> [String: Any] {
+        guard let text = record.settings, !text.isEmpty else { return [:] }
+        guard let settings = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else {
+            throw CovenRepositoryError.settingsUnreadable
+        }
+        return settings
     }
 
     func deleteCoven(id: String) async throws {
@@ -513,11 +543,14 @@ actor CovenRepository {
 enum CovenRepositoryError: Error, LocalizedError {
     case covenNotFound
     case roleNotFound
+    /// What is stored as a coven's settings is not settings.
+    case settingsUnreadable
 
     var errorDescription: String? {
         switch self {
         case .covenNotFound: "Coven not found"
         case .roleNotFound: "Role not found"
+        case .settingsUnreadable: "This coven's settings could not be read"
         }
     }
 }

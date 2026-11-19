@@ -56,24 +56,32 @@ actor CovenService {
     }
 
     /// Which connections may be used in a thread: nil for a thread in no
-    /// coven (a personal thread), or in a coven that has made no choice
-    /// yet, where everything connected is used; the coven's choice
-    /// otherwise. If the thread or its coven cannot be read, nothing is
-    /// on: what cannot be checked is not allowed.
+    /// coven (a personal thread, or an agent run's own thread), or in a
+    /// coven that has made no choice yet, where everything connected is
+    /// used; the coven's choice otherwise. If the thread, its coven or the
+    /// coven's choice cannot be read, or the account changes while they
+    /// are, nothing is on: what cannot be checked is not allowed.
     func connections(forThread threadID: String) async -> CovenConnections? {
+        let account = await MainActor.run { UserScope.currentUserID }
+        let found: CovenConnections?
         do {
-            let thread = try await ThreadService.shared.getThread(threadId: threadID)
-            guard let covenID = thread.covenId else { return nil }
-            guard let coven = try await CovenRepository.shared.loadCovens().first(where: { $0.id == covenID }) else {
-                AppErrorReporter.log(message: "A thread's coven was not found", context: "CovenService.connections")
-                return CovenConnections()
-            }
-            return coven.settings?.connections
+            found = try await storedConnections(forThread: threadID, of: account)
         } catch {
             let failure = error as NSError
             AppErrorReporter.log(message: "A thread's connections could not be read (\(failure.domain) \(failure.code)).", context: "CovenService.connections")
             return CovenConnections()
         }
+        // What was read is the account's that asked: not another's that
+        // signed in while it was read.
+        guard await MainActor.run(body: { UserScope.currentUserID }) == account else { return CovenConnections() }
+        return found
+    }
+
+    /// Read from what is stored, the thread and then its coven, and from
+    /// nothing kept in memory: looking a thread up changes nothing.
+    private func storedConnections(forThread threadID: String, of account: String) async throws -> CovenConnections? {
+        guard let covenID = try await ThreadRepository.shared.covenID(ofThread: threadID, for: account) else { return nil }
+        return try await CovenRepository.shared.connections(ofCoven: covenID, for: account)
     }
 
     /// Delete a coven
