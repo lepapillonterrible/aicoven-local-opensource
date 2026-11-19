@@ -181,6 +181,12 @@ actor ChatService {
     private let shouldAutoRefreshEnvironment: Bool
     /// The Hermes agent connected, if one is; injected for tests.
     private let hermesAgent: @Sendable () -> HermesAgentClient?
+    /// The threads whose latest turn was a Hermes run. What follows a turn
+    /// (the thread's summary, and the memory proposed from it) is made by
+    /// one of the app's own models, and is not made for these: the turn
+    /// went to Hermes, and whichever provider is chosen by the time it ends
+    /// was not given it.
+    private var threadsLastAnsweredByHermes: Set<String> = []
 
     /// Maximum number of prior turns to include when building LLM context.
     private let maxContextMessages = 20
@@ -337,15 +343,16 @@ actor ChatService {
         // Hermes is an agent, not a model: it runs the turn itself, with its
         // own tools and memory, and this app follows the run.
         if prefProvider == "hermes", let agent = hermesAgent() {
+            threadsLastAnsweredByHermes.insert(threadId)
             let earlier = try await loadMessages(threadId: threadId, limit: Self.hermesHistoryLimit)
             try await HermesTurn(client: agent, threadID: threadId).run(
                 input: message,
                 history: Self.hermesHistory(from: earlier),
-                model: nil,
                 report: onStateChange
             )
             return
         }
+        threadsLastAnsweredByHermes.remove(threadId)
 
         let descriptor: ModelDescriptor
         let client: LLMClient
@@ -1250,6 +1257,7 @@ actor ChatService {
     /// configured LLM providers. This runs independently of any one chat turn
     /// and is safe to call opportunistically after new messages are added.
     func updateThreadSummary(threadId: String) async {
+        guard !threadsLastAnsweredByHermes.contains(threadId) else { return }
         // On iOS, skip background summaries when only local models are
         // available. Loading a second MLX model (~1.5 GB) for an optional
         // summary will push past the jetsam memory limit and crash the app.

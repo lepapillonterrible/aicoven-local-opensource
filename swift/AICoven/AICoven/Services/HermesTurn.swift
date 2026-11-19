@@ -14,21 +14,26 @@ nonisolated struct HermesTurn {
     var lookAgainAfter: Duration = .seconds(2)
     var looksBeforeGivingUp = 90
 
+    /// How many times an answer to an approval is sent before the turn
+    /// gives up on Hermes taking it.
+    var triesToAnswer = 3
+
     static let lostContact = "AICoven lost contact with Hermes before the run ended. It may still be running there."
+    static let answerNotTaken = "Hermes did not take the answer to what it asked to be allowed, so the run is still waiting there."
     static let runGone = "Hermes no longer has this run."
     static let notFinished = "Hermes could not finish this run."
 
     /// Starts the run and follows it to its end. The last report is the
-    /// outcome: completed with the answer, or failed with what went wrong.
-    /// Throws `CancellationError` when the run was stopped, here or in
-    /// Hermes, and whatever starting the run threw.
+    /// outcome: completed with the answer, failed with what went wrong, or
+    /// cancelled, with what had been answered, when Hermes says the run was
+    /// stopped there. Throws `CancellationError` when the turn itself was
+    /// stopped, and whatever starting the run threw.
     func run(
         input: String,
         history: [HermesAgentClient.Message],
-        model: String?,
         report: @escaping @Sendable (TurnState) -> Void
     ) async throws {
-        let runID = try await client.startRun(input: input, history: history, model: model, sessionKey: threadID)
+        let runID = try await client.startRun(input: input, history: history, sessionKey: threadID)
         try await withTaskCancellationHandler {
             var following = Following(state: TurnState(threadId: threadID))
             try await follow(runID, &following, report)
@@ -74,9 +79,11 @@ nonisolated struct HermesTurn {
                 case .failed:
                     return fail(&following, saying: Self.notFinished, report)
                 case .cancelled:
-                    throw CancellationError()
+                    return stopped(&following, report)
                 case let .waitingForApproval(request):
-                    try await answer(request, of: runID, &following)
+                    guard try await answer(request, of: runID, &following) else {
+                        return fail(&following, saying: Self.answerNotTaken, report)
+                    }
                 case .running:
                     following.approvalPending = false
                 }
@@ -127,7 +134,10 @@ nonisolated struct HermesTurn {
             following.state.phase = .tooling
             following.state.toolsCompleted.append(call)
         case let .approvalRequested(request):
-            try await answer(request, of: runID, &following)
+            guard try await answer(request, of: runID, &following) else {
+                fail(&following, saying: Self.answerNotTaken, report)
+                return true
+            }
             return false
         case .approvalResolved:
             following.approvalPending = false
@@ -139,7 +149,8 @@ nonisolated struct HermesTurn {
             fail(&following, saying: message.map { "\(Self.notFinished) \($0)" } ?? Self.notFinished, report)
             return true
         case .cancelled:
-            throw CancellationError()
+            stopped(&following, report)
+            return true
         }
         following.state.bumpVersion()
         report(following.state)
@@ -147,23 +158,53 @@ nonisolated struct HermesTurn {
     }
 
     /// Asks the person about what Hermes is waiting to be allowed, once,
-    /// and gives Hermes the answer. Where the person cannot be asked, the
-    /// answer is no.
-    private func answer(_ request: HermesApprovalRequest, of runID: String, _ following: inout Following) async throws {
+    /// and gives Hermes the answer. Where the person cannot be asked, or
+    /// the command is too long to show them whole, the answer is no. False
+    /// when Hermes did not take the answer: it is then still waiting, and
+    /// the request counts as answered only once it has.
+    private func answer(_ request: HermesApprovalRequest, of runID: String, _ following: inout Following) async throws -> Bool {
         if let id = request.id {
-            guard following.approvalsAnswered.insert(id).inserted else { return }
+            guard !following.approvalsAnswered.contains(id) else { return true }
         } else {
-            guard !following.approvalPending else { return }
+            guard !following.approvalPending else { return true }
         }
-        following.approvalPending = true
-        switch await ask(.hermes(request, threadID: threadID)) {
-        case .approved:
-            try await client.answerApproval(of: runID, approve: true)
-        case .denied, .notAsked:
-            try await client.answerApproval(of: runID, approve: false)
-        case .withdrawn:
-            throw CancellationError()
+        let approve: Bool
+        if request.isTooLongToShow {
+            approve = false
+        } else {
+            switch await ask(.hermes(request, threadID: threadID)) {
+            case .approved: approve = true
+            case .denied, .notAsked: approve = false
+            case .withdrawn: throw CancellationError()
+            }
         }
+        for attempt in 1 ... max(1, triesToAnswer) {
+            do {
+                try await client.answerApproval(of: runID, approve: approve)
+                if let id = request.id {
+                    following.approvalsAnswered.insert(id)
+                }
+                following.approvalPending = true
+                return true
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                try Task.checkCancellation()
+                if attempt < triesToAnswer {
+                    try await Task.sleep(for: lookAgainAfter)
+                }
+            }
+        }
+        return false
+    }
+
+    /// Hermes says the run was stopped there, not by this turn: the turn
+    /// ends as stopped, with what had been answered.
+    private func stopped(_ following: inout Following, _ report: @Sendable (TurnState) -> Void) {
+        following.state.phase = .finalizing
+        following.state.status = .cancelled
+        following.state.bumpVersion()
+        report(following.state)
     }
 
     private func finish(_ following: inout Following, with output: String?, _ report: @Sendable (TurnState) -> Void) {

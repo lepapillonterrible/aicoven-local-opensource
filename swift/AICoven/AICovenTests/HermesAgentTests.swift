@@ -12,9 +12,20 @@ final class HermesStub: URLProtocol {
         let session: String?
     }
 
+    // Read and written from the tests and from the URL loading system's
+    // threads: every access is under the lock, which the compiler cannot
+    // see for a static, hence `nonisolated(unsafe)`.
     private static let lock = NSLock()
     private nonisolated(unsafe) static var answers: [String: [(status: Int, body: String)]] = [:]
     private nonisolated(unsafe) static var sent: [Sent] = []
+    private nonisolated(unsafe) static var watchers: [(path: String, seen: XCTestExpectation)] = []
+
+    /// An expectation met when a request for `path` arrives.
+    static func expectRequest(to path: String) -> XCTestExpectation {
+        let seen = XCTestExpectation(description: "A request to \(path)")
+        lock.withLock { watchers.append((path, seen)) }
+        return seen
+    }
 
     /// Answers requests for `method path` with these, in turn; the last
     /// one goes on answering.
@@ -26,6 +37,7 @@ final class HermesStub: URLProtocol {
         lock.withLock {
             answers = [:]
             sent = []
+            watchers = []
         }
     }
 
@@ -69,6 +81,9 @@ final class HermesStub: URLProtocol {
                 key: request.value(forHTTPHeaderField: "Authorization"),
                 session: request.value(forHTTPHeaderField: "X-Hermes-Session-Key")
             ))
+            for watcher in Self.watchers where watcher.path == path {
+                watcher.seen.fulfill()
+            }
             let key = "\(method) \(path)"
             guard var scripted = Self.answers[key], !scripted.isEmpty else { return (404, "{}") }
             let next = scripted.removeFirst()
@@ -86,7 +101,8 @@ final class HermesStub: URLProtocol {
     override func stopLoading() {}
 }
 
-/// The states a turn reported, in order.
+/// The states a turn reported, in order. Added to from the turn's task and
+/// read by the test, under the lock.
 private final class Reports: @unchecked Sendable {
     private let lock = NSLock()
     private var states: [TurnState] = []
@@ -97,6 +113,26 @@ private final class Reports: @unchecked Sendable {
 
     var all: [TurnState] {
         lock.withLock { states }
+    }
+}
+
+/// One of the app's own models, which counts how often it is called.
+private final class CountingModel: LLMClient, @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var calls: Int {
+        lock.withLock { count }
+    }
+
+    func completeChat(messages _: [LLMMessage], model _: String, options _: ChatOptions) async throws -> LLMChatResponse {
+        lock.withLock { count += 1 }
+        throw URLError(.badServerResponse)
+    }
+
+    func embed(texts _: [String], model _: String) async throws -> [[Float]] {
+        lock.withLock { count += 1 }
+        return []
     }
 }
 
@@ -149,7 +185,6 @@ final class HermesAgentTests: XCTestCase {
         try await turn().run(
             input: "Tidy the repo",
             history: [.init(role: "user", content: "Hello"), .init(role: "assistant", content: "Hi")],
-            model: nil,
             report: reports.add
         )
 
@@ -162,7 +197,7 @@ final class HermesAgentTests: XCTestCase {
         XCTAssertEqual(sent["input"] as? String, "Tidy the repo")
         XCTAssertEqual(sent["session_id"] as? String, "thread-1")
         XCTAssertEqual((sent["conversation_history"] as? [[String: String]])?.map { $0["content"] }, ["Hello", "Hi"])
-        XCTAssertNil(sent["model"], "Hermes uses the model it is set up with")
+        XCTAssertEqual(Set(sent.keys), ["input", "session_id", "conversation_history"], "Hermes uses the model it is set up with")
 
         let states = reports.all
         XCTAssertEqual(states.first?.scratchpad, "Checking the repository")
@@ -180,7 +215,7 @@ final class HermesAgentTests: XCTestCase {
         HermesStub.answer("GET", events, with: (200, stream(#"{"event":"run.failed","error":"The model refused"}"#)))
         let reports = Reports()
 
-        try await turn().run(input: "Go", history: [], model: nil, report: reports.add)
+        try await turn().run(input: "Go", history: [], report: reports.add)
 
         XCTAssertEqual(reports.all.last?.status, .failed)
         XCTAssertEqual(reports.all.last?.answer, "Hermes could not finish this run. The model refused")
@@ -191,7 +226,7 @@ final class HermesAgentTests: XCTestCase {
         let reports = Reports()
 
         do {
-            try await turn().run(input: "Go", history: [], model: nil, report: reports.add)
+            try await turn().run(input: "Go", history: [], report: reports.add)
             XCTFail("A run Hermes refused has not started")
         } catch {
             XCTAssertEqual(error as? HermesAgentError, .refused(status: 401))
@@ -210,7 +245,7 @@ final class HermesAgentTests: XCTestCase {
         try await turn { approval in
             await asked.note(approval)
             return .approved
-        }.run(input: "Clean up", history: [], model: nil, report: { _ in })
+        }.run(input: "Clean up", history: [], report: { _ in })
 
         let approvals = await asked.approvals
         XCTAssertEqual(approvals.count, 1, "A request repeated while it waits is asked once")
@@ -238,10 +273,60 @@ final class HermesAgentTests: XCTestCase {
         try await turn { approval in
             await asked.note(approval)
             return .approved
-        }.run(input: "Ship it", history: [], model: nil, report: { _ in })
+        }.run(input: "Ship it", history: [], report: { _ in })
 
         let approvals = await asked.approvals
         XCTAssertEqual(approvals.map(\.details), ["git add .", "git commit", "git push"])
+    }
+
+    func testACommandTooLongToShowWhole_isDeniedWithoutBeingShownInPart() async throws {
+        let long = String(repeating: "a", count: HermesAgentClient.longestCommandShown + 1)
+        HermesStub.answer("GET", events, with: (200, stream(
+            #"{"event":"approval.request","command":"\#(long)"}"#,
+            #"{"event":"run.completed","output":"Not run."}"#
+        )))
+        HermesStub.answer("POST", "/v1/runs/run_1/approval", with: (200, "{}"))
+        let asked = Asked()
+
+        try await turn { approval in
+            await asked.note(approval)
+            return .approved
+        }.run(input: "Go", history: [], report: { _ in })
+
+        let approvals = await asked.approvals
+        XCTAssertEqual(approvals, [], "Approve would run more than the card could show")
+        XCTAssertEqual(HermesStub.requests.filter { $0.path.hasSuffix("/approval") }.map(\.body), [#"{"choice":"deny"}"#])
+        // One that fits is kept whole.
+        let fits = String(repeating: "b", count: HermesAgentClient.longestCommandShown)
+        XCTAssertEqual(HermesAgentClient.approvalRequest(from: ["command": fits]).command, fits)
+    }
+
+    func testAnAnswerHermesDoesNotTakeAtFirst_isSentAgainAndThePersonIsNotAskedTwice() async throws {
+        let request = #"{"event":"approval.request","approval_id":"a1","command":"git push"}"#
+        HermesStub.answer("GET", events, with: (200, stream(request, request, #"{"event":"run.completed","output":"Pushed."}"#)))
+        HermesStub.answer("POST", "/v1/runs/run_1/approval", with: (503, ""), (200, "{}"))
+        let asked = Asked()
+
+        try await turn { approval in
+            await asked.note(approval)
+            return .approved
+        }.run(input: "Push", history: [], report: { _ in })
+
+        let approvals = await asked.approvals
+        XCTAssertEqual(approvals.count, 1)
+        XCTAssertEqual(HermesStub.requests.filter { $0.path.hasSuffix("/approval") }.map(\.body), [#"{"choice":"once"}"#, #"{"choice":"once"}"#])
+    }
+
+    func testAnAnswerHermesNeverTakes_endsTheTurnSayingTheRunIsStillWaiting() async throws {
+        HermesStub.answer("GET", events, with: (200, stream(#"{"event":"approval.request","command":"git push"}"#)))
+        HermesStub.answer("POST", "/v1/runs/run_1/approval", with: (503, ""))
+        let reports = Reports()
+
+        try await turn { _ in .approved }.run(input: "Push", history: [], report: reports.add)
+
+        XCTAssertEqual(reports.all.last?.status, .failed)
+        XCTAssertEqual(reports.all.last?.answer, HermesTurn.answerNotTaken)
+        XCTAssertEqual(HermesStub.requests.count(where: { $0.path.hasSuffix("/approval") }), 3)
     }
 
     func testADeniedApprovalAndOneThatCannotBeAsked_areBothGivenToHermesAsNo() async throws {
@@ -254,7 +339,7 @@ final class HermesAgentTests: XCTestCase {
             )))
             HermesStub.answer("POST", "/v1/runs/run_1/approval", with: (200, "{}"))
 
-            try await turn { _ in answer }.run(input: "Push", history: [], model: nil, report: { _ in })
+            try await turn { _ in answer }.run(input: "Push", history: [], report: { _ in })
 
             XCTAssertEqual(HermesStub.requests.filter { $0.path.hasSuffix("/approval") }.map(\.body), [#"{"choice":"deny"}"#])
         }
@@ -265,6 +350,7 @@ final class HermesAgentTests: XCTestCase {
     func testStoppingTheTurn_stopsTheRunInHermesAndEndsAsStopped() async throws {
         HermesStub.answer("GET", events, with: (200, stream(#"{"event":"approval.request","command":"sleep 600"}"#)))
         HermesStub.answer("POST", "/v1/runs/run_1/stop", with: (200, "{}"))
+        let toldToStop = HermesStub.expectRequest(to: "/v1/runs/run_1/stop")
         let waiting = expectation(description: "The turn is waiting on the person")
         let running = Task {
             try await self.turn { _ in
@@ -274,7 +360,7 @@ final class HermesAgentTests: XCTestCase {
                     await Task.yield()
                 }
                 return .withdrawn
-            }.run(input: "Wait", history: [], model: nil, report: { _ in })
+            }.run(input: "Wait", history: [], report: { _ in })
         }
         await fulfillment(of: [waiting], timeout: 10)
 
@@ -287,22 +373,25 @@ final class HermesAgentTests: XCTestCase {
         }
 
         // Hermes is told in a task of its own.
-        for _ in 0 ..< 10000 where !HermesStub.requests.contains(where: { $0.path.hasSuffix("/stop") }) {
-            await Task.yield()
-        }
+        await fulfillment(of: [toldToStop], timeout: 10)
         XCTAssertTrue(HermesStub.requests.contains { $0.method == "POST" && $0.path == "/v1/runs/run_1/stop" })
         XCTAssertFalse(HermesStub.requests.contains { $0.path.hasSuffix("/approval") }, "A stopped turn answers nothing")
     }
 
-    func testARunHermesSaysWasCancelled_endsAsStopped() async {
+    func testARunHermesSaysWasStoppedThere_endsAsStoppedWithWhatHadBeenAnswered() async throws {
         HermesStub.answer("GET", events, with: (200, stream(#"{"event":"message.delta","delta":"Half"}"#, #"{"event":"run.cancelled"}"#)))
+        let reports = Reports()
 
-        do {
-            try await turn().run(input: "Go", history: [], model: nil, report: { _ in })
-            XCTFail("A cancelled run does not end as a reply")
-        } catch {
-            XCTAssertTrue(error is CancellationError)
-        }
+        try await turn().run(input: "Go", history: [], report: reports.add)
+
+        XCTAssertEqual(reports.all.last?.status, .cancelled)
+        XCTAssertEqual(reports.all.last?.answer, "Half")
+        // The engine ends such a turn as stopped, not as a failure.
+        var progress = TurnProgress(agentName: nil)
+        reports.all.forEach { progress.note($0) }
+        let ending = progress.ending(in: "thread-1", thrown: nil)
+        XCTAssertEqual(ending.outcome, .cancelled)
+        XCTAssertEqual(ending.message.content, "Half\n\n_Stopped here._")
     }
 
     // MARK: - A stream that is lost
@@ -314,7 +403,7 @@ final class HermesAgentTests: XCTestCase {
         HermesStub.answer("GET", "/v1/runs/run_1", with: (200, #"{"status":"running"}"#), (200, #"{"status":"completed","output":"Finished."}"#))
         let reports = Reports()
 
-        try await turn().run(input: "Go", history: [], model: nil, report: reports.add)
+        try await turn().run(input: "Go", history: [], report: reports.add)
 
         XCTAssertEqual(reports.all.last?.status, .completed)
         XCTAssertEqual(reports.all.last?.answer, "Finished.")
@@ -325,7 +414,7 @@ final class HermesAgentTests: XCTestCase {
         HermesStub.answer("GET", "/v1/runs/run_1", with: (404, "{}"))
         let reports = Reports()
 
-        try await turn().run(input: "Go", history: [], model: nil, report: reports.add)
+        try await turn().run(input: "Go", history: [], report: reports.add)
 
         XCTAssertEqual(reports.all.last?.status, .failed)
         XCTAssertEqual(reports.all.last?.answer, HermesTurn.runGone)
@@ -336,7 +425,7 @@ final class HermesAgentTests: XCTestCase {
         HermesStub.answer("GET", "/v1/runs/run_1", with: (503, "{}"))
         let reports = Reports()
 
-        try await turn().run(input: "Go", history: [], model: nil, report: reports.add)
+        try await turn().run(input: "Go", history: [], report: reports.add)
 
         XCTAssertEqual(reports.all.last?.status, .failed)
         XCTAssertEqual(reports.all.last?.answer, HermesTurn.lostContact)
@@ -352,7 +441,7 @@ final class HermesAgentTests: XCTestCase {
         try await turn { approval in
             await asked.note(approval)
             return .approved
-        }.run(input: "Push", history: [], model: nil, report: { _ in })
+        }.run(input: "Push", history: [], report: { _ in })
 
         let approvals = await asked.approvals
         XCTAssertEqual(approvals.map(\.details), ["git push"])
@@ -397,9 +486,10 @@ final class HermesAgentTests: XCTestCase {
         let defaults = UserDefaults.standard
         let keys = ["provider_accounts.v1", "hermes_model_connections_converted.v1"].map(UserScope.scopedKey)
         let saved = keys.map { defaults.object(forKey: $0) }
-        defer {
+        // Run last, after the connection the test makes has been removed.
+        addTeardownBlock {
             for (key, value) in zip(keys, saved) {
-                defaults.set(value, forKey: key)
+                UserDefaults.standard.set(value, forKey: key)
             }
         }
         defaults.removeObject(forKey: keys[0])
@@ -433,23 +523,42 @@ final class HermesAgentTests: XCTestCase {
         await MainActor.run { DatabaseManager.shared.configureIfNeeded() }
         HermesStub.answer("GET", events, with: (200, stream(#"{"event":"run.completed","output":"From Hermes."}"#)))
         let agent = client
+        let model = CountingModel()
         let chat = ChatService(
             contextBuilder: ContextBuilder(limits: .init(maxRecentMessages: 4, maxRecentMemories: 4)),
-            modelRouter: HeuristicModelRouter(availableModels: []),
-            llmClients: [:],
+            modelRouter: HeuristicModelRouter(availableModels: [ModelDescriptor(
+                providerID: "openai", modelID: "gpt", maxContextTokens: 4096,
+                supportsTools: false, supportsEmbeddings: false, costClass: .cheap
+            )]),
+            llmClients: ["openai": model],
             threadStore: ThreadRepository.shared,
             toolService: ToolService.shared,
             shouldAutoRefreshEnvironment: false,
             hermesAgent: { agent }
         )
         let reports = Reports()
-        let threadID = "hermes-\(UUID().uuidString)"
+        await ThreadService.shared.reloadForCurrentUser()
+        let threadID = try await ThreadService.shared.createThread(title: "Hermes \(UUID().uuidString)").id
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await ThreadService.shared.deleteThread(threadId: threadID)
+            await ThreadService.shared.reloadForCurrentUser()
+            await DataEncryptionService.shared.lock()
+        }
 
         try await chat.streamMessage(threadId: threadID, message: "Hello", onStateChange: reports.add)
 
         XCTAssertEqual(reports.all.last?.status, .completed)
         XCTAssertEqual(reports.all.last?.answer, "From Hermes.")
         XCTAssertEqual(HermesStub.requests.first?.session, threadID)
+
+        // What follows a turn is made by the app's own models, and is not
+        // made for a turn that went to Hermes, whichever provider is chosen
+        // by the time it ends.
+        try await ThreadRepository.shared.appendChatMessage(TurnProgress.message(in: threadID, role: "user", content: "Hello"))
+        defaults.set("openai", forKey: keys[0])
+        await chat.updateThreadSummary(threadId: threadID)
+        XCTAssertEqual(model.calls, 0)
         await DataEncryptionService.shared.lock()
     }
 

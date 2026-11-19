@@ -1059,10 +1059,12 @@ struct EditProviderKeySheet: View {
         defer { saving = false }
 
         var address = baseURL
-        if slug == "openai_compatible" {
+        if slug == "openai_compatible" || slug == "hermes" {
             // Saved as the address requests go to, as Add saves it.
             guard let server = LocalProviderDiscoveryService.serverBaseURL(from: baseURL) else {
-                errorMessage = "Enter the server's address, such as http://127.0.0.1:1234."
+                errorMessage = slug == "hermes"
+                    ? "Enter the Hermes agent's address, such as \(HermesAgentClient.usualAddress)."
+                    : "Enter the server's address, such as http://127.0.0.1:1234."
                 return
             }
             address = server.absoluteString

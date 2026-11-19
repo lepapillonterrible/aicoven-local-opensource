@@ -22,7 +22,10 @@ nonisolated struct HermesApprovalRequest: Equatable {
     /// Hermes's own name for this request, where it gives one: the same
     /// request can be sent again while it waits.
     var id: String?
+    /// The command, whole. A command too long to show is not here, and
+    /// `isTooLongToShow` says so: it is never shown in part.
     var command: String?
+    var isTooLongToShow = false
     var description: String?
     var tool: String?
 }
@@ -80,15 +83,12 @@ nonisolated struct HermesAgentClient {
 
     /// Starts a run with the person's message and what was said before, in
     /// the Hermes session `sessionKey` names, and returns the run's id.
-    func startRun(input: String, history: [Message], model: String?, sessionKey: String) async throws -> String {
-        var body: [String: Any] = [
+    func startRun(input: String, history: [Message], sessionKey: String) async throws -> String {
+        let body: [String: Any] = [
             "input": input,
             "conversation_history": history.map { ["role": $0.role, "content": $0.content] },
             "session_id": sessionKey,
         ]
-        if let model, !model.isEmpty {
-            body["model"] = model
-        }
         var request = try request(path: ["v1", "runs"], method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(sessionKey, forHTTPHeaderField: "X-Hermes-Session-Key")
@@ -196,7 +196,8 @@ nonisolated struct HermesAgentClient {
     /// What an approval request says it is for. Hermes puts the command, a
     /// description and the tool's name under different names and at
     /// different depths from one version to the next, so each is looked for
-    /// in the event and in what it nests, and cut to a length.
+    /// in the event and in what it nests. What Hermes says about the
+    /// command is cut to a length, and says so; the command is not.
     static func approvalRequest(from raw: [String: Any]) -> HermesApprovalRequest {
         var places: [[String: Any]] = [raw]
         var next: [[String: Any]] = [raw]
@@ -218,13 +219,33 @@ nonisolated struct HermesAgentClient {
             }
             return nil
         }
+        func whole(_ keys: [String]) -> String? {
+            for place in places {
+                for key in keys {
+                    if let found = (place[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !found.isEmpty {
+                        return found
+                    }
+                }
+            }
+            return nil
+        }
+        let command = whole(["command", "cmd", "shell_command"])
+        let id = whole(["approval_id"])
+        let description = whole(["description", "preview", "message", "title", "summary"])
         return HermesApprovalRequest(
-            id: first(["approval_id"], limit: 240),
-            command: first(["command", "cmd", "shell_command"], limit: 4000),
-            description: first(["description", "preview", "message", "title", "summary"], limit: 2000),
+            // A name too long to be one is no name: cut short, two could
+            // be taken for the same request.
+            id: id.flatMap { $0.count <= 240 ? $0 : nil },
+            command: command.flatMap { $0.count <= longestCommandShown ? $0 : nil },
+            isTooLongToShow: (command?.count ?? 0) > longestCommandShown,
+            description: description.map { $0.count > 2000 ? "\($0.prefix(2000))…" : $0 },
             tool: first(["tool_name", "tool", "name", "toolName"], limit: 160)
         )
     }
+
+    /// The longest command an approval shows. Approve runs exactly what is
+    /// shown, so a longer one is not shown in part: it is refused.
+    static let longestCommandShown = 20000
 
     /// A run id as it may appear in a path: Hermes's own ids are letters,
     /// digits, dashes and underscores.
