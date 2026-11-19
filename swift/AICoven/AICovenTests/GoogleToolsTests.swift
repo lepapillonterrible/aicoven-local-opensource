@@ -295,7 +295,8 @@ final class GoogleToolsTests: XCTestCase {
             let url = request.url?.absoluteString ?? ""
             if url.contains("/files/bin1"), url.contains("alt=media") { return (200, Data([0xFF, 0xFE, 0xFD])) }
             if url.contains("alt=media") { return (200, Data(long.utf8)) }
-            return json(#"{"id": "x", "name": "x", "mimeType": "application/octet-stream"}"#)
+            if url.contains("/files/huge1") { return json(#"{"id": "huge1", "name": "film.mov", "mimeType": "video/quicktime", "size": "734003200"}"#) }
+            return json(#"{"id": "x", "name": "x", "mimeType": "application/octet-stream", "size": "20005"}"#)
         }
         defer { world.forget() }
 
@@ -303,8 +304,16 @@ final class GoogleToolsTests: XCTestCase {
         XCTAssertEqual(binary.status, "ok")
         XCTAssertEqual(binary.contextBlock, "[Google Drive File: bin1]\n[Binary file, 3 bytes - cannot display as text]")
 
-        let cut = await world.call("google_drive.readFile", ["file_id": AnyJSONValue("big1")])
-        XCTAssertEqual(cut.contextBlock, "[Google Drive File: big1]\n" + String(repeating: "a", count: GoogleToolArguments.longestText) + AttachmentContext.cutMark)
+        let cut = await world.call("google_drive.readFile", ["file_id": AnyJSONValue("long1")])
+        XCTAssertEqual(cut.contextBlock, "[Google Drive File: long1]\n" + String(repeating: "a", count: GoogleToolArguments.longestText) + AttachmentContext.cutMark)
+
+        // A file too large to hold is not fetched.
+        let before = world.asked.requests.count
+        let huge = await world.call("google_drive.readFile", ["file_id": AnyJSONValue("huge1")])
+        XCTAssertEqual(huge.status, "error")
+        XCTAssertEqual(huge.error?.hasPrefix("'film.mov' is "), true)
+        XCTAssertEqual(huge.error?.contains("too large to read here"), true)
+        XCTAssertEqual(world.asked.requests.count, before + 1, "Only what it is was asked, not its bytes")
     }
 
     func testDocsSheetsAndSlides_areReadByIdAndToldAsText() async throws {
@@ -402,6 +411,8 @@ final class GoogleToolsTests: XCTestCase {
             XCTAssertNotNil(PromptTemplates.toolDefinitions.first { $0.name == tool }, "\(tool) is described to models")
             XCTAssertEqual(CovenConnectionRules.decision(forAppTool: tool, in: CovenConnections(apps: ["google_drive": .readOnly])), .allowed, tool)
             XCTAssertEqual(CovenConnectionRules.decision(forAppTool: tool, in: CovenConnections(apps: ["github": .readWrite])), .notOn, tool)
+            XCTAssertNotEqual(ChatService.friendlyToolName(tool), tool, "\(tool) is named for the person")
+            XCTAssertFalse(ChatService.friendlyToolSummary(for: tool).contains(tool), tool)
         }
         XCTAssertEqual(PromptTemplates.toolDefinitions.first { $0.name == "google_drive.readFile" }?.parameters.map(\.name), ["file_id", "export_format"])
         // Every tool offered with the Google connection is one of its

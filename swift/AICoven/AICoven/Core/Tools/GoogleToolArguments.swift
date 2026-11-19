@@ -73,6 +73,10 @@ nonisolated enum GoogleToolArguments {
         }
     }
 
+    /// The largest file in Drive that is fetched to be read: as large as
+    /// a file can be to be attached to a message.
+    static let largestFile = AttachmentStore.maxBytes
+
     /// The most of a file's or document's text a tool tells, as an
     /// attached file's.
     static let longestText = AttachmentContext.longestText

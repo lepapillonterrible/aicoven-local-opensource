@@ -1070,6 +1070,10 @@ actor ToolExecutionService {
                         return await .error(tool: toolCall.name, message: "'\(file.name)' is a \(type.dropFirst(GoogleToolArguments.ownTypePrefix.count)) in Google Drive, which has no text to read.")
                     }
                     exportMimeType = export
+                } else if let size = file.size.flatMap(Int.init), size > GoogleToolArguments.largestFile {
+                    // A file is read whole before its text is told: one
+                    // too large to hold is not fetched.
+                    return await .error(tool: toolCall.name, message: "'\(file.name)' is \(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)), which is too large to read here (the most is \(ByteCountFormatter.string(fromByteCount: Int64(GoogleToolArguments.largestFile), countStyle: .file))).")
                 }
             }
             let data = try await googleDriveService.downloadFile(
