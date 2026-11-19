@@ -13,7 +13,7 @@ import SwiftUI
 struct ApprovalBlock: View {
     let approval: ToolApproval
     let phase: ToolApprovals.Phase
-    /// The open text's tallest height before it scrolls.
+    /// The text's tallest height before it scrolls.
     var maxTextHeight: CGFloat = 240
     let onApprove: () -> Void
     let onDeny: () -> Void

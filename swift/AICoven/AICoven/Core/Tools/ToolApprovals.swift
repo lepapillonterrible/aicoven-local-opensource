@@ -13,7 +13,7 @@ nonisolated struct ToolApproval: Identifiable, Equatable {
     /// "Run this command?"
     let question: String
     /// What will happen, in full: the command and where it runs, the file
-    /// and what goes in it. Its first line is what the block shows closed.
+    /// and what goes in it.
     let details: String
     let toolName: String
 
