@@ -665,6 +665,7 @@ final class OpenClawTurnTests: XCTestCase {
             threadId: threadID, message: "And now?",
             onAgentRun: { run in
                 XCTAssertEqual(run.provider, AgentRun.openClaw)
+                XCTAssertEqual(run.origin, "ws://127.0.0.1:18789", "With the Gateway it was started through")
                 await kept.note(run.runID)
             },
             onStateChange: reports.add

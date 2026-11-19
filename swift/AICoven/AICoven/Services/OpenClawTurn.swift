@@ -4,7 +4,8 @@ import Foundation
 /// work, with its own tools; this starts the run in the thread's session,
 /// follows what the Gateway says of it, and reports it as the reply loop
 /// reports its own turns, so the thread shows the same status line and
-/// approvals for it. Stopping the task that runs it stops the run.
+/// approvals for it. Stopping the task that runs it stops the run. A run
+/// this app was closed on is picked up again with `resume`.
 nonisolated struct OpenClawTurn {
     let address: URL
     let token: String?
@@ -25,6 +26,16 @@ nonisolated struct OpenClawTurn {
 
     static let lostContact = "AICoven lost contact with OpenClaw before the run ended. It may still be running there."
     static let notFinished = "OpenClaw could not finish this run."
+    static let runGone = "OpenClaw no longer has this run. It may have been restarted since."
+    static let noAnswerToShow = "OpenClaw finished this run, which went on while AICoven was closed, and its answer could not be read here. It is in OpenClaw."
+    /// The Gateway the run was started through is no longer the one
+    /// connected.
+    struct CannotPickUp: LocalizedError, Equatable {
+        var errorDescription: String? {
+            "The OpenClaw run this reply was waiting on can no longer be picked up."
+        }
+    }
+
     /// The most text a run is started with.
     static let longestMessage = 65536
 
@@ -44,13 +55,120 @@ nonisolated struct OpenClawTurn {
         started: @Sendable (_ runID: String) async -> Void = { _ in },
         report: @escaping @Sendable (TurnState) -> Void
     ) async throws {
+        try await withGateway { gateway in
+            var following = try await subscribe(through: gateway)
+            // What was already waiting to be allowed was asked by an earlier
+            // run, and is not this one's to ask about.
+            following.settled = Set(following.waiting.compactMap { $0["id"] as? String })
+            // Whatever is still asked when the turn ends is withdrawn.
+            defer { following.withdrawAll() }
+
+            // The Gateway names the run by what it was asked with, so a turn
+            // stopped before the Gateway answers can still stop the run.
+            var runID = UUID().uuidString
+            try Task.checkCancellation()
+            // Asked without waiting. If it cannot be asked, no run began;
+            // once it is, the request has its place and is sent whatever
+            // becomes of the turn, so the stop that follows it is of a run
+            // the Gateway was asked for.
+            let answer = try await gateway.ask("chat.send", ["sessionKey": following.sessionKey, "message": message, "idempotencyKey": runID])
+            do {
+                let sent: [String: Any]
+                do {
+                    // No answer and no failure: the turn was stopped as it waited.
+                    guard let answered = try await OpenClawGatewayConnection.first(of: answer) else { throw CancellationError() }
+                    // An answer that says nothing of the run leaves it named
+                    // as it was asked for.
+                    sent = (try? Self.object(answered)) ?? [:]
+                } catch let error as OpenClawGatewayError where error != .closed {
+                    // The Gateway refused the run: none began.
+                    throw error
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    // The connection ended, or failed, with the run asked
+                    // for and not answered: it may have begun.
+                    try Task.checkCancellation()
+                    var state = TurnState(threadId: threadID)
+                    return end(&state, as: .failed, saying: Self.lostContact, report)
+                }
+                if let named = sent["runId"] as? String, !named.isEmpty {
+                    runID = named
+                }
+                await started(runID)
+                try await follow(runID, &following, through: gateway, report)
+            } catch {
+                if Task.isCancelled {
+                    following.withdrawAll()
+                    await stop(runID, in: following.sessionKey, through: gateway)
+                }
+                throw error
+            }
+        }
+    }
+
+    /// Picks up a run started earlier, which went on in OpenClaw while this
+    /// app was closed: where it stands is read first, since it may have
+    /// ended, and it is followed from there. What it had answered before is
+    /// not known here; a run that ends with an answer shows it whole. What
+    /// it is waiting to be allowed is asked again: the question the app was
+    /// closed on went with it. Ends as `run` does.
+    func resume(runID: String, report: @escaping @Sendable (TurnState) -> Void) async throws {
+        try await withGateway { gateway in
+            var following = try await subscribe(through: gateway)
+            defer { following.withdrawAll() }
+            do {
+                let ended: (status: TurnStatus, answer: String)?
+                do {
+                    ended = try await ending(of: runID, in: following.sessionKey, through: gateway)
+                } catch OpenClawGatewayError.closed {
+                    try Task.checkCancellation()
+                    ended = (.failed, Self.lostContact)
+                }
+                if let ended {
+                    var state = TurnState(threadId: threadID)
+                    return end(&state, as: ended.status, saying: ended.answer, report)
+                }
+                for approval in following.waiting {
+                    consider(approval, phase: "pending", &following, through: gateway)
+                }
+                try await follow(runID, &following, through: gateway, report)
+            } catch {
+                if Task.isCancelled {
+                    following.withdrawAll()
+                    await stop(runID, in: following.sessionKey, through: gateway)
+                }
+                throw error
+            }
+        }
+    }
+
+    /// What a turn holds of the session its run is in.
+    private struct Following {
+        /// The Gateway's own name for the session: the one its events use.
+        let sessionKey: String
+        /// What was waiting to be allowed when the session was subscribed to.
+        let waiting: [[String: Any]]
+        /// The requests asked about or settled, by the Gateway's ids.
+        var settled: Set<String> = []
+        /// What the person is being asked, by the Gateway's id for it.
+        var asking: [String: Task<Void, Never>] = [:]
+
+        mutating func withdrawAll() {
+            asking.values.forEach { $0.cancel() }
+            asking = [:]
+        }
+    }
+
+    /// Opens a connection for `work` and closes it after, however it ends.
+    private func withGateway(_ work: (OpenClawGatewayConnection) async throws -> Void) async throws {
         let (gateway, hello) = try await open(address, token)
         if let missing = hello.missing {
             await gateway.close()
             throw OpenClawGatewayError.notSupported(missing)
         }
         do {
-            try await follow(gateway, message: message, started: started, report)
+            try await work(gateway)
         } catch {
             await gateway.close()
             throw Task.isCancelled ? CancellationError() : error
@@ -58,116 +176,107 @@ nonisolated struct OpenClawTurn {
         await gateway.close()
     }
 
-    private func follow(
-        _ gateway: OpenClawGatewayConnection,
-        message: String,
-        started: @Sendable (String) async -> Void,
-        _ report: @Sendable (TurnState) -> Void
-    ) async throws {
-        // The session's events first, so none of the run's is missed.
+    /// Subscribes to the thread's session: its events from here on, and
+    /// what is waiting to be allowed in it.
+    private func subscribe(through gateway: OpenClawGatewayConnection) async throws -> Following {
         let subscribed = try await Self.object(gateway.call("sessions.messages.subscribe", [
             "subscriptionId": "aicoven:\(UUID().uuidString)",
             "key": Self.sessionKey(for: threadID),
             "includeApprovals": true,
         ]))
-        // The Gateway's own name for the session is the one its events use.
-        let sessionKey = (subscribed["key"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? Self.sessionKey(for: threadID)
-        // What was already waiting to be allowed was asked by an earlier
-        // run, and is not this one's to ask about.
-        let replayed = (subscribed["approvalReplay"] as? [String: Any])?["approvals"] as? [[String: Any]] ?? []
-        var settled = Set(replayed.compactMap { $0["id"] as? String })
-        // What the person is being asked, by the Gateway's id for it.
-        var asking: [String: Task<Void, Never>] = [:]
-        // Whatever is still asked when the turn ends is withdrawn.
-        defer { asking.values.forEach { $0.cancel() } }
+        return Following(
+            sessionKey: (subscribed["key"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? Self.sessionKey(for: threadID),
+            waiting: (subscribed["approvalReplay"] as? [String: Any])?["approvals"] as? [[String: Any]] ?? []
+        )
+    }
 
-        // The Gateway names the run by what it was asked with, so a turn
-        // stopped before the Gateway answers can still stop the run.
-        var runID = UUID().uuidString
-        try Task.checkCancellation()
-        // Asked without waiting. If it cannot be asked, no run began; once
-        // it is, the request has its place and is sent whatever becomes of
-        // the turn, so the stop that follows it is of a run the Gateway
-        // was asked for.
-        let answer = try await gateway.ask("chat.send", ["sessionKey": sessionKey, "message": message, "idempotencyKey": runID])
+    /// Follows the run's events to its end, asking the person about what it
+    /// asks to be allowed. If the events end first, the turn ends failed.
+    private func follow(
+        _ runID: String,
+        _ following: inout Following,
+        through gateway: OpenClawGatewayConnection,
+        _ report: @Sendable (TurnState) -> Void
+    ) async throws {
+        var state = TurnState(threadId: threadID)
         do {
-            let sent: [String: Any]
-            do {
-                // No answer and no failure: the turn was stopped as it waited.
-                guard let answered = try await OpenClawGatewayConnection.first(of: answer) else { throw CancellationError() }
-                // An answer that says nothing of the run leaves it named
-                // as it was asked for.
-                sent = (try? Self.object(answered)) ?? [:]
-            } catch let error as OpenClawGatewayError where error != .closed {
-                // The Gateway refused the run: none began.
-                throw error
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                // The connection ended, or failed, with the run asked for
-                // and not answered: it may have begun.
-                try Task.checkCancellation()
-                var state = TurnState(threadId: threadID)
-                return end(&state, as: .failed, saying: Self.lostContact, report)
-            }
-            if let named = sent["runId"] as? String, !named.isEmpty {
-                runID = named
-            }
-            await started(runID)
-
-            var state = TurnState(threadId: threadID)
-            do {
-                for try await event in gateway.events {
-                    let payload = try Self.object(event.payload)
-                    switch event.name {
-                    case "chat":
-                        guard payload["sessionKey"] as? String == sessionKey, payload["runId"] as? String == runID else { continue }
-                        if take(payload, into: &state, report) { return }
-                    case "session.approval":
-                        let from = [payload["sessionKey"] as? String, payload["sourceSessionKey"] as? String]
-                        guard from.contains(sessionKey), let approval = payload["approval"] as? [String: Any],
-                              let id = approval["id"] as? String else { continue }
-                        switch payload["phase"] as? String {
-                        case "pending":
-                            guard settled.insert(id).inserted else { continue }
-                            // An answer names the kind of request it
-                            // answers. One of no kind this app knows cannot
-                            // be answered, and is not asked: as in the
-                            // cloud app, it is left to the Gateway.
-                            let presentation = approval["presentation"] as? [String: Any] ?? [:]
-                            guard let kind = presentation["kind"] as? String, Self.approvalKinds.contains(kind) else {
-                                AppErrorReporter.log(message: "An approval of a kind this app does not know was not asked.", context: "OpenClawTurn.approval")
-                                continue
-                            }
-                            // Asked apart, so the run's events are still
-                            // followed while the person decides.
-                            asking[id] = answering(presentation, id: id, kind: kind, through: gateway)
-                        case "terminal":
-                            // Settled there (answered elsewhere, or no
-                            // longer wanted): no longer asked here.
-                            settled.insert(id)
-                            asking.removeValue(forKey: id)?.cancel()
-                        default:
-                            continue
-                        }
-                    default:
-                        continue
-                    }
+            for try await event in gateway.events {
+                let payload = try Self.object(event.payload)
+                switch event.name {
+                case "chat":
+                    guard payload["sessionKey"] as? String == following.sessionKey, payload["runId"] as? String == runID else { continue }
+                    if take(payload, into: &state, report) { return }
+                case "session.approval":
+                    let from = [payload["sessionKey"] as? String, payload["sourceSessionKey"] as? String]
+                    guard from.contains(following.sessionKey), let approval = payload["approval"] as? [String: Any] else { continue }
+                    consider(approval, phase: payload["phase"] as? String, &following, through: gateway)
+                default:
+                    continue
                 }
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                try Task.checkCancellation()
             }
-            // The events ended before the run did.
-            try Task.checkCancellation()
-            end(&state, as: .failed, saying: Self.lostContact, report)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
-            if Task.isCancelled {
-                asking.values.forEach { $0.cancel() }
-                await stop(runID, in: sessionKey, through: gateway)
+            try Task.checkCancellation()
+        }
+        // The events ended before the run did.
+        try Task.checkCancellation()
+        end(&state, as: .failed, saying: Self.lostContact, report)
+    }
+
+    /// Takes what the Gateway says of a request to be allowed: one waiting
+    /// is asked of the person, once; one settled there (answered elsewhere,
+    /// or no longer wanted) is no longer asked here.
+    private func consider(_ approval: [String: Any], phase: String?, _ following: inout Following, through gateway: OpenClawGatewayConnection) {
+        guard let id = approval["id"] as? String else { return }
+        switch phase {
+        case "pending":
+            guard following.settled.insert(id).inserted else { return }
+            // An answer names the kind of request it answers. One of no
+            // kind this app knows cannot be answered, and is not asked: as
+            // in the cloud app, it is left to the Gateway.
+            let presentation = approval["presentation"] as? [String: Any] ?? [:]
+            guard let kind = presentation["kind"] as? String, Self.approvalKinds.contains(kind) else {
+                return AppErrorReporter.log(message: "An approval of a kind this app does not know was not asked.", context: "OpenClawTurn.approval")
             }
-            throw error
+            // Asked apart, so the run's events are still followed while
+            // the person decides.
+            following.asking[id] = answering(presentation, id: id, kind: kind, through: gateway)
+        case "terminal":
+            following.settled.insert(id)
+            following.asking.removeValue(forKey: id)?.cancel()
+        default:
+            return
+        }
+    }
+
+    /// How a run ended, or nil while it is still going: what `agent.wait`
+    /// says of it, and what the session's history holds of it, which is
+    /// where its answer is.
+    private func ending(of runID: String, in sessionKey: String, through gateway: OpenClawGatewayConnection) async throws -> (status: TurnStatus, answer: String)? {
+        let waited = try await Self.object(gateway.call("agent.wait", ["runId": runID, "timeoutMs": 1000]))
+        let status = waited["status"] as? String ?? ""
+        // Every finished run has an end time: without one, "ok" and
+        // "timeout" are of a run still going.
+        let hasEnded = waited["endedAt"] is NSNumber
+        if status == "error" || (status == "timeout" && hasEnded) {
+            let reason = (waited["stopReason"] as? String ?? "").lowercased()
+            return ["rpc", "stop", "aborted"].contains(reason) ? (.cancelled, "") : (.failed, Self.failure(in: waited))
+        }
+        let history = try await Self.object(gateway.call("chat.history", [
+            "sessionKey": sessionKey, "inputRunIds": [runID], "limit": 20, "maxChars": Self.longestMessage,
+        ]))
+        let held = Self.ending(of: runID, in: history)
+        if status == "ok", hasEnded {
+            return held ?? (.completed, Self.noAnswerToShow)
+        }
+        switch Self.isGoing(runID, in: history) {
+        case true?: return nil
+        // Neither going nor ended as far as its history shows: the Gateway
+        // has lost it.
+        case false?: return held ?? (.failed, Self.runGone)
+        // The history does not say: `agent.wait` did, that it is going.
+        case nil: return nil
         }
     }
 
@@ -275,6 +384,41 @@ nonisolated struct OpenClawTurn {
             return text.isEmpty ? nil : text
         }
         return nil
+    }
+
+    /// Whether the session's history says the run is going, or nil where
+    /// it does not say.
+    static func isGoing(_ runID: String, in history: [String: Any]) -> Bool? {
+        if (history["inFlightRun"] as? [String: Any])?["runId"] as? String == runID { return true }
+        guard let session = history["sessionInfo"] as? [String: Any] else { return nil }
+        if let going = session["activeRunIds"] as? [String] { return going.contains(runID) }
+        return session["hasActiveRun"] as? Bool
+    }
+
+    /// How the run ended, from the newest row of the session's history
+    /// that is the run's, or nil if that row does not end it: stopped;
+    /// failed; or answered, by an assistant's row that stopped of itself,
+    /// calls no tool and has text.
+    static func ending(of runID: String, in history: [String: Any]) -> (status: TurnStatus, answer: String)? {
+        let rows = (history["messages"] as? [[String: Any]] ?? []).filter {
+            ($0["__openclaw"] as? [String: Any])?["runId"] as? String == runID
+                && ["assistant", "toolResult"].contains($0["role"] as? String ?? "")
+        }
+        guard let newest = rows.last, newest["role"] as? String == "assistant" else { return nil }
+        let reason = (newest["stopReason"] as? String ?? "").lowercased()
+        let text = finalText(in: ["message": newest])
+        if (newest["openclawAbort"] as? [String: Any])?["aborted"] as? Bool == true || reason == "aborted" {
+            return (.cancelled, text ?? "")
+        }
+        if reason == "error" {
+            return (.failed, failure(in: newest))
+        }
+        let callsATool = (newest["content"] as? [[String: Any]])?.contains {
+            ["toolCall", "toolUse", "functionCall"].contains($0["type"] as? String ?? "")
+        } ?? false
+        guard ["stop", "length"].contains(reason), !callsATool,
+              let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return (.completed, text)
     }
 
     /// What to say of a run that ended in an error, by its kind.

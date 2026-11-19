@@ -369,7 +369,7 @@ actor ChatService {
             let earlier = try await loadMessages(threadId: threadId, limit: Self.hermesHistoryLimit)
             try await turn.run(
                 message: OpenClawTurn.message(message, after: Self.hermesHistory(from: earlier).map { ($0.role, $0.content) }),
-                started: { await onAgentRun?(AgentRun(provider: AgentRun.openClaw, runID: $0)) },
+                started: { await onAgentRun?(AgentRun(provider: AgentRun.openClaw, runID: $0, origin: turn.address.absoluteString)) },
                 report: onStateChange
             )
             return
@@ -1456,13 +1456,23 @@ actor ChatService {
     /// Whether a run an agent was making for a turn can be picked up again:
     /// it is that agent's, and the agent is still connected.
     func canResume(_ run: AgentRun) -> Bool {
-        run.provider == AgentRun.hermes && hermesAgent() != nil
+        switch run.provider {
+        case AgentRun.hermes: hermesAgent() != nil
+        // At the Gateway it was started through: another would not know it.
+        case AgentRun.openClaw: openClawTurn("").map { $0.address.absoluteString == run.origin } ?? false
+        default: false
+        }
     }
 
     /// Picks up a run an agent was making for a turn when this app was
     /// closed on it, and follows it to its end as `streamMessage` would
     /// have.
     func resumeAgentRun(_ run: AgentRun, threadId: String, onStateChange: @escaping @Sendable (TurnState) -> Void) async throws {
+        if run.provider == AgentRun.openClaw {
+            guard let turn = openClawTurn(threadId), turn.address.absoluteString == run.origin else { throw OpenClawTurn.CannotPickUp() }
+            threadsLastAnsweredByAnAgent.insert(threadId)
+            return try await turn.resume(runID: run.runID, report: onStateChange)
+        }
         guard run.provider == AgentRun.hermes, let agent = hermesAgent() else { throw HermesAgentError.cannotPickUp }
         threadsLastAnsweredByAnAgent.insert(threadId)
         try await HermesTurn(client: agent, threadID: threadId).resume(runID: run.runID, report: onStateChange)
