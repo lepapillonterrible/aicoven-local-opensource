@@ -441,18 +441,26 @@ actor ToolExecutionService {
         // runtime tool calls use the same auth path as MCP connection tests.
         let token = try? await connectedAccountsService.getMCPToken(forServerId: server.id)
         let client = MCPClient(server: server, token: token)
+        // The tool as the server listed it: the current protocol sends the
+        // arguments its schema marks for it as headers too.
+        let listed = server.cachedTools?.first { $0.name == actionName }
 
         do {
-            let items = try await client.callTool(name: actionName, arguments: toolCall.args)
-            let texts = items.compactMap(\.text)
-            let block = "[MCP: \(actionName) on \(server.name)]\n" + texts.joined(separator: "\n\n")
+            let items = try await client.callTool(name: actionName, arguments: toolCall.args, tool: listed)
+            await client.disconnect()
+            let block = "[MCP: \(actionName) on \(server.name)]\n" + items.map(\.shown).joined(separator: "\n\n")
 
             return await .success(
                 tool: toolCall.name,
                 result: ["status": AnyJSONValue("success"), "item_count": AnyJSONValue(items.count)],
                 contextBlock: block
             )
+        } catch let MCPClientError.toolFailed(said) {
+            await client.disconnect()
+            // The tool ran and says it failed: the model is told what it said.
+            return await .error(tool: toolCall.name, message: "The tool reported an error: \(said)")
         } catch {
+            await client.disconnect()
             return await .error(tool: toolCall.name, message: "MCP Server Error: \(error.localizedDescription)")
         }
     }

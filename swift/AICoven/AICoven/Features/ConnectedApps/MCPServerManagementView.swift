@@ -152,10 +152,16 @@ struct MCPServerManagementView: View {
         do {
             let token = try? await service.getMCPToken(forServerId: server.id)
             let client = MCPClient(server: server, token: token)
-            try await client.connect()
 
             // Discover tools and cache them on the server account
-            let tools = try await client.discoverTools()
+            let tools: [MCPToolDefinition]
+            do {
+                tools = try await client.discoverTools()
+                await client.disconnect()
+            } catch {
+                await client.disconnect()
+                throw error
+            }
             var updated = server
             updated.cachedTools = tools
             updated.toolsCachedAt = Date()
@@ -164,13 +170,9 @@ struct MCPServerManagementView: View {
 
             await loadServers()
         } catch {
-            // Suggest switching transport if the connection failed
-            let transportHint = server.transport == .sse
-                ? "\n\nTip: Try removing this server and re-adding it with 'Streamable HTTP' transport."
-                : server.transport == .streamableHttp
-                ? "\n\nTip: Try removing this server and re-adding it with 'SSE' transport."
-                : ""
-            errorMessage = "Connection test failed: \(error.localizedDescription)\(transportHint)"
+            // The client finds out for itself what the server speaks: there
+            // is no other transport setting to suggest.
+            errorMessage = "Connection test failed: \(error.localizedDescription)"
         }
     }
 
@@ -502,8 +504,8 @@ struct AddMCPServerSheet: View {
             Task.detached {
                 let client = MCPClient(server: newAccount, token: tokenToSave)
                 do {
-                    try await client.connect()
                     let tools = try await client.discoverTools()
+                    await client.disconnect()
                     var updated = newAccount
                     updated.cachedTools = tools
                     updated.toolsCachedAt = Date()
