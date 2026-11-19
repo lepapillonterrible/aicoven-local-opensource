@@ -151,6 +151,123 @@ final class MessageAttachmentsTests: XCTestCase {
         XCTAssertEqual(files(under: root), [])
     }
 
+    /// Reads that wait to be let go, one at a time, in the order asked.
+    @MainActor
+    private final class HeldReads {
+        private var waiting: [(id: String, continuation: CheckedContinuation<Data, Error>)] = []
+        /// Met each time a read starts to wait.
+        var isWaiting: XCTestExpectation?
+
+        func read(_ id: String) async throws -> Data {
+            try await withCheckedThrowingContinuation { continuation in
+                waiting.append((id, continuation))
+                isWaiting?.fulfill()
+            }
+        }
+
+        /// Lets the earliest read still waiting return, or fail.
+        func letGo(failing: Bool = false) {
+            guard !waiting.isEmpty else { return }
+            let next = waiting.removeFirst()
+            if failing {
+                next.continuation.resume(throwing: AttachmentStore.Failure.missing)
+            } else {
+                next.continuation.resume(returning: Data("bytes of \(next.id)".utf8))
+            }
+        }
+    }
+
+    @MainActor
+    func testAnAttachmentThatCannotBeOpenedAfterAnother_leavesNeitherOnDisk() async {
+        let root = makeRoot()
+        let reads = HeldReads()
+        let presenter = AttachmentPreviewPresenter(rootDirectory: root, load: { try await reads.read($0) })
+
+        reads.isWaiting = expectation(description: "The first is being read")
+        let first = Task { await presenter.open(attachmentID: "a", filename: "first.txt") }
+        await fulfillment(of: [reads.isWaiting].compactMap(\.self), timeout: 10)
+        reads.letGo()
+        await first.value
+        XCTAssertEqual(files(under: root).map(\.lastPathComponent), ["first.txt"])
+
+        // The next one cannot be read: the first is closed all the same.
+        reads.isWaiting = expectation(description: "The second is being read")
+        let second = Task { await presenter.open(attachmentID: "b", filename: "second.txt") }
+        await fulfillment(of: [reads.isWaiting].compactMap(\.self), timeout: 10)
+        XCTAssertEqual(files(under: root), [], "The earlier preview is gone as soon as another is asked for")
+        XCTAssertTrue(presenter.isOpening)
+        reads.letGo(failing: true)
+        await second.value
+
+        XCTAssertNil(presenter.previewURL)
+        XCTAssertEqual(presenter.errorMessage, AttachmentPreviewPresenter.cannotOpen)
+        XCTAssertEqual(files(under: root), [])
+    }
+
+    @MainActor
+    func testOfTwoAskedForAtOnce_onlyTheLaterIsShown() async {
+        let root = makeRoot()
+        let reads = HeldReads()
+        let presenter = AttachmentPreviewPresenter(rootDirectory: root, load: { try await reads.read($0) })
+
+        // One after the other, each once the one before is being read.
+        reads.isWaiting = expectation(description: "The earlier is being read")
+        let earlier = Task { await presenter.open(attachmentID: "a", filename: "earlier.txt") }
+        await fulfillment(of: [reads.isWaiting].compactMap(\.self), timeout: 10)
+        reads.isWaiting = expectation(description: "The later is being read")
+        let later = Task { await presenter.open(attachmentID: "b", filename: "later.txt") }
+        await fulfillment(of: [reads.isWaiting].compactMap(\.self), timeout: 10)
+
+        // The earlier one's read returns first, and is not shown.
+        reads.letGo()
+        await earlier.value
+        XCTAssertNil(presenter.previewURL)
+        XCTAssertTrue(presenter.isOpening, "The later one is still on its way")
+        reads.letGo()
+        await later.value
+
+        XCTAssertEqual(presenter.previewURL?.lastPathComponent, "later.txt")
+        XCTAssertEqual(files(under: root).map(\.lastPathComponent), ["later.txt"])
+        XCTAssertFalse(presenter.isOpening)
+    }
+
+    @MainActor
+    func testWhatWasReadAsOneAccount_isNotWrittenOutOrShownForAnother() async {
+        let root = makeRoot()
+        let reads = HeldReads()
+        var account = "account-a"
+        let presenter = AttachmentPreviewPresenter(rootDirectory: root, load: { try await reads.read($0) }, currentAccount: { account })
+
+        reads.isWaiting = expectation(description: "It is being read")
+        let opening = Task { await presenter.open(attachmentID: "a", filename: "private.txt") }
+        await fulfillment(of: [reads.isWaiting].compactMap(\.self), timeout: 10)
+        account = "account-b"
+        reads.letGo()
+        await opening.value
+
+        XCTAssertNil(presenter.previewURL)
+        XCTAssertEqual(files(under: root), [])
+        XCTAssertNil(presenter.errorMessage, "Nothing failed: there is nothing to say to the other account")
+        XCTAssertFalse(presenter.isOpening)
+    }
+
+    @MainActor
+    func testWhenTheViewGoesWhileOneIsBeingRead_itIsNotShown() async {
+        let root = makeRoot()
+        let reads = HeldReads()
+        let presenter = AttachmentPreviewPresenter(rootDirectory: root, load: { try await reads.read($0) })
+
+        reads.isWaiting = expectation(description: "It is being read")
+        let opening = Task { await presenter.open(attachmentID: "a", filename: "late.txt") }
+        await fulfillment(of: [reads.isWaiting].compactMap(\.self), timeout: 10)
+        presenter.teardown()
+        reads.letGo()
+        await opening.value
+
+        XCTAssertNil(presenter.previewURL)
+        XCTAssertEqual(files(under: root), [])
+    }
+
     func testAFileName_isMadePlainBeforeItIsUsedOnDisk() {
         XCTAssertEqual(AttachmentPreviewPresenter.safeFilename("report.pdf"), "report.pdf")
         XCTAssertEqual(AttachmentPreviewPresenter.safeFilename("a/b\\c.txt"), "c.txt")

@@ -1,3 +1,4 @@
+import Accessibility
 internal import Combine
 import Foundation
 import SwiftUI
@@ -27,6 +28,8 @@ final class AttachmentPreviewPresenter: ObservableObject {
     private let fileManager: FileManager
     private let sessionDirectory: URL
     private let load: Load
+    /// The account signed in, by its id.
+    private let currentAccount: @MainActor () -> String
     /// The opening under way: a later one takes its place.
     private var opening: UUID?
     /// Previews left by a run of the app that ended while one was open are
@@ -36,7 +39,8 @@ final class AttachmentPreviewPresenter: ObservableObject {
     init(
         fileManager: FileManager = .default,
         rootDirectory: URL? = nil,
-        load: @escaping Load = { try await AttachmentStore.shared.data(of: $0) }
+        load: @escaping Load = { try await AttachmentStore.shared.data(of: $0) },
+        currentAccount: @escaping @MainActor () -> String = { UserScope.currentUserID }
     ) {
         self.fileManager = fileManager
         let defaultRoot = fileManager.temporaryDirectory.appendingPathComponent("AICovenAttachmentPreviews", isDirectory: true)
@@ -48,15 +52,20 @@ final class AttachmentPreviewPresenter: ObservableObject {
         }
         sessionDirectory = (rootDirectory ?? defaultRoot).appendingPathComponent(UUID().uuidString, isDirectory: true)
         self.load = load
+        self.currentAccount = currentAccount
     }
 
     /// Reads the attachment and shows it. If another is asked for before
     /// this one is ready, this one is not shown.
     func open(attachmentID: String, filename: String) async {
         let request = UUID()
+        let account = currentAccount()
         opening = request
         isOpening = true
         errorMessage = nil
+        // What was open before is closed, and its file gone, whatever
+        // becomes of this one.
+        previewURL = nil
         defer {
             if opening == request {
                 opening = nil
@@ -66,10 +75,16 @@ final class AttachmentPreviewPresenter: ObservableObject {
         do {
             let data = try await load(attachmentID)
             guard opening == request else { return }
+            // Read as one account, it is not written out or shown for
+            // another: the account can have changed while it was read.
+            guard currentAccount() == account else { return }
             previewURL = try stage(data, named: filename)
         } catch {
             guard opening == request else { return }
             errorMessage = Self.cannotOpen
+            // Said, as well as shown under the attachment: focus stays on
+            // the button that was pressed.
+            AccessibilityNotification.Announcement(Self.cannotOpen).post()
         }
     }
 

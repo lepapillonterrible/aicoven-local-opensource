@@ -52,7 +52,8 @@ struct AttachmentThumbnail: View {
                     }
             }
             .buttonStyle(.plain)
-            .disabled(isLoading)
+            // Not while it is being read, for its thumbnail or to open.
+            .disabled(isLoading || presenter.isOpening)
             .accessibilityLabel(Text(accessibilityName))
             .accessibilityHint("Opens it larger")
             .accessibilityIdentifier("message-attachment")
