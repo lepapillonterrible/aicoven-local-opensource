@@ -258,21 +258,15 @@ struct PersonalChatView: View {
 
     @State private var messages: [ChatMessage] = []
     @State private var messageText = ""
-    @State private var isSending = false
     @State private var errorMessage: String?
-
-    // Streaming/autonomous state (mirrors EnhancedChatView behavior)
-    @State private var lastResponse: ChatResponse?
-    @State private var lastResponseId: String?
-    /// Descriptive reasoning text shown alongside the loader while the agent is working
-    @State private var reasoningLoadingMessage: String = "Thinking through your request…"
-    /// Live answer buffer used while streaming in the final response
-    @State private var streamingAnswerBuffer: String = ""
-    /// Streaming thoughts collected from planning-phase deltas
-    @State private var streamingThoughts: [String] = []
-    /// Whether the current streamed turn used any tools (web, GitHub, etc.).
-    @State private var streamingUsedTools: Bool = false
+    /// The engine runs the replies; this view shows the one in its thread.
+    @ObservedObject private var turns = TurnEngine.shared
     @State private var canEditAgent: Bool = true
+
+    /// The reply on its way in this thread, if there is one.
+    private var runningTurn: TurnEngine.Activity? {
+        turns.running[thread.id]
+    }
 
     // Pagination state for message history
     @State private var isInitialLoading: Bool = false
@@ -347,7 +341,7 @@ struct PersonalChatView: View {
                         }
 
                         // Show thinking indicator when AI is responding
-                        if isSending {
+                        if let runningTurn {
                             HStack(alignment: .top) {
                                 VStack(alignment: .leading, spacing: 8) {
                                     HStack(spacing: 6) {
@@ -358,7 +352,7 @@ struct PersonalChatView: View {
                                     .font(.caption)
                                     .foregroundStyle(Color.aicovenTeal)
 
-                                    CauldronLoadingView(message: reasoningLoadingMessage, size: 40)
+                                    CauldronLoadingView(message: runningTurn.message, size: 40)
                                         .padding(16)
                                         .background(
                                             RoundedRectangle(cornerRadius: 12)
@@ -406,11 +400,14 @@ struct PersonalChatView: View {
                         }
                     }
                 }
-                .onChange(of: isSending) { _, newValue in
-                    if newValue {
+                .onChange(of: runningTurn?.turnID) { ended, started in
+                    if started != nil {
                         withAnimation {
                             proxy.scrollTo("thinking-indicator", anchor: .bottom)
                         }
+                    } else if ended != nil {
+                        // The engine stored how the turn ended.
+                        Task { await loadNewMessages() }
                     }
                 }
                 .onAppear {
@@ -447,7 +444,7 @@ struct PersonalChatView: View {
                         await ChatService.shared.addLocalMessage(errorMessage)
                     }
                 },
-                isDisabled: isSending,
+                isDisabled: runningTurn != nil,
                 threadId: thread.id,
                 autoFocus: true
             )
@@ -460,11 +457,6 @@ struct PersonalChatView: View {
         // reset and reload the messages/provider keys for the new thread.
         .task(id: thread.id) {
             messages = []
-            lastResponse = nil
-            lastResponseId = nil
-            streamingAnswerBuffer = ""
-            streamingThoughts = []
-            streamingUsedTools = false
             isInitialLoading = false
             didLoadInitialMessages = false
             isLoadingMore = false
@@ -473,6 +465,7 @@ struct PersonalChatView: View {
             isPrependingMessages = false
             pendingScrollAnchorId = nil
 
+            await TurnEngine.shared.settleInterruptedTurns(threadID: thread.id)
             await loadInitialMessages()
             await loadProviderKeys()
         }
@@ -490,56 +483,6 @@ struct PersonalChatView: View {
             idCounts[msg.id] = count + 1
             // Generate unique ID for all messages to handle backend duplicates
             let uniqueId = count == 0 ? msg.id : "\(msg.id)-dup\(count)"
-
-            // For the last AI message, use the cached ChatResponse to preserve tool calls and thoughts.
-            if msg.id == lastResponseId, let response = lastResponse {
-                let base = MessageAdapter.toEnhanced(from: msg, response: response)
-
-                // Resolve agent name for personal threads:
-                // 1) Prefer backend role_name (via base.agentRole)
-                // 2) Fall back to the thread's agentName
-                let resolvedAgentRole = base.agentRole ?? thread.agentName
-
-                // While streaming, override content with live buffer
-                if isSending, !streamingAnswerBuffer.isEmpty, msg.role == "assistant" {
-                    return EnhancedChatMessage(
-                        id: uniqueId,
-                        threadId: base.threadId,
-                        role: base.role,
-                        content: MessageAdapter.sanitizeContentForDisplay(streamingAnswerBuffer),
-                        agentRole: resolvedAgentRole,
-                        model: base.model,
-                        provider: base.provider,
-                        tokens: base.tokens,
-                        cost: base.cost,
-                        thoughts: base.thoughts,
-                        toolCalls: base.toolCalls,
-                        attachments: base.attachments,
-                        images: base.images,
-                        generatedFiles: base.generatedFiles,
-                        createdAt: base.createdAt
-                    )
-                }
-
-                // Non-streaming path: use uniqueId for consistency
-                return EnhancedChatMessage(
-                    id: uniqueId,
-                    threadId: base.threadId,
-                    role: base.role,
-                    content: base.content,
-                    agentRole: resolvedAgentRole,
-                    model: base.model,
-                    provider: base.provider,
-                    tokens: base.tokens,
-                    cost: base.cost,
-                    thoughts: base.thoughts,
-                    toolCalls: base.toolCalls,
-                    attachments: base.attachments,
-                    images: base.images,
-                    generatedFiles: base.generatedFiles,
-                    createdAt: base.createdAt
-                )
-            }
 
             let base = MessageAdapter.toEnhanced(from: msg, response: nil)
             let resolvedAgentRole = base.agentRole ?? thread.agentName
@@ -652,157 +595,42 @@ struct PersonalChatView: View {
 
         // Split the outgoing content into the visible user question and any
         // tool-generated context blocks (web search results, attachment analysis).
-        let parts = splitUserAndToolContext(from: raw)
-        let userVisibleText = parts.userText
-        let fullTextForLLM = parts.fullText
-
-        messageText = ""
-        isSending = true
-        streamingAnswerBuffer = ""
-        streamingThoughts = []
-        streamingUsedTools = false
-        reasoningLoadingMessage = "Thinking through your request…"
-
-        // Add user message immediately and persist it in the local history.
-        // We store only the human-authored question so the transcript stays
+        // Only the human-authored question is stored, so the transcript stays
         // clean; tool context is treated as ephemeral system context.
-        let userMessage = ChatMessage(
-            id: UUID().uuidString,
-            threadId: thread.id,
-            role: "user",
-            content: userVisibleText,
-            metadata: nil,
-            tokenUsage: nil,
-            createdAt: Date(),
-            isEncrypted: false,
-            keyFingerprint: nil
-        )
-        messages.append(userMessage)
-        await ChatService.shared.addLocalMessage(userMessage)
-
+        let parts = splitUserAndToolContext(from: raw)
+        messageText = ""
         do {
-            try await ChatService.shared.streamMessage(
-                threadId: thread.id,
-                message: fullTextForLLM,
-                roleId: thread.agentId,
-                attachments: attachments.isEmpty ? nil : attachments,
-                onStateChange: { state in
-                    Task { @MainActor in
-                        switch state.phase {
-                        case .starting, .planning, .modelAttempt:
-                            let trimmed = state.scratchpad.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if !trimmed.isEmpty {
-                                if streamingUsedTools {
-                                    reasoningLoadingMessage = "Using tools and memory: \(trimmed)"
-                                } else {
-                                    reasoningLoadingMessage = "Planning: \(trimmed)"
-                                }
-                                if streamingThoughts.last != trimmed {
-                                    streamingThoughts.append(trimmed)
-                                }
-                            }
-                        case .tooling:
-                            streamingUsedTools = true
-                            if let lastTool = state.toolsInProgress.values.first ?? state.toolsCompleted.last {
-                                reasoningLoadingMessage = toolActivityMessage(for: lastTool.name)
-                            }
-                        case .answering:
-                            streamingAnswerBuffer = state.answer
-                            streamingAnswerBuffer = Self.stripThinkTags(from: streamingAnswerBuffer)
-                            if streamingAnswerBuffer.contains("web.") || streamingAnswerBuffer.contains("github.") {
-                                streamingUsedTools = true
-                            }
-                        case .finalizing:
-                            if state.status == .failed {
-                                // Handled in catch block naturally if thrown, but if emitted as failed state:
-                                isSending = false
-                                streamingAnswerBuffer = ""
-                                streamingThoughts = []
-                                streamingUsedTools = false
-                                reasoningLoadingMessage = "Something went wrong while contacting the assistant. Please try again."
-
-                                let errorMessage = ChatMessage(
-                                    id: UUID().uuidString,
-                                    threadId: thread.id,
-                                    role: "assistant",
-                                    content: state.answer,
-                                    metadata: nil,
-                                    tokenUsage: nil,
-                                    createdAt: Date(),
-                                    isEncrypted: false,
-                                    keyFingerprint: nil
-                                )
-                                messages.append(errorMessage)
-                                Task { await ChatService.shared.addLocalMessage(errorMessage) }
-                                return
-                            }
-
-                            isSending = false
-                            let collapsedThoughts: [String]
-                            if streamingThoughts.isEmpty {
-                                collapsedThoughts = []
-                            } else {
-                                let joined = streamingThoughts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-                                collapsedThoughts = joined.isEmpty ? [] : [joined]
-                            }
-                            var meta: [String: AnyJSONValue] = [:]
-                            if !collapsedThoughts.isEmpty {
-                                meta["thoughts"] = AnyJSONValue(collapsedThoughts)
-                            }
-                            if let agentName = thread.agentName {
-                                meta["role_name"] = AnyJSONValue(agentName)
-                            }
-
-                            let cleanedContent = MessageAdapter.sanitizeContentForDisplay(state.answer)
-                            let aiMessage = ChatMessage(
-                                id: UUID().uuidString,
-                                threadId: thread.id,
-                                role: "assistant",
-                                content: cleanedContent,
-                                metadata: meta,
-                                tokenUsage: nil,
-                                createdAt: Date(),
-                                isEncrypted: false,
-                                keyFingerprint: nil
-                            )
-                            messages.append(aiMessage)
-                            await ChatService.shared.addLocalMessage(aiMessage)
-                            Task {
-                                await ChatService.shared.updateThreadSummary(threadId: thread.id)
-                            }
-
-                            lastResponse = nil
-                            lastResponseId = aiMessage.id
-                            streamingAnswerBuffer = ""
-                            streamingThoughts = []
-                        }
-                    }
-                }
+            let userMessage = try await TurnEngine.shared.start(
+                threadID: thread.id,
+                text: parts.userText,
+                context: parts.fullText,
+                roleID: thread.agentId,
+                agentName: thread.agentName,
+                attachments: attachments.isEmpty ? nil : attachments
             )
+            messages.append(userMessage)
         } catch {
             AppErrorReporter.log(error: error, context: "PersonalContentView.sendMessage")
-            isSending = false
-            streamingAnswerBuffer = ""
-            streamingThoughts = []
-            streamingUsedTools = false
-            reasoningLoadingMessage = "Something went wrong while contacting the assistant. Please try again."
-
-            let errorText = "I ran into an error while contacting your provider: \(error.localizedDescription)"
-            let errorMessage = ChatMessage(
-                id: UUID().uuidString,
-                threadId: thread.id,
+            // Nothing was sent or stored: the text goes back to the composer,
+            // and the thread says why, for now only on screen.
+            messageText = raw
+            messages.append(TurnProgress.message(
+                in: thread.id,
                 role: "assistant",
-                content: errorText,
-                metadata: nil,
-                tokenUsage: nil,
-                createdAt: Date(),
-                isEncrypted: false,
-                keyFingerprint: nil
-            )
-            messages.append(errorMessage)
-            Task {
-                await ChatService.shared.addLocalMessage(errorMessage)
-            }
+                content: "I couldn't send your message: \(error.localizedDescription)"
+            ))
+        }
+    }
+
+    /// Adds the messages stored since the newest one shown, such as the
+    /// reply a turn ended with.
+    private func loadNewMessages() async {
+        do {
+            let newest = try await ChatService.shared.loadMessages(threadId: thread.id, limit: pageSize, before: nil)
+            let shown = Set(messages.map(\.id))
+            messages.append(contentsOf: newest.filter { !shown.contains($0.id) })
+        } catch {
+            AppErrorReporter.log(error: error, context: "PersonalContentView.loadNewMessages")
         }
     }
 
@@ -828,73 +656,6 @@ struct PersonalChatView: View {
             return (userText: text, fullText: text)
         }
         return (userText: userPart, fullText: text)
-    }
-
-    /// Map tool names to human-readable activity messages for the loader UI.
-    private func toolActivityMessage(for toolName: String) -> String {
-        if toolName.hasPrefix("web.search") {
-            return "Using web.search to look up information on the web…"
-        }
-        if toolName.hasPrefix("web.browse") {
-            return "Using web.browse to read a web page…"
-        }
-        if toolName.hasPrefix("github.readFile") {
-            return "Using github.readFile to inspect a file in your repo…"
-        }
-        if toolName.hasPrefix("github.listFiles") {
-            return "Using github.listFiles to explore the repository structure…"
-        }
-        if toolName.hasPrefix("github.searchCode") {
-            return "Using github.searchCode to search through your codebase…"
-        }
-        if toolName.hasPrefix("github.writeFile") {
-            return "Using github.writeFile to apply code changes…"
-        }
-        if toolName.hasPrefix("github.createBranch") {
-            return "Using github.createBranch to create a new branch…"
-        }
-        if toolName.hasPrefix("github.createPR") {
-            return "Using github.createPR to open a pull request…"
-        }
-        if toolName.hasPrefix("image.generate") {
-            return "Using image.generate to create an image…"
-        }
-        if toolName.hasPrefix("video.generate") {
-            return "Using video.generate to create a video…"
-        }
-        if toolName.hasPrefix("file.generate") {
-            return "Using file.generate to create a file…"
-        }
-        if toolName.hasPrefix("shell.execute") {
-            return "Using shell.execute to run a command on your machine…"
-        }
-        if toolName.hasPrefix("google_drive.") || toolName.hasPrefix("google_docs.") || toolName.hasPrefix("google_sheets.") || toolName.hasPrefix("google_slides.") {
-            return "Using Google Workspace tools to work with your docs and files…"
-        }
-        return "Using tool \(toolName)…"
-    }
-
-    /// Strip <think>...</think> blocks from the streaming buffer so reasoning
-    /// model internals (e.g. Qwen3) don't appear in the live chat UI.
-    /// Handles both closed tags and unclosed tags (model still thinking).
-    private static func stripThinkTags(from text: String) -> String {
-        var result = text
-        // Remove fully closed <think>...</think> blocks
-        if let regex = try? NSRegularExpression(
-            pattern: "<\\s*think\\s*>.*?<\\s*/\\s*think\\s*>",
-            options: [.dotMatchesLineSeparators, .caseInsensitive]
-        ) {
-            result = regex.stringByReplacingMatches(
-                in: result, options: [],
-                range: NSRange(location: 0, length: (result as NSString).length),
-                withTemplate: ""
-            )
-        }
-        // Remove unclosed <think> tags (model still generating reasoning)
-        if let thinkStart = result.range(of: "<think>", options: .caseInsensitive) {
-            result = String(result[..<thinkStart.lowerBound])
-        }
-        return result
     }
 }
 

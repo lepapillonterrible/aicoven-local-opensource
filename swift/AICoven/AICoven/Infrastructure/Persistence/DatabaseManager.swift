@@ -296,6 +296,46 @@ final class DatabaseManager {
                 }
             }
 
+            // v8: one row for each reply the app starts, from the person's
+            // message to its outcome, so a reply cut off by the app closing
+            // is known to have been running. A turn holds no content.
+            migrator.registerMigration("v8_turns") { db in
+                try db.create(table: "turns") { t in
+                    t.column("id", .text).primaryKey()
+                    t.column("user_id", .text).notNull()
+                    t.column("thread_id", .text).notNull()
+                    t.column("status", .text).notNull()
+                    t.column("started_at", .datetime).notNull()
+                    t.column("finished_at", .datetime)
+                    t.column("message_id", .text)
+                    t.foreignKey(["thread_id"], references: "threads", columns: ["id"], onDelete: .cascade)
+                }
+                try db.create(index: "turns_user_thread_status", on: "turns", columns: ["user_id", "thread_id", "status"])
+                // As for messages: a turn belongs to the user its thread does.
+                try db.execute(sql: """
+                CREATE TRIGGER turns_match_thread_user_insert
+                BEFORE INSERT ON turns
+                WHEN length(trim(NEW.user_id)) = 0 OR NOT EXISTS (
+                    SELECT 1 FROM threads
+                    WHERE threads.id = NEW.thread_id AND threads.user_id = NEW.user_id
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'turns.thread_id must reference a thread owned by the same user');
+                END;
+                """)
+                try db.execute(sql: """
+                CREATE TRIGGER turns_match_thread_user_update
+                BEFORE UPDATE OF user_id, thread_id ON turns
+                WHEN length(trim(NEW.user_id)) = 0 OR NOT EXISTS (
+                    SELECT 1 FROM threads
+                    WHERE threads.id = NEW.thread_id AND threads.user_id = NEW.user_id
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'turns.thread_id must reference a thread owned by the same user');
+                END;
+                """)
+            }
+
             try migrator.migrate(queue)
             dbQueue = queue
         } catch {
