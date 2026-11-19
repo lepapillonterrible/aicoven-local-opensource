@@ -79,6 +79,8 @@ struct GrowingTextEditor: NSViewRepresentable {
     var isDisabled: Bool
     var autoFocus: Bool = false
     var onSend: () -> Void
+    /// The field became, or stopped being, where typing goes.
+    var onFocusChange: ((Bool) -> Void)?
 
     /// The editor's font, and the height of the empty editor: one line of
     /// it between the insets.
@@ -129,6 +131,7 @@ struct GrowingTextEditor: NSViewRepresentable {
         textView.setAccessibilityLabel("Message")
         textView.setAccessibilityIdentifier("composer")
         textView.onSend = sendKeepingFocus(in: textView)
+        textView.onFocusChange = onFocusChange
 
         scrollView.documentView = textView
         context.coordinator.updateHeight(in: scrollView)
@@ -152,6 +155,7 @@ struct GrowingTextEditor: NSViewRepresentable {
         textView.setAccessibilityEnabled(!isDisabled)
         // Return must call this render's send: it reads the current state.
         textView.onSend = sendKeepingFocus(in: textView)
+        textView.onFocusChange = onFocusChange
 
         context.coordinator.parent = self
         context.coordinator.updateHeight(in: scrollView, publishHeightSynchronously: false)
@@ -244,6 +248,19 @@ struct GrowingTextEditor: NSViewRepresentable {
 
     final class ChatTextView: NSTextView {
         var onSend: (() -> Void)?
+        var onFocusChange: ((Bool) -> Void)?
+
+        override func becomeFirstResponder() -> Bool {
+            let became = super.becomeFirstResponder()
+            if became { onFocusChange?(true) }
+            return became
+        }
+
+        override func resignFirstResponder() -> Bool {
+            let resigned = super.resignFirstResponder()
+            if resigned { onFocusChange?(false) }
+            return resigned
+        }
 
         override func keyDown(with event: NSEvent) {
             // Return, or Enter on the keypad. While an input method is

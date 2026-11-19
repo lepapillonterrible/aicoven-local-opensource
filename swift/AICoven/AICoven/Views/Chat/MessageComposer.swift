@@ -121,6 +121,15 @@ struct MessageComposer: View {
     /// its draft, from the parent.
     var hasReturnedDraft: Bool = false
     var takeReturnedDraft: (() -> ComposerDraft?)?
+    /// Told when the field takes or loses keyboard focus, and when Send
+    /// is pressed with something to send: approvals are held back while
+    /// the person composes.
+    var onFocusChange: ((Bool) -> Void)?
+    var onSent: (() -> Void)?
+    /// Sets the field's text for the composer when it is not typed (what
+    /// was handed back), so the parent does not take it for typing; nil
+    /// sets it through the binding.
+    var putInTheField: ((String) -> Void)?
 
     /// The attaching under way, if one is. Cleared when the composer moves
     /// to another thread, so files chosen for one thread are never taken
@@ -333,7 +342,8 @@ struct MessageComposer: View {
                 height: $macInputHeight,
                 isDisabled: isDisabled,
                 autoFocus: autoFocus,
-                onSend: send
+                onSend: send,
+                onFocusChange: onFocusChange
             )
             .frame(height: macInputHeight)
             if messageText.isEmpty {
@@ -355,6 +365,7 @@ struct MessageComposer: View {
             axis: .vertical
         )
         .focused($isTextFieldFocused)
+        .onChange(of: isTextFieldFocused) { _, focused in onFocusChange?(focused) }
         .font(.aicovenBody)
         .foregroundStyle(Color.aicovenTextPrimary)
         .lineLimit(1 ... 8)
@@ -497,6 +508,9 @@ struct MessageComposer: View {
         guard canSend else { return }
         let submitted = attachments
         isSubmittingSend = true
+        // Told as Send is pressed, not when the message has been taken:
+        // what is typed while that is waited for is the next message.
+        onSent?()
         Task { @MainActor in
             let accepted = await onSend(submitted)
             isSubmittingSend = false
@@ -518,7 +532,11 @@ struct MessageComposer: View {
     private func takeReturned() {
         guard hasReturnedDraft, let handedBack = takeReturnedDraft?() else { return }
         let merged = handedBack.followed(by: ComposerDraft(text: messageText, attachments: attachments))
-        messageText = merged.text
+        if let putInTheField {
+            putInTheField(merged.text)
+        } else {
+            messageText = merged.text
+        }
         attachments = merged.attachments
         // The field changes without being typed in, wherever focus is.
         AccessibilityNotification.Announcement("Your waiting message is back in the message field").post()

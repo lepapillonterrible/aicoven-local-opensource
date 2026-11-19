@@ -137,7 +137,7 @@ final class TurnEngineTests: XCTestCase {
     // MARK: - Approvals
 
     func testATurn_keepsTheAnswersItWasGivenAndTheNextTurnStartsWithNone() async throws {
-        let approvals = ToolApprovals { _, action in action() }
+        let approvals = ToolApprovals(schedule: { _, action in action() })
         let engine = makeEngine(provider: provider, approvals: approvals)
         // An answer left by a turn that never ended here.
         let stale = ToolApproval(threadID: threadID, question: "Run this command?", details: "rm old", toolName: "shell.execute")
@@ -179,7 +179,7 @@ final class TurnEngineTests: XCTestCase {
     }
 
     func testATurnWhoseEndingCannotBeStored_keepsItsAnswersWithIt() async throws {
-        let approvals = ToolApprovals { _, action in action() }
+        let approvals = ToolApprovals(schedule: { _, action in action() })
         let engine = makeEngine(provider: provider, approvals: approvals)
         try await engine.start(with: question("Push it"), context: "Push it", roleID: nil, agentName: nil, attachments: nil)
         let asked = ToolApproval(threadID: threadID, question: "Run this command?", details: "git push\nIn /tmp", toolName: "shell.execute")

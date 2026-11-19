@@ -382,7 +382,7 @@ final class OpenClawTurnTests: XCTestCase {
         XCTAssertEqual(plugin.details, "Send the email\nTo Sam")
 
         // The approvals take no Approve for one that can only be denied.
-        let approvals = await ToolApprovals { _, _ in }
+        let approvals = await ToolApprovals(schedule: { _, _ in })
         let asking = Task { await approvals.ask(denyOnly) }
         while await approvals.showing == nil {
             await Task.yield()

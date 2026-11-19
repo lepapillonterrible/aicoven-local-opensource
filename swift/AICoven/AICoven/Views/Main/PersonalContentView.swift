@@ -263,6 +263,10 @@ struct PersonalChatView: View {
     /// The thread's draft is being read into the composer: what the
     /// composer holds meanwhile is not yet the thread's to keep.
     @State private var isRestoringDraft = false
+    /// Text this view put in the field itself (a draft read in, the field
+    /// cleared on sending, unsent text given back), until the field's
+    /// change for it has been seen: it was not typed.
+    @State private var textPutInTheField: String?
     @Environment(\.scenePhase) private var scenePhase
     @State private var errorMessage: String?
     /// The engine runs the replies; this view shows the one in its thread.
@@ -499,7 +503,11 @@ struct PersonalChatView: View {
                 // Once this thread's own draft is in the field: what was
                 // handed back before then comes with it.
                 hasReturnedDraft: turns.returned[thread.id] != nil && !isRestoringDraft && shownThreadID == thread.id,
-                takeReturnedDraft: { turns.takeReturned(threadID: thread.id) }
+                takeReturnedDraft: { turns.takeReturned(threadID: thread.id) },
+                // An approval does not come up under what is being typed.
+                onFocusChange: { approvals.composerFocusChanged($0) },
+                onSent: { approvals.noteSent() },
+                putInTheField: { putInTheField($0) }
             )
             .padding(Spacing.md)
         }
@@ -516,7 +524,7 @@ struct PersonalChatView: View {
             // The composer shows this thread's own draft; the one it held
             // was kept as it was typed, and is saved now.
             isRestoringDraft = true
-            messageText = ""
+            putInTheField("")
             attachments = []
             Task { await ComposerDrafts.shared.saveNow() }
             // Counted for this thread from here, before anything waits:
@@ -546,7 +554,22 @@ struct PersonalChatView: View {
             await loadProviderKeys()
         }
         // What the composer holds is the thread's draft, kept as it changes.
-        .onChange(of: messageText) { _, _ in keepDraft() }
+        .onChange(of: messageText) { _, text in
+            keepDraft()
+            // Typed, unless this view put it there itself.
+            let put = textPutInTheField
+            textPutInTheField = nil
+            if text != put { approvals.noteComposerChanged() }
+        }
+        #if os(iOS)
+        // With the on-screen keyboard up, the person is composing.
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            approvals.keyboardVisibilityChanged(true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            approvals.keyboardVisibilityChanged(false)
+        }
+        #endif
         .onChange(of: attachments) { _, _ in keepDraft() }
         // Leaving the foreground, or the thread: saved now, not a moment
         // later.
@@ -557,6 +580,10 @@ struct PersonalChatView: View {
         }
         .onDisappear {
             Task { await ComposerDrafts.shared.saveNow() }
+            // Nobody is composing in a composer that is gone: nothing it
+            // was told keeps an approval back.
+            approvals.composerFocusChanged(false)
+            approvals.keyboardVisibilityChanged(false)
         }
         // Files sent from this thread leave what this composer holds, also
         // when it was opened after the message was sent and before it was
@@ -589,10 +616,20 @@ struct PersonalChatView: View {
             AccessibilityNotification.Announcement("Your waiting message is back in the message field").post()
         }
         let draft = handedBack.followed(by: kept).followed(by: ComposerDraft(text: messageText, attachments: attachments))
-        messageText = draft.text
+        putInTheField(draft.text)
         attachments = draft.attachments
         isRestoringDraft = false
         ComposerDrafts.shared.set(draft, for: threadID)
+    }
+
+    /// Sets the field's text from here, not from the keyboard: the change
+    /// is not taken for typing.
+    private func putInTheField(_ text: String) {
+        // With nothing changed there is no change to see, and nothing to
+        // mark.
+        guard text != messageText else { return }
+        textPutInTheField = text
+        messageText = text
     }
 
     /// Keeps what the composer holds as the draft of the thread shown.
@@ -756,7 +793,7 @@ struct PersonalChatView: View {
             attachments: attachments
         )
         if turns.enqueue(waiting, threadID: thread.id) {
-            messageText = ""
+            putInTheField("")
             ComposerDrafts.shared.removeAttachments(attachments, from: thread.id)
             // The bubble does not take focus: said, so it is known to wait.
             let isNext = turns.waiting[thread.id]?.first?.id == waiting.id
@@ -768,7 +805,7 @@ struct PersonalChatView: View {
         let userMessage = TurnProgress.message(in: thread.id, role: "user", content: parts.userText)
         // Shown at once, before anything waits: this view can be showing
         // another thread by the time the message is stored.
-        messageText = ""
+        putInTheField("")
         messages.append(userMessage)
         do {
             try await TurnEngine.shared.start(
@@ -801,7 +838,7 @@ struct PersonalChatView: View {
     /// Puts the text of a send that failed back in the composer, after
     /// anything typed since, and says in the thread why it was not sent.
     private func giveBack(_ text: String, because reason: String) {
-        messageText = messageText.isEmpty ? text : messageText + "\n" + text
+        putInTheField(messageText.isEmpty ? text : messageText + "\n" + text)
         messages.append(TurnProgress.message(
             in: thread.id,
             role: "assistant",

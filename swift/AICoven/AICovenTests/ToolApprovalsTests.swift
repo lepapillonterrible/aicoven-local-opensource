@@ -1,4 +1,5 @@
 @testable import AICoven
+internal import Combine
 import XCTest
 
 /// Approvals: a tool that changes something asks first and waits; the
@@ -8,8 +9,27 @@ final class ToolApprovalsTests: XCTestCase {
     /// What the approvals were told to do later, run by hand.
     private var scheduled: [@MainActor () -> Void] = []
 
+    /// The time, as the approvals are told it.
+    private var clock = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    /// How long each thing scheduled was asked to wait.
+    private var delays: [TimeInterval] = []
+
     private func makeApprovals() -> ToolApprovals {
-        ToolApprovals { [weak self] _, action in self?.scheduled.append(action) }
+        ToolApprovals(holdInterval: 3, now: { [unowned self] in clock }, schedule: { [weak self] delay, action in
+            self?.delays.append(delay)
+            self?.scheduled.append(action)
+        })
+    }
+
+    /// Waits until the approvals hold `count` back from the screen.
+    private func held(_ approvals: ToolApprovals, _ count: Int) async {
+        let reached = expectation(description: "\(count) held back")
+        reached.assertForOverFulfill = false
+        let watching = approvals.$held.sink { held in
+            if held.count >= count { reached.fulfill() }
+        }
+        await fulfillment(of: [reached], timeout: 10)
+        watching.cancel()
     }
 
     /// Runs what is due, then what that scheduled, until nothing is left.
@@ -30,6 +50,228 @@ final class ToolApprovalsTests: XCTestCase {
             await Task.yield()
         }
         XCTFail("The approval was never asked", file: file, line: line)
+    }
+
+    // MARK: - Not while typing
+
+    func testAnApprovalAskedWhileThePersonIsTyping_isHeldUntilTheyPause() async {
+        let approvals = makeApprovals()
+        approvals.composerFocusChanged(true)
+        approvals.noteComposerChanged()
+        XCTAssertTrue(approvals.isComposing)
+
+        let first = approval()
+        let asking = Task { await approvals.ask(first) }
+        await held(approvals, 1)
+
+        XCTAssertNil(approvals.showing, "Nothing comes up under what is being typed")
+        XCTAssertEqual(approvals.waiting, [])
+        XCTAssertEqual(approvals.askingThreadIDs, ["thread-1"], "The thread still says it needs an answer")
+        XCTAssertFalse(approvals.announceShowing(first.id), "Nor is it announced before it shows")
+        XCTAssertEqual(delays, [3], "It looks again when the pause would be long enough")
+
+        // Still typing when that comes: it looks again later.
+        clock += 2
+        approvals.noteComposerChanged()
+        clock += 1
+        scheduled.removeFirst()()
+        XCTAssertNil(approvals.showing)
+        XCTAssertEqual(delays, [3, 2])
+
+        // Three seconds with nothing typed: it comes in.
+        clock += 2
+        scheduled.removeFirst()()
+        XCTAssertEqual(approvals.showing, .init(approval: first, phase: .asking))
+        XCTAssertEqual(approvals.held, [])
+        XCTAssertFalse(approvals.isComposing)
+
+        approvals.answer(first.id, approve: true)
+        let answer = await asking.value
+        XCTAssertEqual(answer, .approved)
+    }
+
+    func testWhatIsHeld_comesInWhenThePersonSendsOrLeavesTheField() async {
+        // Sending lets it in.
+        let sending = makeApprovals()
+        sending.composerFocusChanged(true)
+        sending.noteComposerChanged()
+        let first = approval()
+        let second = approval(in: "thread-2", "Write this file?")
+        let askingFirst = Task { await sending.ask(first) }
+        await held(sending, 1)
+        let askingSecond = Task { await sending.ask(second) }
+        await held(sending, 2)
+
+        sending.noteSent()
+        XCTAssertEqual(sending.showing?.approval, first, "In the order they were asked")
+        XCTAssertEqual(sending.waiting, [second])
+        XCTAssertEqual(sending.held, [])
+        XCTAssertFalse(sending.isComposing, "A message sent is not one being typed")
+        sending.answer(first.id, approve: false)
+        _ = await askingFirst.value
+        askingSecond.cancel()
+        _ = await askingSecond.value
+
+        // So does leaving the field.
+        let leaving = makeApprovals()
+        leaving.composerFocusChanged(true)
+        leaving.noteComposerChanged()
+        let third = approval()
+        let askingThird = Task { await leaving.ask(third) }
+        await held(leaving, 1)
+        leaving.composerFocusChanged(false)
+        XCTAssertEqual(leaving.showing?.approval, third)
+        askingThird.cancel()
+        _ = await askingThird.value
+    }
+
+    func testWithTheOnScreenKeyboardUp_approvalsAreHeldUntilItGoesDownOrAMessageIsSent() async {
+        let approvals = makeApprovals()
+        approvals.keyboardVisibilityChanged(true)
+        XCTAssertTrue(approvals.isComposing, "Whether or not anything was typed")
+        let first = approval()
+        let asking = Task { await approvals.ask(first) }
+        await held(approvals, 1)
+        XCTAssertEqual(delays, [], "Nothing to look again for: the keyboard going down says so itself")
+
+        clock += 60
+        XCTAssertNil(approvals.showing)
+        approvals.keyboardVisibilityChanged(false)
+        XCTAssertEqual(approvals.showing?.approval, first)
+        approvals.answer(first.id, approve: false)
+        _ = await asking.value
+
+        // Sent with the keyboard still up: what was held comes in, and the
+        // next one asked is held again.
+        approvals.keyboardVisibilityChanged(true)
+        let second = approval(in: "thread-2")
+        let askingSecond = Task { await approvals.ask(second) }
+        await held(approvals, 1)
+        approvals.noteSent()
+        XCTAssertEqual(approvals.held, [])
+        XCTAssertTrue(([approvals.showing?.approval].compactMap(\.self) + approvals.waiting).contains(second))
+        askingSecond.cancel()
+        _ = await askingSecond.value
+    }
+
+    func testAnApprovalHeld_leavesUnseenWhenItsTurnStops() async {
+        let approvals = makeApprovals()
+        approvals.composerFocusChanged(true)
+        approvals.noteComposerChanged()
+        let first = approval()
+        let asking = Task { await approvals.ask(first) }
+        await held(approvals, 1)
+
+        asking.cancel()
+        let answer = await asking.value
+
+        XCTAssertEqual(answer, .withdrawn)
+        XCTAssertEqual(approvals.held, [])
+        XCTAssertEqual(approvals.askingThreadIDs, [])
+        XCTAssertNil(approvals.showing, "It was never shown, and says nothing on leaving")
+        // The pause it was waiting for finds nothing to let in.
+        clock += 5
+        runScheduled()
+        XCTAssertNil(approvals.showing)
+    }
+
+    func testAnApprovalHeldWhoseTurnHasJustStopped_isNotShownByWhatLetsHeldOnesIn() async {
+        // By a message being sent.
+        let sending = makeApprovals()
+        sending.composerFocusChanged(true)
+        sending.noteComposerChanged()
+        let first = approval()
+        let asking = Task { await sending.ask(first) }
+        await held(sending, 1)
+        // The turn stops, and before the queue has been told, a message is
+        // sent: nothing of the stopped turn comes up.
+        asking.cancel()
+        sending.noteSent()
+        XCTAssertNil(sending.showing)
+        XCTAssertEqual(sending.waiting, [])
+        XCTAssertFalse(sending.announceShowing(first.id))
+        let answer = await asking.value
+        XCTAssertEqual(answer, .withdrawn)
+        XCTAssertNil(sending.showing)
+        XCTAssertEqual(sending.askingThreadIDs, [])
+
+        // By the field being left, with another still to come in.
+        let leaving = makeApprovals()
+        leaving.composerFocusChanged(true)
+        leaving.noteComposerChanged()
+        let stoppedOne = approval()
+        let other = approval(in: "thread-2", "Write this file?")
+        let askingStopped = Task { await leaving.ask(stoppedOne) }
+        await held(leaving, 1)
+        let askingOther = Task { await leaving.ask(other) }
+        await held(leaving, 2)
+        askingStopped.cancel()
+        leaving.composerFocusChanged(false)
+        XCTAssertEqual(leaving.showing?.approval, other, "The one whose turn goes on comes in")
+        XCTAssertEqual(leaving.waiting, [])
+        _ = await askingStopped.value
+        askingOther.cancel()
+        _ = await askingOther.value
+    }
+
+    func testAWaitingApprovalWhoseTurnHasJustStopped_isNotTheNextOneShown() async {
+        let approvals = makeApprovals()
+        let first = approval()
+        let second = approval(in: "thread-2", "Write this file?")
+        let third = approval(in: "thread-3", "Create this branch?")
+        let askingFirst = Task { await approvals.ask(first) }
+        await asked(approvals, 1)
+        let askingSecond = Task { await approvals.ask(second) }
+        await asked(approvals, 2)
+        let askingThird = Task { await approvals.ask(third) }
+        await asked(approvals, 3)
+
+        // The second's turn stops, and before the queue has been told, the
+        // person asks for the next one: it is the third.
+        askingSecond.cancel()
+        approvals.showNext()
+        XCTAssertEqual(approvals.showing?.approval, third)
+        XCTAssertEqual(approvals.waiting, [first])
+        _ = await askingSecond.value
+
+        // And when the one showing is answered, the stopped one is not next.
+        let stopping = makeApprovals()
+        let shown = approval()
+        let stoppedOne = approval(in: "thread-2")
+        let askingShown = Task { await stopping.ask(shown) }
+        await asked(stopping, 1)
+        let askingStopped = Task { await stopping.ask(stoppedOne) }
+        await asked(stopping, 2)
+        askingStopped.cancel()
+        stopping.answer(shown.id, approve: false)
+        runScheduled()
+        XCTAssertNil(stopping.showing)
+        _ = await askingShown.value
+        _ = await askingStopped.value
+        for task in [askingFirst, askingThird] {
+            task.cancel()
+            _ = await task.value
+        }
+    }
+
+    func testFocusWithoutTyping_orTypingLongAgo_holdsNothingBack() async {
+        let approvals = makeApprovals()
+        approvals.composerFocusChanged(true)
+        XCTAssertFalse(approvals.isComposing, "The field has focus most of the time: that alone is not composing")
+        approvals.noteComposerChanged()
+        clock += 3
+        XCTAssertFalse(approvals.isComposing)
+        // Typed in a field that does not have focus (text put there, not typed).
+        approvals.composerFocusChanged(false)
+        approvals.noteComposerChanged()
+        XCTAssertFalse(approvals.isComposing)
+
+        let first = approval()
+        let asking = Task { await approvals.ask(first) }
+        await asked(approvals, 1)
+        XCTAssertEqual(approvals.showing?.approval, first)
+        asking.cancel()
+        _ = await asking.value
     }
 
     // MARK: - The queue
