@@ -452,8 +452,9 @@ struct PersonalChatView: View {
                 .onChange(of: turns.additions[thread.id]?.last?.sequence) { _, _ in
                     showAdditions()
                 }
-                .onChange(of: waitingMessages.last?.id) { _, added in
-                    guard let added else { return }
+                // Only when one starts waiting, not when one is removed.
+                .onChange(of: waitingMessages.count) { before, now in
+                    guard now > before, let added = waitingMessages.last?.id else { return }
                     withAnimation {
                         proxy.scrollTo(added, anchor: .bottom)
                     }
@@ -503,6 +504,10 @@ struct PersonalChatView: View {
         // reset and reload the messages/provider keys for the new thread.
         .task(id: thread.id) {
             shownThreadID = thread.id
+            // Counted for this thread from here, before anything waits:
+            // what the engine added before is among the messages read
+            // below, and what it adds from now on is shown as it comes.
+            additionsShown = turns.additions[thread.id]?.last?.sequence ?? 0
             messages = []
             traces = [:]
             shownTrace = nil
@@ -745,10 +750,15 @@ struct PersonalChatView: View {
     /// added meanwhile. What it had added before the read began is among
     /// the messages read.
     private func loadStoredThread() async {
-        let before = turns.additions[thread.id]?.last?.sequence ?? 0
+        let threadID = thread.id
+        // The view can be showing another thread by now, or by the time
+        // the read ends: what it has taken in is that thread's to count.
+        guard shownThreadID == threadID else { return }
+        let before = turns.additions[threadID]?.last?.sequence ?? 0
         additionsShown = before
         await loadInitialMessages()
         await loadTraces()
+        guard shownThreadID == threadID else { return }
         // From before the read again: what was added during it can have
         // been shown and then replaced by what was read.
         additionsShown = before
