@@ -594,6 +594,52 @@ extension ThreadRepository {
         return turns
     }
 
+    /// Keeps what is typed in a thread's composer and not sent, encrypted
+    /// with the thread; empty text keeps nothing. Nothing is kept for a
+    /// thread that is not the current account's.
+    func saveDraft(_ text: String, forThread id: String) async throws {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let session = try await beginWrite()
+        var ciphertext: Data?
+        if !text.isEmpty {
+            ciphertext = try await DataEncryptionService.shared.encrypt(Data(text.utf8), purpose: "thread_draft")
+        }
+        try await confirm(session)
+        try await dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE threads SET draft_ciphertext = ? WHERE id = ? AND user_id = ?",
+                arguments: [ciphertext, id, session.userID]
+            )
+        }
+    }
+
+    /// What was typed in a thread's composer and not sent, or nil if there
+    /// is nothing, the thread is not the current account's, or what is kept
+    /// cannot be read.
+    func draft(forThread id: String) async throws -> String? {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let currentUserId = await MainActor.run { UserScope.currentUserID }
+        let ciphertext: Data? = try await dbQueue.read { db in
+            try Data.fetchOne(
+                db,
+                sql: "SELECT draft_ciphertext FROM threads WHERE id = ? AND user_id = ?",
+                arguments: [id, currentUserId]
+            )
+        }
+        try await requireKey(of: currentUserId)
+        var text: String?
+        if let ciphertext {
+            do {
+                text = try await String(data: DataEncryptionService.shared.decrypt(ciphertext, purpose: "thread_draft"), encoding: .utf8)
+            } catch is CryptoKitError {
+                // Not readable with the key in memory: nothing to show.
+                AppErrorReporter.log(message: "A thread's draft could not be decrypted.", context: "ThreadRepository.draft")
+            }
+        }
+        try await requireKey(of: currentUserId)
+        return text
+    }
+
     /// Keeps, with a running turn, the agent's run that is making it.
     /// Nothing is kept for a turn that is not the current account's running
     /// turn.

@@ -258,6 +258,12 @@ struct PersonalChatView: View {
 
     @State private var messages: [ChatMessage] = []
     @State private var messageText = ""
+    /// The files chosen to go with the message being written.
+    @State private var attachments: [FileAttachmentDetail] = []
+    /// The thread's draft is being read into the composer: what the
+    /// composer holds meanwhile is not yet the thread's to keep.
+    @State private var isRestoringDraft = false
+    @Environment(\.scenePhase) private var scenePhase
     @State private var errorMessage: String?
     /// The engine runs the replies; this view shows the one in its thread.
     @ObservedObject private var turns = TurnEngine.shared
@@ -481,6 +487,7 @@ struct PersonalChatView: View {
             // waits for the turn, and comes back here if it is not sent.
             MessageComposer(
                 messageText: $messageText,
+                attachments: $attachments,
                 onSend: { attachments in await sendMessage(attachments: attachments) },
                 onStop: { turns.stop(threadID: thread.id) },
                 isAgentRunning: runningTurn != nil,
@@ -489,7 +496,9 @@ struct PersonalChatView: View {
                 autoFocus: true,
                 recipientName: thread.agentName ?? "Strix",
                 notice: turns.notSent[thread.id],
-                hasReturnedDraft: turns.returned[thread.id] != nil,
+                // Once this thread's own draft is in the field: what was
+                // handed back before then comes with it.
+                hasReturnedDraft: turns.returned[thread.id] != nil && !isRestoringDraft && shownThreadID == thread.id,
                 takeReturnedDraft: { turns.takeReturned(threadID: thread.id) }
             )
             .padding(Spacing.md)
@@ -504,6 +513,12 @@ struct PersonalChatView: View {
         // reset and reload the messages/provider keys for the new thread.
         .task(id: thread.id) {
             shownThreadID = thread.id
+            // The composer shows this thread's own draft; the one it held
+            // was kept as it was typed, and is saved now.
+            isRestoringDraft = true
+            messageText = ""
+            attachments = []
+            Task { await ComposerDrafts.shared.saveNow() }
             // Counted for this thread from here, before anything waits:
             // what the engine added before is among the messages read
             // below, and what it adds from now on is shown as it comes.
@@ -519,6 +534,7 @@ struct PersonalChatView: View {
             isPrependingMessages = false
             pendingScrollAnchorId = nil
 
+            await restoreDraft()
             await TurnEngine.shared.settleInterruptedTurns(threadID: thread.id)
             await loadStoredThread()
             // The view can have moved to another thread while this one was
@@ -529,11 +545,48 @@ struct PersonalChatView: View {
             }
             await loadProviderKeys()
         }
+        // What the composer holds is the thread's draft, kept as it changes.
+        .onChange(of: messageText) { _, _ in keepDraft() }
+        .onChange(of: attachments) { _, _ in keepDraft() }
+        // Leaving the foreground, or the thread: saved now, not a moment
+        // later.
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active {
+                Task { await ComposerDrafts.shared.saveNow() }
+            }
+        }
+        .onDisappear {
+            Task { await ComposerDrafts.shared.saveNow() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .providerKeysUpdated)) { _ in
             Task {
                 await loadProviderKeys()
             }
         }
+    }
+
+    /// Reads the thread's draft into the composer: what its waiting
+    /// messages handed back while it was off screen, then what was kept of
+    /// what was typed there, then what was typed while that was read.
+    private func restoreDraft() async {
+        let threadID = thread.id
+        let kept = await ComposerDrafts.shared.draft(for: threadID)
+        // The view can be showing another thread by now, or this one
+        // again after another, with its own draft on the way: the task
+        // that asked for this one was then cancelled.
+        guard !Task.isCancelled, shownThreadID == threadID else { return }
+        let handedBack = turns.takeReturned(threadID: threadID) ?? ComposerDraft()
+        let draft = handedBack.followed(by: kept).followed(by: ComposerDraft(text: messageText, attachments: attachments))
+        messageText = draft.text
+        attachments = draft.attachments
+        isRestoringDraft = false
+        ComposerDrafts.shared.set(draft, for: threadID)
+    }
+
+    /// Keeps what the composer holds as the draft of the thread shown.
+    private func keepDraft() {
+        guard !isRestoringDraft, shownThreadID == thread.id else { return }
+        ComposerDrafts.shared.set(ComposerDraft(text: messageText, attachments: attachments), for: thread.id)
     }
 
     /// What was sent while this thread's turn runs, in the order it will go.

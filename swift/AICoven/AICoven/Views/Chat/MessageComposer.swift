@@ -90,6 +90,9 @@ nonisolated enum ComposerRules {
 /// hardware keyboard.
 struct MessageComposer: View {
     @Binding var messageText: String
+    /// The files to go with the message. The parent holds them with the
+    /// text, as the thread's draft.
+    @Binding var attachments: [FileAttachmentDetail]
     /// Sends the text with these attachments, or queues it while a turn
     /// runs. False if it was neither: the attachments then stay in the
     /// composer.
@@ -112,12 +115,13 @@ struct MessageComposer: View {
     /// were not sent. Whoever sets it announces it, once.
     var notice: String?
     /// Whether text and attachments were handed back to this thread's
-    /// composer (waiting messages that were not sent, or one taken back to
-    /// be edited), and how they are taken, once.
+    /// composer while it is on screen (waiting messages that were not
+    /// sent, or one taken back to be edited), and how they are taken,
+    /// once. What was handed back before the thread was opened comes with
+    /// its draft, from the parent.
     var hasReturnedDraft: Bool = false
     var takeReturnedDraft: (() -> ComposerDraft?)?
 
-    @State private var attachments: [FileAttachmentDetail] = []
     /// The attaching under way, if one is. Cleared when the composer moves
     /// to another thread, so files chosen for one thread are never taken
     /// into another's message.
@@ -186,7 +190,6 @@ struct MessageComposer: View {
             attachingTask = nil
             attachFailure = nil
             choosingFiles = nil
-            takeReturned()
             #if os(iOS)
             showFileImporter = false
             #endif
