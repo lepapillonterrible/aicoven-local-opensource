@@ -452,7 +452,7 @@ struct PersonalChatView: View {
             GradientDivider()
 
             // The field stays open while a turn runs; what is typed then
-            // is sent once the turn has ended.
+            // can be sent once the turn has ended.
             MessageComposer(
                 messageText: $messageText,
                 onSend: { attachments in await sendMessage(attachments: attachments) },

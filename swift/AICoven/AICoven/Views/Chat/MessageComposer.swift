@@ -108,10 +108,11 @@ struct MessageComposer: View {
     @ScaledMetric(relativeTo: .body) private var padControlSide: CGFloat = 40
     #else
     @State private var macInputHeight: CGFloat = GrowingTextEditor.emptyHeight
-    /// The file panel open, if one is: it does not block the window, so the
-    /// thread can change under it.
-    @State private var choosingFiles: UUID?
     #endif
+    /// The file chooser open, if one is. Cleared when the composer moves to
+    /// another thread, which can happen under it (the Mac's panel does not
+    /// block the window): what it then returns is not taken.
+    @State private var choosingFiles: UUID?
 
     private var isAttaching: Bool {
         attachingTask != nil
@@ -132,23 +133,16 @@ struct MessageComposer: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true)
-        .onChange(of: messageText) { _, text in
-            if let query = ComposerRules.mentionQuery(in: text), !mentionableRoles.isEmpty {
-                mentionQuery = query
-                showMentionSuggestions = true
-            } else {
-                mentionQuery = ""
-                showMentionSuggestions = false
-            }
-        }
+        .onChange(of: messageText) { _, _ in suggestMentions() }
         .onChange(of: attachFailure) { _, failure in
             if let failure { AccessibilityNotification.Announcement(failure).post() }
         }
         .onChange(of: threadId) { _, _ in
             attachingTask = nil
             attachFailure = nil
-            #if os(macOS)
             choosingFiles = nil
+            #if os(iOS)
+            showFileImporter = false
             #endif
         }
         #if os(iOS)
@@ -157,11 +151,14 @@ struct MessageComposer: View {
             allowedContentTypes: [.item],
             allowsMultipleSelection: true
         ) { result in
+            // Chosen for the thread the chooser was opened in, or not taken.
+            guard choosingFiles != nil else { return }
+            choosingFiles = nil
             switch result {
             case let .success(urls):
                 Task { await attach(urls) }
             case let .failure(error):
-                AppErrorReporter.log(error: error, context: "MessageComposer.fileImporter")
+                Self.log("The file chooser failed", error)
                 attachFailure = "The file could not be opened."
             }
         }
@@ -338,6 +335,7 @@ struct MessageComposer: View {
             #if os(macOS)
             chooseFiles()
             #else
+            choosingFiles = UUID()
             showFileImporter = true
             #endif
         } label: {
@@ -377,7 +375,7 @@ struct MessageComposer: View {
                 guard attachingTask == task else { return }
                 attachments.append(detail)
             } catch {
-                AppErrorReporter.log(error: error, context: "MessageComposer.attach")
+                Self.log("A file could not be attached", error)
                 guard attachingTask == task else { return }
                 attachFailure = "\(url.lastPathComponent) could not be attached."
             }
@@ -460,9 +458,28 @@ struct MessageComposer: View {
             #endif
             let sent = Set(submitted.map(\.id))
             attachments.removeAll { sent.contains($0.id) }
-            showMentionSuggestions = false
-            mentionQuery = ""
+            // For the text as it is now: more can have been typed while
+            // the send was under way.
+            suggestMentions()
         }
+    }
+
+    /// Shows suggestions while the text ends in an unfinished @mention.
+    private func suggestMentions() {
+        if let query = ComposerRules.mentionQuery(in: messageText), !mentionableRoles.isEmpty {
+            mentionQuery = query
+            showMentionSuggestions = true
+        } else {
+            mentionQuery = ""
+            showMentionSuggestions = false
+        }
+    }
+
+    /// Logs what failed and the error's kind, never its description: that
+    /// can name the file or where it is.
+    private static func log(_ what: String, _ error: Error) {
+        let error = error as NSError
+        AppErrorReporter.log(message: "\(what) (\(error.domain) \(error.code)).", context: "MessageComposer.attach")
     }
 
     // MARK: - Recipient
