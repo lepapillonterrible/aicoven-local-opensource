@@ -10,38 +10,73 @@ private final class KeptDrafts {
     var saves: [(text: String, threadID: String)] = []
     var loads: [String] = []
     var failsToSave = false
+    var account = "account-a"
     /// What is due to run, in the order scheduled.
     var scheduled: [@MainActor () -> Void] = []
 
+    /// While true, a read or a save waits to be let go.
+    var holdsLoads = false
+    var holdsSaves = false
+    private var heldLoads: [CheckedContinuation<Void, Never>] = []
+    private var heldSaves: [CheckedContinuation<Void, Never>] = []
+    /// Met each time a read or a save starts to wait.
+    var loadIsWaiting: XCTestExpectation?
+    var saveIsWaiting: XCTestExpectation?
+
     func makeDrafts() -> ComposerDrafts {
         ComposerDrafts(
-            load: { [self] threadID in
-                await MainActor.run {
-                    loads.append(threadID)
-                    return texts[threadID]
-                }
-            },
-            save: { [self] text, threadID in
-                try await MainActor.run {
-                    if failsToSave { throw NSError(domain: "KeptDrafts", code: 1) }
-                    saves.append((text, threadID))
-                    texts[threadID] = text.isEmpty ? nil : text
-                }
-            },
-            schedule: { [self] _, action in scheduled.append(action) }
+            load: { [self] threadID in await read(threadID) },
+            save: { [self] text, threadID in try await keep(text, threadID) },
+            schedule: { [self] _, action in scheduled.append(action) },
+            currentAccount: { [self] in account }
         )
     }
 
-    /// Runs what was scheduled, and waits for the saving it starts.
+    private func read(_ threadID: String) async -> String? {
+        loads.append(threadID)
+        let kept = texts[threadID]
+        if holdsLoads {
+            await withCheckedContinuation { continuation in
+                heldLoads.append(continuation)
+                loadIsWaiting?.fulfill()
+            }
+        }
+        return kept
+    }
+
+    private func keep(_ text: String, _ threadID: String) async throws {
+        if holdsSaves {
+            await withCheckedContinuation { continuation in
+                heldSaves.append(continuation)
+                saveIsWaiting?.fulfill()
+            }
+        }
+        if failsToSave { throw NSError(domain: "KeptDrafts", code: 1) }
+        saves.append((text, threadID))
+        texts[threadID] = text.isEmpty ? nil : text
+    }
+
+    func letLoadsGo() {
+        holdsLoads = false
+        let waiting = heldLoads
+        heldLoads = []
+        waiting.forEach { $0.resume() }
+    }
+
+    func letSavesGo() {
+        holdsSaves = false
+        let waiting = heldSaves
+        heldSaves = []
+        waiting.forEach { $0.resume() }
+    }
+
+    /// Runs what was scheduled, and waits for the saving it started: only
+    /// that, so a scheduled save that saved nothing shows.
     func runScheduled(_ drafts: ComposerDrafts) async {
         let due = scheduled
         scheduled = []
         due.forEach { $0() }
-        // The scheduled action starts the save in a task of its own.
-        for _ in 0 ..< 20 {
-            await Task.yield()
-        }
-        await drafts.saveNow()
+        await drafts.lastSave?.value
     }
 }
 
@@ -125,15 +160,94 @@ final class ComposerDraftsTests: XCTestCase {
     func testWhatIsTypedWhileTheKeptTextIsRead_isNewerThanIt() async {
         let kept = KeptDrafts()
         kept.texts["a"] = "Left unsent"
+        kept.holdsLoads = true
+        kept.loadIsWaiting = expectation(description: "The kept text is being read")
         let drafts = kept.makeDrafts()
 
-        async let read = drafts.draft(for: "a")
-        // The read is waiting on the store: this is set meanwhile.
-        await Task.yield()
+        let reading = Task { await drafts.draft(for: "a") }
+        await fulfillment(of: [kept.loadIsWaiting].compactMap(\.self), timeout: 10)
         drafts.set(ComposerDraft(text: "Typed meanwhile"), for: "a")
-        let draft = await read
+        kept.letLoadsGo()
+        let draft = await reading.value
 
         XCTAssertEqual(draft.text, "Typed meanwhile")
+    }
+
+    func testAThreadOpenedInTwoPlacesAtOnce_isReadFromTheStoreOnce() async {
+        let kept = KeptDrafts()
+        kept.texts["a"] = "Left unsent"
+        kept.holdsLoads = true
+        kept.loadIsWaiting = expectation(description: "The kept text is being read")
+        let drafts = kept.makeDrafts()
+
+        let first = Task { await drafts.draft(for: "a") }
+        await fulfillment(of: [kept.loadIsWaiting].compactMap(\.self), timeout: 10)
+        let second = Task { await drafts.draft(for: "a") }
+        // The second asks while the first is still reading.
+        await Task.yield()
+        kept.letLoadsGo()
+        let (one, two) = await (first.value, second.value)
+
+        XCTAssertEqual(one.text, "Left unsent")
+        XCTAssertEqual(two.text, "Left unsent")
+        XCTAssertEqual(kept.loads, ["a"])
+    }
+
+    func testIfTheAccountChangesWhileADraftIsRead_nothingOfItIsHandedOn() async {
+        let kept = KeptDrafts()
+        kept.texts["a"] = "Left unsent"
+        kept.holdsLoads = true
+        kept.loadIsWaiting = expectation(description: "The kept text is being read")
+        let drafts = kept.makeDrafts()
+
+        let reading = Task { await drafts.draft(for: "a") }
+        await fulfillment(of: [kept.loadIsWaiting].compactMap(\.self), timeout: 10)
+        // Also when something was set for the thread meanwhile.
+        drafts.set(ComposerDraft(text: "Typed meanwhile"), for: "a")
+        kept.account = "account-b"
+        kept.letLoadsGo()
+        let draft = await reading.value
+
+        XCTAssertEqual(draft, ComposerDraft())
+    }
+
+    func testSaves_areMadeOneAfterAnotherSoTheLatestTextIsTheOneKept() async {
+        let kept = KeptDrafts()
+        let drafts = kept.makeDrafts()
+        _ = await drafts.draft(for: "a")
+        drafts.set(ComposerDraft(text: "Earlier"), for: "a")
+        kept.holdsSaves = true
+        kept.saveIsWaiting = expectation(description: "The earlier text is being saved")
+        let earlier = Task { await drafts.saveNow() }
+        await fulfillment(of: [kept.saveIsWaiting].compactMap(\.self), timeout: 10)
+
+        // Changed, and saved again, while the earlier save is under way.
+        kept.saveIsWaiting = nil
+        drafts.set(ComposerDraft(text: "Later"), for: "a")
+        let later = Task { await drafts.saveNow() }
+        kept.letSavesGo()
+        await earlier.value
+        await later.value
+
+        XCTAssertEqual(kept.saves.map(\.text), ["Earlier", "Later"])
+        XCTAssertEqual(kept.texts["a"], "Later")
+    }
+
+    func testSentAttachments_leaveTheThreadsDraftWhereverItsComposerIs() async {
+        let kept = KeptDrafts()
+        let drafts = kept.makeDrafts()
+        _ = await drafts.draft(for: "a")
+        let sent = FileAttachmentDetail(id: "sent", name: "sent.txt", mimeType: nil, sizeBytes: nil, width: nil, height: nil, url: nil)
+        let added = FileAttachmentDetail(id: "added", name: "added.txt", mimeType: nil, sizeBytes: nil, width: nil, height: nil, url: nil)
+        // As the composer leaves it when a message is on its way: the text
+        // cleared, the files still there, and another chosen since.
+        drafts.set(ComposerDraft(text: "", attachments: [sent, added]), for: "a")
+
+        drafts.removeAttachments([sent], from: "a")
+        drafts.removeAttachments([sent], from: "never-opened")
+
+        let draft = await drafts.draft(for: "a")
+        XCTAssertEqual(draft.attachments, [added])
     }
 
     func testATextThatCouldNotBeSaved_isTriedAgainWithTheNextSave() async {

@@ -745,6 +745,7 @@ struct PersonalChatView: View {
         )
         if turns.enqueue(waiting, threadID: thread.id) {
             messageText = ""
+            ComposerDrafts.shared.removeAttachments(attachments, from: thread.id)
             // The bubble does not take focus: said, so it is known to wait.
             let isNext = turns.waiting[thread.id]?.first?.id == waiting.id
             AccessibilityNotification.Announcement(
@@ -779,6 +780,9 @@ struct PersonalChatView: View {
             giveBack(raw, because: error.localizedDescription)
             return false
         }
+        // Sent: its files leave the thread's draft, also if the thread has
+        // left the screen and its composer cannot take them out.
+        ComposerDrafts.shared.removeAttachments(attachments, from: userMessage.threadId)
         return true
     }
 
