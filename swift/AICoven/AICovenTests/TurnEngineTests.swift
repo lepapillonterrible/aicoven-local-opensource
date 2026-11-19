@@ -266,7 +266,7 @@ final class TurnEngineTests: XCTestCase {
     func testStop_startsNoToolOnceTheTurnIsStopped() async {
         let stopped = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            return try await ChatService.shared.executeChatToolCall(ChatToolInvocation(tool: "current_time", input: nil, reason: nil))
+            return try await ChatService.shared.executeChatToolCall(ChatToolInvocation(tool: "current_time", input: nil, reason: nil), threadID: nil)
         }
 
         do {

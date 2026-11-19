@@ -14,14 +14,21 @@ actor ToolExecutionService {
     private let googleDriveService = GoogleDriveToolService.shared
     private let connectedAccountsService = ConnectedAccountsService.shared
 
+    /// Asks the person before a tool changes something, and waits for the
+    /// answer.
+    private let ask: @Sendable (ToolApproval) async -> ApprovalAnswer
+
     /// Default initializer uses the shared ToolService singleton.
     init() {
         toolService = ToolService.shared
+        ask = Self.askInItsThread
     }
 
-    /// Test-friendly initializer that accepts a mock tool service.
-    init(toolService: any ChatToolService) {
+    /// Test-friendly initializer that accepts a mock tool service, and an
+    /// answer to every approval in place of the person's.
+    init(toolService: any ChatToolService, ask: @escaping @Sendable (ToolApproval) async -> ApprovalAnswer = { _ in .denied }) {
         self.toolService = toolService
+        self.ask = ask
     }
 
     // Configuration
@@ -105,7 +112,9 @@ actor ToolExecutionService {
                   let content = extractString(from: toolCall.args, key: "content") else {
                 return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'path' and 'content'")
             }
-            return await fileService.writeFile(path: path, content: content)
+            return await fileService.writeFile(path: path, content: content) { resolvedPath, replaces in
+                await self.answer(in: threadID) { .fileWrite(path: resolvedPath, content: content, replaces: replaces, threadID: $0) }
+            }
 
         case "file.list":
             guard let path = extractString(from: toolCall.args, key: "path") else {
@@ -119,7 +128,9 @@ actor ToolExecutionService {
             guard let command = extractString(from: toolCall.args, key: "command") else {
                 return await .validationError(tool: toolCall.name, message: "Missing required argument: 'command'")
             }
-            return await shellService.execute(command: command)
+            return await shellService.execute(command: command) { command, directory in
+                await self.answer(in: threadID) { .shell(command: command, directory: directory, threadID: $0) }
+            }
 
         // --- Web Tools ---
         case "web_search":
@@ -204,16 +215,16 @@ actor ToolExecutionService {
             return await executeGitHubReadFile(toolCall: toolCall)
 
         case "github.writeFile", "github.write_file":
-            return await executeGitHubWriteFile(toolCall: toolCall)
+            return await executeGitHubWriteFile(toolCall: toolCall, threadID: threadID)
 
         case "github.listFiles", "github.list_files":
             return await executeGitHubListFiles(toolCall: toolCall)
 
         case "github.createBranch", "github.create_branch":
-            return await executeGitHubCreateBranch(toolCall: toolCall)
+            return await executeGitHubCreateBranch(toolCall: toolCall, threadID: threadID)
 
         case "github.createPR", "github.create_pr":
-            return await executeGitHubCreatePR(toolCall: toolCall)
+            return await executeGitHubCreatePR(toolCall: toolCall, threadID: threadID)
 
         case "github.searchCode", "github.search_code":
             return await executeGitHubSearchCode(toolCall: toolCall)
@@ -232,13 +243,13 @@ actor ToolExecutionService {
             return await executeGoogleDriveReadFile(toolCall: toolCall)
 
         case "google_drive.uploadFile", "google_drive.upload_file":
-            return await executeGoogleDriveUploadFile(toolCall: toolCall)
+            return await executeGoogleDriveUploadFile(toolCall: toolCall, threadID: threadID)
 
         case "google_sheets.readValues", "google_sheets.read_values":
             return await executeGoogleSheetsReadValues(toolCall: toolCall)
 
         case "google_sheets.writeValues", "google_sheets.write_values":
-            return await executeGoogleSheetsWriteValues(toolCall: toolCall)
+            return await executeGoogleSheetsWriteValues(toolCall: toolCall, threadID: threadID)
 
         default:
             return await .error(
@@ -343,7 +354,7 @@ actor ToolExecutionService {
     }
 
     /// Execute github.writeFile
-    private func executeGitHubWriteFile(toolCall: ParsedToolCall) async -> ToolExecutionResult {
+    private func executeGitHubWriteFile(toolCall: ParsedToolCall, threadID: String?) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .github) else {
             return await .error(tool: toolCall.name, message: "GitHub not connected.")
         }
@@ -358,6 +369,10 @@ actor ToolExecutionService {
 
         let branch = extractString(from: toolCall.args, key: "branch")
         let sha = extractString(from: toolCall.args, key: "sha")
+
+        if let refusal = await ToolExecutionResult.refusal(answer(in: threadID) { .gitHubWriteFile(owner: owner, repo: repo, path: path, branch: branch, message: message, content: content, threadID: $0) }, tool: toolCall.name) {
+            return refusal
+        }
 
         do {
             _ = try await githubService.writeFile(
@@ -408,7 +423,7 @@ actor ToolExecutionService {
     }
 
     /// Execute github.createBranch
-    private func executeGitHubCreateBranch(toolCall: ParsedToolCall) async -> ToolExecutionResult {
+    private func executeGitHubCreateBranch(toolCall: ParsedToolCall, threadID: String?) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .github) else {
             return await .error(tool: toolCall.name, message: "GitHub not connected.")
         }
@@ -418,6 +433,10 @@ actor ToolExecutionService {
               let baseBranch = extractString(from: toolCall.args, key: "base_branch") ?? extractString(from: toolCall.args, key: "baseBranch"),
               let newBranch = extractString(from: toolCall.args, key: "new_branch") ?? extractString(from: toolCall.args, key: "newBranch") else {
             return await .validationError(tool: toolCall.name, message: "Missing required arguments: 'owner', 'repo', 'base_branch', 'new_branch'")
+        }
+
+        if let refusal = await ToolExecutionResult.refusal(answer(in: threadID) { .gitHubCreateBranch(owner: owner, repo: repo, newBranch: newBranch, baseBranch: baseBranch, threadID: $0) }, tool: toolCall.name) {
+            return refusal
         }
 
         do {
@@ -439,7 +458,7 @@ actor ToolExecutionService {
     }
 
     /// Execute github.createPR
-    private func executeGitHubCreatePR(toolCall: ParsedToolCall) async -> ToolExecutionResult {
+    private func executeGitHubCreatePR(toolCall: ParsedToolCall, threadID: String?) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .github) else {
             return await .error(tool: toolCall.name, message: "GitHub not connected.")
         }
@@ -453,6 +472,10 @@ actor ToolExecutionService {
         }
 
         let body = extractString(from: toolCall.args, key: "body")
+
+        if let refusal = await ToolExecutionResult.refusal(answer(in: threadID) { .gitHubCreatePR(owner: owner, repo: repo, title: title, head: head, base: base, body: body, threadID: $0) }, tool: toolCall.name) {
+            return refusal
+        }
 
         do {
             let result = try await githubService.createPullRequest(
@@ -681,7 +704,7 @@ actor ToolExecutionService {
     }
 
     /// Execute google_drive.uploadFile
-    private func executeGoogleDriveUploadFile(toolCall: ParsedToolCall) async -> ToolExecutionResult {
+    private func executeGoogleDriveUploadFile(toolCall: ParsedToolCall, threadID: String?) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .googleDrive) else {
             return await .error(tool: toolCall.name, message: "Google Drive not connected.")
         }
@@ -692,6 +715,10 @@ actor ToolExecutionService {
         }
 
         let mimeType = extractString(from: toolCall.args, key: "mime_type") ?? "text/plain"
+
+        if let refusal = await ToolExecutionResult.refusal(answer(in: threadID) { .driveUpload(name: name, mimeType: mimeType, content: content, threadID: $0) }, tool: toolCall.name) {
+            return refusal
+        }
 
         do {
             let file = try await googleDriveService.uploadFile(
@@ -733,7 +760,7 @@ actor ToolExecutionService {
     }
 
     /// Execute google_sheets.writeValues
-    private func executeGoogleSheetsWriteValues(toolCall: ParsedToolCall) async -> ToolExecutionResult {
+    private func executeGoogleSheetsWriteValues(toolCall: ParsedToolCall, threadID: String?) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .googleDrive) else {
             return await .error(tool: toolCall.name, message: "Google Drive not connected.")
         }
@@ -750,6 +777,10 @@ actor ToolExecutionService {
 
         let values = valuesArg.map { row in row.map { String(describing: $0) } }
 
+        if let refusal = await ToolExecutionResult.refusal(answer(in: threadID) { .sheetsWrite(spreadsheetID: spreadsheetId, range: range, values: values, threadID: $0) }, tool: toolCall.name) {
+            return refusal
+        }
+
         do {
             _ = try await googleDriveService.writeSpreadsheetValues(
                 accountId: account.id,
@@ -762,6 +793,40 @@ actor ToolExecutionService {
         } catch {
             return await .error(tool: toolCall.name, message: error.localizedDescription)
         }
+    }
+
+    // MARK: - Approvals
+
+    /// Asks the person, in the thread the tool call came from, about what
+    /// `describe` says is about to happen, and waits for the answer. Without
+    /// a thread there is nowhere to ask and no one to answer.
+    private func answer(in threadID: String?, _ describe: @Sendable (_ threadID: String) -> ToolApproval) async -> ApprovalAnswer {
+        guard let threadID else { return .notAsked }
+        return await ask(describe(threadID))
+    }
+
+    /// Asks in the app's approval spot, naming the thread that asked and
+    /// where it lives. An approval that cannot say which thread it is from
+    /// (the thread has been deleted, its coven is gone, or either could not
+    /// be read) is not asked: the person would be answering for somewhere
+    /// else. Why is logged.
+    static func askInItsThread(_ approval: ToolApproval) async -> ApprovalAnswer {
+        var approval = approval
+        do {
+            let thread = try await ThreadService.shared.getThread(threadId: approval.threadID)
+            approval.threadTitle = thread.title ?? approval.threadTitle
+            if let covenID = thread.covenId {
+                guard let coven = try await CovenService.shared.loadCovens().first(where: { $0.id == covenID }) else {
+                    AppErrorReporter.log(message: "An approval's coven was not found", context: "ToolExecutionService.askInItsThread")
+                    return .notAsked
+                }
+                approval.covenName = coven.name
+            }
+        } catch {
+            AppErrorReporter.log(error: error, context: "ToolExecutionService.askInItsThread")
+            return .notAsked
+        }
+        return await ToolApprovals.shared.ask(approval)
     }
 
     // MARK: - Configuration Methods

@@ -1,25 +1,8 @@
 import Foundation
 
-/// Pending shell command approval request.
-/// Note: The continuation is managed internally by ShellApprovalManager to prevent
-/// accidental double-resume from UI handlers.
-struct ShellApprovalRequest: Identifiable {
-    let id: UUID
-    let command: String
-    let workingDir: String?
-    let riskLevel: ShellCommandRiskLevel
-    let metadata: [String: String]
-}
-
-/// User's decision on a shell command approval request.
-enum ShellApprovalDecision {
-    case approve
-    case approveAlways(pattern: String)
-    case deny(reason: String)
-}
-
 /// Provides shell command execution for the agent with safety controls.
-/// Commands require user approval unless they match auto-approve patterns.
+/// A command runs only once the person has approved it, unless it is one of
+/// a few that only read (`readOnlyCommands`).
 actor ShellToolService {
 
     /// Shared singleton instance.
@@ -54,14 +37,16 @@ actor ShellToolService {
     ///   - workingDir: Optional working directory.
     ///   - env: Optional environment variables.
     ///   - timeoutSeconds: Execution timeout.
-    ///   - metadata: Additional metadata for the approval UI.
+    ///   - approve: Asks the person, once the command is known to be allowed
+    ///     to be asked about: the command and the directory it will run in.
+    ///     The command runs only if it returns true.
     /// - Returns: ToolResult with command output or error.
     func execute(
         command: String,
         workingDir: String? = nil,
         env: [String: String]? = nil,
         timeoutSeconds: Int? = nil,
-        metadata: [String: String] = [:]
+        approve: @Sendable (_ command: String, _ directory: String) async -> ApprovalAnswer
     ) async -> ToolExecutionResult {
         let timeout = timeoutSeconds ?? defaultTimeoutSeconds
 
@@ -93,24 +78,9 @@ actor ShellToolService {
             )
         }
 
-        // Assess risk level
-        let riskLevel = ShellCommandRiskLevel.assess(command: command)
-
-        // Request approval via ShellApprovalManager (single source of truth).
-        // The manager auto-approves low-risk commands matching known patterns,
-        // and always prompts for medium/high risk commands.
-        let decision = await requestApproval(
-            command: command,
-            workingDir: normalizedWorkingDir,
-            riskLevel: riskLevel,
-            metadata: metadata
-        )
-
-        switch decision {
-        case .approve, .approveAlways:
-            break // Continue to execution
-        case let .deny(reason):
-            return await .denied(tool: "shell.execute", reason: reason)
+        if !Self.isReadOnly(command),
+           let refusal = await ToolExecutionResult.refusal(approve(command, normalizedWorkingDir), tool: "shell.execute") {
+            return refusal
         }
 
         // Execute the command
@@ -144,19 +114,31 @@ actor ShellToolService {
         return URL(fileURLWithPath: expanded).standardizedFileURL.resolvingSymlinksInPath().path
     }
 
-    /// Request user approval for a command.
-    private func requestApproval(
-        command: String,
-        workingDir: String?,
-        riskLevel: ShellCommandRiskLevel,
-        metadata: [String: String]
-    ) async -> ShellApprovalDecision {
-        // Use the ShellApprovalManager actor
-        await ShellApprovalManager.shared.requestApproval(
-            command: command,
-            directory: workingDir ?? "current directory",
-            riskLevel: riskLevel
-        )
+    /// The commands that run without asking: each only reads, and is
+    /// matched whole. A command with a path, a pipe, a redirect, a
+    /// substitution or a second command in it is always asked about.
+    private static let readOnlyCommands: [String] = [
+        "^pwd$",
+        "^whoami$",
+        "^date$",
+        "^git status( --short)?$",
+        "^git branch( --show-current)?$",
+        "^git remote -v$"
+    ]
+
+    /// Whether a command is one of the few that run without asking.
+    nonisolated static func isReadOnly(_ command: String) -> Bool {
+        // Spaces and tabs only: a newline anywhere makes it more than one
+        // command.
+        let trimmed = command.trimmingCharacters(in: .whitespaces)
+        guard ShellCommandRiskLevel.assess(command: trimmed) == .low else { return false }
+        let disallowedFragments = [";", "&&", "||", "|", ">", "<", "`", "$(", "${", "\n", "\r"]
+        guard !disallowedFragments.contains(where: { trimmed.contains($0) }) else { return false }
+        let tokens = trimmed.split(whereSeparator: { $0 == " " || $0 == "\t" })
+        guard !tokens.contains(where: { $0.hasPrefix("/") || $0.hasPrefix("~") || $0.contains("../") }) else { return false }
+        return readOnlyCommands.contains { pattern in
+            trimmed.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+        }
     }
 
     /// Execute the actual command using Process.

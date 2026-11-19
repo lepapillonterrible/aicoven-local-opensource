@@ -2,9 +2,12 @@ import SwiftUI
 
 /// The one line a turn shows while it runs: ring, what it is doing, Details,
 /// and Stop, with no elapsed time. A turn that is stopping says so and
-/// offers no Stop.
+/// offers no Stop. A turn waiting to be allowed something says "Needs your
+/// OK", and its ring holds still: no work is happening.
 struct TurnStatusLineView: View {
     let turn: TurnEngine.Activity
+    /// The turn is waiting for the person to approve or deny something.
+    var needsOK = false
     /// Opens the work trace.
     let onDetails: () -> Void
     let onStop: () -> Void
@@ -17,12 +20,12 @@ struct TurnStatusLineView: View {
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: Spacing.xxs))
             : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: Spacing.sm))
         HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
-            StatusRing(isTurning: true)
+            StatusRing(isTurning: !waitsForOK)
                 .accessibilityHidden(true)
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
 
             layout {
-                Text(turn.message)
+                Text(text)
                     .font(.aicovenBody)
                     .foregroundStyle(Color.aicovenTextPrimary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -51,11 +54,21 @@ struct TurnStatusLineView: View {
         .accessibilityElement(children: .contain)
         // VoiceOver hears each new status once, however many windows show
         // this turn. A turn in a thread no window shows is not announced.
-        .onChange(of: turn.message) { _, message in
-            // The engine says "Stopping" itself, when Stop is pressed.
-            guard !turn.isStopping else { return }
-            TurnEngine.shared.announceStatus(message, of: turn.turnID)
+        .onChange(of: text) { _, text in
+            // The engine says "Stopping" itself, when Stop is pressed, and
+            // an approval says itself when it comes.
+            guard !turn.isStopping, !waitsForOK else { return }
+            TurnEngine.shared.announceStatus(text, of: turn.turnID)
         }
+    }
+
+    /// A turn that is stopping has stopped waiting.
+    private var waitsForOK: Bool {
+        needsOK && !turn.isStopping
+    }
+
+    private var text: String {
+        waitsForOK ? "Needs your OK" : turn.message
     }
 }
 

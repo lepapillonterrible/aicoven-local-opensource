@@ -121,13 +121,37 @@ struct ToolExecutionResult: Codable {
     }
 
     /// Create a denied result (user declined approval).
-    nonisolated static func denied(tool: String, reason: String = "User denied execution") -> ToolExecutionResult {
+    nonisolated static func denied(tool: String, reason: String = "The person was asked and said no. Do not try this again unless they ask for it.") -> ToolExecutionResult {
         ToolExecutionResult(
             tool: tool,
             status: "denied",
             error: reason,
             errorType: "user_denied"
         )
+    }
+
+    /// What a tool that asked the person returns when it may not go ahead;
+    /// nil when it was approved. Each says what happened, so the model is
+    /// not told the person said no when no one was asked.
+    static func refusal(_ answer: ApprovalAnswer, tool: String) -> ToolExecutionResult? {
+        switch answer {
+        case .approved:
+            nil
+        case .denied:
+            denied(tool: tool)
+        case .withdrawn:
+            ToolExecutionResult(
+                tool: tool,
+                status: "denied",
+                error: "The turn was stopped before the person answered.",
+                errorType: "approval_withdrawn"
+            )
+        case .notAsked:
+            permissionDenied(
+                tool: tool,
+                message: "This changes something, so the person has to be asked first, and the thread to ask them in could not be found or read."
+            )
+        }
     }
 
     /// Create a timeout result.
@@ -234,7 +258,7 @@ enum ShellCommandRiskLevel: String, Codable {
     case high
 
     /// Determine risk level from a shell command string.
-    static func assess(command: String) -> ShellCommandRiskLevel {
+    nonisolated static func assess(command: String) -> ShellCommandRiskLevel {
         let lowercased = command.lowercased()
 
         // High-risk patterns

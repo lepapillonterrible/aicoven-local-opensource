@@ -146,7 +146,7 @@ This is the local-first backbone intended to replace many backend-oriented servi
   - `AgentProfile` describes agent types, allowed tools, memory scopes, and safety constraints.
 
 - `Core/Tools/`
-  - `ToolExecutionService` routes tool calls including shell commands (with approval via `ShellApprovalManager`), connected-app tools (GitHub, Google Drive), and MCP server tools.
+  - `ToolExecutionService` routes tool calls including shell commands, connected-app tools (GitHub, Google Drive), and MCP server tools. A tool that changes something (a shell command, a file write, a GitHub or Google write) first asks the person through `ToolApprovals`, which shows one approval at a time beside the thread (`Views/Chat/ApprovalBlock.swift`).
 
 - `Features/MCP/`
   - `MCPClient` is an actor-based MCP (Model Context Protocol) client that connects to remote servers over HTTP/SSE, discovers tools via `tools/list`, and executes them via `tools/call` using JSON-RPC 2.0.
