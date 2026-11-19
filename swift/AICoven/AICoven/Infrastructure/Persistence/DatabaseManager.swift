@@ -283,6 +283,19 @@ final class DatabaseManager {
                 """)
             }
 
+            // v7: the app's own threads and messages move here from plain
+            // JSON files. A thread's whole record, its title included, is in
+            // `payload_ciphertext`. `payload_format` 1 marks a message whose
+            // ciphertext is its whole record; 0 is the earlier plain content.
+            migrator.registerMigration("v7_chat_history") { db in
+                try db.alter(table: "threads") { t in
+                    t.add(column: "payload_ciphertext", .blob)
+                }
+                try db.alter(table: "messages") { t in
+                    t.add(column: "payload_format", .integer).notNull().defaults(to: 0)
+                }
+            }
+
             try migrator.migrate(queue)
             dbQueue = queue
         } catch {

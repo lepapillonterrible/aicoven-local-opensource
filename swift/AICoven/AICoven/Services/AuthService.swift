@@ -88,7 +88,6 @@ class AuthService: ObservableObject {
                     }
 
                     await StoreService.shared.reloadForCurrentUser()
-                    await ChatService.shared.reloadForCurrentUser()
                 } else {
                     print("❌ No Firebase user - signed out")
                     self?.currentUser = nil

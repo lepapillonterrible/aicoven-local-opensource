@@ -10,6 +10,11 @@ protocol ThreadStore {
     func updateSummary(forThreadID threadID: String, summary: String?) async throws
     func appendMessage(toThreadID threadID: String, role: String, content: String) async throws -> LocalMessage
     func loadMessages(forThreadID threadID: String, limit: Int?) async throws -> [LocalMessage]
+    /// Adds a message of the app's chat history to the end of its thread.
+    func appendChatMessage(_ message: ChatMessage) async throws
+    /// A page of a thread's chat history, oldest first: the `limit` newest
+    /// messages, or the `limit` just before the message `before`.
+    func loadChatMessages(threadID: String, limit: Int, before: String?) async throws -> [ChatMessage]
 }
 
 /// Protocol abstraction for long-term memory storage.

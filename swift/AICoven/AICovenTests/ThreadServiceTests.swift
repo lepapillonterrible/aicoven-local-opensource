@@ -1,10 +1,22 @@
 import XCTest
 @testable import AICoven
 
-/// Tests for the local-only ThreadService that manages personal threads
-/// persisted to disk as JSON.
+/// Tests for the local-only ThreadService, which keeps threads in the
+/// encrypted local database.
 @MainActor
 final class ThreadServiceTests: XCTestCase {
+    override func setUp() async throws {
+        try await super.setUp()
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        DatabaseManager.shared.configureIfNeeded()
+        await ThreadService.shared.reloadForCurrentUser()
+    }
+
+    override func tearDown() async throws {
+        await ThreadService.shared.reloadForCurrentUser()
+        await DataEncryptionService.shared.lock()
+        try await super.tearDown()
+    }
 
     func testCreateThreadAddsPersonalThreadAndCanBeLoaded() async throws {
         let service = ThreadService.shared

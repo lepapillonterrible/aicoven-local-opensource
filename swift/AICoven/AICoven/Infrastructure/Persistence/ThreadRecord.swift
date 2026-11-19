@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import GRDB
 
@@ -12,6 +13,9 @@ struct ThreadRecord: Codable, FetchableRecord, PersistableRecord {
     var updatedAt: Date?
     var summaryCiphertext: Data?
     var metadata: String?
+    /// The encrypted `Thread` this row holds, for a thread of the app's own
+    /// chat history. Such a row has no plain `title`.
+    var payloadCiphertext: Data?
 
     enum Columns: String, ColumnExpression {
         case id
@@ -21,6 +25,7 @@ struct ThreadRecord: Codable, FetchableRecord, PersistableRecord {
         case updatedAt = "updated_at"
         case summaryCiphertext = "summary_ciphertext"
         case metadata
+        case payloadCiphertext = "payload_ciphertext"
     }
 
     /// Memberwise initializer used by repositories when inserting new rows.
@@ -31,7 +36,8 @@ struct ThreadRecord: Codable, FetchableRecord, PersistableRecord {
         createdAt: Date,
         updatedAt: Date?,
         summaryCiphertext: Data?,
-        metadata: String?
+        metadata: String?,
+        payloadCiphertext: Data? = nil
     ) {
         self.id = id
         self.userId = userId
@@ -40,6 +46,7 @@ struct ThreadRecord: Codable, FetchableRecord, PersistableRecord {
         self.updatedAt = updatedAt
         self.summaryCiphertext = summaryCiphertext
         self.metadata = metadata
+        self.payloadCiphertext = payloadCiphertext
     }
 
     /// Custom Row initializer so GRDB can decode from the snake_case schema.
@@ -51,6 +58,7 @@ struct ThreadRecord: Codable, FetchableRecord, PersistableRecord {
         updatedAt = row[Columns.updatedAt]
         summaryCiphertext = row[Columns.summaryCiphertext]
         metadata = row[Columns.metadata]
+        payloadCiphertext = row[Columns.payloadCiphertext]
     }
 
     /// Ensure GRDB uses snake_case column names on INSERT/UPDATE.
@@ -62,6 +70,7 @@ struct ThreadRecord: Codable, FetchableRecord, PersistableRecord {
         container[Columns.updatedAt] = updatedAt
         container[Columns.summaryCiphertext] = summaryCiphertext
         container[Columns.metadata] = metadata
+        container[Columns.payloadCiphertext] = payloadCiphertext
     }
 }
 
@@ -76,6 +85,12 @@ struct MessageRecord: Codable, FetchableRecord, PersistableRecord {
     var createdAt: Date
     var contentCiphertext: Data
     var metadata: String?
+    /// What `contentCiphertext` holds: `plainContent`, or `chatMessage`, the
+    /// whole `ChatMessage` of the app's own chat history.
+    var payloadFormat: Int
+
+    static let plainContent = 0
+    static let chatMessage = 1
 
     enum Columns: String, ColumnExpression {
         case id
@@ -85,6 +100,7 @@ struct MessageRecord: Codable, FetchableRecord, PersistableRecord {
         case createdAt = "created_at"
         case contentCiphertext = "content_ciphertext"
         case metadata
+        case payloadFormat = "payload_format"
     }
 
     /// Memberwise initializer used by repositories when inserting new rows.
@@ -95,7 +111,8 @@ struct MessageRecord: Codable, FetchableRecord, PersistableRecord {
         role: String,
         createdAt: Date,
         contentCiphertext: Data,
-        metadata: String?
+        metadata: String?,
+        payloadFormat: Int = MessageRecord.plainContent
     ) {
         self.id = id
         self.userId = userId
@@ -104,6 +121,7 @@ struct MessageRecord: Codable, FetchableRecord, PersistableRecord {
         self.createdAt = createdAt
         self.contentCiphertext = contentCiphertext
         self.metadata = metadata
+        self.payloadFormat = payloadFormat
     }
 
     /// Custom Row initializer so GRDB can decode from the snake_case schema.
@@ -115,6 +133,7 @@ struct MessageRecord: Codable, FetchableRecord, PersistableRecord {
         createdAt = row[Columns.createdAt]
         contentCiphertext = row[Columns.contentCiphertext]
         metadata = row[Columns.metadata]
+        payloadFormat = row[Columns.payloadFormat]
     }
 
     func encode(to container: inout PersistenceContainer) {
@@ -125,6 +144,7 @@ struct MessageRecord: Codable, FetchableRecord, PersistableRecord {
         container[Columns.createdAt] = createdAt
         container[Columns.contentCiphertext] = contentCiphertext
         container[Columns.metadata] = metadata
+        container[Columns.payloadFormat] = payloadFormat
     }
 }
 
@@ -151,7 +171,7 @@ actor ThreadRepository {
 
     /// Access the database queue from the MainActor-isolated DatabaseManager.
     /// This must be called from async context.
-    private func getDbQueue() async -> DatabaseQueue? {
+    func getDbQueue() async -> DatabaseQueue? {
         await MainActor.run { DatabaseManager.shared.dbQueue }
     }
 
@@ -336,7 +356,9 @@ actor ThreadRepository {
 
         for rec in records {
             let decrypted = try await DataEncryptionService.shared.decrypt(rec.contentCiphertext, purpose: "chat_message")
-            let content = String(decoding: decrypted, as: UTF8.self)
+            let content = rec.payloadFormat == MessageRecord.chatMessage
+                ? try JSONDecoder().decode(ChatMessage.self, from: decrypted).content
+                : String(decoding: decrypted, as: UTF8.self)
             result.append(
                 LocalMessage(
                     id: rec.id,
@@ -349,6 +371,193 @@ actor ThreadRepository {
         }
 
         return result
+    }
+}
+
+// MARK: - Chat history
+
+/// The app's own threads and messages. Each thread and each message is
+/// stored whole and encrypted, so nothing about a conversation, its title
+/// included, is readable in the database file. Reading or adding to the
+/// history first moves in whatever earlier builds left in files.
+extension ThreadRepository {
+    /// Saves a thread, new or changed.
+    func saveThread(_ thread: Thread) async throws {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let currentUserId = await MainActor.run { UserScope.currentUserID }
+        let payload = try await DataEncryptionService.shared.encrypt(JSONEncoder().encode(thread), purpose: "chat_thread")
+
+        try await dbQueue.write { db in
+            try Self.upsert(thread, payload: payload, userId: currentUserId, in: db)
+        }
+    }
+
+    /// The current user's threads, in no particular order.
+    func loadChatThreads() async throws -> [Thread] {
+        try await LegacyChatHistoryImport.shared.importIfNeeded()
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let currentUserId = await MainActor.run { UserScope.currentUserID }
+
+        let payloads: [Data] = try await dbQueue.read { db in
+            try ThreadRecord
+                .filter(ThreadRecord.Columns.userId == currentUserId)
+                .filter(ThreadRecord.Columns.payloadCiphertext != nil)
+                .fetchAll(db)
+                .compactMap(\.payloadCiphertext)
+        }
+
+        var threads: [Thread] = []
+        threads.reserveCapacity(payloads.count)
+        for payload in payloads {
+            if let thread = try await Self.open(Thread.self, payload, purpose: "chat_thread") {
+                threads.append(thread)
+            }
+        }
+        return threads
+    }
+
+    /// Deletes a thread of the current user's, and with it its messages.
+    func deleteThread(id: String) async throws {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let currentUserId = await MainActor.run { UserScope.currentUserID }
+
+        try await dbQueue.write { db in
+            _ = try ThreadRecord
+                .filter(ThreadRecord.Columns.id == id)
+                .filter(ThreadRecord.Columns.userId == currentUserId)
+                .deleteAll(db)
+        }
+    }
+
+    /// Adds a message to the end of its thread.
+    func appendChatMessage(_ message: ChatMessage) async throws {
+        try await LegacyChatHistoryImport.shared.importIfNeeded()
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let currentUserId = await MainActor.run { UserScope.currentUserID }
+        let record = try await Self.record(for: message, userId: currentUserId)
+
+        try await dbQueue.write { db in
+            try record.insert(db)
+        }
+    }
+
+    /// A page of a thread's messages, oldest first: the `limit` newest, or
+    /// the `limit` just before the message `before`.
+    func loadChatMessages(threadID: String, limit: Int, before: String?) async throws -> [ChatMessage] {
+        try await LegacyChatHistoryImport.shared.importIfNeeded()
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let currentUserId = await MainActor.run { UserScope.currentUserID }
+
+        // Messages are appended in order, so the row order is their order.
+        let records: [MessageRecord] = try await dbQueue.read { db in
+            var sql = "SELECT * FROM messages WHERE thread_id = ? AND user_id = ? AND payload_format = ?"
+            var arguments: [any DatabaseValueConvertible] = [threadID, currentUserId, MessageRecord.chatMessage]
+            if let before {
+                sql += " AND rowid < (SELECT rowid FROM messages WHERE id = ? AND thread_id = ? AND user_id = ?)"
+                arguments += [before, threadID, currentUserId]
+            }
+            sql += " ORDER BY rowid DESC LIMIT ?"
+            arguments.append(limit)
+            return try MessageRecord.fetchAll(db, sql: sql, arguments: StatementArguments(arguments))
+        }
+
+        var messages: [ChatMessage] = []
+        messages.reserveCapacity(records.count)
+        for record in records.reversed() {
+            if let message = try await Self.open(ChatMessage.self, record.contentCiphertext, purpose: "chat_message") {
+                messages.append(message)
+            }
+        }
+        return messages
+    }
+
+    /// Stores threads and their messages together, or not at all: the one
+    /// write of chat history from the files that used to hold it. A thread or
+    /// message already stored is left as it is.
+    func importChatHistory(threads: [Thread], messages: [String: [ChatMessage]]) async throws {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let currentUserId = await MainActor.run { UserScope.currentUserID }
+
+        var entries: [(thread: Thread, payload: Data, messages: [MessageRecord])] = []
+        for thread in threads {
+            let payload = try await DataEncryptionService.shared.encrypt(JSONEncoder().encode(thread), purpose: "chat_thread")
+            var records: [MessageRecord] = []
+            for message in messages[thread.id] ?? [] {
+                try await records.append(Self.record(for: message, userId: currentUserId))
+            }
+            entries.append((thread, payload, records))
+        }
+
+        let toWrite = entries
+        try await dbQueue.write { db in
+            for entry in toWrite {
+                if let stored = try ThreadRecord.fetchOne(db, key: entry.thread.id) {
+                    // A row another user owns cannot take this user's messages.
+                    guard stored.userId == currentUserId else { continue }
+                } else {
+                    try Self.upsert(entry.thread, payload: entry.payload, userId: currentUserId, in: db)
+                }
+                for record in entry.messages {
+                    try record.insert(db, onConflict: .ignore)
+                }
+            }
+        }
+    }
+
+    /// Decrypts and decodes one stored record. `nil`, and logged, when this
+    /// record cannot be read with the current key or is not what it should
+    /// be: one unreadable record must not hide the rest. While the data is
+    /// locked nothing can be read, and that is thrown.
+    private static func open<Value: Decodable>(_ type: Value.Type, _ ciphertext: Data, purpose: String) async throws -> Value? {
+        do {
+            let plaintext = try await DataEncryptionService.shared.decrypt(ciphertext, purpose: purpose)
+            return try JSONDecoder().decode(type, from: plaintext)
+        } catch let error as CryptoKitError {
+            AppErrorReporter.log(error: error, context: "ThreadRepository.open.\(purpose)")
+            return nil
+        } catch let error as DecodingError {
+            AppErrorReporter.log(error: error, context: "ThreadRepository.open.\(purpose)")
+            return nil
+        }
+    }
+
+    private static func record(for message: ChatMessage, userId: String) async throws -> MessageRecord {
+        let ciphertext = try await DataEncryptionService.shared.encrypt(JSONEncoder().encode(message), purpose: "chat_message")
+        return MessageRecord(
+            id: message.id,
+            userId: userId,
+            threadID: message.threadId,
+            role: message.role,
+            createdAt: message.createdAt ?? Date(),
+            contentCiphertext: ciphertext,
+            metadata: nil,
+            payloadFormat: MessageRecord.chatMessage
+        )
+    }
+
+    /// Writes a thread's row: a new row, or the payload and dates of the
+    /// current user's existing one, whose summary stays.
+    private static func upsert(_ thread: Thread, payload: Data, userId: String, in db: Database) throws {
+        let existing = try ThreadRecord
+            .filter(ThreadRecord.Columns.id == thread.id)
+            .filter(ThreadRecord.Columns.userId == userId)
+            .fetchOne(db)
+        if var existing {
+            existing.payloadCiphertext = payload
+            existing.updatedAt = thread.updatedAt
+            try existing.update(db)
+        } else {
+            try ThreadRecord(
+                id: thread.id,
+                userId: userId,
+                title: nil,
+                createdAt: thread.createdAt,
+                updatedAt: thread.updatedAt,
+                summaryCiphertext: nil,
+                metadata: nil,
+                payloadCiphertext: payload
+            ).insert(db)
+        }
     }
 }
 

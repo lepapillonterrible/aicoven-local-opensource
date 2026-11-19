@@ -3,137 +3,51 @@ import Foundation
 /// Service for thread-related operations.
 ///
 /// In the open-source, local-first client we do **not** talk to the
-/// multi-tenant backend. Personal threads are stored locally and
-/// persisted to disk. Coven-based threads are stubbed out and return
-/// empty results so legacy code can compile without surfacing coven UI.
+/// multi-tenant backend. Threads are stored in the encrypted local database
+/// and cached here once read.
 actor ThreadService {
     static let shared = ThreadService()
 
-    /// Local store for personal threads (covenId == nil).
-    /// Backed by a simple JSON file on disk so that threads persist
-    /// across app launches.
+    /// The current account's threads, personal and coven, once loaded.
     private var personalThreads: [Thread] = []
+    /// The account `personalThreads` was loaded for; `nil` until it is.
+    private var loadedUserID: String?
 
-    /// Location on disk where we persist personal threads.
-    private var persistenceURL: URL
+    private init() {}
 
-    private init() {
-        // IMPORTANT: Do NOT load threads here. The active user scope may change
-        // after authentication, so threads are loaded in reloadForCurrentUser()
-        // using the scoped persistence path for the current owner.
-        persistenceURL = ThreadService.makePersistenceURL()
-        // Start with empty array - will be populated after auth via reloadForCurrentUser()
+    /// Forget the loaded threads. Call after a user switch or sign-out; the
+    /// next read loads the current account's.
+    func reloadForCurrentUser() {
         personalThreads = []
+        loadedUserID = nil
     }
 
-    /// Reload threads for the current user. Call after user switch.
-    func reloadForCurrentUser() {
-        persistenceURL = ThreadService.makePersistenceURL()
-        AppErrorReporter.log(message: "Reloading scoped personal threads", context: "ThreadService.reloadForCurrentUser")
-
-        personalThreads = ThreadService.loadThreadsFromDisk(persistenceURL: persistenceURL)
-
-        // Clean up any orphaned threads without a valid user ID.
-        // These may exist from before authentication was required.
-        cleanupOrphanedThreads()
-
-        // Clean up threads created by automated tests
-        cleanupTestThreads()
+    /// Loads the current account's threads from the database. It throws
+    /// while the account's data is locked, and loads on a later call.
+    private func ensureLoaded() async throws {
+        let userID = UserScope.currentUserID
+        guard loadedUserID != userID else { return }
+        let threads = try await ThreadRepository.shared.loadChatThreads()
+        // The account can change while the database answers.
+        guard UserScope.currentUserID == userID, loadedUserID != userID else { return }
+        personalThreads = threads.sorted { $0.createdAt < $1.createdAt }
+        loadedUserID = userID
+        await cleanupTestThreads()
     }
 
     /// Remove threads created by automated tests (identified by "Test Thread" prefix).
     /// Call this to clean up after running tests with a real Firebase account.
-    func cleanupTestThreads() {
-        let testThreads = personalThreads.filter { thread in
-            thread.title?.hasPrefix("Test Thread") == true
-        }
-
-        if !testThreads.isEmpty {
-            AppErrorReporter.log(message: "Removing \(testThreads.count) automated test threads", context: "ThreadService.cleanupTestThreads")
-            personalThreads.removeAll { thread in
-                thread.title?.hasPrefix("Test Thread") == true
+    func cleanupTestThreads() async {
+        let testThreads = personalThreads.filter { $0.title?.hasPrefix("Test Thread") == true }
+        guard !testThreads.isEmpty else { return }
+        AppErrorReporter.log(message: "Removing \(testThreads.count) automated test threads", context: "ThreadService.cleanupTestThreads")
+        for thread in testThreads {
+            do {
+                try await ThreadRepository.shared.deleteThread(id: thread.id)
+                personalThreads.removeAll { $0.id == thread.id }
+            } catch {
+                AppErrorReporter.log(error: error, context: "ThreadService.cleanupTestThreads")
             }
-            persistPersonalThreads()
-        }
-    }
-
-    /// Remove threads that don't belong to the current user.
-    /// This handles legacy threads created before auth was required.
-    private func cleanupOrphanedThreads() {
-        let currentUserID = UserScope.currentUserID
-
-        // Remove threads with missing or mismatched user IDs
-        let validUserIDs = [currentUserID] // Only current user's threads are valid
-        let orphanedThreads = personalThreads.filter { thread in
-            thread.userId.isEmpty ||
-                !validUserIDs.contains(thread.userId)
-        }
-
-        if !orphanedThreads.isEmpty {
-            AppErrorReporter.log(message: "Removing \(orphanedThreads.count) orphaned threads (invalid user ID)", context: "ThreadService.cleanupOrphanedThreads")
-            personalThreads.removeAll { thread in
-                thread.userId.isEmpty ||
-                    thread.userId == "local-user" ||
-                    !validUserIDs.contains(thread.userId)
-            }
-            persistPersonalThreads()
-        }
-    }
-
-    // MARK: - Persistence helpers
-
-    /// Compute the URL where the threads JSON file should live.
-    private static func makePersistenceURL() -> URL {
-        let fileManager = FileManager.default
-        let baseDir: URL
-        #if os(iOS) || os(tvOS) || os(watchOS)
-        baseDir = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first ?? fileManager.temporaryDirectory
-        #else
-        // On macOS prefer Application Support, but fall back to Documents if needed.
-        baseDir = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fileManager.temporaryDirectory
-        #endif
-        let appDir = baseDir.appendingPathComponent("AICoven", isDirectory: true)
-        // Best-effort create with logging so failures are visible during
-        // debugging, but do not crash the app.
-        do {
-            try fileManager.createDirectory(at: appDir, withIntermediateDirectories: true)
-        } catch {
-            AppErrorReporter.log(error: error, context: "ThreadService.makePersistenceURL.createDirectory")
-        }
-        let filename = UserScope.scopedFilename("personal_threads", extension: "json")
-        return appDir.appendingPathComponent(filename, isDirectory: false)
-    }
-
-    /// Load any previously-saved personal threads from disk.
-    ///
-    /// Marked as `internal` so tests can exercise the decode-error path and
-    /// assert on the corresponding AppErrorReporter logging context.
-    static func loadThreadsFromDisk(persistenceURL: URL) -> [Thread] {
-        do {
-            let data = try Data(contentsOf: persistenceURL)
-            let decoder = JSONDecoder()
-            let threads = try decoder.decode([Thread].self, from: data)
-            AppErrorReporter.log(message: "Loaded \(threads.count) personal threads from disk", context: "ThreadService.loadThreadsFromDisk")
-            return threads
-        } catch {
-            // It's fine if the file does not exist yet or decoding fails;
-            // we just start with an empty list.
-            if (error as NSError).code != NSFileNoSuchFileError {
-                AppErrorReporter.log(error: error, context: "ThreadService.loadThreadsFromDisk")
-            }
-            return []
-        }
-    }
-
-    /// Persist the current in-memory personal threads to disk.
-    private func persistPersonalThreads() {
-        do {
-            let encoder = JSONEncoder()
-            let data = try encoder.encode(personalThreads)
-            try data.write(to: persistenceURL, options: [.atomic])
-            AppErrorReporter.log(message: "Saved \(personalThreads.count) personal threads to disk", context: "ThreadService.persistPersonalThreads")
-        } catch {
-            AppErrorReporter.log(error: error, context: "ThreadService.persistPersonalThreads")
         }
     }
 
@@ -143,6 +57,7 @@ actor ThreadService {
     ///   - includeArchived: Whether to include archived threads
     /// - Returns: List of threads
     func loadThreads(covenId: String? = nil, includeArchived: Bool = false) async throws -> [Thread] {
+        try await ensureLoaded()
         let filtered: [Thread]
         if let covenId {
             // Return locally persisted threads that belong to this coven.
@@ -167,6 +82,7 @@ actor ThreadService {
     ///   - agentId: AI agent/role ID (optional)
     /// - Returns: The created thread
     func createThread(title: String? = nil, covenId: String? = nil, agentId: String? = nil, agentName: String? = nil) async throws -> Thread {
+        try await ensureLoaded()
         let currentUserID = UserScope.currentUserID
 
         if let covenId {
@@ -189,8 +105,8 @@ actor ThreadService {
                 updatedAt: now,
                 lastMessageAt: nil
             )
+            try await ThreadRepository.shared.saveThread(thread)
             personalThreads.append(thread)
-            persistPersonalThreads()
             await AnalyticsService.shared.trackThreadCreated(covenId: covenId, agentId: agentId)
             await MainActor.run {
                 NotificationCenter.default.post(name: .didCreateThread, object: nil, userInfo: ["thread": thread])
@@ -215,8 +131,8 @@ actor ThreadService {
                 updatedAt: now,
                 lastMessageAt: nil
             )
+            try await ThreadRepository.shared.saveThread(thread)
             personalThreads.append(thread)
-            persistPersonalThreads()
 
             // Track analytics
             await AnalyticsService.shared.trackThreadCreated(covenId: nil, agentId: agentId)
@@ -235,6 +151,7 @@ actor ThreadService {
     /// - Returns: The thread
     /// - Throws: Error if thread not found or no authenticated user
     func getThread(threadId: String) async throws -> Thread {
+        try await ensureLoaded()
         if let local = personalThreads.first(where: { $0.id == threadId }) {
             return local
         }
@@ -275,10 +192,8 @@ actor ThreadService {
             }
         }
 
-        // Update in-memory personal thread if present. We ignore coven
-        // threads in the local-first client.
-        if let index = personalThreads.firstIndex(where: { $0.id == threadId }) {
-            let thread = personalThreads[index]
+        try await ensureLoaded()
+        if let thread = personalThreads.first(where: { $0.id == threadId }) {
             let newTitle = title.map { ThreadInputValidator.normalizedTitle($0, defaultTitle: thread.title ?? "New Chat") } ?? thread.title
             let newAgentId = agentId ?? thread.agentId
             let newPinned = isPinned ?? thread.isPinned
@@ -298,8 +213,11 @@ actor ThreadService {
                 updatedAt: Date(),
                 lastMessageAt: thread.lastMessageAt
             )
-            personalThreads[index] = updated
-            persistPersonalThreads()
+            try await ThreadRepository.shared.saveThread(updated)
+            // The list can change while the database writes.
+            if let index = personalThreads.firstIndex(where: { $0.id == threadId }) {
+                personalThreads[index] = updated
+            }
             return updated
         }
 
@@ -311,9 +229,11 @@ actor ThreadService {
     /// Delete a thread
     /// - Parameter threadId: The thread ID
     func deleteThread(threadId: String) async throws {
-        if let index = personalThreads.firstIndex(where: { $0.id == threadId }) {
-            personalThreads.remove(at: index)
-            persistPersonalThreads()
+        try await ensureLoaded()
+        if personalThreads.contains(where: { $0.id == threadId }) {
+            // The thread's messages go with it.
+            try await ThreadRepository.shared.deleteThread(id: threadId)
+            personalThreads.removeAll { $0.id == threadId }
             AppErrorReporter.log(message: "Deleted personal thread from local store", context: "ThreadService.deleteThread")
 
             // Track analytics

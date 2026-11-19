@@ -92,35 +92,20 @@ final class ErrorReportingTests: XCTestCase {
         )
     }
 
-    func testThreadService_logsDecodeErrorOnCorruptJSON() throws {
+    func testLegacyChatHistory_logsAndSetsAsideAFileItCannotRead() throws {
         let reporter = CapturingErrorReporter()
         AppErrorReporter.use(reporter)
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("personal_threads_\(UUID().uuidString).json")
+        let setAside = file.appendingPathExtension("unreadable")
+        defer { try? FileManager.default.removeItem(at: setAside) }
+        try Data("not-json".utf8).write(to: file)
 
-        // Arrange: write invalid JSON to the ThreadService persistence URL so
-        // that loadThreadsFromDisk() hits its decode failure path.
-        let fm = FileManager.default
-        let baseDir: URL
-        #if os(iOS) || os(tvOS) || os(watchOS)
-        baseDir = fm.urls(for: .documentDirectory, in: .userDomainMask).first ?? fm.temporaryDirectory
-        #else
-        baseDir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fm.temporaryDirectory
-        #endif
-        let appDir = baseDir.appendingPathComponent("AICoven", isDirectory: true)
-        try? fm.createDirectory(at: appDir, withIntermediateDirectories: true)
-        let persistenceURL = appDir.appendingPathComponent("personal_threads.json", isDirectory: false)
+        let threads = LegacyChatHistoryImport.read([AICoven.Thread].self, at: file)
 
-        try "not-json".data(using: .utf8)?.write(to: persistenceURL)
-
-        // Act: load threads directly via the helper so we exercise the decode
-        // error path in isolation without depending on ThreadService.shared's
-        // singleton lifecycle.
-        let threads = ThreadService.loadThreadsFromDisk(persistenceURL: persistenceURL)
-        XCTAssertTrue(threads.isEmpty, "Expected no threads to be returned for corrupt JSON file")
-
-        XCTAssertTrue(
-            reporter.errors.contains { $0.context == "ThreadService.loadThreadsFromDisk" },
-            "Expected ThreadService.loadThreadsFromDisk to be logged when personal_threads.json is corrupt"
-        )
+        XCTAssertNil(threads)
+        XCTAssertTrue(reporter.errors.contains { $0.context == "LegacyChatHistoryImport.read" })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: setAside.path))
     }
 
     func testDatabaseManager_logsErrorOnFailedMigration() {
