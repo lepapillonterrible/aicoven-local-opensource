@@ -130,9 +130,11 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertEqual(statuses?.contains("running"), false)
     }
 
-    /// Async, as is every test that makes an engine: a main-actor object
-    /// released outside a task crashes on macOS 15 (see issue #61).
-    func testTextOfAFailedSend_isKeptForItsThreadAndGivenBackOnce() {
+    func testTextOfAFailedSend_isKeptForItsThreadAndGivenBackOnce() async {
+        // Makes this test a task, as every test that makes an engine must
+        // be: a main-actor object released outside a task crashes on
+        // macOS 15 (issue #61).
+        await Task.yield()
         let engine = makeEngine()
 
         engine.keepUnsent("Do not lose this", for: threadID, because: "The data is locked")
@@ -241,7 +243,9 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertEqual(statuses, ["completed", "cancelled"])
     }
 
-    func testStop_doesNothingWhereNoTurnRuns() {
+    func testStop_doesNothingWhereNoTurnRuns() async {
+        // A task, for the engine's release; see the note on issue #61 above.
+        await Task.yield()
         let engine = makeEngine()
 
         engine.stop(threadID: threadID)
