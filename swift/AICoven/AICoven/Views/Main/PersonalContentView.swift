@@ -387,6 +387,19 @@ struct PersonalChatView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .id("thinking-indicator")
                         }
+
+                        // What was sent while that reply runs, waiting
+                        // for it, in the order it will go.
+                        ForEach(waitingMessages) { waiting in
+                            WaitingMessageBubble(
+                                message: waiting,
+                                isNext: waiting.id == waitingMessages.first?.id,
+                                agentName: thread.agentName ?? "Strix",
+                                onEdit: { turns.editWaiting(waiting.id, threadID: thread.id) },
+                                onRemove: { turns.removeWaiting(waiting.id, threadID: thread.id) }
+                            )
+                            .id(waiting.id)
+                        }
                     }
                     .padding(.horizontal, Spacing.lg)
                     .padding(.top, Spacing.lg)
@@ -433,6 +446,22 @@ struct PersonalChatView: View {
                 .onChange(of: turns.endings[thread.id]) { _, _ in
                     showLastEnding()
                 }
+                // A waiting message was sent: it takes its place in the
+                // thread as a message, after the reply it waited for.
+                .onChange(of: turns.sentFromWaiting[thread.id]) { _, sent in
+                    // Only while this thread is the one shown: on the way
+                    // to another thread, what was last sent there is among
+                    // the messages it loads.
+                    guard shownThreadID == thread.id, let sent, !messages.contains(where: { $0.id == sent.id }) else { return }
+                    showLastEnding()
+                    messages.append(sent)
+                }
+                .onChange(of: waitingMessages.last?.id) { _, added in
+                    guard let added else { return }
+                    withAnimation {
+                        proxy.scrollTo(added, anchor: .bottom)
+                    }
+                }
                 .onAppear {
                     if let lastMessage = enhancedMessages.last {
                         proxy.scrollTo(lastMessage.id, anchor: .bottom)
@@ -451,8 +480,8 @@ struct PersonalChatView: View {
 
             GradientDivider()
 
-            // The field stays open while a turn runs; what is typed then
-            // can be sent once the turn has ended.
+            // The field stays open while a turn runs; what is sent then
+            // waits for the turn, and comes back here if it is not sent.
             MessageComposer(
                 messageText: $messageText,
                 onSend: { attachments in await sendMessage(attachments: attachments) },
@@ -461,7 +490,10 @@ struct PersonalChatView: View {
                 isStopping: runningTurn?.isStopping == true,
                 threadId: thread.id,
                 autoFocus: true,
-                recipientName: thread.agentName ?? "Strix"
+                recipientName: thread.agentName ?? "Strix",
+                notice: turns.notSent[thread.id],
+                hasReturnedDraft: turns.returned[thread.id] != nil,
+                takeReturnedDraft: { turns.takeReturned(threadID: thread.id) }
             )
             .padding(Spacing.md)
         }
@@ -500,6 +532,11 @@ struct PersonalChatView: View {
                 await loadProviderKeys()
             }
         }
+    }
+
+    /// What was sent while this thread's turn runs, in the order it will go.
+    private var waitingMessages: [TurnEngine.WaitingMessage] {
+        turns.waiting[thread.id] ?? []
     }
 
     private var enhancedMessages: [EnhancedChatMessage] {
@@ -641,6 +678,24 @@ struct PersonalChatView: View {
         // Only the human-authored question is stored, so the transcript stays
         // clean; tool context is treated as ephemeral system context.
         let parts = splitUserAndToolContext(from: raw)
+        // While a turn runs the message waits for it, shown as waiting.
+        let waiting = TurnEngine.WaitingMessage(
+            text: raw,
+            userText: parts.userText,
+            context: parts.fullText,
+            roleID: thread.agentId,
+            agentName: thread.agentName,
+            attachments: attachments
+        )
+        if turns.enqueue(waiting, threadID: thread.id) {
+            messageText = ""
+            // The bubble does not take focus: said, so it is known to wait.
+            let isNext = turns.waiting[thread.id]?.first?.id == waiting.id
+            AccessibilityNotification.Announcement(
+                WaitingMessageBubble.note(isNext: isNext, agentName: thread.agentName ?? "Strix")
+            ).post()
+            return true
+        }
         let userMessage = TurnProgress.message(in: thread.id, role: "user", content: parts.userText)
         // Shown at once, before anything waits: this view can be showing
         // another thread by the time the message is stored.

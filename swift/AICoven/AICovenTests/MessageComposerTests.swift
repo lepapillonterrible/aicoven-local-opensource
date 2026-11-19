@@ -13,17 +13,34 @@ final class MessageComposerTests: XCTestCase {
     }
 
     func testSend_needsTextAndNothingInItsWay() {
-        XCTAssertTrue(ComposerRules.canSend(text: "Hello", isDisabled: false, isAgentRunning: false, isBusy: false))
-        XCTAssertFalse(ComposerRules.canSend(text: "", isDisabled: false, isAgentRunning: false, isBusy: false))
-        XCTAssertFalse(ComposerRules.canSend(text: "  \n ", isDisabled: false, isAgentRunning: false, isBusy: false))
-        XCTAssertFalse(ComposerRules.canSend(text: "Hello", isDisabled: true, isAgentRunning: false, isBusy: false))
-        XCTAssertFalse(ComposerRules.canSend(text: "Hello", isDisabled: false, isAgentRunning: true, isBusy: false), "Not while a turn runs")
-        XCTAssertFalse(ComposerRules.canSend(text: "Hello", isDisabled: false, isAgentRunning: false, isBusy: true), "Not while a file is being attached or a send is under way")
+        XCTAssertTrue(ComposerRules.canSend(text: "Hello", isDisabled: false, isBusy: false))
+        XCTAssertFalse(ComposerRules.canSend(text: "", isDisabled: false, isBusy: false))
+        XCTAssertFalse(ComposerRules.canSend(text: "  \n ", isDisabled: false, isBusy: false))
+        XCTAssertFalse(ComposerRules.canSend(text: "Hello", isDisabled: true, isBusy: false))
+        XCTAssertFalse(ComposerRules.canSend(text: "Hello", isDisabled: false, isBusy: true), "Not while a file is being attached or a send is under way")
     }
 
-    func testWhileATurnRuns_theComposerSaysWhenTheTextCanBeSent() {
-        XCTAssertEqual(ComposerRules.waitNote(isAgentRunning: true, runningName: "Strix"), "You can send when Strix finishes")
+    func testWhileATurnRuns_theComposerSaysTheMessageWillWaitForIt() {
+        XCTAssertEqual(ComposerRules.waitNote(isAgentRunning: true, runningName: "Strix"), "Sends when Strix finishes")
         XCTAssertNil(ComposerRules.waitNote(isAgentRunning: false, runningName: "Strix"))
+        XCTAssertEqual(WaitingMessageBubble.note(isNext: true, agentName: "Strix"), "Waiting. Sends when Strix finishes.")
+        XCTAssertEqual(WaitingMessageBubble.note(isNext: false, agentName: "Strix"), "Waiting. Sends after the one above.")
+    }
+
+    func testWhatIsHandedBackToTheComposer_goesBeforeWhatIsInItABlankLineApart() {
+        let file = FileAttachmentDetail(id: "a", name: "a.txt", mimeType: nil, sizeBytes: nil, width: nil, height: nil, url: nil)
+        let other = FileAttachmentDetail(id: "b", name: "b.txt", mimeType: nil, sizeBytes: nil, width: nil, height: nil, url: nil)
+        let handedBack = ComposerDraft(text: "Waited", attachments: [file])
+
+        XCTAssertEqual(
+            handedBack.followed(by: ComposerDraft(text: "Typed since", attachments: [other])),
+            ComposerDraft(text: "Waited\n\nTyped since", attachments: [file, other])
+        )
+        XCTAssertEqual(handedBack.followed(by: ComposerDraft(text: "  ")).text, "Waited", "An empty field adds nothing")
+        XCTAssertEqual(ComposerDraft(text: "\n").followed(by: ComposerDraft(text: "Typed")).text, "Typed")
+        XCTAssertTrue(ComposerDraft().isEmpty)
+        XCTAssertTrue(ComposerDraft(text: " \n").isEmpty)
+        XCTAssertFalse(ComposerDraft(attachments: [file]).isEmpty)
     }
 
     func testMentionSuggestions_showWhileTheTextEndsInAnUnfinishedMention() {

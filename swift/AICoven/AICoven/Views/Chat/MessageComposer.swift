@@ -13,6 +13,23 @@ struct MentionableRole: Identifiable, Hashable {
     let emoji: String?
 }
 
+/// What a composer holds unsent: its text and its attachments.
+nonisolated struct ComposerDraft: Equatable {
+    var text = ""
+    var attachments: [FileAttachmentDetail] = []
+
+    var isEmpty: Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty
+    }
+
+    /// This draft with `later` after it: the texts a blank line apart, an
+    /// empty one left out, and the attachments one after the other.
+    func followed(by later: ComposerDraft) -> ComposerDraft {
+        let texts = [text, later.text].filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        return ComposerDraft(text: texts.joined(separator: "\n\n"), attachments: attachments + later.attachments)
+    }
+}
+
 /// What the composer decides from its state, apart from how it draws it.
 nonisolated enum ComposerRules {
     /// What the trailing slot is.
@@ -27,16 +44,16 @@ nonisolated enum ComposerRules {
         isAgentRunning && canStop && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .stop : .send
     }
 
-    /// Whether Send sends: there is text, and nothing is in its way. A
-    /// message is not sent while a turn runs.
-    static func canSend(text: String, isDisabled: Bool, isAgentRunning: Bool, isBusy: Bool) -> Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isDisabled && !isAgentRunning && !isBusy
+    /// Whether Send sends: there is text, and nothing is in its way. While
+    /// a turn runs it sends too; the message then waits for the turn.
+    static func canSend(text: String, isDisabled: Bool, isBusy: Bool) -> Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isDisabled && !isBusy
     }
 
-    /// What the composer says of text typed while a turn runs: when it can
-    /// be sent. Nothing when no turn runs.
+    /// What the composer says of a message sent now, while a turn runs: it
+    /// waits for the turn. Nothing when no turn runs.
     static func waitNote(isAgentRunning: Bool, runningName: String) -> String? {
-        isAgentRunning ? "You can send when \(runningName) finishes" : nil
+        isAgentRunning ? "Sends when \(runningName) finishes" : nil
     }
 
     /// The unfinished "@query" the text ends in, or nil: suggestions show
@@ -67,14 +84,15 @@ nonisolated enum ComposerRules {
 /// (Send | Stop)` in a raised stone box with rounded corners, who the
 /// message goes to at its bottom left, no formatting controls.
 ///
-/// While a turn runs the field can still be typed in; the slot is Stop with
-/// an empty field and Send, off until the turn ends, once there is text.
+/// While a turn runs the slot is Stop with an empty field and Send once
+/// there is text; what is sent then waits (the parent queues it).
 /// Return sends and Shift+Return starts a new line on the Mac and with a
 /// hardware keyboard.
 struct MessageComposer: View {
     @Binding var messageText: String
-    /// Sends the text with these attachments. False if it was not sent: the
-    /// attachments then stay in the composer.
+    /// Sends the text with these attachments, or queues it while a turn
+    /// runs. False if it was neither: the attachments then stay in the
+    /// composer.
     let onSend: ([FileAttachmentDetail]) async -> Bool
     /// Stops the running turn; nil means this composer has no turn to stop.
     var onStop: (() -> Void)?
@@ -90,6 +108,14 @@ struct MessageComposer: View {
     var autoFocus: Bool = false
     /// Who the next message goes to.
     let recipientName: String
+    /// Something the thread has to say above the box: why waiting messages
+    /// were not sent.
+    var notice: String?
+    /// Whether text and attachments were handed back to this thread's
+    /// composer (waiting messages that were not sent, or one taken back to
+    /// be edited), and how they are taken, once.
+    var hasReturnedDraft: Bool = false
+    var takeReturnedDraft: (() -> ComposerDraft?)?
 
     @State private var attachments: [FileAttachmentDetail] = []
     /// The attaching under way, if one is. Cleared when the composer moves
@@ -130,6 +156,13 @@ struct MessageComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
+            if let notice {
+                Text(notice)
+                    .font(.aicovenBodySmall)
+                    .foregroundStyle(Color.aicovenError)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("composer-notice")
+            }
             if let attachFailure {
                 Text(attachFailure)
                     .font(.aicovenBodySmall)
@@ -147,10 +180,16 @@ struct MessageComposer: View {
         .onChange(of: attachFailure) { _, failure in
             if let failure { AccessibilityNotification.Announcement(failure).post() }
         }
+        .onChange(of: notice) { _, notice in
+            if let notice { AccessibilityNotification.Announcement(notice).post() }
+        }
+        .onAppear(perform: takeReturned)
+        .onChange(of: hasReturnedDraft) { _, _ in takeReturned() }
         .onChange(of: threadId) { _, _ in
             attachingTask = nil
             attachFailure = nil
             choosingFiles = nil
+            takeReturned()
             #if os(iOS)
             showFileImporter = false
             #endif
@@ -451,7 +490,7 @@ struct MessageComposer: View {
     }
 
     private var canSend: Bool {
-        ComposerRules.canSend(text: messageText, isDisabled: isDisabled, isAgentRunning: isAgentRunning, isBusy: isBusy)
+        ComposerRules.canSend(text: messageText, isDisabled: isDisabled, isBusy: isBusy)
     }
 
     private func send() {
@@ -472,6 +511,17 @@ struct MessageComposer: View {
             // the send was under way.
             suggestMentions()
         }
+    }
+
+    /// What was handed back goes before whatever is in the field: it was
+    /// written first.
+    private func takeReturned() {
+        guard hasReturnedDraft, let handedBack = takeReturnedDraft?() else { return }
+        let merged = handedBack.followed(by: ComposerDraft(text: messageText, attachments: attachments))
+        messageText = merged.text
+        attachments = merged.attachments
+        // The field changes without being typed in, wherever focus is.
+        AccessibilityNotification.Announcement("Your waiting message is back in the message field").post()
     }
 
     /// Shows suggestions while the text ends in an unfinished @mention.

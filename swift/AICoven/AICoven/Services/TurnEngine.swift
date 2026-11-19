@@ -54,8 +54,37 @@ final class TurnEngine: ObservableObject {
         let stored: Bool
     }
 
+    /// A message the person sent while the thread's turn ran. It waits,
+    /// shown in the thread, and goes when the turn completes; after a stop
+    /// or a failure nothing waiting is sent.
+    struct WaitingMessage: Identifiable, Equatable {
+        let id = UUID().uuidString
+        /// What the person typed, as the composer held it: what is given
+        /// back if it is not sent.
+        let text: String
+        /// What is stored and shown as their message, and what the model is
+        /// sent, which can carry more.
+        let userText: String
+        let context: String
+        let roleID: String?
+        let agentName: String?
+        let attachments: [FileAttachmentDetail]
+    }
+
     /// The turn running in each thread, by thread id.
     @Published private(set) var running: [String: Activity] = [:]
+    /// The messages waiting for each thread's running turn, in the order
+    /// they were sent, by thread id. Kept while the app runs.
+    @Published private(set) var waiting: [String: [WaitingMessage]] = [:]
+    /// What was handed back to each thread's composer and not yet taken:
+    /// waiting messages that were not sent, or one taken back to be edited.
+    @Published private(set) var returned: [String: ComposerDraft] = [:]
+    /// The waiting message last sent in each thread, as it was stored: a
+    /// thread on screen shows it from here.
+    @Published private(set) var sentFromWaiting: [String: ChatMessage] = [:]
+    /// Why a thread's waiting messages were not sent, for its composer to
+    /// say, until the next message is sent there.
+    @Published private(set) var notSent: [String: String] = [:]
     /// The ending of the last turn this engine ran in each thread, by
     /// thread id. A thread shows it from here, so the reply appears where
     /// its turn ended whether or not it could be stored.
@@ -106,6 +135,7 @@ final class TurnEngine: ObservableObject {
     ) async throws {
         let threadID = userMessage.threadId
         guard running[threadID] == nil else { throw TurnError.alreadyRunning }
+        notSent[threadID] = nil
         let turnID = UUID().uuidString
         // Marked before anything waits, so a second send cannot start too.
         running[threadID] = Activity(turnID: turnID, message: TurnProgress.startingMessage, trace: WorkTrace(startedAt: Date()))
@@ -170,6 +200,83 @@ final class TurnEngine: ObservableObject {
         announced[turnID] = message
         AccessibilityNotification.Announcement(message).post()
         return true
+    }
+
+    // MARK: - While a turn runs
+
+    /// Takes a message to wait for the thread's running turn. False, with
+    /// nothing taken, if no turn is running there: it can be sent now.
+    func enqueue(_ message: WaitingMessage, threadID: String) -> Bool {
+        guard running[threadID] != nil else { return false }
+        notSent[threadID] = nil
+        waiting[threadID, default: []].append(message)
+        return true
+    }
+
+    /// Remove: the waiting message is dropped.
+    func removeWaiting(_ id: WaitingMessage.ID, threadID: String) {
+        waiting[threadID]?.removeAll { $0.id == id }
+        if waiting[threadID]?.isEmpty == true { waiting[threadID] = nil }
+    }
+
+    /// Edit: the waiting message leaves the queue and goes back to the
+    /// composer.
+    func editWaiting(_ id: WaitingMessage.ID, threadID: String) {
+        guard let message = waiting[threadID]?.first(where: { $0.id == id }) else { return }
+        removeWaiting(id, threadID: threadID)
+        giveBack([message], threadID: threadID)
+    }
+
+    /// What was handed back to the thread's composer, once.
+    func takeReturned(threadID: String) -> ComposerDraft? {
+        returned.removeValue(forKey: threadID)
+    }
+
+    /// Hands waiting messages back to the composer, in order, after
+    /// whatever was handed back before and not yet taken.
+    private func giveBack(_ messages: [WaitingMessage], threadID: String) {
+        var draft = returned[threadID] ?? ComposerDraft()
+        for message in messages {
+            draft = draft.followed(by: ComposerDraft(text: message.text, attachments: message.attachments))
+        }
+        if !draft.isEmpty { returned[threadID] = draft }
+    }
+
+    /// Settles what waited for a turn that has ended. A turn that completed
+    /// and that the person did not try to stop sends the first waiting
+    /// message, as an ordinary one; the rest wait for that turn. After any
+    /// other ending nothing is sent, and what waited goes back to the
+    /// composer.
+    private func settleWaiting(threadID: String, sendsNext: Bool) async {
+        guard let queue = waiting[threadID], let next = queue.first else { return }
+        guard sendsNext else {
+            waiting[threadID] = nil
+            return giveBack(queue, threadID: threadID)
+        }
+        // Made now, not when it was typed: it is stored after the reply it
+        // waited for.
+        let userMessage = TurnProgress.message(in: threadID, role: "user", content: next.userText)
+        do {
+            // It stays among the waiting until its turn has started, so the
+            // thread never shows it as neither waiting nor sent.
+            try await start(
+                with: userMessage,
+                context: next.context,
+                roleID: next.roleID,
+                agentName: next.agentName,
+                attachments: next.attachments.isEmpty ? nil : next.attachments
+            )
+            removeWaiting(next.id, threadID: threadID)
+            sentFromWaiting[threadID] = userMessage
+        } catch TurnError.alreadyRunning {
+            // A turn started meanwhile: this one waits for it, where it is.
+        } catch {
+            // Not sent, and nothing behind it is either.
+            AppErrorReporter.log(error: error, context: "TurnEngine.settleWaiting")
+            let unsentQueue = waiting.removeValue(forKey: threadID) ?? []
+            giveBack(unsentQueue, threadID: threadID)
+            notSent[threadID] = "Your waiting message could not be sent: \(error.localizedDescription)"
+        }
     }
 
     /// Keeps the text of a send that could not be started, for a thread that
@@ -300,7 +407,8 @@ final class TurnEngine: ObservableObject {
         let thrown = await reply.value
         replies[threadID] = nil
         settling.insert(turnID)
-        var ending = progress.ending(in: threadID, thrown: thrown, stopped: running[threadID]?.isStopping == true)
+        let wasStopped = running[threadID]?.isStopping == true
+        var ending = progress.ending(in: threadID, thrown: thrown, stopped: wasStopped)
         // Copied, and forgotten there only once the ending is published:
         // until then the thread shows a running turn's answers from there.
         ending.trace.approvals = approvals.answered[threadID] ?? []
@@ -332,6 +440,8 @@ final class TurnEngine: ObservableObject {
             // Once, when the turn has in fact stopped and Stop is gone.
             AccessibilityNotification.Announcement("Stopped").post()
         }
+        // A completion the person tried to stop is not a go-ahead.
+        await settleWaiting(threadID: threadID, sendsNext: ending.outcome == .completed && !wasStopped)
         if ending.outcome == .completed {
             await chat.updateThreadSummary(threadId: threadID)
         }
