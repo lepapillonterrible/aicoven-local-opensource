@@ -583,6 +583,11 @@ struct PersonalChatView: View {
         // that asked for this one was then cancelled.
         guard !Task.isCancelled, shownThreadID == threadID else { return }
         let handedBack = turns.takeReturned(threadID: threadID) ?? ComposerDraft()
+        if !handedBack.isEmpty {
+            // The field holds more than was left in it: said, as it is
+            // when a waiting message comes back while the thread is shown.
+            AccessibilityNotification.Announcement("Your waiting message is back in the message field").post()
+        }
         let draft = handedBack.followed(by: kept).followed(by: ComposerDraft(text: messageText, attachments: attachments))
         messageText = draft.text
         attachments = draft.attachments

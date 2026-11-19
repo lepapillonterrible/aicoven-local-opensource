@@ -30,7 +30,14 @@ final class ComposerDrafts {
     private var drafts: [Key: ComposerDraft] = [:]
     /// The reads of kept text under way: a thread opened in two places at
     /// once is read once.
-    private var reads: [Key: Task<String?, Never>] = [:]
+    private var reads: [Key: Task<Read, Never>] = [:]
+
+    /// What a read of a thread's kept text came to.
+    private enum Read {
+        case text(String?)
+        case failed
+    }
+
     /// The threads whose text has changed since it was last saved.
     private var unsaved: Set<Key> = []
     /// Sent files taken out of a thread's draft: a composer showing that
@@ -66,26 +73,29 @@ final class ComposerDrafts {
 
     /// The thread's draft: what was set since the app started, or else the
     /// text kept with the thread. Empty when there is none, it cannot be
-    /// read, or the account changed while it was read.
+    /// read for now, or the account changed while it was read.
     func draft(for threadID: String) async -> ComposerDraft {
         let key = Key(account: currentAccount(), threadID: threadID)
         if let known = drafts[key] { return known }
         let reading = reads[key] ?? Task { [load] in
             do {
-                return try await load(threadID)
+                return try await Read.text(load(threadID))
             } catch {
                 Self.log("A draft could not be read", error)
-                return nil
+                return Read.failed
             }
         }
         reads[key] = reading
-        let kept = await reading.value
+        let read = await reading.value
         if reads[key] == reading { reads[key] = nil }
         // Nothing of an earlier account's is handed on, read or set: what
         // was read was read as the account that asked.
         guard currentAccount() == key.account else { return ComposerDraft() }
         // What was set while the kept text was read is newer than it.
         if let known = drafts[key] { return known }
+        // A read that failed says nothing of what is kept: it is read
+        // again the next time the thread is asked for.
+        guard case let .text(kept) = read else { return ComposerDraft() }
         let draft = ComposerDraft(text: kept ?? "")
         drafts[key] = draft
         return draft

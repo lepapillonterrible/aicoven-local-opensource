@@ -13,6 +13,7 @@ private final class KeptDrafts {
     var savesStarted = 0
     var loads: [String] = []
     var failsToSave = false
+    var failsToLoad = false
     var account = "account-a"
     /// What is due to run, in the order scheduled.
     var scheduled: [@MainActor () -> Void] = []
@@ -28,14 +29,14 @@ private final class KeptDrafts {
 
     func makeDrafts() -> ComposerDrafts {
         ComposerDrafts(
-            load: { [self] threadID in await read(threadID) },
+            load: { [self] threadID in try await read(threadID) },
             save: { [self] text, threadID in try await keep(text, threadID) },
             schedule: { [self] _, action in scheduled.append(action) },
             currentAccount: { [self] in account }
         )
     }
 
-    private func read(_ threadID: String) async -> String? {
+    private func read(_ threadID: String) async throws -> String? {
         loads.append(threadID)
         let kept = texts[threadID]
         if holdsLoads {
@@ -44,6 +45,7 @@ private final class KeptDrafts {
                 loadIsWaiting?.fulfill()
             }
         }
+        if failsToLoad { throw NSError(domain: "KeptDrafts", code: 2) }
         return kept
     }
 
@@ -293,6 +295,25 @@ final class ComposerDraftsTests: XCTestCase {
         XCTAssertEqual(back.text, "Typed by the first account")
     }
 
+    func testADraftThatCouldNotBeRead_isReadAgainTheNextTimeAndNotErasedMeanwhile() async {
+        let kept = KeptDrafts()
+        kept.texts["a"] = "Left unsent"
+        kept.failsToLoad = true
+        let drafts = kept.makeDrafts()
+
+        let unread = await drafts.draft(for: "a")
+        XCTAssertEqual(unread, ComposerDraft())
+        // The field, still empty, says nothing of what is kept.
+        drafts.set(ComposerDraft(), for: "a")
+        await drafts.saveNow()
+        XCTAssertEqual(kept.texts["a"], "Left unsent")
+
+        kept.failsToLoad = false
+        let read = await drafts.draft(for: "a")
+        XCTAssertEqual(read.text, "Left unsent")
+        XCTAssertEqual(kept.loads, ["a", "a"])
+    }
+
     func testATextThatCouldNotBeSaved_isTriedAgainWithTheNextSave() async {
         let kept = KeptDrafts()
         let drafts = kept.makeDrafts()
@@ -338,10 +359,32 @@ final class ComposerDraftsTests: XCTestCase {
         let afterRename = try await store.draft(forThread: threadID)
         XCTAssertEqual(afterRename, "Remember the milk 🥛")
 
-        // Nothing is kept for a thread that is not there, or of another's.
+        // Nothing is kept for a thread that is not there.
         try await store.saveDraft("Nowhere", forThread: "no-such-thread")
         let nowhere = try await store.draft(forThread: "no-such-thread")
         XCTAssertNil(nowhere)
+
+        // Another account's thread is neither written nor read.
+        let othersThread = "others-\(UUID().uuidString)"
+        let othersDraft = Data("another account's".utf8)
+        try await DatabaseManager.shared.dbQueue?.write { db in
+            try db.execute(
+                sql: "INSERT INTO threads (id, user_id, created_at, draft_ciphertext) VALUES (?, ?, ?, ?)",
+                arguments: [othersThread, "another-account", Date(), othersDraft]
+            )
+        }
+        addTeardownBlock {
+            _ = try? await DatabaseManager.shared.dbQueue?.write { db in
+                try db.execute(sql: "DELETE FROM threads WHERE id = ?", arguments: [othersThread])
+            }
+        }
+        try await store.saveDraft("Mine", forThread: othersThread)
+        let untouched = try await DatabaseManager.shared.dbQueue?.read { db in
+            try Data.fetchOne(db, sql: "SELECT draft_ciphertext FROM threads WHERE id = ?", arguments: [othersThread])
+        }
+        XCTAssertEqual(untouched, othersDraft)
+        let notMine = try await store.draft(forThread: othersThread)
+        XCTAssertNil(notMine)
 
         // Locked, nothing is read or kept.
         await DataEncryptionService.shared.lock()
@@ -361,6 +404,16 @@ final class ComposerDraftsTests: XCTestCase {
             try Row.fetchOne(db, sql: "SELECT draft_ciphertext FROM threads WHERE id = ?", arguments: [threadID])
         }
         XCTAssertNil(cleared?["draft_ciphertext"] as Data?)
+
+        // The draft goes with its thread.
+        try await store.saveDraft("Going with the thread", forThread: threadID)
+        try await ThreadService.shared.deleteThread(threadId: threadID)
+        let gone = try await store.draft(forThread: threadID)
+        XCTAssertNil(gone)
+        let rows = try await DatabaseManager.shared.dbQueue?.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM threads WHERE id = ?", arguments: [threadID])
+        }
+        XCTAssertEqual(rows, 0)
         await DataEncryptionService.shared.lock()
     }
 }
