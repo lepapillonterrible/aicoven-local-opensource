@@ -490,7 +490,7 @@ private struct KeysStepView: View {
                 onAddProviderKey()
             }
 
-            Text("You can add keys now or skip and add them later in Settings → AI.")
+            Text("You can add keys now or skip and add them later in Settings → \(SettingsPane.aiConnections.listedTitle).")
                 .font(.aicovenBodySmall)
                 .foregroundColor(.aicovenTextSecondary)
 

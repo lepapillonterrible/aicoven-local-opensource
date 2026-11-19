@@ -44,6 +44,16 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
+    /// The pane's name where this device lists it: the tab on the Mac, the
+    /// row on the iPad and iPhone. Text that sends someone to a pane uses it.
+    var listedTitle: String {
+        #if os(macOS)
+        tabTitle
+        #else
+        title
+        #endif
+    }
+
     var systemImage: String {
         switch self {
         case .aiConnections: "key"

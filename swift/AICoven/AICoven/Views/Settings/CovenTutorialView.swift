@@ -84,7 +84,7 @@ struct CovenTutorialView: View {
                         .foregroundColor(.aicovenTextSecondary)
 
                     BulletList(items: [
-                        "Go to Settings → AI to add or manage keys.",
+                        "Go to Settings → \(SettingsPane.aiConnections.listedTitle) to add or manage keys.",
                         "Use clear display names (e.g., 'OpenAI – Team', 'Claude – Research').",
                         "Keys are encrypted at rest and only decrypted in memory when needed."
                     ])
@@ -115,7 +115,7 @@ struct CovenTutorialView: View {
                         .foregroundColor(.aicovenTextSecondary)
 
                     BulletList(items: [
-                        "Go to Settings → Apps to connect GitHub, Google Drive, and more.",
+                        "Go to Settings → \(SettingsPane.connectedApps.listedTitle) to connect GitHub, Google Drive, and more.",
                         "Each connection is tied to your account and can be revoked at any time.",
                         "Tokens are stored encrypted; agents only access the repos and folders you’ve approved."
                     ])
