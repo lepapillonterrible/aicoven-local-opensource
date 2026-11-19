@@ -96,13 +96,17 @@ actor ToolExecutionService {
     /// What `image.generate` was asked for, or why it cannot be made.
     struct ImageRequest: Equatable {
         let prompt: String
+        /// The provider the call names, or the one its model is of; nil
+        /// where it says neither, and any key that can make pictures will
+        /// do.
+        var provider: ImageProvider?
         let model: String?
         let size: String
         let quality: String?
     }
 
-    /// Reads a call's arguments: a prompt that says something, OpenAI as
-    /// the provider if one is named, and a size that reads as one.
+    /// Reads a call's arguments: a prompt that says something, a provider
+    /// that makes pictures if one is named, and a size that reads as one.
     nonisolated static func imageRequest(from args: [String: AnyJSONValue]) -> Result<ImageRequest, ImageRequestRefusal> {
         func text(_ key: String) -> String? {
             let value = (args[key]?.value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -111,9 +115,16 @@ actor ToolExecutionService {
         guard let prompt = text("prompt") else {
             return .failure(ImageRequestRefusal(message: "Missing required argument: 'prompt'", field: "prompt"))
         }
-        if let provider = text("provider"), provider.lowercased() != "openai" {
-            return .failure(ImageRequestRefusal(message: "Images are made with OpenAI in this app; '\(provider)' is not available. Leave 'provider' out.", field: "provider"))
+        var provider: ImageProvider?
+        if let named = text("provider") {
+            guard let known = ImageProvider(named: named) else {
+                return .failure(ImageRequestRefusal(message: "Images are made with OpenAI or Google in this app; '\(named)' is not available. Leave 'provider' out to use whichever is connected.", field: "provider"))
+            }
+            provider = known
         }
+        // A model says whose it is, where the call does not.
+        let model = text("model")
+        if provider == nil, let model { provider = ImageProvider.ofModel(model) }
         // A size that was given must read as one: only one left out (or
         // given as null, as models write what they leave out) is the
         // default.
@@ -126,7 +137,7 @@ actor ToolExecutionService {
         } else {
             size = ImageGenerationService.defaultSize
         }
-        return .success(ImageRequest(prompt: prompt, model: text("model"), size: size, quality: text("quality")))
+        return .success(ImageRequest(prompt: prompt, provider: provider, model: model, size: size, quality: text("quality")))
     }
 
     struct ImageRequestRefusal: Error, Equatable {
@@ -144,8 +155,9 @@ actor ToolExecutionService {
         return lines.joined(separator: "\n")
     }
 
-    /// Makes the picture with the person's OpenAI key and keeps it in the
-    /// attachment store for the thread; the turn gives it to its reply.
+    /// Makes the picture with one of the person's keys that can make
+    /// pictures and keeps it in the attachment store for the thread; the
+    /// turn gives it to its reply.
     private func generateImage(toolCall: ParsedToolCall, threadID: String?) async -> ToolExecutionResult {
         let request: ImageRequest
         switch Self.imageRequest(from: toolCall.args) {
@@ -157,11 +169,11 @@ actor ToolExecutionService {
         }
         // The key is the signed-in account's. A turn can outlive the
         // account it was started as, so the thread must be that account's
-        // before anything is asked with its key. The account and its key
-        // are read together, with nothing between them, so the key is
+        // before anything is asked with its key. The account and its keys
+        // are read together, with nothing between them, so the keys are
         // that account's whatever is signed in a moment later.
-        let keyed = imageService
-        let (account, service) = await MainActor.run { (UserScope.currentUserID, keyed()) }
+        let keyed = imageMakers
+        let (account, makers) = await MainActor.run { (UserScope.currentUserID, keyed()) }
         let isTheAccounts: Bool
         do {
             isTheAccounts = try await ThreadRepository.shared.isThread(threadID, of: account)
@@ -173,31 +185,49 @@ actor ToolExecutionService {
         guard isTheAccounts else {
             return .error(tool: toolCall.name, message: "This thread is not the signed-in account's: no image was made.", errorType: "image_account_changed")
         }
-        guard let service else {
+        // The key that is asked: the named provider's, or, where the
+        // call names none, each key that can make pictures in turn until
+        // one does.
+        let asked = request.provider.map { named in makers.filter { $0.provider == named } } ?? makers
+        guard !asked.isEmpty else {
+            let needs = request.provider?.aConnection ?? "an OpenAI or Google connection"
             return .error(
                 tool: toolCall.name,
-                message: "Image generation needs an OpenAI connection with a key.",
+                message: "Image generation needs \(needs) with a key.",
                 errorType: "image_provider_key_required",
-                helpfulInstructions: "Add an OpenAI connection in Settings to make images."
+                helpfulInstructions: "Add \(needs) in Settings to make images."
             )
         }
-        let made: ImageGenerationService.Generated
-        do {
-            made = try await service.generate(prompt: request.prompt, model: request.model, size: request.size, quality: request.quality)
-        } catch is CancellationError {
-            return .error(tool: toolCall.name, message: "Stopped before the image was made.", errorType: "cancelled")
-        } catch let failure as ImageGenerationService.Failure {
-            return .error(tool: toolCall.name, message: failure.errorDescription ?? "The image could not be made.", errorType: "image_generation_failed", isRetryable: failure != .keyRefused)
-        } catch {
-            let failure = error as NSError
-            AppErrorReporter.log(message: "An image could not be made (\(failure.domain) \(failure.code)).", context: "ToolExecutionService.generateImage")
-            return .error(tool: toolCall.name, message: "The image could not be made: OpenAI could not be reached.", errorType: "image_generation_failed", isRetryable: true)
+        var made: ImageGenerationService.Generated?
+        var provider = asked[0].provider
+        var failed: ToolExecutionResult?
+        for maker in asked {
+            provider = maker.provider
+            do {
+                made = try await maker.make(request.prompt, request.model, request.size, request.quality)
+                break
+            } catch is CancellationError {
+                return .error(tool: toolCall.name, message: "Stopped before the image was made.", errorType: "cancelled")
+            } catch let failure as ImageGenerationService.Failure {
+                failed = .error(tool: toolCall.name, message: failure.said(of: provider), errorType: "image_generation_failed", isRetryable: failure != .keyRefused)
+            } catch {
+                let failure = error as NSError
+                AppErrorReporter.log(message: "An image could not be made (\(failure.domain) \(failure.code)).", context: "ToolExecutionService.generateImage")
+                failed = .error(tool: toolCall.name, message: "The image could not be made: \(provider.displayName) could not be reached.", errorType: "image_generation_failed", isRetryable: true)
+            }
+            if Task.isCancelled {
+                return .error(tool: toolCall.name, message: "Stopped before the image was made.", errorType: "cancelled")
+            }
+        }
+        guard let made else {
+            // What the last key asked said of it.
+            return failed ?? .error(tool: toolCall.name, message: "The image could not be made.", errorType: "image_generation_failed")
         }
         do {
-            let kept = try await AttachmentStore.shared.add(made.data, named: Self.generatedImageName, mimeType: made.mimeType, toThread: threadID)
+            let kept = try await AttachmentStore.shared.add(made.data, named: Self.generatedImageName(for: made.mimeType), mimeType: made.mimeType, toThread: threadID)
             return .success(
                 tool: toolCall.name,
-                result: [Self.generatedFilesKey: .array([kept.messageMetadata]), "provider": .string("openai"), "model": .string(made.model), "size": .string(made.size)],
+                result: [Self.generatedFilesKey: .array([kept.messageMetadata]), "provider": .string(provider.rawValue), "model": .string(made.model), "size": .string(made.size)],
                 contextBlock: Self.imageContextBlock(for: made)
             )
         } catch {
@@ -213,6 +243,12 @@ actor ToolExecutionService {
     /// What a generated image is called; the store adds the kind it keeps.
     nonisolated static let generatedImageName = "Generated image.png"
 
+    /// The name for a picture of this kind: OpenAI's are PNG, Google's
+    /// JPEG.
+    nonisolated static func generatedImageName(for mimeType: String) -> String {
+        mimeType.lowercased() == "image/jpeg" ? "Generated image.jpg" : generatedImageName
+    }
+
     /// Where a tool's result lists the files it made for the person, each
     /// as a message keeps an attachment.
     nonisolated static let generatedFilesKey = "generated_attachments"
@@ -223,17 +259,34 @@ actor ToolExecutionService {
         return entries.compactMap(FileAttachmentDetail.init(messageMetadata:))
     }
 
-    /// The service a picture is asked of, with the person's OpenAI key;
-    /// nil where there is no key. Tests give one that answers from a script.
+    /// The service a picture is asked of with the person's OpenAI key;
+    /// nil where there is no key.
     nonisolated static let imageServiceWithTheStoredKey: @Sendable () -> ImageGenerationService? = {
         guard let key = ProviderAccountService.apiKeyFromKeychain(forProvider: "openai"), !key.isEmpty else { return nil }
         return ImageGenerationService(apiKey: key)
     }
 
-    private var imageService = imageServiceWithTheStoredKey
+    /// Every key of the person's that can make pictures, in the order
+    /// they are asked when a call names no provider: OpenAI's, then
+    /// Google's. Tests give makers that answer from a script.
+    nonisolated static let imageMakersWithTheStoredKeys: @Sendable () -> [ImageMaker] = {
+        var makers: [ImageMaker] = []
+        if let openAI = imageServiceWithTheStoredKey() { makers.append(ImageMaker(openAI)) }
+        if let key = ProviderAccountService.apiKeyFromKeychain(forProvider: "google"), !key.isEmpty {
+            makers.append(ImageMaker(GoogleImageGenerationService(apiKey: key)))
+        }
+        return makers
+    }
 
+    private var imageMakers = imageMakersWithTheStoredKeys
+
+    func setImageMakers(_ make: @escaping @Sendable () -> [ImageMaker]) {
+        imageMakers = make
+    }
+
+    /// As `setImageMakers`, for an OpenAI service alone.
     func setImageService(_ make: @escaping @Sendable () -> ImageGenerationService?) {
-        imageService = make
+        imageMakers = { make().map { [ImageMaker($0)] } ?? [] }
     }
 
     // MARK: - Execution

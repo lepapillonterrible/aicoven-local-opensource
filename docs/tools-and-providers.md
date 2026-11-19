@@ -95,12 +95,15 @@ These are used in two main places:
 
 ### Image generation
 
-- Image generation is a tool a model calls, `image.generate` (`prompt`, and optionally `model`, `size`, `quality`), not a `ToolService` function.
-- It is offered to a chat turn only where an OpenAI key is stored, whichever model answers the turn. Agent runs are not offered it.
-- `ImageGenerationService` (`Infrastructure/Tools/ImageGenerationService.swift`) makes the image with that key at OpenAI's image endpoint (`POST /v1/images/generations`). With no model named, the key's image models are tried in order, four at most.
+- Image generation is a tool a model calls, `image.generate` (`prompt`, and optionally `provider`, `model`, `size`, `quality`), not a `ToolService` function.
+- The app supplies no key. An image is made with whichever of your keys can make one: OpenAI's or Google's.
+- It is offered to a chat turn only where one of those keys is stored, whichever model answers the turn. Agent runs are not offered it.
+- `ImageGenerationService` (`Infrastructure/Tools/ImageGenerationService.swift`) makes the image with an OpenAI key at OpenAI's image endpoint (`POST /v1/images/generations`). With no model named, the key's image models are tried in order, four at most.
+- `GoogleImageGenerationService` makes it with a Google key, with a Gemini model that answers with an image (`POST v1beta/models/{model}:generateContent`). With no model named, the key's image models are tried, four at most. The size is asked for as the nearest of square, wide and tall.
+- A call that names a provider, or a model that says whose it is, is asked of that provider's key only. A call that names neither is asked of each key in turn (OpenAI's, then Google's) until one makes the image.
 - `ToolExecutionService` keeps the image in the app's encrypted attachment store (`AttachmentStore`) for the thread, only if the thread is the signed-in account's.
 - The turn gives it to its reply, which shows it like any attachment (`FileAttachmentDetail`): a thumbnail that opens in Quick Look. The model is told the person has the image, not where it is.
-- Only OpenAI makes images for now.
+- OpenRouter's image models are not used yet.
 
 ### File generation
 
