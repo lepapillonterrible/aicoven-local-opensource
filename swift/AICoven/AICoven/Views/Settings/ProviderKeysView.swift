@@ -371,7 +371,7 @@ struct AddProviderKeySheet: View {
         } header: {
             Text("On this Mac")
         } footer: {
-            Text("Detect asks the usual ports of LM Studio and Ollama on this Mac. For a server on another port, or another machine, enter its port or address.")
+            Text("Detect asks the usual ports of LM Studio, Ollama and a Hermes agent on this Mac. For a server on another port, or another machine, enter its port or address.")
                 .font(.aicovenBodySmall)
         }
     }
@@ -385,7 +385,7 @@ struct AddProviderKeySheet: View {
     private static func subtitle(for server: DetectedLocalProvider) -> String {
         let address = server.baseURL.replacingOccurrences(of: "http://", with: "")
         if server.requiresKey { return "\(address) · asks for an API key" }
-        if server.provider == "ollama" { return address }
+        if server.provider == "ollama" || server.provider == "hermes" { return address }
         return "\(address) · \(server.models.count == 1 ? "1 model" : "\(server.models.count) models")"
     }
 
@@ -508,6 +508,7 @@ private struct AddProviderKeyStep2View: View {
     private let connectsOnOpen: Bool
 
     private static let serverAsksForKey = "This server asks for an API key. Enter it below, then Connect."
+    private static let hermesAsksForKey = "This Hermes agent asks for its API key. Enter it below."
 
     /// `detected` fills the form from a server Detect found, so connecting
     /// it needs nothing typed unless the server asks for a key.
@@ -526,7 +527,12 @@ private struct AddProviderKeyStep2View: View {
         _baseURL = State(initialValue: detected?.baseURL ?? (selectedProvider == "ollama" ? "http://localhost:11434" : ""))
         _serverModels = State(initialValue: detected?.models ?? [])
         _selectedServerModel = State(initialValue: detected?.models.first ?? "")
-        _connectionFailure = State(initialValue: detected?.requiresKey == true ? Self.serverAsksForKey : nil)
+        // What Detect found: a server, or a Hermes agent, that asks for a key.
+        var asksForKey: String?
+        if detected?.requiresKey == true {
+            asksForKey = selectedProvider == "hermes" ? Self.hermesAsksForKey : Self.serverAsksForKey
+        }
+        _connectionFailure = State(initialValue: asksForKey)
         connectsOnOpen = detected != nil && selectedProvider == "ollama"
     }
 
@@ -663,11 +669,17 @@ private struct AddProviderKeyStep2View: View {
         } else if isHermes {
             Section {
                 FormAddressField(label: "Address", text: $baseURL, prompt: HermesAgentClient.usualAddress)
+                    // What Detect found is about the address it asked.
+                    .onChange(of: baseURL) { _, _ in connectionFailure = nil }
             } header: {
                 Text("Hermes agent")
             } footer: {
                 Text("The address of the Hermes agent's API server, and below, the key it was started with (API_SERVER_KEY), if it has one.")
                     .font(.aicovenBodySmall)
+            }
+            // Detect found it asking for a key: said until one is entered.
+            if let connectionFailure, apiKey.isEmpty {
+                FormErrorRow(message: connectionFailure)
             }
         }
     }
