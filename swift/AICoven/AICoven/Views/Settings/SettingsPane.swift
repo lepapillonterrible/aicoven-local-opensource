@@ -123,13 +123,9 @@ struct SettingsPaneView: View {
                 FileAccessSettingsSection()
                     .padding(.vertical, Spacing.lg)
             }
-            .background(Color.aicovenSurface)
+            .background(Color.aicovenDark)
             #else
-            ContentUnavailableView(
-                "\(pane.title) is on the Mac",
-                systemImage: pane.systemImage,
-                description: Text("Open AICoven on your Mac to change this.")
-            )
+            EmptyView()
             #endif
         case .appearance:
             AppearanceSettingsPane()
@@ -163,7 +159,7 @@ struct SettingsList: View {
             .listRowBackground(Color.aicovenSurfaceElevated)
         }
         .scrollContentBackground(.hidden)
-        .background(Color.aicovenSurface)
+        .background(Color.aicovenDark)
         .font(.aicovenBody)
         .navigationTitle("Settings")
         #if os(iOS)

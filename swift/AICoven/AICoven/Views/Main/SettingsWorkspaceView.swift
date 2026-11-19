@@ -10,7 +10,9 @@ struct SettingsWorkspaceView: View {
     /// The pane on screen, kept on this Mac: Settings reopens on it, and
     /// stays on it when a typography change rebuilds this view.
     @AppStorage("settings.pane") private var selectedPaneID = SettingsPane.aiConnections.rawValue
-    /// Counts requests, so a repeated one opens its pane afresh.
+    /// Counts requests for a legal page, so a repeated one opens the page
+    /// afresh. Other requests only select their pane, and leave what is
+    /// open in it alone.
     @State private var requestCount = 0
     #endif
 
@@ -49,7 +51,9 @@ struct SettingsWorkspaceView: View {
         appState.requestedSettingsPane = nil
         if let pane = SettingsPane(requested) {
             request = requested
-            requestCount += 1
+            if LegalPage(requested) != nil {
+                requestCount += 1
+            }
             selectedPaneID = pane.rawValue
         }
     }

@@ -132,7 +132,7 @@ struct AICovenApp: App {
                 }
             }
             .frame(minWidth: 900, idealWidth: 960, minHeight: 520, idealHeight: 620)
-            .background(Color.aicovenSurface)
+            .background(Color.aicovenDark)
             .environmentObject(authService)
             .environmentObject(AppState.shared)
             .environmentObject(StoreService.shared)
