@@ -474,6 +474,9 @@ struct PersonalChatView: View {
             await TurnEngine.shared.settleInterruptedTurns(threadID: thread.id)
             await loadInitialMessages()
             showLastEnding()
+            if let unsent = TurnEngine.shared.takeUnsent(for: thread.id) {
+                giveBack(unsent.text, because: unsent.reason)
+            }
             await loadProviderKeys()
         }
         .onReceive(NotificationCenter.default.publisher(for: .providerKeysUpdated)) { _ in
@@ -622,16 +625,26 @@ struct PersonalChatView: View {
             AppErrorReporter.log(error: error, context: "PersonalContentView.sendMessage")
             // Nothing was sent or stored. If this thread is still the one
             // shown, the message comes out of it, the text goes back to the
-            // composer, and the thread says why, for now only on screen.
-            guard shownThreadID == userMessage.threadId else { return }
+            // composer, and the thread says why, for now only on screen. If
+            // it is not, the text is kept for when the thread is opened.
+            guard shownThreadID == userMessage.threadId else {
+                TurnEngine.shared.keepUnsent(raw, for: userMessage.threadId, because: error.localizedDescription)
+                return
+            }
             messages.removeAll { $0.id == userMessage.id }
-            messageText = raw
-            messages.append(TurnProgress.message(
-                in: userMessage.threadId,
-                role: "assistant",
-                content: "I couldn't send your message: \(error.localizedDescription)"
-            ))
+            giveBack(raw, because: error.localizedDescription)
         }
+    }
+
+    /// Puts the text of a send that failed back in the composer, after
+    /// anything typed since, and says in the thread why it was not sent.
+    private func giveBack(_ text: String, because reason: String) {
+        messageText = messageText.isEmpty ? text : messageText + "\n" + text
+        messages.append(TurnProgress.message(
+            in: thread.id,
+            role: "assistant",
+            content: "I couldn't send your message: \(reason)"
+        ))
     }
 
     /// Shows how the last turn in this thread ended, if it is not shown

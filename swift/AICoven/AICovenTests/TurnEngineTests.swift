@@ -108,10 +108,13 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertEqual(engine.endings[threadID], unsaved)
         XCTAssertNil(engine.running[threadID])
 
-        // Storable again: opening the thread keeps the turn, and the next
-        // send stores the earlier ending ahead of the new question.
+        // Storable again. Opening the thread and sending both try to store
+        // the earlier ending; whichever gets there first, the send goes
+        // through, and the ending is stored ahead of the new question.
         await DataEncryptionService.shared.unlockForTestingEphemeral()
+        async let opened: Void = engine.settleInterruptedTurns(threadID: threadID)
         try await engine.start(with: question("Second"), context: "Second", roleID: nil, agentName: nil, attachments: nil)
+        await opened
         await finished(engine)
 
         // The first question was stored under the key before the lock, so
@@ -125,6 +128,18 @@ final class TurnEngineTests: XCTestCase {
             try String.fetchAll(db, sql: "SELECT status FROM turns WHERE thread_id = ? ORDER BY started_at", arguments: [threadID])
         }
         XCTAssertEqual(statuses?.contains("running"), false)
+    }
+
+    func testTextOfAFailedSend_isKeptForItsThreadAndGivenBackOnce() {
+        let engine = makeEngine()
+
+        engine.keepUnsent("Do not lose this", for: threadID, because: "The data is locked")
+
+        XCTAssertNil(engine.takeUnsent(for: "another-thread"))
+        let kept = engine.takeUnsent(for: threadID)
+        XCTAssertEqual(kept?.text, "Do not lose this")
+        XCTAssertEqual(kept?.reason, "The data is locked")
+        XCTAssertNil(engine.takeUnsent(for: threadID))
     }
 
     // MARK: - A turn the app closed on

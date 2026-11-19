@@ -55,6 +55,10 @@ final class TurnEngine: ObservableObject {
     /// ahead of it, and no later ending takes its place.
     private var unstored: [String: (turnID: String, outcome: TurnOutcome, message: ChatMessage)] = [:]
 
+    /// The text of a send that failed after its thread had left the screen,
+    /// and why, by thread id: given back when the thread is next opened.
+    private var unsent: [String: (text: String, reason: String)] = [:]
+
     private let chat: ChatService
     private let store = ThreadRepository.shared
 
@@ -91,6 +95,18 @@ final class TurnEngine: ObservableObject {
         }
     }
 
+    /// Keeps the text of a send that could not be started, for a thread that
+    /// is no longer on screen to give it back to.
+    func keepUnsent(_ text: String, for threadID: String, because reason: String) {
+        unsent[threadID] = (text, reason)
+    }
+
+    /// The text of a send to this thread that failed while the thread was
+    /// off screen, and why, once.
+    func takeUnsent(for threadID: String) -> (text: String, reason: String)? {
+        unsent.removeValue(forKey: threadID)
+    }
+
     /// Ends any turn in the thread that is recorded as running but is not,
     /// and whose ending this engine does not hold: the thread gets a line
     /// saying no reply was saved. An ending the engine holds unstored is
@@ -119,11 +135,11 @@ final class TurnEngine: ObservableObject {
     /// is one. Throws if it still cannot be.
     private func storeWaitingEnding(threadID: String) async throws {
         guard let waiting = unstored[threadID] else { return }
-        guard try await store.endTurn(id: waiting.turnID, outcome: waiting.outcome, message: waiting.message) else {
-            throw TurnError.endingNotStored
-        }
-        // Another call can have stored it while this one waited.
+        let stored = try await store.endTurn(id: waiting.turnID, outcome: waiting.outcome, message: waiting.message)
+        // Another call can have stored it while this one waited; then there
+        // is nothing left to do, whatever this call's own answer.
         guard unstored[threadID]?.turnID == waiting.turnID else { return }
+        guard stored else { throw TurnError.endingNotStored }
         unstored[threadID] = nil
         endings[threadID] = Ending(turnID: waiting.turnID, messages: [waiting.message], stored: true)
     }
