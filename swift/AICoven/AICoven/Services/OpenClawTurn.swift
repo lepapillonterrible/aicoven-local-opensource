@@ -119,6 +119,9 @@ nonisolated struct OpenClawTurn {
                 var following: Following?
                 defer { following?.withdrawAll() }
                 do {
+                    // Stopped while the connection was opening: nothing
+                    // more is asked but the stop.
+                    try Task.checkCancellation()
                     let session = try await subscribe(through: gateway)
                     following = session
                     if let ended = try await ending(of: runID, in: session.sessionKey, through: gateway) {
@@ -284,7 +287,8 @@ nonisolated struct OpenClawTurn {
         let status = waited["status"] as? String ?? ""
         // Every finished run has an end time: without one, "ok" and
         // "timeout" are of a run still going.
-        let hasEnded = waited["endedAt"] is NSNumber
+        // A time is a number: true and false read as numbers too, and are not one.
+        let hasEnded = (waited["endedAt"] as? NSNumber).map { CFGetTypeID($0) != CFBooleanGetTypeID() } ?? false
         if status == "error" || (status == "timeout" && hasEnded) {
             let reason = (waited["stopReason"] as? String ?? "").lowercased()
             return ["rpc", "stop", "aborted"].contains(reason) ? (.cancelled, "") : (.failed, Self.failure(in: waited))

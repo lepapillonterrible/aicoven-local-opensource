@@ -125,6 +125,9 @@ final class OpenClawRunPickUpTests: XCTestCase {
         XCTAssertEqual(reports.last?.answer, "Done while away.")
         let requests = socket.sent.dropFirst()
         XCTAssertEqual(requests.map { $0["method"] as? String }, ["sessions.messages.subscribe", "agent.wait", "chat.history"], "No run is started")
+        let subscribe = try XCTUnwrap(requests.first?["params"] as? [String: Any])
+        XCTAssertEqual(subscribe["key"] as? String, "aicoven-local:thread-1")
+        XCTAssertEqual(subscribe["includeApprovals"] as? Bool, true)
         let wait = try XCTUnwrap(requests.dropFirst().first?["params"] as? [String: Any])
         XCTAssertEqual(wait["runId"] as? String, "run-1")
         XCTAssertEqual(wait["timeoutMs"] as? Int, 1000)
@@ -169,6 +172,14 @@ final class OpenClawRunPickUpTests: XCTestCase {
         try await turn(over: ranOut).resume(runID: "run-1", report: out.add)
         XCTAssertEqual(out.last?.status, .failed)
         XCTAssertEqual(out.last?.answer, OpenClawTurn.notFinished)
+
+        // An end time is a number: true is not one, and the run is not ended by it.
+        let notATime = ScriptedGatewaySocket()
+        play(notATime, wait: ["status": "timeout", "endedAt": true], history: ["sessionInfo": ["activeRunIds": ["run-1"]]], then: [chat("final", ["finalText": "Done."])])
+        let going = PickUpReports()
+        try await turn(over: notATime).resume(runID: "run-1", report: going.add)
+        XCTAssertEqual(going.last?.status, .completed)
+        XCTAssertEqual(going.last?.answer, "Done.")
     }
 
     func testARunTheGatewayNoLongerHas_endsSayingSo() async throws {
@@ -321,6 +332,48 @@ final class OpenClawRunPickUpTests: XCTestCase {
 
         let abort = socket.sent.first { $0["method"] as? String == "chat.abort" }?["params"] as? [String: String]
         XCTAssertEqual(abort, ["sessionKey": "aicoven-local:thread-1", "runId": "run-1"], "Under the name the session was asked for with")
+    }
+
+    func testStoppingATurnPickedUpWhileItsConnectionIsOpening_stopsTheRunOnceItIsOpen() async throws {
+        let socket = ScriptedGatewaySocket()
+        let aborted = expectation(description: "The Gateway is told to stop the run")
+        socket.answer { [self] request in
+            switch request["method"] as? String {
+            case "connect":
+                return [ScriptedGatewaySocket.welcome(to: request["id"] as? String ?? "")]
+            case "chat.abort":
+                aborted.fulfill()
+                return [answer(request, with: ["ok": true, "aborted": true])]
+            default:
+                return []
+            }
+        }
+        let opening = expectation(description: "The connection is being opened")
+        var turn = try turn(over: socket)
+        let open = turn.open
+        turn.open = { address, token in
+            opening.fulfill()
+            // Held until the turn is stopped; the handshake then completes.
+            while !Task.isCancelled {
+                await Task.yield()
+            }
+            return try await open(address, token)
+        }
+        let running = Task { [turn] in try await turn.resume(runID: "run-1", report: { _ in }) }
+        await fulfillment(of: [opening], timeout: 10)
+
+        running.cancel()
+        do {
+            try await running.value
+            XCTFail("A stopped turn does not end as a reply")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        await fulfillment(of: [aborted], timeout: 10)
+
+        XCTAssertFalse(socket.sent.contains { $0["method"] as? String == "sessions.messages.subscribe" }, "Nothing more is asked of a turn that was stopped")
+        let abort = socket.sent.first { $0["method"] as? String == "chat.abort" }?["params"] as? [String: String]
+        XCTAssertEqual(abort, ["sessionKey": "aicoven-local:thread-1", "runId": "run-1"])
     }
 
     func testStoppingATurnPickedUp_stopsTheRunInOpenClaw() async throws {
