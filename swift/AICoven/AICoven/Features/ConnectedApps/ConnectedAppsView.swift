@@ -346,10 +346,13 @@ struct ConnectedAppsView: View {
         }
     }
 
-    /// Disconnect from a provider. (A connection waiting for a new token
-    /// is disconnected too.)
+    /// Disconnect from a provider: the connection its row shows. For an
+    /// app connected with a token that is, where none is connected, the
+    /// one that waits for a new token.
     private func disconnect(provider: ConnectedAppProvider) async {
-        guard let account = accounts.first(where: { $0.provider == provider && ($0.status == .connected || $0.status == .error) }) else {
+        let connected = accounts.first { $0.provider == provider && $0.status == .connected }
+        let waiting = provider.connectsWithToken ? accounts.first { $0.provider == provider && $0.status == .error } : nil
+        guard let account = connected ?? waiting else {
             return
         }
 

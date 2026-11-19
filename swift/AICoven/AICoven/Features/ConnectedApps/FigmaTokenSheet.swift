@@ -17,17 +17,15 @@ struct FigmaTokenRequest: Identifiable, Equatable {
 /// holds, and this app has no server.)
 struct FigmaTokenSheet: View {
     let request: FigmaTokenRequest
-    /// Checks the token and keeps it; a test stands in for it.
-    var connect: (_ token: String, _ replacing: String?) async throws -> ConnectedAccount = {
-        try await ConnectedAccountsService.shared.connectFigma(token: $0, replacing: $1)
-    }
-
     let onConnected: () -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var token = ""
     @State private var saving = false
     @State private var errorMessage: String?
+    /// The check of the token that is under way. Closing the sheet calls
+    /// it off: a token is not kept after its sheet is gone.
+    @State private var checking: Task<Void, Never>?
 
     /// What the tools ask of Figma, and so what a token needs.
     static let scopes = [
@@ -97,7 +95,10 @@ struct FigmaTokenSheet: View {
             #endif
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }
+                        Button("Cancel") {
+                            checking?.cancel()
+                            dismiss()
+                        }
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         if saving {
@@ -106,7 +107,7 @@ struct FigmaTokenSheet: View {
                                 .accessibilityLabel("Checking the token")
                         } else {
                             Button(isReplacing ? "Save" : "Connect") {
-                                Task { await save() }
+                                checking = Task { await save() }
                             }
                             .disabled(token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
@@ -117,6 +118,7 @@ struct FigmaTokenSheet: View {
         .frame(minWidth: 480, idealWidth: 520, minHeight: 420)
         #endif
         .accessibilityIdentifier("figma-token-sheet")
+        .onDisappear { checking?.cancel() }
     }
 
     private func save() async {
@@ -125,11 +127,13 @@ struct FigmaTokenSheet: View {
         errorMessage = nil
         defer { saving = false }
         do {
-            _ = try await connect(token, request.replacing?.id)
+            _ = try await ConnectedAccountsService.shared.connectFigma(token: token, replacing: request.replacing?.id)
             token = ""
             onConnected()
             dismiss()
         } catch {
+            // Called off: the sheet is gone, and has nothing to say.
+            if Task.isCancelled || error is CancellationError { return }
             let message = Self.message(for: error)
             errorMessage = message
             AccessibilityNotification.Announcement(message).post()

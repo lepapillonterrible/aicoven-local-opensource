@@ -167,6 +167,7 @@ actor ConnectedAccountsService {
     /// Delete a connected account and its tokens
     func deleteAccount(id: String) async throws {
         let owner = await ensureAccountsLoaded()
+        if accountsCache?.contains(where: { $0.id == id && $0.provider == .figma }) == true { figmaChanges += 1 }
         deleteTokenBundle(forAccountId: id, of: owner)
         accountsCache?.removeAll { $0.id == id }
         saveAccountsToStorage()
@@ -176,6 +177,7 @@ actor ConnectedAccountsService {
     func disconnectAccount(id: String) async {
         let owner = await ensureAccountsLoaded()
         if let index = accountsCache?.firstIndex(where: { $0.id == id }) {
+            if accountsCache?[index].provider == .figma { figmaChanges += 1 }
             accountsCache?[index].status = .disconnected
             accountsCache?[index].updatedAt = Date()
             saveAccountsToStorage()
@@ -204,6 +206,11 @@ actor ConnectedAccountsService {
     /// The Figma metadata key that holds Figma's id of the user.
     static let figmaUserKey = "figma_user_id"
 
+    /// Counts what is done to the Figma connection (a token given, the
+    /// connection disconnected or deleted). A token whose check with
+    /// Figma was overtaken by any of these is not kept.
+    private var figmaChanges = 0
+
     /// Connects Figma with a personal access token, or gives the
     /// connection `replacing` a new one. The token is checked with Figma
     /// first (who it belongs to); nothing is kept of a token Figma does
@@ -214,6 +221,8 @@ actor ConnectedAccountsService {
         guard !token.isEmpty, token.count <= FigmaToolService.longestToken else { throw FigmaTokenRefusal.notAToken }
 
         let owner = await ensureAccountsLoaded()
+        figmaChanges += 1
+        let attempt = figmaChanges
         let who: FigmaToolService.Identity
         do {
             who = try await figmaIdentity(token)
@@ -221,14 +230,20 @@ actor ConnectedAccountsService {
             throw FigmaTokenRefusal.refused
         }
         // Figma was waited for. What follows is for the account that
-        // asked, with nothing more waited for.
-        guard await ensureAccountsLoaded() == owner else { throw FigmaTokenRefusal.changed }
+        // asked, with nothing more waited for; and only if the person has
+        // not called it off (the sheet was closed), given another token,
+        // or disconnected Figma meanwhile.
+        try Task.checkCancellation()
+        guard await ensureAccountsLoaded() == owner, attempt == figmaChanges else { throw FigmaTokenRefusal.changed }
 
         let bundle = OAuthTokenBundle(accessToken: token, refreshToken: nil, tokenType: "X-Figma-Token", expiresAt: nil, scopes: [])
         let now = Date()
 
         if let accountID {
-            guard let index = accountsCache?.firstIndex(where: { $0.id == accountID && $0.provider == .figma }), var account = accountsCache?[index] else {
+            // A connection that was disconnected is not brought back by
+            // a token given before that.
+            guard let index = accountsCache?.firstIndex(where: { $0.id == accountID && $0.provider == .figma }), var account = accountsCache?[index],
+                  account.status == .connected || account.status == .error else {
                 throw FigmaTokenRefusal.changed
             }
             guard account.metadata[Self.figmaUserKey] == who.id else { throw FigmaTokenRefusal.otherAccount }
@@ -471,6 +486,12 @@ actor ConnectedAccountsService {
         forAccount account: ConnectedAccount,
         currentBundle: OAuthTokenBundle
     ) async throws -> OAuthTokenBundle {
+        // A token the person pasted is not refreshed: it works until the
+        // expiry set where it was made, and is then replaced by them. Its
+        // connection is left as it is.
+        if account.provider.connectsWithToken {
+            throw ConnectedAccountError.refreshNotSupported(provider: account.provider)
+        }
         let owner = await ensureAccountsLoaded()
         guard let refreshToken = currentBundle.refreshToken else {
             // Mark account as needing re-auth
@@ -496,8 +517,7 @@ actor ConnectedAccountsService {
             )
 
         case .figma:
-            // A personal access token is not refreshed: it works until
-            // the expiry set in Figma, and is then replaced by the person.
+            // Not reached: a pasted token is turned away above.
             throw ConnectedAccountError.refreshNotSupported(provider: account.provider)
         }
 
