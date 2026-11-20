@@ -4,8 +4,7 @@ import SwiftUI
 /// The Mac window as the cloud app's shell: one split view, with the
 /// sidebar on the left and the place open in the scope on screen beside it,
 /// under a toolbar and the window's title. Built beside the two workspaces
-/// the window has had, which it replaces once its switcher and places are
-/// in; until then it shows Strix.
+/// the window has had, which it replaces once its places are in.
 struct MacShellView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var authService: AuthService
@@ -18,9 +17,17 @@ struct MacShellView: View {
     @StateObject private var threadActions = ThreadActions()
 
     @State private var covens: [Coven] = []
+    /// The person's own order for their covens, as kept on this device.
+    @State private var covenOrder: [String] = []
+    private let orderStore = CovenOrderStore()
     @State private var columnVisibility = NavigationSplitViewVisibility.automatic
     @State private var showNewThread = false
     @State private var showCreateCoven = false
+
+    /// The covens in the person's order.
+    private var orderedCovens: [Coven] {
+        CovenOrder.ordered(covens, by: covenOrder)
+    }
 
     /// The coven on screen; nil for Strix, or while the covens are not in.
     private var selectedCoven: Coven? {
@@ -37,10 +44,11 @@ struct MacShellView: View {
                 navigator: navigator,
                 shellThreads: shellThreads,
                 threadActions: threadActions,
-                coven: selectedCoven,
-                scopeName: scopeName,
+                covens: orderedCovens,
                 personName: ShellSidebar.personName(name: authService.currentUser?.name, email: authService.currentUser?.email),
-                onOpenSettings: { _ = appState.openSettings(for: .settings) }
+                onOpenSettings: { _ = appState.openSettings(for: .settings) },
+                onCreateCoven: { showCreateCoven = true },
+                onMoveCoven: moveCoven
             )
             // On the sidebar column's content, as Apple's example attaches
             // it; on the split view it does not remove the system toggle.
@@ -118,6 +126,7 @@ struct MacShellView: View {
             let loaded = try await CovenService.shared.loadCovens()
             guard UserScope.currentUserID == account else { return }
             covens = loaded
+            covenOrder = orderStore.ids(for: account)
             // The coven on screen can be gone by now.
             if let covenID = navigator.selected.covenID, !loaded.contains(where: { $0.id == covenID }) {
                 navigator.handleCovenGone(covenID: covenID)
@@ -126,6 +135,14 @@ struct MacShellView: View {
             // The kind of failure only. The covens shown stay as they are.
             AppErrorReporter.log(message: "Could not read the covens (\(type(of: error)))", context: "MacShellView.loadCovens")
         }
+    }
+
+    /// Moves a coven to a place in the person's order, and keeps the order
+    /// on this device for the account signed in.
+    private func moveCoven(_ covenID: String, to index: Int) {
+        let ids = CovenOrder.moving(covenID, to: index, in: orderedCovens)
+        covenOrder = ids
+        orderStore.save(ids, for: UserScope.currentUserID)
     }
 
     /// New Thread: in Strix a thread is made at once and opened; in a coven

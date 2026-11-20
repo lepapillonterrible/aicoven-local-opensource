@@ -53,4 +53,9 @@ struct CovenOrderStore {
     func save(_ ids: [String], for account: String) {
         defaults.set(ids, forKey: UserScope.scopedKey(Self.key, for: account))
     }
+
+    /// Forgets the order of `account`'s covens: the account is gone.
+    func remove(for account: String) {
+        defaults.removeObject(forKey: UserScope.scopedKey(Self.key, for: account))
+    }
 }

@@ -59,6 +59,28 @@ nonisolated enum ConversationActivity: Equatable {
         return marks?.isUnread == true ? .unread : nil
     }
 
+    /// One scope's current, for the switcher and the lines under the
+    /// scope's name: waiting when anything there waits for the person, else
+    /// the one moving thread's words, else "2 moving"; nil when nothing
+    /// moves or waits.
+    static func current(of activities: some Sequence<ConversationActivity>) -> ConversationActivity? {
+        var moving: [String] = []
+        var waiting: ConversationActivity?
+        for activity in activities {
+            switch activity {
+            case .waiting: waiting = waiting ?? activity
+            case let .moving(words): moving.append(words)
+            case .paused, .broken, .unsent, .unread: break
+            }
+        }
+        if let waiting { return waiting }
+        return switch moving.count {
+        case 0: nil
+        case 1: .moving(moving[0])
+        default: .moving("\(moving.count) moving")
+        }
+    }
+
     /// Whether the thread is still open: work moving, paused or broken,
     /// something waiting for the person, or an unsent message. An unread
     /// reply alone is not.

@@ -112,6 +112,7 @@ final class ThreadActivityTests: XCTestCase {
         var account = "ada"
         var stored: [String: ThreadMarks] = [:]
         var covens: [String: String] = [:]
+        var archived: Set<String> = []
         var drafts: [String: Bool] = [:]
         var now = Date(timeIntervalSince1970: 1000)
         var read: [String] = []
@@ -130,14 +131,23 @@ final class ThreadActivityTests: XCTestCase {
                     return try await self.marks(for: account)
                 },
                 markRead: { threadID, date, account in await self.note(threadID, date, account) },
-                loadCovens: {
+                loadScopes: {
                     await self.beforeCovens?()
                     if await self.covensFailing { throw URLError(.cannotOpenFile) }
-                    return await self.covens
+                    return await self.scopes()
                 },
                 holdsDraft: { self.drafts[$0] },
                 now: { self.now }
             ))
+        }
+
+        /// Where each stored thread belongs: its coven, or Strix (but for those put away).
+        private func scopes() -> [String: ShellScope] {
+            var scopes: [String: ShellScope] = [:]
+            for threadID in stored.keys where !archived.contains(threadID) {
+                scopes[threadID] = ShellScope(covenID: covens[threadID])
+            }
+            return scopes
         }
 
         private func marks(for account: String) throws -> [String: ThreadMarks] {
@@ -383,6 +393,54 @@ final class ThreadActivityTests: XCTestCase {
         XCTAssertEqual(activities.covensWithUnread, ["c1"])
     }
 
+    func testAScopesCurrentIsWhatWaits_elseTheOneThingMoving_elseHowManyMove() {
+        typealias Activity = ConversationActivity
+        XCTAssertNil(Activity.current(of: []))
+        XCTAssertNil(Activity.current(of: [.paused, .broken("Stopped on a problem"), .unsent, .unread]), "Nothing moves or waits")
+        XCTAssertEqual(Activity.current(of: [.unread, .moving("Reading 3 files")]), .moving("Reading 3 files"))
+        XCTAssertEqual(Activity.current(of: [.moving("Reading"), .unsent, .moving("Searching")]), .moving("2 moving"))
+        XCTAssertEqual(
+            Activity.current(of: [.moving("Reading"), .waiting("Needs your OK"), .moving("Searching")]),
+            .waiting("Needs your OK"), "What waits for the person comes first"
+        )
+    }
+
+    @MainActor
+    func testEachScopeSaysWhatMovesThere_andWhetherItHoldsAnUnreadReply() async {
+        let world = World()
+        world.stored = [
+            "s-unread": marks(read: 100, reply: 200),
+            "s-busy": marks(),
+            "w-busy": marks(),
+            "w-busy-too": marks(),
+            "h-waits": marks(read: 100, reply: 300),
+            "put-away": marks(read: 100, reply: 400),
+        ]
+        world.covens = ["w-busy": "work", "w-busy-too": "work", "h-waits": "hiring", "put-away": "work"]
+        world.archived = ["put-away"]
+        let activities = world.activities()
+        await activities.reload().value
+        XCTAssertEqual(activities.scopesWithUnread, [.strix, .coven("hiring")], "A thread put away marks its row, not its scope")
+        XCTAssertEqual(activities.covensWithUnread, ["hiring"])
+        XCTAssertEqual(activities.current, [:])
+
+        activities.setTurns([
+            "s-busy": .init(message: "Thinking"), "w-busy": .init(message: "Reading"), "w-busy-too": .init(message: "Searching"),
+            "h-waits": .init(message: "Writing"),
+        ])
+        activities.setAsking(["h-waits"])
+        XCTAssertEqual(activities.current, [
+            .strix: .moving("Thinking"), .coven("work"): .moving("2 moving"), .coven("hiring"): .waiting("Needs your OK"),
+        ])
+        // The turns end: nothing moves anywhere.
+        activities.setTurns([:])
+        activities.setAsking([])
+        XCTAssertEqual(activities.current, [:])
+        // Strix's unread thread comes on screen: Strix holds none.
+        activities.show("s-unread")
+        XCTAssertEqual(activities.scopesWithUnread, [.coven("hiring")])
+    }
+
     // MARK: - From what is stored
 
     func testAThreadsMarksAreStoredWithIt() async throws {
@@ -487,12 +545,12 @@ final class ThreadActivityTests: XCTestCase {
             await DataEncryptionService.shared.lock()
         }
 
-        var covens = try await ThreadService.shared.covensOfThreads()
-        XCTAssertEqual(covens[inCoven.id], coven)
-        XCTAssertNil(covens[personal.id], "A personal thread is in none")
+        var covens = try await ThreadService.shared.scopesOfThreads()
+        XCTAssertEqual(covens[inCoven.id], .coven(coven))
+        XCTAssertEqual(covens[personal.id], .strix, "A personal thread is Strix's")
         // Put away, its reply marks its row, not its coven.
         _ = try await ThreadService.shared.updateThread(threadId: inCoven.id, isArchived: true)
-        covens = try await ThreadService.shared.covensOfThreads()
+        covens = try await ThreadService.shared.scopesOfThreads()
         XCTAssertNil(covens[inCoven.id])
     }
 }

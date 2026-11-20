@@ -198,6 +198,34 @@ final class ShellThreadsTests: XCTestCase {
         XCTAssertEqual(ShellSidebar.personName(name: nil, email: nil), "Account")
     }
 
+    func testTheSwitcherNamesUpToTwoOtherScopesWithSomethingMovingOrWaiting_inItsOwnOrder() {
+        func coven(_ id: String) -> Coven {
+            Coven(id: id, name: id.capitalized, createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0))
+        }
+        let covens = [coven("work"), coven("hiring"), coven("home")]
+        let current: [ShellScope: ConversationActivity] = [
+            .strix: .moving("Thinking"), .coven("work"): .moving("2 moving"), .coven("hiring"): .waiting("Needs your OK"),
+            .coven("home"): .moving("Reading"),
+        ]
+        func names(_ selected: ShellScope) -> [String] {
+            ShellSidebar.othersCurrent(covens: covens, selected: selected, current: current).map(\.name)
+        }
+        XCTAssertEqual(names(.strix), ["Work", "Hiring"], "Not the scope on screen; two at most")
+        XCTAssertEqual(names(.coven("work")), ["Strix", "Hiring"], "Strix first")
+        XCTAssertEqual(names(.coven("home")), ["Strix", "Work"])
+        let others = ShellSidebar.othersCurrent(covens: covens, selected: .strix, current: [.coven("home"): .moving("Reading")])
+        XCTAssertEqual(others.map(\.name), ["Home"])
+        XCTAssertEqual(others.first?.current, .moving("Reading"))
+        XCTAssertTrue(ShellSidebar.othersCurrent(covens: covens, selected: .strix, current: [.strix: .moving("Thinking")]).isEmpty)
+    }
+
+    func testWhatVoiceOverReadsAfterAScopesNameInTheSwitcher() {
+        XCTAssertEqual(CovenSwitcherList.accessibilityValue(current: nil, unread: false), "")
+        XCTAssertEqual(CovenSwitcherList.accessibilityValue(current: nil, unread: true), "Unread")
+        XCTAssertEqual(CovenSwitcherList.accessibilityValue(current: .moving("Reading"), unread: false), "Reading")
+        XCTAssertEqual(CovenSwitcherList.accessibilityValue(current: .waiting("Needs your OK"), unread: true), "Needs your OK, Unread")
+    }
+
     func testTheSidebarShowsUnlessTheSplitViewShowsTheDetailOnly() {
         XCTAssertTrue(StoneSidebarToggle.isShowing(.automatic))
         XCTAssertTrue(StoneSidebarToggle.isShowing(.all))
