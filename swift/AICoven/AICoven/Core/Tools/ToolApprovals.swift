@@ -476,6 +476,29 @@ nonisolated extension ToolApproval {
         )
     }
 
+    /// A comment on a Linear issue, posted as the person: which issue,
+    /// and all of it up to the limit.
+    static func linearComment(issue: String, body: String, threadID: String) -> ToolApproval {
+        ToolApproval(
+            threadID: threadID,
+            question: "Comment on this Linear issue?",
+            details: "\(issue)\nPosted as you · \(size(of: body))\n\n\(shown(body))",
+            toolName: "linear.addComment"
+        )
+    }
+
+    /// Changes to a Linear issue, made as the person: which issue, each
+    /// change as from what to what, and a new description in full up to
+    /// the limit.
+    static func linearUpdate(issue: String, changes: [String], newDescription: String?, threadID: String) -> ToolApproval {
+        ToolApproval(
+            threadID: threadID,
+            question: "Change this Linear issue?",
+            details: "\(issue)\n" + changes.map { "- \($0)" }.joined(separator: "\n") + (newDescription.map { "\n\nNew description:\n\(shown($0))" } ?? ""),
+            toolName: "linear.updateIssue"
+        )
+    }
+
     /// The kinds of Google file a model can ask to be changed in Google's
     /// own form of requests.
     enum GoogleFile {

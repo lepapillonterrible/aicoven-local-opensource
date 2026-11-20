@@ -1827,14 +1827,12 @@ extension ChatService {
             // What the tool made for the person goes with the turn's reply.
             return (summary, result.contextBlock, ToolExecutionService.generatedFiles(in: result))
         } else if result.status == "denied" {
-            let message = result.error ?? "Permission denied"
             let summary = "⚠️ \(Self.friendlyToolName(call.tool)): permission denied"
-            return (summary, "[Tool Permission Denied: \(result.tool)]\n\(message)", [])
+            return (summary, result.toldToAModel, [])
         } else {
             // Error or validation error
-            let message = result.error ?? "Unknown error"
             let summary = "⚠️ \(Self.friendlyToolName(call.tool)): error"
-            return (summary, "[Tool Error: \(result.tool)]\n\(message)", [])
+            return (summary, result.toldToAModel, [])
         }
     }
 
