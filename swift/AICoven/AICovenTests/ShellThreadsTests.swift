@@ -130,6 +130,51 @@ final class ShellThreadsTests: XCTestCase {
     }
 
     @MainActor
+    func testARetrySaysItFailed_onlyIfItIsStillTheLatestReadingOfTheScopeShown() async {
+        let store = Store()
+        await store.fail(with: URLError(.cannotOpenFile))
+        let threads = ShellThreads(load: { try await store.load($0) })
+        let nothingToRetry = await threads.retry()
+        XCTAssertFalse(nothingToRetry, "No scope was asked for")
+
+        await threads.load(.strix).value
+        XCTAssertTrue(threads.failed)
+        // Tried again, and it fails again: that retry says so.
+        let failedAgain = await threads.retry()
+        XCTAssertTrue(failedAgain)
+
+        // Pressed twice: the first retry is overtaken by the second, and says nothing of its own.
+        let begun = await store.hold(nil)
+        let first = Task { await threads.retry() }
+        for await _ in begun {
+            break
+        }
+        let second = Task { await threads.retry() }
+        let secondSaid = await second.value
+        await store.release(nil)
+        let firstSaid = await first.value
+        XCTAssertFalse(firstSaid, "Overtaken")
+        XCTAssertTrue(secondSaid, "The latest says it")
+
+        // The scope changed while it was read: nothing is said of the scope that was left.
+        let begunAgain = await store.hold(nil)
+        let leaving = Task { await threads.retry() }
+        for await _ in begunAgain {
+            break
+        }
+        await threads.load(.coven("work")).value
+        await store.release(nil)
+        let saidOfTheOldScope = await leaving.value
+        XCTAssertFalse(saidOfTheOldScope)
+
+        // It reads: nothing failed, nothing to say.
+        await store.fail(with: nil)
+        await threads.load(.strix).value
+        let nowRead = await threads.retry()
+        XCTAssertFalse(nowRead)
+    }
+
+    @MainActor
     func testAListAlreadyShownStaysWhenReadingItAgainFails_unlessItIsNoLongerThisReadersToSee() async {
         let store = Store()
         await store.set([thread("s1")], for: nil)

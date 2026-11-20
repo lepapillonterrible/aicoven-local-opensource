@@ -79,7 +79,11 @@ struct ShellRootView: View {
                 await loadCovens()
             }
             .task(id: navigator.selected) {
-                // Another scope's threads are another list.
+                // Another scope's threads are another list, searched
+                // afresh: in whichever layout the scope changed, since the
+                // search is kept across a change of layout.
+                threadSearch = ""
+                isSearchingThreads = false
                 threadActions.invalidate()
                 shellThreads.load(navigator.selected)
                 if let covenID = navigator.selected.covenID { AnalyticsService.shared.trackCovenView(covenId: covenID) }
@@ -156,11 +160,6 @@ struct ShellRootView: View {
             #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
             #endif
-        }
-        // Another scope's threads are searched afresh.
-        .onChange(of: navigator.selected) { _, _ in
-            threadSearch = ""
-            isSearchingThreads = false
         }
     }
 

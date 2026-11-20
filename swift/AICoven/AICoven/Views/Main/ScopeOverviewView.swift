@@ -43,6 +43,9 @@ struct ScopeOverviewView: View {
     /// The latest ask from here: the thread it starts opens only if the
     /// person is still here and has asked nothing since.
     @State private var ask: UUID?
+    /// Counts the presses of Try again: each is its own task, which the
+    /// next one, and this view going, call off.
+    @State private var retries = 0
 
     var body: some View {
         let scope = navigator.selected
@@ -55,7 +58,9 @@ struct ScopeOverviewView: View {
         let away = ThreadListRules.away(listed, unreadReplyAt: activities.unreadReplyAt, since: navigator.previousVisit(in: scope))
         let nothingListed = listed.contains { !$0.isArchived } == false
         let state = (failed: isRead && shellThreads.failed, hasLoaded: isRead && shellThreads.hasLoaded)
-        let emptyLine = Self.emptyLine(hasArchived: !listed.isEmpty, canAsk: canAsk)
+        // "Ask below" only while there is a composer below: not while the
+        // search field has it collapsed.
+        let emptyLine = Self.emptyLine(hasArchived: !listed.isEmpty, canAsk: canAsk && !isSearchFieldActive)
         Group {
             if usesList {
                 compactList(
@@ -85,6 +90,9 @@ struct ScopeOverviewView: View {
             }
         }
         .background(Color.aicovenSurface)
+        .task(id: retries) {
+            if retries > 0 { await tryAgain(scope) }
+        }
         // Said when it comes, and on coming to an Overview that already
         // shows it, as well as shown.
         .onChange(of: shellThreads.failed, initial: true) { _, failed in
@@ -313,17 +321,14 @@ struct ScopeOverviewView: View {
     }
 
     /// Reads the threads again, and says so if they still cannot be read
-    /// (nothing on screen changes then).
-    private func tryAgain() {
-        let scope = navigator.selected
-        guard let reading = shellThreads.reload() else { return }
-        Task {
-            await reading.value
-            // Only while this Overview is still what is on screen.
-            let isStillHere = navigator.selected == scope && navigator.place == nil && navigator.personPlace == nil
-            if shellThreads.failed, shellThreads.scope == scope, isStillHere {
-                AccessibilityNotification.Announcement("Couldn't load threads.").post()
-            }
+    /// (nothing on screen changes then). Only the latest press says it,
+    /// and only while this Overview is still on screen: the task is this
+    /// view's, called off by the next press and when the view goes.
+    private func tryAgain(_ scope: ShellScope) async {
+        let failed = await shellThreads.retry()
+        guard failed, !Task.isCancelled else { return }
+        if navigator.selected == scope, navigator.place == nil, navigator.personPlace == nil {
+            AccessibilityNotification.Announcement("Couldn't load threads.").post()
         }
     }
 
@@ -383,7 +388,7 @@ struct ScopeOverviewView: View {
                     Text("Couldn't load threads.")
                         .font(.aicovenBodySmall)
                         .foregroundStyle(Color.aicovenError)
-                    Button("Try again") { tryAgain() }
+                    Button("Try again") { retries += 1 }
                         .buttonStyle(.bordered)
                 }
             }
