@@ -235,7 +235,12 @@ struct ShellRootView: View {
     /// New Thread: the scope's new-thread page. Its thread is made when
     /// its first message is sent.
     private func newThread() {
+        // Where the shell is: the Mac's window, or the iPad's layout.
+        #if os(macOS)
         AnalyticsService.shared.trackNewChatTapped(source: "mac_shell")
+        #else
+        AnalyticsService.shared.trackNewChatTapped(source: "ipad_shell")
+        #endif
         navigator.requestNewThread()
     }
 

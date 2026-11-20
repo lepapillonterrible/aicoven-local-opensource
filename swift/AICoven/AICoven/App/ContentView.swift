@@ -16,11 +16,7 @@ struct ContentView: View {
             } else if authService.isAuthenticated {
                 // Authenticated – check onboarding
                 if appState.hasCompletedOnboarding {
-                    #if os(iOS)
-                    MobileRootView()
-                    #else
                     HomeView()
-                    #endif
                 } else {
                     OnboardingFlowView()
                 }

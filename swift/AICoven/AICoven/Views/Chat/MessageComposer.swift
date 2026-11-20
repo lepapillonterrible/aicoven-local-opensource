@@ -429,9 +429,8 @@ struct MessageComposer: View {
     }
 
     #if os(iOS)
-    private var isPad: Bool {
-        UIDevice.current.userInterfaceIdiom == .pad
-    }
+    /// The iPad's layout: an iPad, and an iPhone in the split layout.
+    @Environment(\.isPadLayout) private var isPad
 
     /// The controls' height, growing with the text: 44 pt targets on iPhone,
     /// 40 pt on iPad.
