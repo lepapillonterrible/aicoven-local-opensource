@@ -78,7 +78,10 @@ struct MacShellView: View {
         .threadActionsHost(threadActions)
         .sheet(isPresented: $showNewThread) {
             NewThreadView(covenId: navigator.selected.covenID) { thread in
-                navigator.open(thread)
+                // The sheet can have been cancelled while the thread was
+                // being made: it is then in the list, and not opened over
+                // wherever the person has gone.
+                if showNewThread { navigator.open(thread) }
                 shellThreads.reload()
             }
         }
