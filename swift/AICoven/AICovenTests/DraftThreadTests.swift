@@ -210,6 +210,8 @@ final class DraftThreadTests: XCTestCase {
         var sendFails = false
         /// Held until the test lets the thread be made.
         var beforeCreating: (() async -> Void)?
+        /// Held until the test lets the message be sent into the thread.
+        var beforeSending: (() async -> Void)?
 
         func submission() -> DraftThreadSubmission {
             DraftThreadSubmission(currentAccount: { self.account })
@@ -227,6 +229,7 @@ final class DraftThreadTests: XCTestCase {
                     )
                 },
                 sendFirstMessage: { thread, text in
+                    await self.beforeSending?()
                     if self.sendFails { throw URLError(.networkConnectionLost) }
                     self.did.append("send '\(text)' in \(thread.id)")
                 },
@@ -309,6 +312,24 @@ final class DraftThreadTests: XCTestCase {
         XCTAssertEqual(submission.messageText, "Something newer")
         XCTAssertEqual(submission.errorMessage, DraftThreadSubmission.couldNotStart)
 
+        // Only blank space typed meanwhile: that is nothing to keep, and the message comes back over it.
+        var heldBlank: CheckedContinuation<Void, Never>?
+        let (reachedBlank, reachBlank) = AsyncStream<Void>.makeStream()
+        world.beforeCreating = {
+            reachBlank.yield()
+            await withCheckedContinuation { heldBlank = $0 }
+        }
+        submission.messageText = "The one that matters"
+        let blank = world.send(submission)
+        for await _ in reachedBlank {
+            break
+        }
+        submission.messageText = "  \n"
+        world.beforeCreating = nil
+        heldBlank?.resume()
+        await blank?.value
+        XCTAssertEqual(submission.messageText, "The one that matters")
+
         // Tried again and made: the message goes.
         world.createFails = false
         submission.messageText = "Plan the release"
@@ -376,5 +397,36 @@ final class DraftThreadTests: XCTestCase {
         await failing?.value
         XCTAssertEqual(submission.messageText, "")
         XCTAssertNil(submission.errorMessage)
+
+        // While the message is being sent into the thread that was made: the thread is not opened for the other account.
+        world.account = "ada"
+        world.did = []
+        world.createFails = false
+        for sendFails in [false, true] {
+            world.account = "ada"
+            world.did = []
+            world.sendFails = sendFails
+            var heldSending: CheckedContinuation<Void, Never>?
+            let (reachedSending, reachSending) = AsyncStream<Void>.makeStream()
+            world.beforeSending = {
+                reachSending.yield()
+                await withCheckedContinuation { heldSending = $0 }
+            }
+            submission.messageText = "Ada's third plan"
+            let sending = world.send(submission)
+            for await _ in reachedSending {
+                break
+            }
+            world.account = "grace"
+            world.beforeSending = nil
+            heldSending?.resume()
+            await sending?.value
+            let made = world.did.first { $0.hasPrefix("create") }
+            XCTAssertEqual(made, "create 'Ada's third plan' as ada")
+            XCTAssertFalse(world.did.contains { $0.hasPrefix("created") }, "Not opened for the other account")
+            XCTAssertFalse(world.did.contains { $0.hasPrefix("keep") }, "Nor kept through it")
+            XCTAssertEqual(submission.messageText, "")
+            XCTAssertNil(submission.errorMessage)
+        }
     }
 }
