@@ -50,10 +50,10 @@ struct ShellRootView: View {
     @State private var switcherFollowUp: SwitcherFollowUp?
 
     /// Whether the shell reports how it is used (a scope viewed, a place
-    /// opened, New Thread, a thread made, the memory list opened), to those
-    /// who opted in. These are the Mac window's events, kept when it became
-    /// the shell; the iPhone's and iPad's old root sent none, so none are
-    /// sent there.
+    /// opened, New Thread, a thread made, the memory list opened), where
+    /// analytics is on in Settings. These are the Mac window's events, kept
+    /// when it became the shell; the iPhone's and iPad's old root sent
+    /// none, so none are sent there.
     static let reportsUsage = PlatformCapabilities.current.platform == .macOS
 
     /// What the switcher sheet was asked to open as it closes.
