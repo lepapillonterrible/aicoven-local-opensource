@@ -60,9 +60,12 @@ final class ThreadActions: ObservableObject {
         self.dependencies = dependencies
     }
 
-    func rename(_ thread: Thread, to typed: String) {
-        guard let name = ThreadListRules.name(from: typed), name != thread.title else { return }
-        run("Couldn't rename the thread") { [dependencies] in
+    /// Renames a thread. Like the other actions, it gives back the work it
+    /// started, or nothing if there was nothing to do.
+    @discardableResult
+    func rename(_ thread: Thread, to typed: String) -> Task<Void, Never>? {
+        guard let name = ThreadListRules.name(from: typed), name != thread.title else { return nil }
+        return run("Couldn't rename the thread") { [dependencies] in
             try await dependencies.rename(thread.id, name)
         }
     }
@@ -70,19 +73,21 @@ final class ThreadActions: ObservableObject {
     /// Archives a thread, or brings it back. Archiving stops the turn
     /// running in it (what waited for that turn goes back to its
     /// composer).
-    func setArchived(_ thread: Thread, _ archived: Bool) {
+    @discardableResult
+    func setArchived(_ thread: Thread, _ archived: Bool) -> Task<Void, Never>? {
         if archived { dependencies.stopTurn(thread.id) }
-        run(archived ? "Couldn't archive the thread" : "Couldn't unarchive the thread", leaving: archived ? thread : nil) { [dependencies] in
+        return run(archived ? "Couldn't archive the thread" : "Couldn't unarchive the thread", leaving: archived ? thread : nil) { [dependencies] in
             try await dependencies.setArchived(thread.id, archived)
         }
     }
 
     /// Deletes a thread: called once the person has said so.
-    func delete(_ thread: Thread) {
+    @discardableResult
+    func delete(_ thread: Thread) -> Task<Void, Never>? {
         // A copy of it under way is called off: it is no longer there to copy.
         if exportingThreadID == thread.id { cancelExport() }
         dependencies.stopTurn(thread.id)
-        run("Couldn't delete the thread", leaving: thread) { [dependencies] in
+        return run("Couldn't delete the thread", leaving: thread) { [dependencies] in
             try await dependencies.delete(thread.id)
         }
     }
@@ -93,14 +98,15 @@ final class ThreadActions: ObservableObject {
     }
 
     /// Copies a thread to the clipboard as Markdown, and says how it went.
-    func copy(_ thread: Thread) {
-        guard canCopy else { return }
+    @discardableResult
+    func copy(_ thread: Thread) -> Task<Void, Never>? {
+        guard canCopy else { return nil }
         let account = dependencies.currentAccount()
         exportGeneration &+= 1
         let request = exportGeneration
         exportingThreadID = thread.id
         notice = nil
-        export = Task { [weak self, dependencies] in
+        let copying = Task { [weak self, dependencies] in
             var said: ThreadMarkdownExportNotice?
             do {
                 let markdown = try await ThreadMarkdownExport.makeDocument(thread: thread, dependencies: dependencies.export)
@@ -128,6 +134,8 @@ final class ThreadActions: ObservableObject {
             }
             self?.finishExport(request, saying: said)
         }
+        export = copying
+        return copying
     }
 
     /// Calls off a copy under way and what it would have said: the list
@@ -154,9 +162,11 @@ final class ThreadActions: ObservableObject {
     }
 
     /// Runs a change for the account that asked; says so if it failed.
-    private func run(_ failureTitle: String, leaving left: Thread? = nil, _ change: @escaping () async throws -> Void) {
+    private func run(
+        _ failureTitle: String, leaving left: Thread? = nil, _ change: @escaping () async throws -> Void
+    ) -> Task<Void, Never> {
         let account = dependencies.currentAccount()
-        Task { [weak self, dependencies] in
+        return Task { [weak self, dependencies] in
             // Another account signed in before this began: it is not made.
             guard dependencies.currentAccount() == account else { return }
             do {

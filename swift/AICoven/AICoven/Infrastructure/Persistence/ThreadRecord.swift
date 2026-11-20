@@ -336,6 +336,8 @@ actor ThreadRepository {
         try await dbQueue.write { db in
             try record.insert(db)
         }
+        // The thread is as lately used as this.
+        await ThreadService.shared.noteMessage(in: threadID, at: now)
 
         return LocalMessage(id: id, threadID: threadID, role: role, content: content, createdAt: now)
     }

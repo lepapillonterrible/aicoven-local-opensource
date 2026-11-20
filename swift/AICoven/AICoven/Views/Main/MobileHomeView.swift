@@ -83,6 +83,8 @@ struct MobileChatsRootView: View {
     @State private var showArchived = false
     /// Counts the list's loads, so that only the latest one is shown.
     @State private var threadsLoad = 0
+    /// Whether the scope's threads have been shown since it was chosen.
+    @State private var hasLoadedScope = false
 
     private var selectedCoven: Coven? {
         guard let selectedCovenId else { return nil }
@@ -331,7 +333,10 @@ struct MobileChatsRootView: View {
         let scope = selectedCovenId
         threadsLoad += 1
         let request = threadsLoad
-        isLoading = true
+        // The list gives way to a spinner only until a scope's threads are
+        // first shown: read again after that, it stays as it is (where it
+        // was scrolled to, an open menu) until the new reading is in.
+        if !hasLoadedScope { isLoading = true }
         do {
             // With those archived: the list shows them in a section of their own.
             let stored = try await ThreadService.shared.loadThreads(covenId: scope, includeArchived: true)
@@ -344,6 +349,7 @@ struct MobileChatsRootView: View {
             selectedThread = nil
             errorMessage = "Couldn’t load chats for this workspace."
         }
+        hasLoadedScope = true
         isLoading = false
     }
 
@@ -371,6 +377,7 @@ struct MobileChatsRootView: View {
         selectedCovenId = covenId
         selectedThread = nil
         threads = []
+        hasLoadedScope = false
     }
 }
 

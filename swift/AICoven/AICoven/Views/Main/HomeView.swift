@@ -12,6 +12,8 @@ struct HomeView: View {
 
     @State private var covens: [Coven] = []
     @State private var personalThreads: [Thread] = []
+    /// Counts the loads of the personal threads, so that only the latest is shown.
+    @State private var personalThreadsLoad = 0
     @State private var isLoadingCovens = true
     @State private var showCreateCoven = false
 
@@ -117,11 +119,19 @@ struct HomeView: View {
     }
 
     private func loadPersonalThreads() async {
+        // Only the latest request is shown: the list is read again on every
+        // message stored and after every change, and an earlier reading can
+        // come back after a later one.
+        personalThreadsLoad += 1
+        let request = personalThreadsLoad
         do {
             // With those archived: the sidebar shows them in a section of their own.
-            personalThreads = try await ThreadService.shared.loadThreads(covenId: nil, includeArchived: true)
+            let stored = try await ThreadService.shared.loadThreads(covenId: nil, includeArchived: true)
+            guard request == personalThreadsLoad else { return }
+            personalThreads = stored
             AppErrorReporter.log(message: "Loaded \(personalThreads.count) personal threads", context: "HomeView.loadPersonalThreads")
         } catch {
+            guard request == personalThreadsLoad else { return }
             AppErrorReporter.log(error: error, context: "HomeView.loadPersonalThreads")
             personalThreads = []
         }

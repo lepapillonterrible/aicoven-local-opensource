@@ -27,8 +27,11 @@ actor ThreadService {
     /// A message was stored in a thread at `date`: the thread, if it is
     /// among those loaded, is as lately used as that.
     func noteMessage(in threadID: String, at date: Date) {
-        guard let index = personalThreads.firstIndex(where: { $0.id == threadID }) else { return }
-        personalThreads[index] = personalThreads[index].lastUsed(at: date)
+        if let index = personalThreads.firstIndex(where: { $0.id == threadID }) {
+            personalThreads[index] = personalThreads[index].lastUsed(at: date)
+        }
+        // Told whether or not the thread is among those held: the threads
+        // can be on their way from the database, read before this message.
         // Posted on the main actor: the lists that hear it are views.
         Task { @MainActor in
             NotificationCenter.default.post(name: Self.threadUsed, object: nil)

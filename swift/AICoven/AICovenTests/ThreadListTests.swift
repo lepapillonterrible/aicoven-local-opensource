@@ -256,42 +256,32 @@ final class ThreadListTests: XCTestCase {
     }
 
     @MainActor
-    private func wait(_ what: String, until done: @MainActor () -> Bool) async {
-        for _ in 0 ..< 2000 where !done() {
-            await Task.yield()
-            try? await Task.sleep(for: .milliseconds(1))
-        }
-        XCTAssertTrue(done(), what)
-    }
-
-    @MainActor
     func testRenameArchiveAndDelete() async {
         let store = Store()
         let actions = store.actions()
         let plans = thread("t1", title: "Plans")
 
-        actions.rename(plans, to: "  Plans for May\n")
-        await wait("renamed") { store.changed == 1 }
+        await actions.rename(plans, to: "  Plans for May\n")?.value
+        XCTAssertEqual(store.changed, 1)
         XCTAssertEqual(store.did, ["rename t1 Plans for May"])
         XCTAssertEqual(store.left, [], "A renamed thread stays open")
-        // Nothing to call it, or the name it has: nothing is done.
-        actions.rename(plans, to: "  ")
-        actions.rename(plans, to: "Plans")
-        try? await Task.sleep(for: .milliseconds(20))
+        // Nothing to call it, or the name it has: nothing is started.
+        XCTAssertNil(actions.rename(plans, to: "  "))
+        XCTAssertNil(actions.rename(plans, to: "Plans"))
         XCTAssertEqual(store.did.count, 1)
 
         // Archiving stops the turn running in it, then puts it away.
-        actions.setArchived(plans, true)
-        await wait("archived") { store.changed == 2 }
+        await actions.setArchived(plans, true)?.value
+        XCTAssertEqual(store.changed, 2)
         XCTAssertEqual(Array(store.did.suffix(2)), ["stop t1", "archive t1"])
         XCTAssertEqual(store.left, ["t1"], "What showed it closes")
-        actions.setArchived(thread("t1", archived: true), false)
-        await wait("unarchived") { store.changed == 3 }
+        await actions.setArchived(thread("t1", archived: true), false)?.value
+        XCTAssertEqual(store.changed, 3)
         XCTAssertEqual(store.did.last, "unarchive t1")
         XCTAssertEqual(store.left, ["t1"], "Bringing one back opens or closes nothing")
 
-        actions.delete(plans)
-        await wait("deleted") { store.changed == 4 }
+        await actions.delete(plans)?.value
+        XCTAssertEqual(store.changed, 4)
         XCTAssertEqual(Array(store.did.suffix(2)), ["stop t1", "delete t1"])
         XCTAssertEqual(store.left, ["t1", "t1"])
         XCTAssertNil(actions.failure)
@@ -309,10 +299,9 @@ final class ThreadListTests: XCTestCase {
             ({ actions.setArchived(plans, true) }, "Couldn't archive the thread"),
             ({ actions.setArchived(plans, false) }, "Couldn't unarchive the thread"),
             ({ actions.delete(plans) }, "Couldn't delete the thread"),
-        ] as [(() -> Void, String)] {
+        ] as [(() -> Task<Void, Never>?, String)] {
             actions.failure = nil
-            run()
-            await wait(title) { actions.failure != nil }
+            await run()?.value
             XCTAssertEqual(actions.failure?.title, title)
         }
         XCTAssertEqual(ThreadActions.Failure.message, "Try again.")
@@ -321,9 +310,9 @@ final class ThreadListTests: XCTestCase {
         // Another account signs in while it is tried: nothing is said or shown to it.
         actions.failure = nil
         let changedBefore = store.changed
-        actions.rename(plans, to: "Newer")
+        let renaming = actions.rename(plans, to: "Newer")
         store.account = "grace"
-        try? await Task.sleep(for: .milliseconds(30))
+        await renaming?.value
         XCTAssertNil(actions.failure)
         XCTAssertEqual(store.changed, changedBefore)
     }
@@ -336,10 +325,11 @@ final class ThreadListTests: XCTestCase {
         store.messages = [message("1", "user", "What next?"), message("2", "assistant", "Ship it.")]
 
         XCTAssertTrue(actions.canCopy)
-        actions.copy(plans)
+        var copying = actions.copy(plans)
         XCTAssertEqual(actions.exportingThreadID, "t1")
         XCTAssertFalse(actions.canCopy, "Not while one is being read")
-        await wait("copied") { actions.notice != nil }
+        XCTAssertNil(actions.copy(plans), "A second is not started")
+        await copying?.value
         XCTAssertEqual(store.clipboard, "# Plans\n\n## You\n\nWhat next?\n\n## Strix\n\nShip it.")
         XCTAssertEqual(actions.notice?.title, "Thread Copied")
         XCTAssertEqual(actions.notice?.message, "The full thread was copied as Markdown.")
@@ -347,8 +337,8 @@ final class ThreadListTests: XCTestCase {
 
         // Nothing to copy: the clipboard is left as it was.
         store.messages = []
-        actions.copy(plans)
-        await wait("said") { actions.notice?.kind == .failure }
+        await actions.copy(plans)?.value
+        XCTAssertEqual(actions.notice?.kind, .failure)
         XCTAssertEqual(actions.notice?.title, "Couldn’t Copy Thread")
         XCTAssertEqual(actions.notice?.message, ThreadMarkdownExport.nothingToCopy)
         XCTAssertEqual(store.clipboard?.hasPrefix("# Plans"), true)
@@ -356,52 +346,69 @@ final class ThreadListTests: XCTestCase {
         // The clipboard would not take it; then the thread could not be read.
         store.messages = [message("1", "user", "Hi")]
         store.clipboardTakes = false
-        actions.copy(plans)
-        await wait("said") { actions.notice?.message == ThreadMarkdownExport.clipboardFailed }
+        await actions.copy(plans)?.value
+        XCTAssertEqual(actions.notice?.message, ThreadMarkdownExport.clipboardFailed)
         store.failing = true
-        actions.copy(plans)
-        await wait("said") { actions.notice?.message == ThreadMarkdownExport.failed }
+        await actions.copy(plans)?.value
+        XCTAssertEqual(actions.notice?.message, ThreadMarkdownExport.failed)
 
         // Another account signs in while it is read: nothing is copied or said.
         store.failing = false
         store.clipboardTakes = true
         store.clipboard = nil
-        actions.copy(plans)
+        copying = actions.copy(plans)
         store.account = "grace"
-        await wait("done") { actions.exportingThreadID == nil }
+        await copying?.value
+        XCTAssertNil(actions.exportingThreadID)
         XCTAssertNil(store.clipboard)
         XCTAssertNil(actions.notice)
 
         // The thread went while it was read: nothing is copied, and that is said.
         store.account = "ada"
         store.gone = true
-        actions.copy(plans)
-        await wait("said") { actions.notice?.message == ThreadMarkdownExport.failed }
+        await actions.copy(plans)?.value
+        XCTAssertEqual(actions.notice?.message, ThreadMarkdownExport.failed)
         XCTAssertNil(store.clipboard)
         store.gone = false
 
         // Deleting a thread calls off a copy of it under way: nothing is copied or said of it.
         var reading: CheckedContinuation<Void, Never>?
-        store.beforeReading = { await withCheckedContinuation { reading = $0 } }
+        let (reached, reach) = AsyncStream<Void>.makeStream()
+        store.beforeReading = {
+            reach.yield()
+            await withCheckedContinuation { reading = $0 }
+        }
         actions.notice = nil
-        actions.copy(plans)
-        await wait("reading") { reading != nil }
-        actions.delete(plans)
+        copying = actions.copy(plans)
+        for await _ in reached {
+            break
+        }
+        let deleting = actions.delete(plans)
         XCTAssertNil(actions.exportingThreadID)
-        reading?.resume()
         store.beforeReading = nil
-        try? await Task.sleep(for: .milliseconds(30))
+        reading?.resume()
+        await copying?.value
+        await deleting?.value
         XCTAssertNil(store.clipboard)
         XCTAssertNil(actions.notice)
 
         // The list went elsewhere: a copy under way says nothing.
-        store.account = "ada"
-        actions.copy(plans)
+        copying = actions.copy(plans)
         actions.invalidate()
-        try? await Task.sleep(for: .milliseconds(30))
+        await copying?.value
+        XCTAssertNil(store.clipboard)
         XCTAssertNil(actions.notice)
         XCTAssertNil(actions.exportingThreadID)
         XCTAssertTrue(actions.canCopy)
+    }
+
+    @MainActor
+    func testAStoredMessageIsTold_evenInAThreadNotHeldYet() async {
+        // The threads can be on their way from the database when a message
+        // is stored: the lists are told all the same, and read again.
+        let told = expectation(forNotification: ThreadService.threadUsed, object: nil)
+        await ThreadService.shared.noteMessage(in: "not-held-\(UUID().uuidString)", at: Date())
+        await fulfillment(of: [told], timeout: 10)
     }
 
     // MARK: - From what is stored
