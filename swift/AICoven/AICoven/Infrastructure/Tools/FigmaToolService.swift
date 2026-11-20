@@ -187,9 +187,10 @@ nonisolated extension FigmaToolService {
     /// The newest comments a model is told of.
     static let mostComments = 200
 
-    /// Text on one line: each line break in it (of any kind) made a space.
+    /// Text on one line: each line break in it (of any kind; a CRLF is
+    /// one) made one space.
     static func oneLine(_ text: String) -> String {
-        text.split(whereSeparator: \.isNewline).joined(separator: " ")
+        String(text.map { $0.isNewline ? " " : $0 })
     }
 
     /// How many nodes a node is, with all those under it.

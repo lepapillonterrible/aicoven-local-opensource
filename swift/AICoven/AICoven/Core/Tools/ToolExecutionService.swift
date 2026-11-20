@@ -1172,7 +1172,11 @@ actor ToolExecutionService {
     /// Runs a Figma tool on the file its call names, with the connected
     /// account's token. A token Figma refuses marks the connection as
     /// needing a new one.
-    private func executeFigma(toolCall: ParsedToolCall, _ run: @Sendable (_ file: String, _ token: String) async throws -> ToolExecutionResult) async -> ToolExecutionResult {
+    ///
+    /// A reading tool whose turn was stopped while its answer was read
+    /// tells that it was stopped. One that changed something (`changes`)
+    /// tells what it did: the comment is posted, stopped or not.
+    private func executeFigma(toolCall: ParsedToolCall, changes: Bool = false, _ run: @Sendable (_ file: String, _ token: String) async throws -> ToolExecutionResult) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .figma) else {
             return .error(tool: toolCall.name, message: Self.figmaNotConnected)
         }
@@ -1183,7 +1187,9 @@ actor ToolExecutionService {
         do {
             let kept = try await connectedAccountsService.getAccessToken(forAccountId: account.id)
             token = kept
-            return try await run(file, kept)
+            let result = try await run(file, kept)
+            if !changes { try Task.checkCancellation() }
+            return result
         } catch {
             // Stopped, however that showed (the request cancelled too).
             if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
@@ -1223,7 +1229,7 @@ actor ToolExecutionService {
         if let refusal = await refusal(ofAppChange: toolCall, in: threadID, { .figmaComment(file: named, replyTo: replyTo, message: message, threadID: $0) }) {
             return refusal
         }
-        return await executeFigma(toolCall: toolCall) { [figmaSession] file, token in
+        return await executeFigma(toolCall: toolCall, changes: true) { [figmaSession] file, token in
             let posted = try await FigmaToolService.postComment(key: file, message: message, replyTo: replyTo, token: token, session: figmaSession)
             let id = posted["id"] as? String
             let block = "[Figma Comment Posted: \(file)]\n" + (id.map { "Comment \($0)" } ?? "Posted") + (replyTo.map { ", in reply to \($0)" } ?? "") + "."

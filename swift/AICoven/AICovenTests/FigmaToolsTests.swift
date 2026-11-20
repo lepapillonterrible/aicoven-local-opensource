@@ -89,6 +89,7 @@ final class FigmaToolsTests: XCTestCase {
         XCTAssertEqual(counted.omitted, 3, "The group and the two under it")
         XCTAssertEqual(FigmaToolService.count(of: deep), 5)
         XCTAssertEqual(FigmaToolService.oneLine("a\r\nb\rc\nd"), "a b c d")
+        XCTAssertEqual(FigmaToolService.oneLine("\nA\n\nB\n"), " A  B ", "Each break is one space, where it stands")
     }
 
     func testCommentsAreToldNewestFirst_andAReplyIsResolvedWhenItsThreadIs() throws {
