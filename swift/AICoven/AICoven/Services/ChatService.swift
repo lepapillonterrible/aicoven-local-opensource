@@ -1952,7 +1952,7 @@ extension ChatService {
         case _ where tool.hasPrefix("google_docs"): "📝 Working with Docs…"
         case _ where tool.hasPrefix("google_sheets"): "📊 Working with Sheets…"
         case _ where tool.hasPrefix("google_slides"): "🖼️ Working with Slides…"
-        case _ where tool.hasPrefix("figma."): "🎨 Looking in Figma…"
+        case _ where tool.hasPrefix("figma."): "🎨 Working with Figma…"
         default: "⚙️ Using \(tool)…"
         }
     }

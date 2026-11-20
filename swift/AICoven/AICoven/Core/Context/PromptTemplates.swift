@@ -231,6 +231,37 @@ enum PromptTemplates {
             example: #"{"tool": "github.listPullRequestFiles", "input": {"repo": "user/project", "pull_number": 42}, "reason": "See what files changed in PR"}"#
         ),
 
+        // Figma tools. A file is named by its key or its link.
+        ToolDefinition(
+            name: "figma.readFile",
+            description: "Read the structure of a Figma file: its pages, frames and layers, each with its name, id and kind. Use node to read under one node, and depth to go deeper.",
+            parameters: [
+                ToolParameter(name: "file", type: "string", description: "The file's key, or its link (https://www.figma.com/design/<key>/...)", required: true),
+                ToolParameter(name: "node", type: "string", description: "A node's id, like '3:21', to read only what is under it", required: false),
+                ToolParameter(name: "depth", type: "integer", description: "How many levels to read (1 to 4, default 2)", required: false)
+            ],
+            example: #"{"tool": "figma.readFile", "input": {"file": "https://www.figma.com/design/AbCdEfGhIjKl/Homepage"}, "reason": "See the file's pages and frames"}"#
+        ),
+        ToolDefinition(
+            name: "figma.readComments",
+            description: "Read the comments on a Figma file, newest first, each with its id, author and where it sits.",
+            parameters: [
+                ToolParameter(name: "file", type: "string", description: "The file's key, or its link", required: true),
+                ToolParameter(name: "include_resolved", type: "boolean", description: "Also show resolved comments (default: only open ones)", required: false)
+            ],
+            example: #"{"tool": "figma.readComments", "input": {"file": "AbCdEfGhIjKl"}, "reason": "See what was said about the design"}"#
+        ),
+        ToolDefinition(
+            name: "figma.addComment",
+            description: "Post a comment on a Figma file as the user, or a reply to a comment.",
+            parameters: [
+                ToolParameter(name: "file", type: "string", description: "The file's key, or its link", required: true),
+                ToolParameter(name: "message", type: "string", description: "The comment", required: true),
+                ToolParameter(name: "reply_to", type: "string", description: "The id of the comment this answers", required: false)
+            ],
+            example: #"{"tool": "figma.addComment", "input": {"file": "AbCdEfGhIjKl", "message": "The header overlaps the logo at 320pt."}, "reason": "Leave the feedback on the file"}"#
+        ),
+
         // Google Drive tools
         ToolDefinition(
             name: "google_drive.listFiles",
@@ -725,6 +756,9 @@ enum PromptTemplates {
         "google_sheets.read", "google_sheets.readValues", "google_sheets.updateValues", "google_sheets.batchUpdate"
     ]
 
+    /// Figma tools, offered where Figma is connected.
+    static let figmaTools: Set<String> = ["figma.readFile", "figma.readComments", "figma.addComment"]
+
     /// Image generation, offered where the person has a key that can
     /// make images, to a turn that gives what is made to its reply.
     static let imageTools: Set<String> = ["image.generate"]
@@ -750,6 +784,7 @@ enum PromptTemplates {
         .union(shellTools)
         .union(githubTools)
         .union(googleDriveTools)
+        .union(figmaTools)
 
     /// Dynamically resolve the Set of actual enabled native tools according to Connected Accounts + Entitlements.
     static func connectedToolSet() async -> Set<String> {
@@ -769,6 +804,10 @@ enum PromptTemplates {
 
         if await accountsService.getConnectedAccount(for: .googleDrive) != nil {
             tools.formUnion(googleDriveTools)
+        }
+
+        if await accountsService.getConnectedAccount(for: .figma) != nil {
+            tools.formUnion(figmaTools)
         }
 
         return tools
