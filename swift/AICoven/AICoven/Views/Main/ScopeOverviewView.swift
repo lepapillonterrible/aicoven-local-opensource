@@ -3,8 +3,9 @@ import SwiftUI
 /// A scope's Overview, as the cloud app's: when the person was last here,
 /// then the threads still open, the replies that came while they were
 /// away, and the earlier threads, each only when it has something to show
-/// (in two columns when there were replies), with the composer at the foot; asking from it starts
-/// a thread and opens it, if the person is still here when it is made.
+/// (in two columns when there were replies), with the composer at the
+/// foot; asking from it starts a thread and opens it, if the person is
+/// still here when it is made.
 ///
 /// What it knows is this device's: what moves or waits comes from the
 /// turns this app is running, unsent messages and read marks from this
@@ -222,8 +223,8 @@ private struct OverviewRow: View {
     let activity: ConversationActivity?
     let title: String
     let date: Date
-    /// A line under the title in place of what the thread is doing: who
-    /// replied, on a reply's row.
+    /// A line under the title, above what the thread is doing if that has
+    /// words: who replied, on a reply's row (an unread reply has none).
     var detail: String?
     let action: () -> Void
 
