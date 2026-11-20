@@ -17,6 +17,8 @@ struct MacShellView: View {
     @StateObject private var threadActions = ThreadActions()
 
     @State private var covens: [Coven] = []
+    /// Counts the readings of the covens, so that only the latest is kept.
+    @State private var covensLoad = 0
     /// The person's own order for their covens, as kept on this device.
     @State private var covenOrder: [String] = []
     private let orderStore = CovenOrderStore()
@@ -129,10 +131,14 @@ struct MacShellView: View {
     }
 
     private func loadCovens() async {
+        // Only the latest reading is kept: one begun before a coven was
+        // made can land after the one begun for it, without that coven.
+        covensLoad += 1
+        let reading = covensLoad
         let account = UserScope.currentUserID
         do {
             let loaded = try await CovenService.shared.loadCovens()
-            guard UserScope.currentUserID == account else { return }
+            guard reading == covensLoad, UserScope.currentUserID == account else { return }
             covens = loaded
             covenOrder = orderStore.ids(for: account)
             // The coven on screen can be gone by now.
