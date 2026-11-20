@@ -40,7 +40,54 @@ nonisolated enum ShellSidebarItem: Hashable {
 final class ShellNavigator: ObservableObject {
     /// The scope on screen.
     @Published private(set) var selected: ShellScope = .strix {
-        didSet { if selected != oldValue { placeGeneration += 1 } }
+        didSet {
+            guard selected != oldValue else { return }
+            placeGeneration += 1
+            previousVisits[selected] = arrive?(selected)
+        }
+    }
+
+    /// When the person was last in each scope before they came in this
+    /// time, where this device knows.
+    @Published private var previousVisits: [ShellScope: Date] = [:]
+    /// Notes the person arriving in a scope, and gives back when they were
+    /// last there before; nil keeps no visits.
+    private let arrive: ((ShellScope) -> Date?)?
+    /// The app went inactive since it was last active: coming back enters
+    /// the scope on screen again.
+    private var wasInactive = false
+    /// The app has been in front since the window opened. Until then it
+    /// has not been anywhere to come back from: a window that opens
+    /// inactive, or flickers so while it opens, is not a time away.
+    private var hasBeenActive = false
+
+    /// `arrive` notes an arrival in a scope and gives back the visit
+    /// before it. The shell starts in Strix: that arrival is noted here.
+    init(arrive: ((ShellScope) -> Date?)? = nil) {
+        self.arrive = arrive
+        previousVisits[.strix] = arrive?(.strix)
+    }
+
+    /// When the person was last in `scope` before this visit, if this
+    /// device knows.
+    func previousVisit(in scope: ShellScope) -> Date? {
+        previousVisits[scope]
+    }
+
+    /// The app went inactive, after being in front; coming back enters the
+    /// scope on screen again.
+    func appWentInactive() {
+        if hasBeenActive { wasInactive = true }
+    }
+
+    /// The app is in front again, after it went inactive: the scope on
+    /// screen is entered again, so its last visit reads as it was before
+    /// the time away. Moves nothing.
+    func appBecameActive() {
+        hasBeenActive = true
+        guard wasInactive else { return }
+        wasInactive = false
+        previousVisits[selected] = arrive?(selected)
     }
 
     /// Each scope's place; none is its Overview. A scope's place changing

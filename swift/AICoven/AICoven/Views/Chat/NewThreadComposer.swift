@@ -59,6 +59,8 @@ struct NewThreadComposer: View {
     var request = 0
     @ObservedObject var submission: DraftThreadSubmission
     var autoFocus = false
+    /// Told when a send is taken, before its thread is made.
+    var onSend: (() -> Void)?
     let onThreadCreated: (Thread) -> Void
 
     /// The coven's agents, once read.
@@ -190,6 +192,7 @@ struct NewThreadComposer: View {
             },
             onThreadCreated: onThreadCreated
         )
+        if sending != nil { onSend?() }
         return sending != nil
     }
 }

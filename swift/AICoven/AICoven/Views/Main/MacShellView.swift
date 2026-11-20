@@ -8,7 +8,13 @@ struct MacShellView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var authService: AuthService
 
-    @StateObject private var navigator = ShellNavigator()
+    /// Where the shell is. It notes each arrival in a scope on this device,
+    /// for the account signed in, so the Overview can say when the person
+    /// was last there.
+    @StateObject private var navigator = ShellNavigator(arrive: { scope in
+        ScopeVisitStore().arrive(in: scope, at: Date(), for: UserScope.currentUserID)
+    })
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var shellThreads = ShellThreads()
     /// Rename, archive, delete and copy, for the sidebar's threads. Owned
     /// here, not by the sidebar: its sheet and alerts show also while the
@@ -60,13 +66,13 @@ struct MacShellView: View {
         } detail: {
             ShellContentView(
                 navigator: navigator,
+                shellThreads: shellThreads,
                 threadActions: threadActions,
                 drafts: drafts,
                 coven: selectedCoven,
-                onNewThread: newThread,
                 onNewThreadWithAgent: newThread(with:),
                 onThreadCreated: threadCreated,
-                onCreateCoven: { showCreateCoven = true },
+                onThreadAsked: threadMade,
                 onOpenProviderKeys: { _ = appState.openSettings(for: .providerKeys) }
             )
             .toolbar {
@@ -113,6 +119,12 @@ struct MacShellView: View {
             // A thread deleted or archived is no longer open.
             threadActions.onLeft = { [navigator] in navigator.removeThread(id: $0.id) }
         }
+        // Coming back to the app is coming back to the scope on screen. The
+        // phase the window opens in is told too, so the navigator knows
+        // when the app was first in front.
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            if phase == .active { navigator.appBecameActive() } else { navigator.appWentInactive() }
+        }
         // A thread was used, or made: the list follows it.
         .onReceive(NotificationCenter.default.publisher(for: ThreadService.threadUsed)) { _ in
             shellThreads.reload()
@@ -145,6 +157,7 @@ struct MacShellView: View {
             for covenID in CovenOrder.gone(known: covens, selected: navigator.selected, among: loaded) {
                 navigator.handleCovenGone(covenID: covenID)
                 drafts.forget(.coven(covenID))
+                ScopeVisitStore().forget(.coven(covenID), for: account)
             }
             covens = loaded
             covenOrder = orderStore.ids(for: account)
@@ -175,9 +188,16 @@ struct MacShellView: View {
     }
 
     /// The new-thread page made its thread: it takes the page's place
-    /// (where the page still is), and the list shows it.
+    /// (where the page still is).
     private func threadCreated(_ thread: Thread) {
         navigator.handleCreatedThread(thread)
+        threadMade(thread)
+    }
+
+    /// A thread was made, by the new-thread page or from an Overview: the
+    /// list shows it. Where it opens is the navigator's to say, for each
+    /// of the two in its own way.
+    private func threadMade(_ thread: Thread) {
         shellThreads.reload()
         if let covenID = thread.covenId {
             AnalyticsService.shared.trackThreadCreate(threadId: thread.id, covenId: covenID, hasTitle: thread.title != nil)
