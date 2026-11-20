@@ -272,7 +272,7 @@ final class DraftThreadTests: XCTestCase {
         XCTAssertFalse(submission.isCreatingThread)
         XCTAssertNil(submission.submittedText)
 
-        // Something newer typed while it was tried: that stays, and the failure is still said.
+        // Something newer typed while it was tried: that stays, and the failure is said without the promise.
         var held: CheckedContinuation<Void, Never>?
         let (reached, reach) = AsyncStream<Void>.makeStream()
         world.beforeCreating = {
@@ -289,7 +289,7 @@ final class DraftThreadTests: XCTestCase {
         held?.resume()
         await sending?.value
         XCTAssertEqual(submission.messageText, "Something newer")
-        XCTAssertEqual(submission.errorMessage, DraftThreadSubmission.couldNotStart)
+        XCTAssertEqual(submission.errorMessage, "The thread could not be started.", "Not said to be available: it was not given back")
 
         // Only blank space typed meanwhile: that is nothing to keep, and the message comes back over it.
         var heldBlank: CheckedContinuation<Void, Never>?
