@@ -1344,6 +1344,8 @@ actor ToolExecutionService {
             return refused
         }
         if Task.isCancelled {
+            // Stopped, here as while Figma was asked: not one of the turn's renders.
+            pictures.giveBackRender()
             return .error(tool: toolCall.name, message: "Stopped before Figma's answer was used.", errorType: "cancelled")
         }
         let frames = rendered.frames
