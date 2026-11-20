@@ -124,6 +124,11 @@ final class DraftThreadTests: XCTestCase {
         // Asked again without an agent: the composer chooses as it does.
         navigator.requestNewThread()
         XCTAssertNil(navigator.draftAgent(in: .coven("work")))
+        // Each ask is counted, so a page asked for again for the same agent knows it was.
+        let asks = navigator.draftRequests
+        navigator.requestNewThread(agentID: "scout")
+        navigator.requestNewThread(agentID: "scout")
+        XCTAssertEqual(navigator.draftRequests, asks + 2)
 
         // A coven that is gone takes its page and what was asked for it along.
         navigator.requestNewThread(agentID: "scout")

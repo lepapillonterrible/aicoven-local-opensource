@@ -37,6 +37,7 @@ struct ShellContentView: View {
                     DraftThreadView(
                         coven: coven,
                         askedAgentID: navigator.draftAgent(in: navigator.selected),
+                        request: navigator.draftRequests,
                         submission: drafts.submission(for: navigator.selected),
                         onThreadCreated: onThreadCreated
                     )
