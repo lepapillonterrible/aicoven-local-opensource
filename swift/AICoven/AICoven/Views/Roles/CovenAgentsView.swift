@@ -11,8 +11,10 @@ struct CovenAgentsView: View {
 
     @State private var roles: [Role] = []
     @State private var loadFailed = false
-    @State private var adding = false
-    @State private var editing: Role?
+    /// The agent form on screen, if one is: each showing is its own.
+    @State private var form: AgentForm?
+    /// Counts the readings of the agents, so that only the latest is shown.
+    @State private var readings = 0
     /// The agent a delete is asked for; it stays set after the dialog closes,
     /// so the dialog's Delete button still has it.
     @State private var deleting: Role?
@@ -20,6 +22,9 @@ struct CovenAgentsView: View {
     @State private var deleteFailed = false
     /// The agents whose delete is on its way.
     @State private var deletingIDs: Set<Role.ID> = []
+
+    static let loadFailure = "Couldn't load the agents. Open this page again to retry."
+    static let deleteFailure = "Couldn't delete the agent. Try again."
 
     /// The page's centred column, and its rows.
     private let column: CGFloat = 780
@@ -29,6 +34,7 @@ struct CovenAgentsView: View {
     static func instructionsLine(_ instructions: String?) -> String {
         (instructions ?? "")
             .split(whereSeparator: \.isNewline)
+            .lazy
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .first { !$0.isEmpty } ?? ""
     }
@@ -51,7 +57,7 @@ struct CovenAgentsView: View {
 
                 row {
                     Button {
-                        adding = true
+                        form = .add(showing: UUID())
                     } label: {
                         HStack(spacing: Spacing.sm) {
                             RoundedRectangle(cornerRadius: 11)
@@ -76,45 +82,41 @@ struct CovenAgentsView: View {
 
                 ForEach(roles) { role in
                     row {
-                        AgentListRow(role: role, rowHeight: rowHeight) { editing = role }
+                        AgentListRow(role: role, rowHeight: rowHeight) { form = .edit(role, showing: UUID()) }
                     }
                     .accessibilityAction(named: "Delete") { askDelete(role) }
                     .contextMenu {
                         Button("New Thread with \(role.name)") { onNewThread(role) }
-                        Button("Edit…") { editing = role }
+                        Button("Edit…") { form = .edit(role, showing: UUID()) }
                         Button("Delete…", role: .destructive) { askDelete(role) }
                     }
                 }
 
                 if loadFailed {
-                    row { failureLine("Couldn't load the agents. Open this page again to retry.") }
+                    row { failureLine(Self.loadFailure) }
                 } else if deleteFailed {
-                    row { failureLine("Couldn't delete the agent. Try again.") }
+                    row { failureLine(Self.deleteFailure) }
                 }
             }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(Color.aicovenSurface)
-        .sheet(isPresented: $adding) {
-            ShellFormSheet(onCancel: { adding = false }) {
-                AddRoleView(covenId: coven.id, roles: roles) {
-                    adding = false
-                    Task { await load() }
-                }
-            }
-        }
-        .sheet(item: $editing) { role in
-            ShellFormSheet(onCancel: { editing = nil }) {
-                EditRoleView(roleId: role.id, roles: roles) {
-                    editing = nil
-                    Task { await load() }
+        .sheet(item: $form) { shown in
+            ShellFormSheet(onCancel: { form = nil }) {
+                if let role = shown.role {
+                    EditRoleView(roleId: role.id, roles: roles) { completed(shown) }
+                } else {
+                    AddRoleView(covenId: coven.id, roles: roles) { completed(shown) }
                 }
             }
         }
         .confirmationDialog("Delete \(deleting?.name ?? "this agent")?", isPresented: $askingDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
-                if let role = deleting { Task { await delete(role) } }
+                // For the account that said so: read here, not when the
+                // delete's turn comes.
+                let account = UserScope.currentUserID
+                if let role = deleting { Task { await delete(role, as: account) } }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -140,6 +142,19 @@ struct CovenAgentsView: View {
             .foregroundStyle(Color.aicovenError)
     }
 
+    /// A form has saved (or deleted its agent): its sheet closes, if it is
+    /// still the one on screen (a save can end after its sheet was cancelled
+    /// and another opened), and the agents are read again either way.
+    private func completed(_ shown: AgentForm) {
+        if form == shown { form = nil }
+        Task { await load() }
+    }
+
+    /// Says a failure where it shows, and to VoiceOver.
+    private func failed(_ text: String) {
+        AccessibilityNotification.Announcement(text).post()
+    }
+
     private func askDelete(_ role: Role) {
         deleting = role
         askingDelete = true
@@ -148,31 +163,37 @@ struct CovenAgentsView: View {
     /// Reads the coven's agents. Those of another coven (the page moved on
     /// while they were read) are not shown.
     private func load() async {
+        // Only the latest reading is shown: one begun before a save or a
+        // delete can land after the one begun for it.
+        readings += 1
+        let reading = readings
         let covenID = coven.id
         do {
             let loaded = try await RoleService.shared.loadRoles(covenId: covenID)
-            guard covenID == coven.id else { return }
+            guard reading == readings, covenID == coven.id else { return }
             roles = loaded
             loadFailed = false
         } catch {
-            guard covenID == coven.id else { return }
+            guard reading == readings, covenID == coven.id else { return }
             // The kind of failure only.
             AppErrorReporter.log(message: "Could not read the agents (\(type(of: error)))", context: "CovenAgentsView.load")
             loadFailed = true
+            failed(Self.loadFailure)
         }
     }
 
     /// Deletes an agent, once: a second ask while the first is on its way
     /// does nothing.
-    private func delete(_ role: Role) async {
+    private func delete(_ role: Role, as account: String) async {
         guard deletingIDs.insert(role.id).inserted else { return }
         defer { deletingIDs.remove(role.id) }
         do {
-            try await RoleService.shared.deleteRole(roleId: role.id)
+            try await RoleService.shared.deleteRole(roleId: role.id, as: account)
             deleteFailed = false
         } catch {
             AppErrorReporter.log(message: "Could not delete an agent (\(type(of: error)))", context: "CovenAgentsView.delete")
             deleteFailed = true
+            failed(Self.deleteFailure)
         }
         await load()
     }
@@ -237,6 +258,29 @@ private struct AgentListRow: View {
         .onHover { hovering = $0 }
         .accessibilityElement(children: .combine)
         .accessibilityHint("Opens this agent")
+    }
+}
+
+/// One showing of an agent's form: a new agent, or one being edited. Each
+/// showing is its own, so a form that saves late closes only its own sheet.
+enum AgentForm: Identifiable, Equatable {
+    case add(showing: UUID)
+    case edit(Role, showing: UUID)
+
+    var id: UUID {
+        switch self {
+        case let .add(showing), let .edit(_, showing): showing
+        }
+    }
+
+    /// The agent being edited; nil for a new one.
+    var role: Role? {
+        if case let .edit(role, _) = self { return role }
+        return nil
+    }
+
+    static func == (one: AgentForm, other: AgentForm) -> Bool {
+        one.id == other.id
     }
 }
 

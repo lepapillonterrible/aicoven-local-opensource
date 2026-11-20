@@ -161,8 +161,13 @@ actor ThreadService {
     ///   - covenId: The coven ID (nil for personal thread)
     ///   - agentId: AI agent/role ID (optional)
     /// - Returns: The created thread
-    func createThread(title: String? = nil, covenId: String? = nil, agentId: String? = nil, agentName: String? = nil) async throws -> Thread {
+    ///   - account: Whoever asked, where the caller read it before waiting:
+    ///     if another account is signed in by now, nothing is made.
+    func createThread(
+        title: String? = nil, covenId: String? = nil, agentId: String? = nil, agentName: String? = nil, as account: String? = nil
+    ) async throws -> Thread {
         let userID = UserScope.currentUserID
+        if let account, account != userID { throw RepositoryError.accountChanged }
         return try await oneAtATime { service in
             try await service.create(title: title, covenId: covenId, agentId: agentId, agentName: agentName, for: userID)
         }

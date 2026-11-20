@@ -177,7 +177,7 @@ struct MacShellView: View {
             defer { isMakingThread = false }
             do {
                 let thread = try await ThreadService.shared.createThread(
-                    title: "Chat with \(role.name)", covenId: role.covenId, agentId: role.id, agentName: role.name
+                    title: "Chat with \(role.name)", covenId: role.covenId, agentId: role.id, agentName: role.name, as: account
                 )
                 guard UserScope.currentUserID == account, navigator.placeGeneration == asked else { return }
                 navigator.open(thread)
@@ -190,18 +190,19 @@ struct MacShellView: View {
     /// New Thread: in Strix a thread is made at once and opened; in a coven
     /// the sheet asks which agent it is for.
     private func newThread() {
+        // One at a time, whichever way it is asked for.
+        guard !isMakingThread else { return }
         guard navigator.selected == .strix else {
             newThreadSheet = NewThreadSheet(covenID: navigator.selected.covenID)
             return
         }
-        guard !isMakingThread else { return }
         isMakingThread = true
         let account = UserScope.currentUserID
         let asked = navigator.placeGeneration
         Task {
             defer { isMakingThread = false }
             do {
-                let thread = try await ThreadService.shared.createThread(title: "New Chat", covenId: nil, agentId: nil)
+                let thread = try await ThreadService.shared.createThread(title: "New Chat", covenId: nil, agentId: nil, as: account)
                 // Opened only for the account that asked, and only if the
                 // person has not gone elsewhere meanwhile: it is in the list
                 // either way.

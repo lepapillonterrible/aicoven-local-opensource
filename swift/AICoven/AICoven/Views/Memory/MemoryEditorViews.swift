@@ -214,17 +214,9 @@ struct AddMemoryView: View {
                     tags: tags.isEmpty ? nil : tags,
                     isPinned: isPinned
                 )
-
-                // Also index this memory locally with an embedding so chat
-                // and agents can retrieve it via the context sandwich.
-                _ = try await EmbeddingService.shared.indexMemory(
-                    scope: scope,
-                    text: content,
-                    tags: tags,
-                    pii: false,
-                    createdBy: nil,
-                    source: nil
-                )
+                // `createMemory` stores it with its embedding, which is what
+                // chat and agents retrieve it by: it is not stored a second
+                // time here.
 
                 // Call completion handler
                 onSave()
