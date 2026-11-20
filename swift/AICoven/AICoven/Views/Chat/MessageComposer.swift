@@ -63,15 +63,18 @@ nonisolated enum ComposerRules {
     }
 
     /// One trailing place: Stop while a turn runs and the field is empty,
-    /// Send otherwise, so the button under the pointer never moves.
-    static func slot(text: String, isAgentRunning: Bool, canStop: Bool) -> Slot {
-        isAgentRunning && canStop && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .stop : .send
+    /// Send otherwise, so the button under the pointer never moves. While
+    /// a voice message is recorded it is Send (off): the mic sends it,
+    /// and Stop would stop the turn, not the recording.
+    static func slot(text: String, isAgentRunning: Bool, canStop: Bool, isRecordingVoice: Bool = false) -> Slot {
+        isAgentRunning && canStop && !isRecordingVoice && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .stop : .send
     }
 
     /// Whether Send sends: there is text, and nothing is in its way. While
-    /// a turn runs it sends too; the message then waits for the turn.
-    static func canSend(text: String, isDisabled: Bool, isBusy: Bool) -> Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isDisabled && !isBusy
+    /// a turn runs it sends too; the message then waits for the turn. Not
+    /// while a voice message is recorded.
+    static func canSend(text: String, isDisabled: Bool, isBusy: Bool, isRecordingVoice: Bool = false) -> Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isDisabled && !isBusy && !isRecordingVoice
     }
 
     /// What the composer says of a message sent now, while a turn runs: it
@@ -105,7 +108,7 @@ nonisolated enum ComposerRules {
 }
 
 /// The one composer on the Mac, the iPad, and the iPhone: `(+) field
-/// (Send | Stop)` in a raised stone box with rounded corners, who the
+/// (mic) (Send | Stop)` in a raised stone box with rounded corners, who the
 /// message goes to at its bottom left, no formatting controls.
 ///
 /// While a turn runs the slot is Stop with an empty field and Send once
@@ -154,6 +157,15 @@ struct MessageComposer: View {
     /// was handed back), so the parent does not take it for typing; nil
     /// sets it through the binding.
     var putInTheField: ((String) -> Void)?
+    /// A voice message: starts recording one, ends it to be sent, or
+    /// calls it off. With any of them nil the mic is off.
+    var onVoiceRecordStart: (() -> Void)?
+    var onVoiceRecordStop: (() -> Void)?
+    var onVoiceRecordCancel: (() -> Void)?
+    /// A voice message is being recorded.
+    var isRecordingVoice: Bool = false
+    /// One is being started, or put into words.
+    var isVoiceBusy: Bool = false
 
     /// The attaching under way, if one is. Cleared when the composer moves
     /// to another thread, so files chosen for one thread are never taken
@@ -164,6 +176,22 @@ struct MessageComposer: View {
     @State private var attachFailure: String?
     @State private var showMentionSuggestions = false
     @State private var mentionQuery = ""
+    /// The mic is held down (or was clicked on), and whether the finger
+    /// has moved far enough away to call the recording off.
+    @State private var isVoicePressActive = false
+    @State private var isVoicePressCancelled = false
+    #if os(iOS)
+    /// A finger is on the mic now: its press ends when it is lifted.
+    @State private var isFingerOnMic = false
+    /// The touch on the mic, as the system has it: it goes false when the
+    /// finger is lifted and also when the touch is taken away (a system
+    /// prompt comes up over it), which ends no gesture.
+    @GestureState private var isTouchingMic = false
+    #endif
+    #if os(macOS)
+    /// The recording was started by holding Space, not by clicking the mic.
+    @State private var isSpaceHoldRecording = false
+    #endif
     #if os(iOS)
     @State private var showFileImporter = false
     @FocusState private var isTextFieldFocused: Bool
@@ -222,80 +250,103 @@ struct MessageComposer: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true)
-        .onChange(of: messageText) { _, _ in suggestMentions() }
-        .onAppear(perform: takeReturned)
-        .onChange(of: hasReturnedDraft) { _, _ in takeReturned() }
-        // The composer is gone (its thread view replaced or popped): what
-        // is still being chosen or attached for it is not taken.
-        .onDisappear {
-            attachingTask = nil
-            choosingFiles = nil
-            #if os(iOS)
-            // The camera covers the whole screen, the composer with it:
-            // the composer is not gone for that, and the photo is still
-            // taken. If the composer does go, the camera goes with it.
-            if !showCamera { choosingPictures = nil }
-            #else
-            choosingPictures = nil
-            #endif
-        }
-        .onChange(of: threadId) { _, _ in
-            attachingTask = nil
-            attachFailure = nil
-            choosingFiles = nil
-            choosingPictures = nil
-            showPhotoLibrary = false
-            #if os(iOS)
-            showFileImporter = false
-            showCamera = false
-            #endif
-        }
-        .photosPicker(
-            isPresented: $showPhotoLibrary,
-            selection: $pickedPhotos,
-            maxSelectionCount: ComposerRules.mostPhotosAtOnce,
-            selectionBehavior: .ordered,
-            matching: .images,
-            preferredItemEncoding: .current
-        )
-        .onChange(of: pickedPhotos) { _, picked in
-            guard !picked.isEmpty else { return }
-            pickedPhotos = []
-            // For the library that is open, or not taken.
-            guard let choosing = choosingPictures else { return }
-            Task { await attach(picked.map(AttachSource.photo), chosen: (.pictures, choosing)) }
-        }
-        #if os(iOS)
-        .fileImporter(
-            isPresented: $showFileImporter,
-            allowedContentTypes: [.item],
-            allowsMultipleSelection: true
-        ) { result in
-            // For the chooser that is open, or not taken: the one a
-            // thread was left with is closed, and returns nothing here.
-            guard let choosing = choosingFiles else { return }
-            switch result {
-            case let .success(urls):
-                Task { await attach(urls.map(AttachSource.file), chosen: (.files, choosing)) }
-            case let .failure(error):
+        #if os(macOS)
+            // Esc calls a recording off wherever in the composer the keyboard
+            // is (on the mic, say), not only in the field.
+            .onExitCommand {
+                if isRecordingVoice || isVoicePressActive { cancelVoicePress() }
+            }
+        #endif
+            .onChange(of: messageText) { _, _ in suggestMentions() }
+            // A press that no finger holds (a click on the Mac, VoiceOver's
+            // activation) has no letting go of its own: it is over when the
+            // recording could not start, or has ended some other way.
+            .onChange(of: isVoiceBusy) { _, busy in
+                if !busy, !isRecordingVoice { endPressNoFingerHolds() }
+            }
+            .onChange(of: isRecordingVoice) { _, recording in
+                if !recording { endPressNoFingerHolds() }
+            }
+            .onAppear(perform: takeReturned)
+            .onChange(of: hasReturnedDraft) { _, _ in takeReturned() }
+            // The composer is gone (its thread view replaced or popped): what
+            // is still being chosen or attached for it is not taken.
+            .onDisappear {
+                attachingTask = nil
                 choosingFiles = nil
-                Self.log("The file chooser failed", error)
-                say("The file could not be opened.", after: [])
+                #if os(iOS)
+                // The camera covers the whole screen, the composer with it:
+                // the composer is not gone for that, and the photo is still
+                // taken. If the composer does go, the camera goes with it.
+                if !showCamera { choosingPictures = nil }
+                #else
+                choosingPictures = nil
+                #endif
             }
-        }
-        .fullScreenCover(isPresented: $showCamera) {
-            CameraPicker { photo in
-                // For the camera that is open, or not taken.
+            .onChange(of: threadId) { _, _ in
+                // A recording does not follow the composer to another thread
+                // (its owner calls it off); nor does a press of the mic.
+                isVoicePressActive = false
+                isVoicePressCancelled = false
+                #if os(iOS)
+                isFingerOnMic = false
+                #endif
+                attachingTask = nil
+                attachFailure = nil
+                choosingFiles = nil
+                choosingPictures = nil
+                showPhotoLibrary = false
+                #if os(iOS)
+                showFileImporter = false
+                showCamera = false
+                #endif
+            }
+            .photosPicker(
+                isPresented: $showPhotoLibrary,
+                selection: $pickedPhotos,
+                maxSelectionCount: ComposerRules.mostPhotosAtOnce,
+                selectionBehavior: .ordered,
+                matching: .images,
+                preferredItemEncoding: .current
+            )
+            .onChange(of: pickedPhotos) { _, picked in
+                guard !picked.isEmpty else { return }
+                pickedPhotos = []
+                // For the library that is open, or not taken.
                 guard let choosing = choosingPictures else { return }
-                Task { await attach([.picture(photo, name: ComposerRules.photoName(fileExtension: "jpg"))], chosen: (.pictures, choosing)) }
+                Task { await attach(picked.map(AttachSource.photo), chosen: (.pictures, choosing)) }
             }
-            .ignoresSafeArea()
-        }
-        .onChange(of: isDisabled) { _, disabled in
-            // The composer can render before it can be typed in; focus once
-            // it can.
-            if autoFocus, !disabled { isTextFieldFocused = true }
-        }
+        #if os(iOS)
+            .fileImporter(
+                isPresented: $showFileImporter,
+                allowedContentTypes: [.item],
+                allowsMultipleSelection: true
+            ) { result in
+                // For the chooser that is open, or not taken: the one a
+                // thread was left with is closed, and returns nothing here.
+                guard let choosing = choosingFiles else { return }
+                switch result {
+                case let .success(urls):
+                    Task { await attach(urls.map(AttachSource.file), chosen: (.files, choosing)) }
+                case let .failure(error):
+                    choosingFiles = nil
+                    Self.log("The file chooser failed", error)
+                    say("The file could not be opened.", after: [])
+                }
+            }
+            .fullScreenCover(isPresented: $showCamera) {
+                CameraPicker { photo in
+                    // For the camera that is open, or not taken.
+                    guard let choosing = choosingPictures else { return }
+                    Task { await attach([.picture(photo, name: ComposerRules.photoName(fileExtension: "jpg"))], chosen: (.pictures, choosing)) }
+                }
+                .ignoresSafeArea()
+            }
+            .onChange(of: isDisabled) { _, disabled in
+                // The composer can render before it can be typed in; focus once
+                // it can.
+                if autoFocus, !disabled { isTextFieldFocused = true }
+            }
         #endif
     }
 
@@ -322,6 +373,7 @@ struct MessageComposer: View {
                 field
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .layoutPriority(1)
+                micButton
                 // The field takes the spare width, never the slot's.
                 actionSlot
                     .fixedSize()
@@ -375,8 +427,8 @@ struct MessageComposer: View {
         controlSide - (isPad ? 6 : 8)
     }
 
-    /// The + button's width stays put, so larger text leaves the field its
-    /// room.
+    /// The + and mic buttons' width stays put, so larger text leaves the
+    /// field its room.
     private var iconControlWidth: CGFloat {
         isPad ? 40 : 44
     }
@@ -409,8 +461,50 @@ struct MessageComposer: View {
 
     // MARK: - Field
 
-    @ViewBuilder
     private var field: some View {
+        ZStack(alignment: .leading) {
+            textInput
+                // Kept in place while recording, so that a held Space
+                // still reaches the editor when it is let go.
+                .opacity(isRecordingVoice ? 0 : 1)
+                .accessibilityHidden(isRecordingVoice)
+            if isRecordingVoice {
+                listening
+            }
+        }
+    }
+
+    /// No running time: the dot and the words say it is listening.
+    private var listening: some View {
+        HStack(spacing: Spacing.xs) {
+            Circle()
+                .fill(Color.aicovenWater)
+                .frame(width: 8, height: 8)
+                .accessibilityHidden(true)
+            Text("Listening")
+                .font(.aicovenBody)
+                .foregroundStyle(Color.aicovenTextSecondary)
+            Text(listeningHint)
+                .font(.aicovenBodySmall)
+                .foregroundStyle(Color.aicovenTextTertiary)
+                .lineLimit(2)
+        }
+        .padding(.horizontal, 4)
+        .frame(minHeight: controlSide)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("composer-listening")
+    }
+
+    private var listeningHint: String {
+        #if os(macOS)
+        isSpaceHoldRecording ? "Release Space to send · Esc to cancel" : "Click the mic to send · Esc to cancel"
+        #else
+        "Let go to send, slide away to cancel"
+        #endif
+    }
+
+    @ViewBuilder
+    private var textInput: some View {
         #if os(macOS)
         ZStack(alignment: .leading) {
             GrowingTextEditor(
@@ -420,7 +514,15 @@ struct MessageComposer: View {
                 autoFocus: autoFocus,
                 onSend: send,
                 onFocusChange: onFocusChange,
-                onAttach: attachPastedOrDropped
+                onAttach: attachPastedOrDropped,
+                // Whether Space may start talking changes as the composer
+                // does; letting go of it, and calling it off, are always
+                // heard, or a hold under way could not be ended.
+                onVoiceHoldStart: spaceHoldEligible ? { beginVoicePress(bySpace: true) } : nil,
+                onVoiceHoldStop: hasVoiceCallbacks ? { endVoicePress() } : nil,
+                onVoiceHoldCancel: hasVoiceCallbacks ? { cancelVoicePress() } : nil,
+                onEscape: isRecordingVoice || isVoicePressActive ? { cancelVoicePress() } : nil,
+                isTalking: isRecordingVoice || isVoicePressActive
             )
             .frame(height: macInputHeight)
             if messageText.isEmpty {
@@ -517,7 +619,7 @@ struct MessageComposer: View {
         .menuIndicator(.hidden)
         .buttonStyle(.plain)
         .frame(width: iconControlWidth, height: controlSide)
-        .disabled(isBusy || isDisabled || isChoosingOnTheMac)
+        .disabled(isBusy || isDisabled || isChoosingOnTheMac || isRecordingVoice)
         .accessibilityLabel("Attach")
         .accessibilityIdentifier("composer-attach")
         #if os(macOS)
@@ -656,11 +758,162 @@ struct MessageComposer: View {
     }
     #endif
 
+    // MARK: - Mic
+
+    /// Hold to talk on the iPhone and iPad (let go to send, slide away to
+    /// cancel); a click to start and a click to send on the Mac, and for
+    /// VoiceOver everywhere.
+    private var micButton: some View {
+        #if os(iOS)
+        micLabel
+            .frame(width: iconControlWidth, height: controlSide)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .updating($isTouchingMic) { _, touching, _ in touching = true }
+                    .onChanged { value in
+                        isFingerOnMic = true
+                        if !isVoicePressActive { beginVoicePress(bySpace: false) }
+                        let distance = hypot(value.translation.width, value.translation.height)
+                        isVoicePressCancelled = isVoicePressCancelled || distance > VoiceHoldToTalkPolicy.cancelDistance
+                    }
+                    .onEnded { value in
+                        let distance = hypot(value.translation.width, value.translation.height)
+                        isVoicePressCancelled = isVoicePressCancelled || distance > VoiceHoldToTalkPolicy.cancelDistance
+                        isFingerOnMic = false
+                        endVoicePress()
+                    }
+            )
+            // The touch was taken away without the gesture ending (the
+            // microphone prompt came up over it): the press is called off,
+            // once whatever ended it has had its say.
+            .onChange(of: isTouchingMic) { _, touching in
+                guard !touching else { return }
+                Task { @MainActor in
+                    guard isFingerOnMic else { return }
+                    isFingerOnMic = false
+                    cancelVoicePress()
+                }
+            }
+            .allowsHitTesting(!micIsDisabled)
+            .opacity(micIsDisabled ? 0.4 : 1)
+            .accessibilityElement(children: .ignore)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityRespondsToUserInteraction(!micIsDisabled)
+            .accessibilityLabel(isRecordingVoice ? "Send voice message" : "Record voice message")
+            .accessibilityHint("Press and hold to record. Release to send. Drag away to cancel.")
+            .accessibilityAction { toggleVoiceRecording() }
+            .accessibilityIdentifier("composer-mic")
+        #else
+        Button(action: toggleVoiceRecording) {
+            micLabel
+                .frame(width: iconControlWidth, height: controlSide)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(micIsDisabled)
+        .opacity(micIsDisabled ? 0.4 : 1)
+        .help(isRecordingVoice ? "Click to send, or press Esc to cancel" : "Click, or hold Space in an empty field, to talk")
+        .accessibilityLabel(isRecordingVoice ? "Send voice message" : "Record voice message")
+        .accessibilityIdentifier("composer-mic")
+        #endif
+    }
+
+    @ViewBuilder
+    private var micLabel: some View {
+        if isVoiceBusy, !isRecordingVoice {
+            ProgressView().controlSize(.small)
+        } else {
+            Image(systemName: isRecordingVoice ? "mic.fill" : "mic")
+                .font(.aicovenBody)
+                .foregroundStyle(isRecordingVoice ? Color.aicovenWater : Color.aicovenTextTertiary)
+        }
+    }
+
+    private var hasVoiceCallbacks: Bool {
+        onVoiceRecordStart != nil && onVoiceRecordStop != nil && onVoiceRecordCancel != nil
+    }
+
+    private var micIsDisabled: Bool {
+        VoiceHoldToTalkPolicy.isMicDisabled(
+            isRecordingVoice: isRecordingVoice,
+            isPressActive: isVoicePressActive,
+            isVoiceBusy: isVoiceBusy,
+            isDisabled: isDisabled,
+            isSubmittingSend: isSubmittingSend,
+            isAttaching: isAttaching,
+            hasVoiceCallbacks: hasVoiceCallbacks
+        )
+    }
+
+    #if os(macOS)
+    private var spaceHoldEligible: Bool {
+        VoiceHoldToTalkPolicy.isMacSpaceHoldEligible(
+            messageText: messageText,
+            isDisabled: isDisabled,
+            isVoiceBusy: isVoiceBusy,
+            isRecordingVoice: isRecordingVoice,
+            isPressActive: isVoicePressActive,
+            isAttaching: isAttaching,
+            hasVoiceCallbacks: hasVoiceCallbacks
+        )
+    }
+    #endif
+
+    private func beginVoicePress(bySpace: Bool) {
+        guard !micIsDisabled, !isRecordingVoice else { return }
+        isVoicePressActive = true
+        isVoicePressCancelled = false
+        #if os(macOS)
+        isSpaceHoldRecording = bySpace
+        #endif
+        onVoiceRecordStart?()
+    }
+
+    private func endVoicePress() {
+        let action = VoiceHoldToTalkPolicy.releaseAction(
+            isRecordingVoice: isRecordingVoice,
+            wasPressActive: isVoicePressActive,
+            wasCancelled: isVoicePressCancelled
+        )
+        isVoicePressActive = false
+        isVoicePressCancelled = false
+        switch action {
+        case .send: onVoiceRecordStop?()
+        case .cancel: onVoiceRecordCancel?()
+        case .none: break
+        }
+    }
+
+    private func endPressNoFingerHolds() {
+        #if os(iOS)
+        guard !isFingerOnMic else { return }
+        #endif
+        isVoicePressActive = false
+        isVoicePressCancelled = false
+    }
+
+    private func cancelVoicePress() {
+        let shouldCancel = isRecordingVoice || isVoicePressActive
+        isVoicePressActive = false
+        isVoicePressCancelled = false
+        if shouldCancel { onVoiceRecordCancel?() }
+    }
+
+    /// A click on the Mac, and VoiceOver everywhere: start, then send.
+    private func toggleVoiceRecording() {
+        if isRecordingVoice {
+            endVoicePress()
+        } else {
+            beginVoicePress(bySpace: false)
+        }
+    }
+
     // MARK: - Send | Stop
 
     @ViewBuilder
     private var actionSlot: some View {
-        switch ComposerRules.slot(text: messageText, isAgentRunning: isAgentRunning, canStop: onStop != nil) {
+        switch ComposerRules.slot(text: messageText, isAgentRunning: isAgentRunning, canStop: onStop != nil, isRecordingVoice: isRecordingVoice) {
         case .stop:
             Button(action: { onStop?() }, label: {
                 Image(systemName: "stop.fill")
@@ -695,7 +948,7 @@ struct MessageComposer: View {
     }
 
     private var canSend: Bool {
-        ComposerRules.canSend(text: messageText, isDisabled: isDisabled, isBusy: isBusy)
+        ComposerRules.canSend(text: messageText, isDisabled: isDisabled, isBusy: isBusy, isRecordingVoice: isRecordingVoice)
     }
 
     private func send() {

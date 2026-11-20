@@ -273,6 +273,10 @@ struct PersonalChatView: View {
     @ObservedObject private var turns = TurnEngine.shared
     /// What turns, in this thread or another, are waiting to be allowed.
     @ObservedObject private var approvals = ToolApprovals.shared
+    /// The voice message being recorded or put into words here.
+    @StateObject private var voice = VoiceMessages()
+    /// The composer is on screen: what is heard is sent only while it is.
+    @State private var isComposerOnScreen = true
     /// The thread this view's state belongs to. The view is reused when the
     /// thread changes, so work that waited checks it before touching state.
     @State private var shownThreadID: String?
@@ -499,7 +503,7 @@ struct PersonalChatView: View {
                 threadId: thread.id,
                 autoFocus: true,
                 recipientName: thread.agentName ?? "Strix",
-                notice: turns.notSent[thread.id],
+                notice: Self.notice(notSent: turns.notSent[thread.id], voice: voice.failure(for: thread.id)),
                 // Once this thread's own draft is in the field: what was
                 // handed back before then comes with it.
                 hasReturnedDraft: turns.returned[thread.id] != nil && !isRestoringDraft && shownThreadID == thread.id,
@@ -507,9 +511,46 @@ struct PersonalChatView: View {
                 // An approval does not come up under what is being typed.
                 onFocusChange: { approvals.composerFocusChanged($0) },
                 onSent: { approvals.noteSent() },
-                putInTheField: { putInTheField($0) }
+                putInTheField: { putInTheField($0) },
+                onVoiceRecordStart: {
+                    voice.start(for: VoiceMessages.Destination(threadID: thread.id, roleID: thread.agentId, agentName: thread.agentName))
+                },
+                onVoiceRecordStop: { voice.stop() },
+                onVoiceRecordCancel: { voice.cancel() },
+                isRecordingVoice: voice.isRecording,
+                isVoiceBusy: voice.isBusy
             )
             .padding(Spacing.md)
+            // What a voice message was heard to say is sent as a message.
+            .onChange(of: voice.heard) { _, heard in
+                guard heard != nil, let words = voice.takeHeard() else { return }
+                // Where they go is decided when they are sent, not here:
+                // the thread can leave the screen in between.
+                Task { await sendVoiceMessage(words) }
+            }
+            // A recording is for the thread it was started in, while that
+            // thread is on screen and the app is in front.
+            .onDisappear {
+                isComposerOnScreen = false
+                voice.cancel()
+                voice.setShown(false)
+            }
+            .onAppear {
+                isComposerOnScreen = true
+                voice.setShown(true)
+                // Words that arrived just as this left the screen were
+                // not taken then: they are now, and sent or kept.
+                if let words = voice.takeHeard() {
+                    Task { await sendVoiceMessage(words) }
+                }
+                // What was heard while this was off screen comes back.
+                if shownThreadID == thread.id, let unsent = TurnEngine.shared.takeUnsent(for: thread.id) {
+                    giveBack(unsent.text, because: unsent.reason)
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .background { voice.cancel() }
+            }
         }
         #if os(iOS)
         .background(NebulaBackground())
@@ -520,6 +561,8 @@ struct PersonalChatView: View {
         // When the bound thread changes (e.g. user switches tabs on macOS),
         // reset and reload the messages/provider keys for the new thread.
         .task(id: thread.id) {
+            // A recording begun in the thread that was shown is called off.
+            voice.cancel()
             shownThreadID = thread.id
             // The composer shows this thread's own draft; the one it held
             // was kept as it was typed, and is saved now.
@@ -774,7 +817,43 @@ struct PersonalChatView: View {
     /// text back in the composer or kept for its thread.
     @MainActor
     private func sendMessage(attachments: [FileAttachmentDetail]) async -> Bool {
-        let raw = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
+        await send(messageText, attachments: attachments, isFromTheField: true)
+    }
+
+    /// What the composer shows above its box: why waiting messages were
+    /// not sent, and why a voice message was not.
+    static func notice(notSent: String?, voice: String?) -> String? {
+        let notices = [notSent, voice].compactMap(\.self).filter { !$0.isEmpty }
+        return notices.isEmpty ? nil : notices.joined(separator: "\n")
+    }
+
+    /// Sends what a voice message was heard to say, as a message of its
+    /// own, to the thread it was recorded in: the field keeps what it
+    /// holds. If that thread is no longer the one shown, nothing is sent
+    /// unseen; the words are kept for when it is opened.
+    @MainActor
+    private func sendVoiceMessage(_ heard: VoiceMessages.Heard) async {
+        // Only as the account that said them; another's is signed in now.
+        guard UserScope.currentUserID == heard.account else { return }
+        guard Self.sendsVoiceMessage(for: heard.destination.threadID, shown: shownThreadID, thread: thread.id, isOnScreen: isComposerOnScreen) else {
+            TurnEngine.shared.keepUnsent(heard.text, for: heard.destination.threadID, because: VoiceMessages.leftTheThread)
+            return
+        }
+        _ = await send(heard.text, attachments: [], isFromTheField: false)
+    }
+
+    /// Whether words heard for a thread are sent now: only into the thread
+    /// they were said in, while it is the one shown and on screen.
+    static func sendsVoiceMessage(for heardIn: String, shown: String?, thread: String, isOnScreen: Bool) -> Bool {
+        isOnScreen && shown == heardIn && thread == heardIn
+    }
+
+    /// Sends `text` to this thread, or has it wait for the turn that
+    /// runs. `isFromTheField`: it is what the field holds, which is then
+    /// cleared.
+    @MainActor
+    private func send(_ text: String, attachments: [FileAttachmentDetail], isFromTheField: Bool) async -> Bool {
+        let raw = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return false }
 
         // Split the outgoing content into the visible user question and any
@@ -785,7 +864,7 @@ struct PersonalChatView: View {
         // While a turn runs the message waits for it, shown as waiting.
         let waiting = TurnEngine.WaitingMessage(
             // As the field held it, to give back as it was.
-            text: messageText,
+            text: text,
             userText: parts.userText,
             context: parts.fullText,
             roleID: thread.agentId,
@@ -793,7 +872,7 @@ struct PersonalChatView: View {
             attachments: attachments
         )
         if turns.enqueue(waiting, threadID: thread.id) {
-            putInTheField("")
+            if isFromTheField { putInTheField("") }
             ComposerDrafts.shared.removeAttachments(attachments, from: thread.id)
             // The bubble does not take focus: said, so it is known to wait.
             let isNext = turns.waiting[thread.id]?.first?.id == waiting.id
@@ -805,7 +884,7 @@ struct PersonalChatView: View {
         let userMessage = TurnProgress.userMessage(in: thread.id, text: parts.userText, attachments: attachments)
         // Shown at once, before anything waits: this view can be showing
         // another thread by the time the message is stored.
-        putInTheField("")
+        if isFromTheField { putInTheField("") }
         messages.append(userMessage)
         do {
             try await TurnEngine.shared.start(

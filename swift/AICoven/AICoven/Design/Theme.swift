@@ -62,6 +62,10 @@ extension Color {
     static let aicovenPurple = room(light: Color(hex: "#5A5248"), dark: Color(hex: "#CFC6B6"))
     static let aicovenPink = room(light: Color(hex: "#8A4526"), dark: Color(hex: "#E0A183"))
 
+    /// Water as the cloud app names it, for a mark or text on a surface
+    /// (what is moving: a recording under way): its lighter dusk value.
+    static let aicovenWater = room(light: Color(hex: "#36625F"), dark: Color(hex: "#8FBDB6"))
+
     // Semantic
     static let aicovenSuccess = room(light: Color(hex: "#36625F"), dark: Color(hex: "#8FBDB6"))
     static let aicovenWarning = room(light: Color(hex: "#8A4526"), dark: Color(hex: "#E0A183"))
