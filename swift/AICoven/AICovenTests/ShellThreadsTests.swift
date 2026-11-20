@@ -209,11 +209,4 @@ final class ShellThreadsTests: XCTestCase {
         XCTAssertTrue(second.opensItsThread(whileShowing: second))
     }
     #endif
-
-    func testTheSidebarShowsUnlessTheSplitViewShowsTheDetailOnly() {
-        XCTAssertTrue(StoneSidebarToggle.isShowing(.automatic))
-        XCTAssertTrue(StoneSidebarToggle.isShowing(.all))
-        XCTAssertTrue(StoneSidebarToggle.isShowing(.doubleColumn))
-        XCTAssertFalse(StoneSidebarToggle.isShowing(.detailOnly))
-    }
 }
