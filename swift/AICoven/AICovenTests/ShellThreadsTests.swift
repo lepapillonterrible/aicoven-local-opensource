@@ -198,6 +198,18 @@ final class ShellThreadsTests: XCTestCase {
         XCTAssertEqual(ShellSidebar.personName(name: nil, email: nil), "Account")
     }
 
+    #if os(macOS)
+    func testTheNewThreadSheetOpensItsThreadOnlyWhileThatShowingIsOnScreen() {
+        let first = NewThreadSheet(covenID: "work")
+        XCTAssertTrue(first.opensItsThread(whileShowing: first))
+        XCTAssertFalse(first.opensItsThread(whileShowing: nil), "Cancelled while its thread was being made")
+        // Cancelled, and the sheet opened again since: the first's thread is still not opened.
+        let second = NewThreadSheet(covenID: "work")
+        XCTAssertFalse(first.opensItsThread(whileShowing: second))
+        XCTAssertTrue(second.opensItsThread(whileShowing: second))
+    }
+    #endif
+
     func testTheSidebarShowsUnlessTheSplitViewShowsTheDetailOnly() {
         XCTAssertTrue(StoneSidebarToggle.isShowing(.automatic))
         XCTAssertTrue(StoneSidebarToggle.isShowing(.all))
