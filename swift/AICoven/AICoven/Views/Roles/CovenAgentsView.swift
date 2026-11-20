@@ -168,8 +168,8 @@ struct CovenAgentsView: View {
         AccessibilityNotification.Announcement(text).post()
     }
 
+    /// Opens an agent's form, which records the view of the agent itself.
     private func edit(_ role: Role) {
-        AnalyticsService.shared.trackRoleView(roleId: role.id)
         form = .edit(role, showing: UUID())
     }
 

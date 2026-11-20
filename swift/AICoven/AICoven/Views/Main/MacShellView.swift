@@ -93,6 +93,11 @@ struct MacShellView: View {
                 // the sheet again since.
                 if sheet.opensItsThread(whileShowing: newThreadSheet) { navigator.open(thread) }
                 shellThreads.reload()
+                // A coven's thread made, and its agent given it.
+                if let covenID = thread.covenId {
+                    AnalyticsService.shared.trackThreadCreate(threadId: thread.id, covenId: covenID, hasTitle: thread.title != nil)
+                    if let agentID = thread.agentId { AnalyticsService.shared.trackRoleAssign(roleId: agentID, threadId: thread.id) }
+                }
             }
         }
         .sheet(isPresented: $showCreateCoven) {

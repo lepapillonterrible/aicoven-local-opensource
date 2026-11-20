@@ -16,7 +16,8 @@ struct HomeView: View {
             .task {
                 AnalyticsService.shared.trackScreenView(screenName: "HomeView", screenClass: "HomeView")
             }
-            .onChange(of: appState.pendingDeepLink) { _, newValue in
+            // Also the link that was waiting when the window came up.
+            .onChange(of: appState.pendingDeepLink, initial: true) { _, newValue in
                 guard let target = newValue else { return }
                 _ = appState.openSettings(for: HomeView.settingsPlace(for: target))
                 _ = appState.consumeDeepLink()
