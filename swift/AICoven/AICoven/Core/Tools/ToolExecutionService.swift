@@ -1494,7 +1494,7 @@ actor ToolExecutionService {
             issue = try await LinearToolService.issue(start.issue, key: start.key, session: appSession)
             try Task.checkCancellation()
             func now(_ key: String, or none: String) -> String {
-                ((issue[key] as? [String: Any])?["name"] as? String) ?? none
+                ((issue[key] as? [String: Any])?["name"] as? String).map(LinearToolService.oneLine) ?? none
             }
             let team = issue["team"] as? [String: Any]
             let teamName = team?["name"] as? String ?? "(unnamed)"
@@ -1507,7 +1507,7 @@ actor ToolExecutionService {
                     switch LinearToolService.state(named: status, among: states, team: teamName) {
                     case let .success(found):
                         input["stateId"] = found.id
-                        changes.append("Status: \(now("state", or: "(none)")) → \(found.name)")
+                        changes.append("Status: \(now("state", or: "(none)")) → \(LinearToolService.oneLine(found.name))")
                     case let .failure(refusal):
                         return .validationError(tool: toolCall.name, message: refusal.message, field: refusal.field)
                     }
@@ -1517,7 +1517,7 @@ actor ToolExecutionService {
                     switch LinearToolService.member(matching: assignee, among: members, team: teamName) {
                     case let .success(found):
                         input["assigneeId"] = found.id
-                        changes.append("Assignee: \(now("assignee", or: "(no one)")) → \(found.name)")
+                        changes.append("Assignee: \(now("assignee", or: "(no one)")) → \(LinearToolService.oneLine(found.name))")
                     case let .failure(refusal):
                         return .validationError(tool: toolCall.name, message: refusal.message, field: refusal.field)
                     }
@@ -1532,7 +1532,7 @@ actor ToolExecutionService {
         }
         if let title = asked.title {
             input["title"] = title
-            changes.append("Title: \(Self.given(issue["title"] as? String) ?? "(untitled)") → \(title)")
+            changes.append("Title: \(LinearToolService.title(of: issue)) → \(title)")
         }
         if let priority = asked.priority {
             input["priority"] = priority

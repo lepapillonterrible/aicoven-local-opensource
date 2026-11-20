@@ -320,12 +320,17 @@ nonisolated extension LinearToolService {
         } catch {
             return .failure(error as? ArgumentRefusal ?? ArgumentRefusal(message: "The arguments could not be read.", field: "issue"))
         }
+        // A title is one line (and is shown to the person on one).
+        if let title = asked.title, title.contains(where: \.isNewline) {
+            return .failure(ArgumentRefusal(message: "'title' must be one line.", field: "title"))
+        }
         if let due = asked.dueDate, due.range(of: #"\A[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])\z"#, options: .regularExpression) == nil {
             return .failure(ArgumentRefusal(message: "'due_date' must be a date written YYYY-MM-DD.", field: "due_date"))
         }
         if let priority = given("priority") {
             let number: Int? = switch priority {
             case let .int(value): value
+            case let .double(value): Int(exactly: value)
             case let .string(digits): ["0", "1", "2", "3", "4"].contains(digits.trimmingCharacters(in: .whitespaces)) ? Int(digits.trimmingCharacters(in: .whitespaces)) : nil
             default: nil
             }
@@ -366,9 +371,19 @@ nonisolated extension LinearToolService {
         return .success(matches[0])
     }
 
+    /// An issue's title on one line, as the person is shown it.
+    static func title(of issue: [String: Any]) -> String {
+        let title = oneLine(issue["title"] as? String ?? "")
+        return title.isEmpty ? "(untitled)" : title
+    }
+
+    /// Text on one line: a name of Linear's shown within a line.
+    static func oneLine(_ text: String) -> String {
+        String(text.map { $0.isNewline ? " " : $0 }).trimmingCharacters(in: .whitespaces)
+    }
+
     /// An issue as an approval names it: its identifier and its title.
     static func named(_ issue: [String: Any]) -> String {
-        let title = (issue["title"] as? String).map { String($0.map { $0.isNewline ? " " : $0 }) }
-        return "\(issue["identifier"] as? String ?? "?"): \(title ?? "(untitled)")"
+        "\(issue["identifier"] as? String ?? "?"): \(title(of: issue))"
     }
 }

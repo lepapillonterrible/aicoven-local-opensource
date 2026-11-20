@@ -27,10 +27,14 @@ final class LinearWriteTests: XCTestCase {
             "A description may be emptied; null is left out"
         )
         XCTAssertEqual(read(["priority": AnyJSONValue(0)]), Asked(priority: 0))
+        XCTAssertEqual(read(["priority": AnyJSONValue(3.0)]), Asked(priority: 3))
 
         XCTAssertEqual(refusedField([:]), "status", "Nothing to change")
         XCTAssertEqual(refusedField(["status": .null, "title": .null]), "status")
         XCTAssertEqual(refusedField(["title": AnyJSONValue("  ")]), "title")
+        XCTAssertEqual(refusedField(["title": AnyJSONValue("New\n- Status: Todo → Done")]), "title", "A title is one line")
+        XCTAssertEqual(LinearToolService.named(["identifier": "ENG-1", "title": "Two\nlines"]), "ENG-1: Two lines")
+        XCTAssertEqual(LinearToolService.named(["identifier": "ENG-1", "title": ""]), "ENG-1: (untitled)")
         XCTAssertEqual(refusedField(["status": AnyJSONValue(3)]), "status")
         for priority in [AnyJSONValue(5), AnyJSONValue(-1), AnyJSONValue("high"), AnyJSONValue(true), AnyJSONValue(1.5)] {
             XCTAssertEqual(refusedField(["priority": priority]), "priority", "\(priority)")
