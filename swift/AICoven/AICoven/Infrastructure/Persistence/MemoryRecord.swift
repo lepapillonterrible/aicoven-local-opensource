@@ -117,15 +117,39 @@ actor MemoryRepository {
         source: String?,
         embedding: [Float]?
     ) async throws -> LocalMemoryChunk {
+        // For whoever is signed in now.
+        let account = await MainActor.run { UserScope.currentUserID }
+        return try await storeMemory(
+            scope: scope, text: text, tags: tags, pii: pii, createdBy: createdBy, source: source, embedding: embedding, as: account
+        )
+    }
+
+    func storeMemory(
+        scope: String,
+        text: String,
+        tags: [String],
+        pii: Bool,
+        createdBy: String?,
+        source: String?,
+        embedding: [Float]?,
+        as account: String
+    ) async throws -> LocalMemoryChunk {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
-        // Get current user ID for data isolation
-        let currentUserId = await MainActor.run { UserScope.currentUserID }
+        // The account that wrote it must be the one signed in, under the
+        // same data key, from before the text is encrypted until after:
+        // it is then stored as that account's, encrypted for it.
+        let currentUserId = account
+        let keyEpoch = await DataEncryptionService.shared.keyEpoch
+        guard await MainActor.run(body: { UserScope.currentUserID }) == account else { throw RepositoryError.accountChanged }
 
         let id = UUID().uuidString
         let now = Date()
         let plaintext = Data(text.utf8)
         let ciphertext = try await DataEncryptionService.shared.encrypt(plaintext, purpose: "memory_chunk")
+        guard await MainActor.run(body: { UserScope.currentUserID }) == account,
+              await DataEncryptionService.shared.keyEpoch == keyEpoch
+        else { throw RepositoryError.accountChanged }
 
         let tagsString = tags.isEmpty ? nil : try String(data: JSONEncoder().encode(tags), encoding: .utf8)
         let embeddingData: Data? = if let embedding {

@@ -13,6 +13,7 @@ struct CovenAgentsView: View {
     @State private var loadFailed = false
     /// The agent form on screen, if one is: each showing is its own.
     @State private var form: AgentForm?
+    @State private var isOnScreen = false
     /// Counts the readings of the agents, so that only the latest is shown.
     @State private var readings = 0
     /// The agent a delete is asked for; it stays set after the dialog closes,
@@ -124,6 +125,8 @@ struct CovenAgentsView: View {
             Text("Its threads keep their replies. \(deleting?.name ?? "This agent") stops answering in \(coven.name).")
         }
         .task(id: coven.id) { await load() }
+        .onAppear { isOnScreen = true }
+        .onDisappear { isOnScreen = false }
     }
 
     /// One row of the list, in the page's centred column with no separator or
@@ -151,8 +154,10 @@ struct CovenAgentsView: View {
         Task { await load() }
     }
 
-    /// Says a failure where it shows, and to VoiceOver.
+    /// Says a failure to VoiceOver, as well as where it shows: only while
+    /// this page is on screen, not for one the person has left.
     private func failed(_ text: String) {
+        guard isOnScreen else { return }
         AccessibilityNotification.Announcement(text).post()
     }
 

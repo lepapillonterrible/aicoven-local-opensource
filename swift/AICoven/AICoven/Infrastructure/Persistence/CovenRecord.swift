@@ -640,6 +640,8 @@ actor CovenRepository {
         let uid = account ?? current
         guard uid == current else { throw RepositoryError.accountChanged }
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        // Asked again once the database is in hand, just before the write.
+        guard await MainActor.run(body: { UserScope.currentUserID }) == uid else { throw RepositoryError.accountChanged }
 
         try await dbQueue.write { db in
             guard let record = try RoleRecord.fetchOne(db, key: roleId), record.userId == uid else {

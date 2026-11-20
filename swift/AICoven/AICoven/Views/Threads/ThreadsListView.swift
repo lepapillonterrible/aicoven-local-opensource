@@ -223,6 +223,9 @@ struct NewThreadView: View {
                         Button("Cancel") {
                             dismiss()
                         }
+                        // Not while the thread is being made: it would be
+                        // made all the same, behind a sheet that had gone.
+                        .disabled(isCreating)
                     }
 
                     ToolbarItem(placement: .confirmationAction) {
@@ -292,6 +295,8 @@ struct NewThreadView: View {
         isCreating = true
         errorMessage = nil
         defer { isCreating = false }
+        // For the account that asked, read before anything waits.
+        let account = UserScope.currentUserID
 
         do {
             // What it is called is the person's own words: not logged.
@@ -301,7 +306,8 @@ struct NewThreadView: View {
                 title: title.isEmpty ? nil : title,
                 covenId: covenId,
                 agentId: covenId == nil ? nil : selectedRoleId,
-                agentName: covenId == nil ? nil : selectedRole?.name
+                agentName: covenId == nil ? nil : selectedRole?.name,
+                as: account
             )
             AppErrorReporter.log(message: "Thread created successfully (id: \(thread.id))", context: "NewThreadView.createThread")
             onThreadCreated(thread)
