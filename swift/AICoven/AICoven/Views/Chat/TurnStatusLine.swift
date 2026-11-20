@@ -77,8 +77,8 @@ struct TurnStatusLineView: View {
 struct StatusRing: View {
     let isTurning: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// `.increased` on a selected row's system highlight: the ring then
-    /// turns in the highlight's own ink.
+    /// `.increased` on a selected row's system highlight: the ring is then
+    /// drawn, and turns, in the highlight's own ink.
     @Environment(\.backgroundProminence) private var prominence
 
     var body: some View {
@@ -86,7 +86,10 @@ struct StatusRing: View {
             let turn = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1)
             ZStack {
                 Circle()
-                    .stroke(Color.aicovenBorder, lineWidth: 2)
+                    .stroke(
+                        prominence == .increased ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.aicovenBorder),
+                        lineWidth: 2
+                    )
                 if isTurning {
                     Circle()
                         .trim(from: 0, to: 0.25)

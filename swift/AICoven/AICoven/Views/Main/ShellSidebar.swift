@@ -51,12 +51,15 @@ struct ShellSidebar: View {
     }
 
     /// Nothing matches the query, among the threads or those archived.
-    private var noThreadsMatch: Bool {
-        isNarrowing && shellThreads.hasLoaded && sections.open.isEmpty && sections.archived.isEmpty
+    /// Not said while the threads are not in, or could not be read: then
+    /// it is not known whether anything matches.
+    private func noThreadsMatch(in sections: (open: [Thread], archived: [Thread])) -> Bool {
+        isNarrowing && shellThreads.hasLoaded && !shellThreads.failed && sections.open.isEmpty && sections.archived.isEmpty
     }
 
     var body: some View {
         let sections = sections
+        let noThreadsMatch = noThreadsMatch(in: sections)
         List(selection: selection) {
             Section {
                 if isSearching {
