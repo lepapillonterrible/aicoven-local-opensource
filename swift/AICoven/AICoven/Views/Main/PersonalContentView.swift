@@ -503,7 +503,7 @@ struct PersonalChatView: View {
                 threadId: thread.id,
                 autoFocus: true,
                 recipientName: thread.agentName ?? "Strix",
-                notice: Self.notice(notSent: turns.notSent[thread.id], voice: voice.failure),
+                notice: Self.notice(notSent: turns.notSent[thread.id], voice: voice.failure(for: thread.id)),
                 // Once this thread's own draft is in the field: what was
                 // handed back before then comes with it.
                 hasReturnedDraft: turns.returned[thread.id] != nil && !isRestoringDraft && shownThreadID == thread.id,
@@ -538,6 +538,11 @@ struct PersonalChatView: View {
             .onAppear {
                 isComposerOnScreen = true
                 voice.setShown(true)
+                // Words that arrived just as this left the screen were
+                // not taken then: they are now, and sent or kept.
+                if let words = voice.takeHeard() {
+                    Task { await sendVoiceMessage(words) }
+                }
                 // What was heard while this was off screen comes back.
                 if shownThreadID == thread.id, let unsent = TurnEngine.shared.takeUnsent(for: thread.id) {
                     giveBack(unsent.text, because: unsent.reason)
@@ -558,7 +563,6 @@ struct PersonalChatView: View {
         .task(id: thread.id) {
             // A recording begun in the thread that was shown is called off.
             voice.cancel()
-            voice.clearFailure()
             shownThreadID = thread.id
             // The composer shows this thread's own draft; the one it held
             // was kept as it was typed, and is saved now.

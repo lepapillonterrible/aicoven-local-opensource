@@ -262,11 +262,14 @@ final class VoiceMessagesTests: XCTestCase {
         world.voice.stop()
         await wait("failed") { world.voice.failure != nil }
         XCTAssertEqual(world.voice.failure, "OpenAI refused the key. Check the OpenAI connection in Settings.")
+        XCTAssertEqual(world.voice.failure(for: "thread-1"), "OpenAI refused the key. Check the OpenAI connection in Settings.")
+        XCTAssertNil(world.voice.failure(for: "thread-2"), "It is shown in the thread it was said in only")
         XCTAssertNil(world.voice.heard)
         XCTAssertFalse(world.voice.isBusy)
         XCTAssertEqual(world.capture.written.filter { FileManager.default.fileExists(atPath: $0.path) }, [], "The recording is not kept")
         world.voice.clearFailure()
         XCTAssertNil(world.voice.failure)
+        XCTAssertNil(world.voice.failure(for: "thread-1"))
 
         // A stop while it was put into words says nothing.
         world = self.world { _, _ in throw CancellationError() }

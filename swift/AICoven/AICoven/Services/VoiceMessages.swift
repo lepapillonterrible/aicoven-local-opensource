@@ -44,6 +44,8 @@ final class VoiceMessages: ObservableObject {
     @Published private(set) var isBusy = false
     /// Why the last voice message was not sent, for the person.
     @Published private(set) var failure: String?
+    /// The thread that voice message was for: it is shown there only.
+    private(set) var failureThreadID: String?
     /// Words waiting to be sent by the thread's view (`takeHeard`).
     @Published private(set) var heard: Heard?
 
@@ -125,7 +127,7 @@ final class VoiceMessages: ObservableObject {
                 if Task.isCancelled || error is CancellationError { return }
                 // Said only to the one who asked.
                 guard currentUser() == account else { return }
-                say("Unable to start recording: \(error.localizedDescription)")
+                say("Unable to start recording: \(error.localizedDescription)", for: destination.threadID)
             }
         }
     }
@@ -173,6 +175,7 @@ final class VoiceMessages: ObservableObject {
 
     func clearFailure() {
         failure = nil
+        failureThreadID = nil
     }
 
     private func submit() async {
@@ -186,7 +189,7 @@ final class VoiceMessages: ObservableObject {
         if let startedAt, ContinuousClock.now - startedAt < shortest {
             capture.cancelRecording()
             isRecording = false
-            say(Self.tooShort)
+            say(Self.tooShort, for: owner.destination.threadID)
             return
         }
         isBusy = true
@@ -198,7 +201,7 @@ final class VoiceMessages: ObservableObject {
             isRecording = false
         } catch {
             isRecording = false
-            say("Voice message failed: \(error.localizedDescription)")
+            say("Voice message failed: \(error.localizedDescription)", for: owner.destination.threadID)
             return
         }
         defer { try? FileManager.default.removeItem(at: recording) }
@@ -219,14 +222,21 @@ final class VoiceMessages: ObservableObject {
             if Task.isCancelled || error is CancellationError { return }
             guard currentUser() == owner.account else { return }
             if let unheard = error as? VoiceTranscription.Unheard {
-                say(unheard.message)
+                say(unheard.message, for: owner.destination.threadID)
             } else {
-                say("Voice message failed: \(error.localizedDescription)")
+                say("Voice message failed: \(error.localizedDescription)", for: owner.destination.threadID)
             }
         }
     }
 
-    private func say(_ message: String) {
+    /// Why the last voice message for this thread was not sent; nil for
+    /// any other thread (the person may have moved on while it was heard).
+    func failure(for threadID: String) -> String? {
+        failureThreadID == threadID ? failure : nil
+    }
+
+    private func say(_ message: String, for threadID: String) {
+        failureThreadID = threadID
         failure = message
         AccessibilityAnnouncements.say(message)
     }
