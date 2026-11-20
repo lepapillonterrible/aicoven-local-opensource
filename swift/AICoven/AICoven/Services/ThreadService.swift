@@ -160,9 +160,10 @@ actor ThreadService {
     ///   - title: Thread title (optional)
     ///   - covenId: The coven ID (nil for personal thread)
     ///   - agentId: AI agent/role ID (optional)
-    /// - Returns: The created thread
+    ///   - agentName: The agent's name, kept with the thread (optional)
     ///   - account: Whoever asked, where the caller read it before waiting:
     ///     if another account is signed in by now, nothing is made.
+    /// - Returns: The created thread
     func createThread(
         title: String? = nil, covenId: String? = nil, agentId: String? = nil, agentName: String? = nil, as account: String? = nil
     ) async throws -> Thread {

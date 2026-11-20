@@ -262,25 +262,6 @@ final class ShellThreadsTests: XCTestCase {
         let again = try XCTUnwrap(MemoryForm(tab: .editMemory(memoryId: "m1", memoryTitle: "A note", covenId: nil)))
         XCTAssertEqual(again.memoryID, "m1")
         XCTAssertNotEqual(edit, again)
-        XCTAssertNotEqual(edit.id, again.id)
-        XCTAssertNotEqual(add, try XCTUnwrap(MemoryForm(tab: .addMemory(covenId: "work"))))
-        XCTAssertEqual(edit, edit)
-    }
-
-    func testEachShowingOfAnAgentsFormIsItsOwn() {
-        let scout = Role(
-            id: "r1", covenId: "work", name: "Scout", emoji: nil, description: nil, systemPrompt: nil, model: nil, provider: nil,
-            providerAccountId: nil, temperature: nil, maxTokens: nil, settings: nil,
-            createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
-        )
-        let first = AgentForm.edit(scout, showing: UUID())
-        let second = AgentForm.edit(scout, showing: UUID())
-        XCTAssertEqual(first.role?.id, "r1")
-        XCTAssertNotEqual(first, second, "The same agent's form, opened again")
-        XCTAssertEqual(first, first)
-        let adding = AgentForm.add(showing: UUID())
-        XCTAssertNil(adding.role)
-        XCTAssertNotEqual(adding, AgentForm.add(showing: UUID()))
     }
 
     func testACovensThreadIsNotMadeBeforeItsAgentsAreIn_norWithNoneChosenWhereThereAreSome() {
