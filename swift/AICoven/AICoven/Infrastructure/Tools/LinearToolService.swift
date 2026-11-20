@@ -187,3 +187,188 @@ nonisolated enum LinearToolService {
         return lines.joined(separator: "\n")
     }
 }
+
+// MARK: - Changing an issue
+
+nonisolated extension LinearToolService {
+    /// The most pages of a team's states or members that are read (250 a
+    /// page).
+    static let mostPages = 20
+
+    /// A team's workflow states or its members, all pages of them.
+    private static func all(_ field: String, wanting: String, ofTeam teamID: String, key: String, session: URLSession) async throws -> [[String: Any]] {
+        let query = """
+        query ($id: String!, $after: String) {
+          team(id: $id) {
+            \(field)(first: 250, after: $after) {
+              nodes { \(wanting) }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
+        """
+        var found: [[String: Any]] = []
+        var after: String?
+        for _ in 0 ..< mostPages {
+            var variables: [String: Any] = ["id": teamID]
+            if let after { variables["after"] = after }
+            let data = try await ask(query, variables: variables, key: key, session: session)
+            guard let page = (data["team"] as? [String: Any])?[field] as? [String: Any] else { throw LinearError.invalidResponse }
+            found += page["nodes"] as? [[String: Any]] ?? []
+            let info = page["pageInfo"] as? [String: Any]
+            guard info?["hasNextPage"] as? Bool == true else { return found }
+            guard let next = info?["endCursor"] as? String, !next.isEmpty else { throw LinearError.invalidResponse }
+            after = next
+        }
+        // More than can be read: a name not found among these may yet be there.
+        throw LinearError.refused(message: "the team has more \(field) than can be read")
+    }
+
+    /// Every workflow state of a team (id, name).
+    static func states(ofTeam teamID: String, key: String, session: URLSession = .shared) async throws -> [[String: Any]] {
+        try await all("states", wanting: "id name", ofTeam: teamID, key: key, session: session)
+    }
+
+    /// Every member of a team (id, name, email).
+    static func members(ofTeam teamID: String, key: String, session: URLSession = .shared) async throws -> [[String: Any]] {
+        try await all("members", wanting: "id name email", ofTeam: teamID, key: key, session: session)
+    }
+
+    /// Comments on an issue as the key's person; the comment's link.
+    static func addComment(toIssue issueID: String, body: String, key: String, session: URLSession = .shared) async throws -> String? {
+        let data = try await ask("""
+        mutation ($issueId: String!, $body: String!) {
+          commentCreate(input: { issueId: $issueId, body: $body }) {
+            success
+            comment { url }
+          }
+        }
+        """, variables: ["issueId": issueID, "body": body], key: key, session: session)
+        guard let made = data["commentCreate"] as? [String: Any], made["success"] as? Bool == true else {
+            throw LinearError.refused(message: "Linear did not add the comment")
+        }
+        return (made["comment"] as? [String: Any])?["url"] as? String
+    }
+
+    /// Changes an issue (`changes` is Linear's `IssueUpdateInput`); the
+    /// issue as it is afterwards.
+    static func update(issue issueID: String, changes: [String: Any], key: String, session: URLSession = .shared) async throws -> [String: Any] {
+        let data = try await ask("""
+        mutation ($id: String!, $input: IssueUpdateInput!) {
+          issueUpdate(id: $id, input: $input) {
+            success
+            issue {
+              identifier url title description priority dueDate
+              state { name }
+              assignee { name }
+            }
+          }
+        }
+        """, variables: ["id": issueID, "input": changes], key: key, session: session)
+        guard let made = data["issueUpdate"] as? [String: Any], made["success"] as? Bool == true, let issue = made["issue"] as? [String: Any] else {
+            throw LinearError.refused(message: "Linear did not update the issue")
+        }
+        return issue
+    }
+
+    // MARK: What a call asks to change
+
+    /// What `linear.updateIssue` is asked to change, as its call says it.
+    struct Asked: Equatable {
+        var title: String?
+        var description: String?
+        var priority: Int?
+        var dueDate: String?
+        /// A status by its name, and an assignee by name or email: Linear
+        /// is asked which of the team's they are.
+        var status: String?
+        var assignee: String?
+
+        var isNothing: Bool {
+            self == Asked()
+        }
+    }
+
+    /// Why a call's arguments could not be read.
+    struct ArgumentRefusal: Error, Equatable {
+        let message: String
+        let field: String
+    }
+
+    /// Reads what a call asks to change. An argument left out, or given
+    /// as null, is not changed; one that is given must read as what it
+    /// is. At least one must be given.
+    static func asked(in args: [String: AnyJSONValue]) -> Result<Asked, ArgumentRefusal> {
+        func given(_ key: String) -> AnyJSONValue? {
+            guard let value = args[key], value != .null else { return nil }
+            return value
+        }
+        func text(_ key: String, mayBeEmpty: Bool = false) -> Result<String?, ArgumentRefusal> {
+            guard let value = given(key) else { return .success(nil) }
+            guard case let .string(text) = value, mayBeEmpty || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return .failure(ArgumentRefusal(message: "'\(key)' must be text\(mayBeEmpty ? "" : " that says something"), or be left out.", field: key))
+            }
+            return .success(mayBeEmpty ? text : text.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        var asked = Asked()
+        do {
+            asked.title = try text("title").get()
+            asked.description = try text("description", mayBeEmpty: true).get()
+            asked.status = try text("status").get()
+            asked.assignee = try text("assignee").get()
+            asked.dueDate = try text("due_date").get()
+        } catch {
+            return .failure(error as? ArgumentRefusal ?? ArgumentRefusal(message: "The arguments could not be read.", field: "issue"))
+        }
+        if let due = asked.dueDate, due.range(of: #"\A[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])\z"#, options: .regularExpression) == nil {
+            return .failure(ArgumentRefusal(message: "'due_date' must be a date written YYYY-MM-DD.", field: "due_date"))
+        }
+        if let priority = given("priority") {
+            let number: Int? = switch priority {
+            case let .int(value): value
+            case let .string(digits): ["0", "1", "2", "3", "4"].contains(digits.trimmingCharacters(in: .whitespaces)) ? Int(digits.trimmingCharacters(in: .whitespaces)) : nil
+            default: nil
+            }
+            guard let number, (0 ... 4).contains(number) else {
+                return .failure(ArgumentRefusal(message: "'priority' must be a whole number from 0 to 4: 0 (none), 1 (urgent), 2 (high), 3 (medium) or 4 (low).", field: "priority"))
+            }
+            asked.priority = number
+        }
+        guard !asked.isNothing else {
+            return .failure(ArgumentRefusal(message: "Give at least one of 'status', 'assignee', 'title', 'description', 'priority', 'due_date'.", field: "status"))
+        }
+        return .success(asked)
+    }
+
+    /// The state of that name among a team's (case does not matter), or
+    /// why there is none: the names there are.
+    static func state(named name: String, among states: [[String: Any]], team: String) -> Result<(id: String, name: String), ArgumentRefusal> {
+        let wanted = name.lowercased()
+        let named = states.compactMap { state -> (id: String, name: String)? in
+            guard let id = state["id"] as? String, let name = state["name"] as? String else { return nil }
+            return (id, name)
+        }
+        if let found = named.first(where: { $0.name.lowercased() == wanted }) { return .success(found) }
+        return .failure(ArgumentRefusal(message: "No status '\(name)' in team \(team). Statuses: \(named.map(\.name).joined(separator: ", "))", field: "status"))
+    }
+
+    /// The one member of a team with that name or email (case does not
+    /// matter), or why there is not exactly one.
+    static func member(matching wanted: String, among members: [[String: Any]], team: String) -> Result<(id: String, name: String), ArgumentRefusal> {
+        let sought = wanted.lowercased()
+        let matches = members.compactMap { member -> (id: String, name: String)? in
+            guard let id = member["id"] as? String, let name = member["name"] as? String else { return nil }
+            return name.lowercased() == sought || (member["email"] as? String)?.lowercased() == sought ? (id, name) : nil
+        }
+        guard matches.count == 1 else {
+            return .failure(ArgumentRefusal(message: "'\(wanted)' matches \(matches.count) members of team \(team); give one member's name or email.", field: "assignee"))
+        }
+        return .success(matches[0])
+    }
+
+    /// An issue as an approval names it: its identifier and its title.
+    static func named(_ issue: [String: Any]) -> String {
+        let title = (issue["title"] as? String).map { String($0.map { $0.isNewline ? " " : $0 }) }
+        return "\(issue["identifier"] as? String ?? "?"): \(title ?? "(untitled)")"
+    }
+}

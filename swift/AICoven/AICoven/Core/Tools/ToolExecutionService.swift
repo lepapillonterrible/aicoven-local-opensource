@@ -529,6 +529,12 @@ actor ToolExecutionService {
         case "linear.getIssue":
             return await executeLinearGetIssue(toolCall: toolCall)
 
+        case "linear.addComment":
+            return await executeLinearAddComment(toolCall: toolCall, threadID: threadID)
+
+        case "linear.updateIssue":
+            return await executeLinearUpdateIssue(toolCall: toolCall, threadID: threadID)
+
         // --- Google Drive Tools ---
         case "google_drive.listFiles", "google_drive.list_files":
             return await executeGoogleDriveListFiles(toolCall: toolCall)
@@ -1293,55 +1299,270 @@ actor ToolExecutionService {
         }
     }
 
-    /// Execute linear.getIssue: reads the issue the call names, with the
-    /// connected account's key. A key Linear refuses marks the connection
-    /// as needing a new one. A call whose turn was stopped tells that it
-    /// was stopped, wherever the stop landed.
-    private func executeLinearGetIssue(toolCall: ParsedToolCall) async -> ToolExecutionResult {
+    /// What a Linear tool starts with: the issue its call names, the
+    /// connected account and its key. Nil with the result to give where
+    /// one of them is missing, or the turn was stopped meanwhile.
+    private func linearStart(_ toolCall: ParsedToolCall, stopped: ToolExecutionResult) async -> Result<(issue: String, account: ConnectedAccount, key: String), LinearStop> {
         // What names no issue is told so before anything is waited for.
         guard let given = toolCall.args["issue"]?.value as? String, let issue = LinearToolService.issueReference(given) else {
-            return .validationError(tool: toolCall.name, message: "Missing or unreadable 'issue'. Give a Linear issue's identifier, like 'ENG-12', or its link.", field: "issue")
+            return .failure(LinearStop(.validationError(tool: toolCall.name, message: "Missing or unreadable 'issue'. Give a Linear issue's identifier, like 'ENG-12', or its link.", field: "issue")))
         }
-        let stopped = ToolExecutionResult.error(tool: toolCall.name, message: "Stopped before the issue was read.", errorType: "cancelled")
         let account = await connectedAccountsService.getConnectedAccount(for: .linear)
         // Stopped while the connection was looked up.
-        if Task.isCancelled { return stopped }
+        if Task.isCancelled { return .failure(LinearStop(stopped)) }
         guard let account else {
-            return .error(tool: toolCall.name, message: Self.linearNotConnected)
+            return .failure(LinearStop(.error(tool: toolCall.name, message: Self.linearNotConnected)))
         }
-        var key: String?
+        return await linearKey(of: account, tool: toolCall.name, stopped: stopped).map { (issue, account, $0) }
+    }
+
+    /// The key a connection is asked with, as it is kept now.
+    private func linearKey(of account: ConnectedAccount, tool: String, stopped: ToolExecutionResult) async -> Result<String, LinearStop> {
         do {
-            let kept = try await connectedAccountsService.getAccessToken(forAccountId: account.id)
-            key = kept
-            let found = try await LinearToolService.issue(issue, key: kept, session: appSession)
+            let key = try await connectedAccountsService.getAccessToken(forAccountId: account.id)
+            if Task.isCancelled { return .failure(LinearStop(stopped)) }
+            return .success(key)
+        } catch {
+            if Task.isCancelled || error is CancellationError { return .failure(LinearStop(stopped)) }
+            let failure = Self.linearFailure(error)
+            return .failure(LinearStop(.error(tool: tool, message: failure.message, errorType: failure.code, isRetryable: failure.retry)))
+        }
+    }
+
+    /// The key an approved change is made with: the connection's as it is
+    /// once the person has answered. They may have taken a while, and a
+    /// connection that was removed, or is another one, meanwhile is not
+    /// written through (the issue was read as the one that was there).
+    private func linearKeyOnceApproved(of account: ConnectedAccount, tool: String, stopped: ToolExecutionResult) async -> Result<String, LinearStop> {
+        let now = await connectedAccountsService.getConnectedAccount(for: .linear)
+        if Task.isCancelled { return .failure(LinearStop(stopped)) }
+        guard let now, now.id == account.id else {
+            return .failure(LinearStop(.error(tool: tool, message: "Linear's connection changed while the person was asked, so nothing was changed.", errorType: "linear_connection_changed")))
+        }
+        return await linearKey(of: now, tool: tool, stopped: stopped)
+    }
+
+    /// What a Linear tool tells when a change it asked Linear to make
+    /// threw `error`. A change whose answer did not come, or whose turn
+    /// was stopped while Linear was asked, may have been made, and is told
+    /// so; anything else is told as any failed call.
+    private func linearResult(ofChange error: Error, tool: String, key: String, accountID: String) async -> ToolExecutionResult {
+        if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
+            return .error(tool: tool, message: "Stopped while Linear was asked, so the change may have been made. Check with linear.getIssue before making it again.", errorType: "cancelled")
+        }
+        if Self.linearMayHaveBeenCarriedOut(error) {
+            return .error(tool: tool, message: Self.linearUnconfirmed, errorType: "linear_unconfirmed", isRetryable: false)
+        }
+        let stopped = ToolExecutionResult.error(tool: tool, message: "Stopped; Linear had refused the change.", errorType: "cancelled")
+        return await linearResult(of: error, tool: tool, key: key, accountID: accountID, stopped: stopped)
+    }
+
+    /// The result a Linear tool gives in place of going on.
+    struct LinearStop: Error {
+        let result: ToolExecutionResult
+
+        init(_ result: ToolExecutionResult) {
+            self.result = result
+        }
+    }
+
+    /// What a Linear tool tells when Linear, asked with `key`, threw
+    /// `error`. A stop is told as stopped. When Linear refuses, it is
+    /// asked whose the key is: only a key it refuses there too marks the
+    /// connection as waiting for a new one; otherwise it is the issue
+    /// that is not this account's.
+    private func linearResult(of error: Error, tool: String, key: String, accountID: String, stopped: ToolExecutionResult) async -> ToolExecutionResult {
+        if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return stopped }
+        if case LinearError.keyRefused = error {
+            do {
+                _ = try await LinearToolService.identity(key: key, session: appSession)
+                if Task.isCancelled { return stopped }
+                return .error(tool: tool, message: "Linear does not let this account see that issue, or do that with it.", errorType: "linear_forbidden")
+            } catch LinearError.keyRefused {
+                await connectedAccountsService.markTokenRefused(accountID: accountID, token: key)
+            } catch {
+                // Linear could not say: the connection is left as it is.
+                if Task.isCancelled { return stopped }
+                let failure = Self.linearFailure(error)
+                return .error(tool: tool, message: failure.message, errorType: failure.code, isRetryable: failure.retry)
+            }
+            // Stopped while that was written down.
+            if Task.isCancelled { return stopped }
+        }
+        let failure = Self.linearFailure(error)
+        return .error(tool: tool, message: failure.message, errorType: failure.code, isRetryable: failure.retry)
+    }
+
+    /// Execute linear.getIssue: reads the issue the call names, with the
+    /// connected account's key. A call whose turn was stopped tells that
+    /// it was stopped, wherever the stop landed.
+    private func executeLinearGetIssue(toolCall: ParsedToolCall) async -> ToolExecutionResult {
+        let stopped = ToolExecutionResult.error(tool: toolCall.name, message: "Stopped before the issue was read.", errorType: "cancelled")
+        let start: (issue: String, account: ConnectedAccount, key: String)
+        switch await linearStart(toolCall, stopped: stopped) {
+        case let .success(found): start = found
+        case let .failure(stop): return stop.result
+        }
+        do {
+            let found = try await LinearToolService.issue(start.issue, key: start.key, session: appSession)
             try Task.checkCancellation()
             return .success(
                 tool: toolCall.name,
-                result: ["issue": AnyJSONValue(found["identifier"] as? String ?? issue), "url": AnyJSONValue(found["url"] as? String ?? "")],
+                result: ["issue": AnyJSONValue(found["identifier"] as? String ?? start.issue), "url": AnyJSONValue(found["url"] as? String ?? "")],
                 contextBlock: LinearToolService.told(issue: found)
             )
         } catch {
-            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return stopped }
-            if case LinearError.keyRefused = error, let key {
-                // Is it the key, or this issue? Linear is asked whose the
-                // key is: only a key it refuses there too is marked.
-                do {
-                    _ = try await LinearToolService.identity(key: key, session: appSession)
-                    if Task.isCancelled { return stopped }
-                    return .error(tool: toolCall.name, message: "Linear does not let this account see that issue.", errorType: "linear_forbidden")
-                } catch LinearError.keyRefused {
-                    await connectedAccountsService.markTokenRefused(accountID: account.id, token: key)
-                } catch {
-                    // Linear could not say: the connection is left as it is.
-                    if Task.isCancelled { return stopped }
-                    let failure = Self.linearFailure(error)
-                    return .error(tool: toolCall.name, message: failure.message, errorType: failure.code, isRetryable: failure.retry)
-                }
-                // Stopped while that was written down.
-                if Task.isCancelled { return stopped }
+            return await linearResult(of: error, tool: toolCall.name, key: start.key, accountID: start.account.id, stopped: stopped)
+        }
+    }
+
+    /// What a model is told when a change to a Linear issue was asked
+    /// for and its answer did not come: it may have been made.
+    nonisolated static let linearUnconfirmed = "Linear's answer did not come or could not be read, so the change may have been made. Check with linear.getIssue before making it again."
+
+    /// Whether a failed call may have reached Linear and been carried
+    /// out all the same.
+    nonisolated static func linearMayHaveBeenCarriedOut(_ error: Error) -> Bool {
+        if case LinearError.invalidResponse = error { return true }
+        guard let failure = error as? URLError else { return false }
+        return [.timedOut, .networkConnectionLost, .badServerResponse, .cannotParseResponse].contains(failure.code)
+    }
+
+    /// Execute linear.addComment: a comment on the issue the call names,
+    /// posted as the person once they have approved it.
+    private func executeLinearAddComment(toolCall: ParsedToolCall, threadID: String?) async -> ToolExecutionResult {
+        guard let body = Self.given((toolCall.args["body"]?.value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return .validationError(tool: toolCall.name, message: "Missing required argument: 'body'", field: "body")
+        }
+        let stopped = ToolExecutionResult.error(tool: toolCall.name, message: "Stopped before the comment was posted.", errorType: "cancelled")
+        let start: (issue: String, account: ConnectedAccount, key: String)
+        switch await linearStart(toolCall, stopped: stopped) {
+        case let .success(found): start = found
+        case let .failure(stop): return stop.result
+        }
+        // The issue is read first: the person is asked about it by name,
+        // and the comment goes to its id.
+        let issue: [String: Any]
+        do {
+            issue = try await LinearToolService.issue(start.issue, key: start.key, session: appSession)
+            try Task.checkCancellation()
+        } catch {
+            return await linearResult(of: error, tool: toolCall.name, key: start.key, accountID: start.account.id, stopped: stopped)
+        }
+        guard let issueID = issue["id"] as? String else {
+            return .error(tool: toolCall.name, message: "Linear's answer could not be read.", errorType: "linear_failed", isRetryable: true)
+        }
+        let named = LinearToolService.named(issue)
+        if let refusal = await refusal(ofAppChange: toolCall, in: threadID, { .linearComment(issue: named, body: body, threadID: $0) }) {
+            return refusal
+        }
+        let key: String
+        switch await linearKeyOnceApproved(of: start.account, tool: toolCall.name, stopped: stopped) {
+        case let .success(kept): key = kept
+        case let .failure(stop): return stop.result
+        }
+        do {
+            let url = try await LinearToolService.addComment(toIssue: issueID, body: body, key: key, session: appSession)
+            let block = "[Linear Comment Posted: \(issue["identifier"] as? String ?? start.issue)]" + (url.map { "\n\($0)" } ?? "")
+            return .success(tool: toolCall.name, result: ["issue": AnyJSONValue(issue["identifier"] as? String ?? start.issue), "comment_url": AnyJSONValue(url ?? "")], contextBlock: block)
+        } catch {
+            return await linearResult(ofChange: error, tool: toolCall.name, key: key, accountID: start.account.id)
+        }
+    }
+
+    /// Execute linear.updateIssue: changes to the issue the call names,
+    /// made as the person once they have approved them. A status and an
+    /// assignee are given by name and found among the issue's team's.
+    private func executeLinearUpdateIssue(toolCall: ParsedToolCall, threadID: String?) async -> ToolExecutionResult {
+        let asked: LinearToolService.Asked
+        switch LinearToolService.asked(in: toolCall.args) {
+        case let .success(read): asked = read
+        case let .failure(refusal): return .validationError(tool: toolCall.name, message: refusal.message, field: refusal.field)
+        }
+        let stopped = ToolExecutionResult.error(tool: toolCall.name, message: "Stopped before the issue was changed.", errorType: "cancelled")
+        let start: (issue: String, account: ConnectedAccount, key: String)
+        switch await linearStart(toolCall, stopped: stopped) {
+        case let .success(found): start = found
+        case let .failure(stop): return stop.result
+        }
+        // The issue as it is, and what its team has, are read first: the
+        // person is asked about each change as from what to what.
+        var input: [String: Any] = [:]
+        var changes: [String] = []
+        let issue: [String: Any]
+        do {
+            issue = try await LinearToolService.issue(start.issue, key: start.key, session: appSession)
+            try Task.checkCancellation()
+            func now(_ key: String, or none: String) -> String {
+                ((issue[key] as? [String: Any])?["name"] as? String) ?? none
             }
-            let failure = Self.linearFailure(error)
-            return .error(tool: toolCall.name, message: failure.message, errorType: failure.code, isRetryable: failure.retry)
+            let team = issue["team"] as? [String: Any]
+            let teamName = team?["name"] as? String ?? "(unnamed)"
+            if asked.status != nil || asked.assignee != nil {
+                guard let teamID = team?["id"] as? String else {
+                    return .error(tool: toolCall.name, message: "Linear did not say which team the issue is in, so its statuses and members cannot be read.", errorType: "linear_failed")
+                }
+                if let status = asked.status {
+                    let states = try await LinearToolService.states(ofTeam: teamID, key: start.key, session: appSession)
+                    switch LinearToolService.state(named: status, among: states, team: teamName) {
+                    case let .success(found):
+                        input["stateId"] = found.id
+                        changes.append("Status: \(now("state", or: "(none)")) → \(found.name)")
+                    case let .failure(refusal):
+                        return .validationError(tool: toolCall.name, message: refusal.message, field: refusal.field)
+                    }
+                }
+                if let assignee = asked.assignee {
+                    let members = try await LinearToolService.members(ofTeam: teamID, key: start.key, session: appSession)
+                    switch LinearToolService.member(matching: assignee, among: members, team: teamName) {
+                    case let .success(found):
+                        input["assigneeId"] = found.id
+                        changes.append("Assignee: \(now("assignee", or: "(no one)")) → \(found.name)")
+                    case let .failure(refusal):
+                        return .validationError(tool: toolCall.name, message: refusal.message, field: refusal.field)
+                    }
+                }
+                try Task.checkCancellation()
+            }
+        } catch {
+            return await linearResult(of: error, tool: toolCall.name, key: start.key, accountID: start.account.id, stopped: stopped)
+        }
+        guard let issueID = issue["id"] as? String else {
+            return .error(tool: toolCall.name, message: "Linear's answer could not be read.", errorType: "linear_failed", isRetryable: true)
+        }
+        if let title = asked.title {
+            input["title"] = title
+            changes.append("Title: \(Self.given(issue["title"] as? String) ?? "(untitled)") → \(title)")
+        }
+        if let priority = asked.priority {
+            input["priority"] = priority
+            changes.append("Priority: \(LinearToolService.priorityName(issue["priority"] as? Int ?? 0)) → \(LinearToolService.priorityName(priority))")
+        }
+        if let due = asked.dueDate {
+            input["dueDate"] = due
+            changes.append("Due: \(issue["dueDate"] as? String ?? "(none)") → \(due)")
+        }
+        if let description = asked.description {
+            input["description"] = description
+            changes.append("Description: replaced")
+        }
+        let named = LinearToolService.named(issue)
+        let shownChanges = changes
+        let newDescription = asked.description
+        if let refusal = await refusal(ofAppChange: toolCall, in: threadID, { .linearUpdate(issue: named, changes: shownChanges, newDescription: newDescription, threadID: $0) }) {
+            return refusal
+        }
+        let key: String
+        switch await linearKeyOnceApproved(of: start.account, tool: toolCall.name, stopped: stopped) {
+        case let .success(kept): key = kept
+        case let .failure(stop): return stop.result
+        }
+        do {
+            let after = try await LinearToolService.update(issue: issueID, changes: input, key: key, session: appSession)
+            let block = "[Linear Issue Changed: \(after["identifier"] as? String ?? start.issue)]\n" + changes.map { "- \($0)" }.joined(separator: "\n") + ((after["url"] as? String).map { "\n\($0)" } ?? "")
+            return .success(tool: toolCall.name, result: ["issue": AnyJSONValue(after["identifier"] as? String ?? start.issue), "changes": AnyJSONValue(changes.count)], contextBlock: block)
+        } catch {
+            return await linearResult(ofChange: error, tool: toolCall.name, key: key, accountID: start.account.id)
         }
     }
 

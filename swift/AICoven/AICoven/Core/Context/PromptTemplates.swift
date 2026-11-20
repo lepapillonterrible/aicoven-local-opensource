@@ -271,6 +271,29 @@ enum PromptTemplates {
             ],
             example: #"{"tool": "linear.getIssue", "input": {"issue": "ENG-12"}, "reason": "Read the issue before answering"}"#
         ),
+        ToolDefinition(
+            name: "linear.addComment",
+            description: "Comment on a Linear issue as the user.",
+            parameters: [
+                ToolParameter(name: "issue", type: "string", description: "The issue's identifier, like 'ENG-12', or its link", required: true),
+                ToolParameter(name: "body", type: "string", description: "The comment, in Markdown", required: true)
+            ],
+            example: #"{"tool": "linear.addComment", "input": {"issue": "ENG-12", "body": "Fixed in the linked pull request."}, "reason": "Say what was done on the issue"}"#
+        ),
+        ToolDefinition(
+            name: "linear.updateIssue",
+            description: "Change a Linear issue as the user: its status, assignee, title, description, priority or due date. Give at least one.",
+            parameters: [
+                ToolParameter(name: "issue", type: "string", description: "The issue's identifier, like 'ENG-12', or its link", required: true),
+                ToolParameter(name: "status", type: "string", description: "The name of one of its team's statuses, like 'In Progress'", required: false),
+                ToolParameter(name: "assignee", type: "string", description: "The name or email of a member of its team", required: false),
+                ToolParameter(name: "title", type: "string", description: "A new title", required: false),
+                ToolParameter(name: "description", type: "string", description: "A new description, in Markdown (replaces the one there)", required: false),
+                ToolParameter(name: "priority", type: "integer", description: "0 (none), 1 (urgent), 2 (high), 3 (medium) or 4 (low)", required: false),
+                ToolParameter(name: "due_date", type: "string", description: "A due date, written YYYY-MM-DD", required: false)
+            ],
+            example: #"{"tool": "linear.updateIssue", "input": {"issue": "ENG-12", "status": "In Progress"}, "reason": "Mark the issue as started"}"#
+        ),
 
         // Google Drive tools
         ToolDefinition(
@@ -770,7 +793,7 @@ enum PromptTemplates {
     static let figmaTools: Set<String> = ["figma.readFile", "figma.readComments", "figma.addComment"]
 
     /// Linear tools, offered where Linear is connected.
-    static let linearTools: Set<String> = ["linear.getIssue"]
+    static let linearTools: Set<String> = ["linear.getIssue", "linear.addComment", "linear.updateIssue"]
 
     /// Image generation, offered where the person has a key that can
     /// make images, to a turn that gives what is made to its reply.

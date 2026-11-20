@@ -124,6 +124,7 @@ nonisolated enum CovenConnectionRules {
         "google_sheets.updateValues", "google_sheets.writeValues", "google_sheets.write_values",
         "google_sheets.batchUpdate", "google_docs.update", "google_slides.update",
         "figma.addComment",
+        "linear.addComment", "linear.updateIssue",
     ]
 
     static func isWriteTool(_ tool: String) -> Bool {
