@@ -348,6 +348,9 @@ struct MobileChatsRootView: View {
         } catch {
             guard request == threadsLoad, selectedCovenId == scope else { return }
             AppErrorReporter.log(error: error, context: "MobileChatsRootView.loadThreads")
+            // A list already shown stays, with the thread open from it: it
+            // was only being read again (a message was stored, say).
+            guard !hasLoadedScope else { return }
             threads = []
             selectedThread = nil
             errorMessage = "Couldn’t load chats for this workspace."

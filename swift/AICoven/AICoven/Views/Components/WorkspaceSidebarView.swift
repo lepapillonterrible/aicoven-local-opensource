@@ -162,6 +162,13 @@ struct WorkspaceSidebarView: View {
         .task {
             await loadCovens()
         }
+        // A thread was used: the order follows it. Heard here, where the
+        // threads are held, so they are current when the sidebar is opened
+        // out again after being folded away.
+        .onReceive(NotificationCenter.default.publisher(for: ThreadService.threadUsed)) { _ in
+            guard let covenID = selectedCoven?.id else { return }
+            Task { await loadThreads(covenId: covenID) }
+        }
         // A thread renamed in the list goes by its new name on its tab and
         // over its messages too.
         .onChange(of: threads) { _, threads in
@@ -271,7 +278,7 @@ struct WorkspaceSidebarView: View {
             guard request == threadsLoad, selectedCoven?.id == covenId else { return }
             threads = stored
         } catch {
-            print("❌ Failed to load threads: \(error.localizedDescription)")
+            AppErrorReporter.log(error: error, context: "WorkspaceSidebarView.loadThreads")
         }
     }
 
@@ -681,10 +688,6 @@ struct ThreadManagementView: View {
             threadActions.invalidate()
             threadActions.onChanged = nil
             threadActions.onLeft = nil
-        }
-        // A thread was used: the order follows it.
-        .onReceive(NotificationCenter.default.publisher(for: ThreadService.threadUsed)) { _ in
-            Task { await onReload() }
         }
         // Another coven's threads are another list.
         .onChange(of: selectedCoven?.id) { _, _ in threadActions.invalidate() }
