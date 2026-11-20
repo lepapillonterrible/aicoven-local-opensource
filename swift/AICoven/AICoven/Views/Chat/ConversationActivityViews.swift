@@ -34,31 +34,38 @@ struct ConversationActivityGlyph<Idle: View>: View {
 struct ConversationActivityCaption: View {
     let activity: ConversationActivity?
     var font: Font = .aicovenCaption
+    /// `.increased` on a selected row's system highlight, where water and
+    /// rust would not read; the caption then takes the highlight's own ink.
+    @Environment(\.backgroundProminence) private var prominence
 
     var body: some View {
         if let activity, let caption = activity.caption {
             Text(caption)
                 .font(activity.isWaiting ? font.weight(.semibold) : font)
-                .foregroundStyle(color(activity))
+                .foregroundStyle(style(activity))
                 .lineLimit(1)
                 .accessibilityHidden(true)
         }
     }
 
-    private func color(_ activity: ConversationActivity) -> Color {
-        switch activity {
-        case .moving: .aicovenWater
-        case .broken: .aicovenError
-        case .waiting, .paused, .unsent, .unread: .aicovenTextSecondary
+    private func style(_ activity: ConversationActivity) -> AnyShapeStyle {
+        if prominence == .increased { return AnyShapeStyle(.secondary) }
+        return switch activity {
+        case .moving: AnyShapeStyle(Color.aicovenWater)
+        case .broken: AnyShapeStyle(Color.aicovenError)
+        case .waiting, .paused, .unsent, .unread: AnyShapeStyle(Color.aicovenTextSecondary)
         }
     }
 }
 
-/// The 7 pt water dot for unread.
+/// The 7 pt water dot for unread; in the highlight's own ink on a selected
+/// row.
 struct ActivityDot: View {
+    @Environment(\.backgroundProminence) private var prominence
+
     var body: some View {
         Circle()
-            .fill(Color.aicovenWater)
+            .fill(prominence == .increased ? AnyShapeStyle(.primary) : AnyShapeStyle(Color.aicovenWater))
             .frame(width: 7, height: 7)
             .accessibilityHidden(true)
     }
@@ -67,9 +74,11 @@ struct ActivityDot: View {
 /// The waiting mark: a 7 pt secondary-ink square with 2 pt corners, for
 /// what waits for the person. Never a count.
 struct WaitingMark: View {
+    @Environment(\.backgroundProminence) private var prominence
+
     var body: some View {
         RoundedRectangle(cornerRadius: 2)
-            .fill(Color.aicovenTextSecondary)
+            .fill(prominence == .increased ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.aicovenTextSecondary))
             .frame(width: 7, height: 7)
             .accessibilityHidden(true)
     }
@@ -95,5 +104,18 @@ extension View {
     /// doing, or that it holds a reply not yet seen.
     func threadActivityValue(_ activity: ConversationActivity?) -> some View {
         accessibilityValue(activity?.accessibilityWords ?? "")
+    }
+}
+
+/// A thread row's date in tertiary ink; on a selected row's system
+/// highlight, in the highlight's own ink.
+struct ThreadRowDate: View {
+    let date: Date
+    @Environment(\.backgroundProminence) private var prominence
+
+    var body: some View {
+        Text(VisitWords.rowDate(date))
+            .font(.aicovenCaption)
+            .foregroundStyle(prominence == .increased ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.aicovenTextTertiary))
     }
 }

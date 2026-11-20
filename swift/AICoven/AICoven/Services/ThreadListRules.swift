@@ -29,6 +29,17 @@ nonisolated enum ThreadListRules {
         return (listed.filter(isStillOpen) + listed.filter { !isStillOpen($0) }, ordered.filter(\.isArchived))
     }
 
+    /// The threads a search for `query` shows: those whose title, as a row
+    /// shows it, holds what was typed, whatever its case or accents. All
+    /// of them while nothing is typed.
+    static func matching(_ threads: [Thread], query: String) -> [Thread] {
+        let typed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !typed.isEmpty else { return threads }
+        return threads.filter {
+            title(of: $0).range(of: typed, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+    }
+
     /// A thread's title as a row shows it.
     static func title(of thread: Thread) -> String {
         let title = thread.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
