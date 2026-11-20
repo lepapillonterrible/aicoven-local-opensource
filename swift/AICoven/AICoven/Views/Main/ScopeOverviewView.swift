@@ -75,8 +75,9 @@ struct ScopeOverviewView: View {
             }
         }
         .background(Color.aicovenSurface)
-        // Said once when it comes, as well as shown.
-        .onChange(of: shellThreads.failed) { _, failed in
+        // Said when it comes, and on coming to an Overview that already
+        // shows it, as well as shown.
+        .onChange(of: shellThreads.failed, initial: true) { _, failed in
             if failed, shellThreads.scope == navigator.selected {
                 AccessibilityNotification.Announcement("Couldn't load threads.").post()
             }

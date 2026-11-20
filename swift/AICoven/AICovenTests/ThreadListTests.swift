@@ -72,20 +72,41 @@ final class ThreadListTests: XCTestCase {
         func ago(days: Int = 0, hours: Int = 0) throws -> Date {
             try XCTUnwrap(calendar.date(byAdding: DateComponents(day: -days, hour: -hours), to: now))
         }
+        // Worded in the calendar the days are counted in (the device's may be another, with another year).
+        var style = Date.FormatStyle.dateTime
+        style.calendar = calendar
+        style.timeZone = calendar.timeZone
         let earlier = try ago(hours: 5)
-        XCTAssertEqual(VisitWords.rowDate(earlier, now: now, calendar: calendar), earlier.formatted(date: .omitted, time: .shortened), "Today: the time")
+        XCTAssertEqual(VisitWords.rowDate(earlier, now: now, calendar: calendar), earlier.formatted(style.hour().minute()), "Today: the time")
         let yesterday = try ago(days: 1)
-        XCTAssertEqual(VisitWords.rowDate(yesterday, now: now, calendar: calendar), yesterday.formatted(.dateTime.weekday(.abbreviated)), "Within the week: the weekday")
+        XCTAssertEqual(VisitWords.rowDate(yesterday, now: now, calendar: calendar), yesterday.formatted(style.weekday(.abbreviated)), "Within the week: the weekday")
         let sixDays = try ago(days: 6)
-        XCTAssertEqual(VisitWords.rowDate(sixDays, now: now, calendar: calendar), sixDays.formatted(.dateTime.weekday(.abbreviated)))
+        XCTAssertEqual(VisitWords.rowDate(sixDays, now: now, calendar: calendar), sixDays.formatted(style.weekday(.abbreviated)))
         let week = try ago(days: 7)
-        XCTAssertEqual(VisitWords.rowDate(week, now: now, calendar: calendar), week.formatted(.dateTime.day().month(.abbreviated)), "This year: the day and month")
+        XCTAssertEqual(VisitWords.rowDate(week, now: now, calendar: calendar), week.formatted(style.day().month(.abbreviated)), "This year: the day and month")
         let lastYear = try ago(days: 400)
-        XCTAssertEqual(VisitWords.rowDate(lastYear, now: now, calendar: calendar), lastYear.formatted(.dateTime.day().month(.abbreviated).year()), "Another year: with the year")
+        XCTAssertEqual(VisitWords.rowDate(lastYear, now: now, calendar: calendar), lastYear.formatted(style.day().month(.abbreviated).year()), "Another year: with the year")
+        XCTAssertTrue(VisitWords.rowDate(lastYear, now: now, calendar: calendar).contains("2025"), "The year is the given calendar's")
         // The day counts, not the hours: late last night is yesterday's weekday.
         let lateLastNight = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 19, hour: 23, minute: 50)))
-        XCTAssertEqual(VisitWords.rowDate(lateLastNight, now: now, calendar: calendar), lateLastNight.formatted(.dateTime.weekday(.abbreviated)))
+        XCTAssertEqual(VisitWords.rowDate(lateLastNight, now: now, calendar: calendar), lateLastNight.formatted(style.weekday(.abbreviated)))
         XCTAssertEqual(VisitWords.daysBetween(lateLastNight, now, calendar), 1)
+
+        // Worded in the calendar's own time zone, whatever the device's: two zones 25 hours apart never share a
+        // day, so the device's zone agrees with one of them at most.
+        var names: Set<String> = []
+        for zone in ["Pacific/Kiritimati", "Pacific/Pago_Pago"] {
+            var far = Calendar(identifier: .gregorian)
+            far.timeZone = try XCTUnwrap(TimeZone(identifier: zone))
+            var style = Date.FormatStyle.dateTime
+            style.calendar = far
+            style.timeZone = far.timeZone
+            let threeDays = now.addingTimeInterval(-3 * 24 * 3600)
+            let day = threeDays.formatted(style.weekday(.abbreviated))
+            XCTAssertEqual(VisitWords.rowDate(threeDays, now: now, calendar: far), day, zone)
+            names.insert(day)
+        }
+        XCTAssertEqual(names.count, 2)
     }
 
     // MARK: - As Markdown

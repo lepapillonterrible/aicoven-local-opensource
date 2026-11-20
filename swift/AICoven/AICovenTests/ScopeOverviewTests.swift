@@ -73,13 +73,22 @@ final class ScopeOverviewTests: XCTestCase {
         XCTAssertEqual(last(20 * 24 * hour), "You were last here on \(weeksAgo.formatted(style.day().month(.wide))).")
         let lastYear = now.addingTimeInterval(-400 * 24 * hour)
         XCTAssertEqual(last(400 * 24 * hour), "You were last here on \(lastYear.formatted(style.day().month(.wide).year())).")
-        // Late on the 13th in the calendar's zone is the 14th on a device further east: it is named by the calendar's day.
-        let lateFriday = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 13, hour: 23, minute: 30)))
-        let named = VisitWords.lastHere(lateFriday, now: now, calendar: calendar)
-        XCTAssertEqual(named, "You were last here on \(lateFriday.formatted(style.weekday(.wide))).")
-        var east = Date.FormatStyle.dateTime
-        east.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Bangkok"))
-        XCTAssertNotEqual(lateFriday.formatted(style.weekday(.wide)), lateFriday.formatted(east.weekday(.wide)), "The two zones name different days")
+        // The day is named in the calendar's own time zone, whatever the device's. Two zones 25 hours apart never
+        // share a calendar day, so the device's own zone agrees with one of them at most: naming the day in the
+        // device's zone would get the other wrong.
+        var names: Set<String> = []
+        for zone in ["Pacific/Kiritimati", "Pacific/Pago_Pago"] {
+            var far = Calendar(identifier: .gregorian)
+            far.timeZone = try XCTUnwrap(TimeZone(identifier: zone))
+            var farStyle = Date.FormatStyle.dateTime
+            farStyle.calendar = far
+            farStyle.timeZone = far.timeZone
+            let visit = now.addingTimeInterval(-4 * 24 * hour)
+            let day = visit.formatted(farStyle.weekday(.wide))
+            XCTAssertEqual(VisitWords.lastHere(visit, now: now, calendar: far), "You were last here on \(day).", zone)
+            names.insert(day)
+        }
+        XCTAssertEqual(names.count, 2, "The two zones name different days for the same moment")
         // Seven days is no longer "on Wednesday".
         let weekAgo = now.addingTimeInterval(-7 * 24 * hour)
         XCTAssertEqual(last(7 * 24 * hour), "You were last here on \(weekAgo.formatted(style.day().month(.wide))).")

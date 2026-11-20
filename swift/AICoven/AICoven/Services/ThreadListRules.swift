@@ -106,16 +106,20 @@ nonisolated enum VisitWords {
     /// week, else the day and month, with the year when it is not this
     /// year.
     static func rowDate(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        // Worded in the calendar the days are counted in, and its time zone.
+        var style = Date.FormatStyle.dateTime
+        style.calendar = calendar
+        style.timeZone = calendar.timeZone
         if calendar.isDate(date, inSameDayAs: now) {
-            return date.formatted(date: .omitted, time: .shortened)
+            return date.formatted(style.hour().minute())
         }
         if daysBetween(date, now, calendar) < 7 {
-            return date.formatted(.dateTime.weekday(.abbreviated))
+            return date.formatted(style.weekday(.abbreviated))
         }
         if calendar.isDate(date, equalTo: now, toGranularity: .year) {
-            return date.formatted(.dateTime.day().month(.abbreviated))
+            return date.formatted(style.day().month(.abbreviated))
         }
-        return date.formatted(.dateTime.day().month(.abbreviated).year())
+        return date.formatted(style.day().month(.abbreviated).year())
     }
 
     /// When the person was last in a scope: "You were last here earlier
