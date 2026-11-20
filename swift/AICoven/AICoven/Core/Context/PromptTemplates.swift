@@ -737,7 +737,9 @@ enum PromptTemplates {
 
     /// The image tools a chat turn is offered now: all of them where a
     /// non-empty key that can make images is stored (OpenAI's or
-    /// Google's), whichever model answers the turn; none otherwise.
+    /// Google's), whichever cloud model answers the turn; none otherwise.
+    /// (A model on this device, and a Hermes or OpenClaw run, are not
+    /// offered it.)
     static func offeredImageTools(storedKeys: [String?] = storedImageKeys()) -> Set<String> {
         storedKeys.contains { $0?.isEmpty == false } ? imageTools : []
     }

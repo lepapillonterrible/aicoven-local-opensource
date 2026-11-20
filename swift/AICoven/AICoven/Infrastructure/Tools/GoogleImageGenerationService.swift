@@ -38,7 +38,10 @@ nonisolated struct GoogleImageGenerationService {
         for candidate in candidates {
             try Task.checkCancellation()
             do {
-                return try await attempt(prompt: prompt, model: candidate, shape: Self.shape(for: size))
+                let made = try await attempt(prompt: prompt, model: candidate, shape: Self.shape(for: size))
+                // Stopped while the answer was being read: it is not given.
+                try Task.checkCancellation()
+                return made
             } catch Failure.keyRefused {
                 throw Failure.keyRefused
             } catch is CancellationError {
@@ -63,6 +66,7 @@ nonisolated struct GoogleImageGenerationService {
     /// square, as the cloud app reads it. A size that does not read as one
     /// is square.
     static func shape(for size: String) -> String {
+        guard ImageGenerationService.isSize(size) else { return "1:1" }
         let sides = size.split(separator: "x").compactMap { Double($0) }
         guard sides.count == 2, sides[0] > 0, sides[1] > 0 else { return "1:1" }
         let ratio = sides[0] / sides[1]

@@ -203,8 +203,17 @@ actor ToolExecutionService {
         var failed: ToolExecutionResult?
         for maker in asked {
             provider = maker.provider
+            // Each key is the account's the turn began as. If another
+            // account has signed in since (while the thread was read, or
+            // while an earlier key was asked), no more is asked with it.
+            guard await MainActor.run(body: { UserScope.currentUserID }) == account else {
+                return .error(tool: toolCall.name, message: "Another account signed in: no image was made.", errorType: "image_account_changed")
+            }
             do {
-                made = try await maker.make(request.prompt, request.model, request.size, request.quality)
+                let picture = try await maker.make(request.prompt, request.model, request.size, request.quality)
+                // Stopped while it was being made: it is not kept.
+                try Task.checkCancellation()
+                made = picture
                 break
             } catch is CancellationError {
                 return .error(tool: toolCall.name, message: "Stopped before the image was made.", errorType: "cancelled")
@@ -243,8 +252,8 @@ actor ToolExecutionService {
     /// What a generated image is called; the store adds the kind it keeps.
     nonisolated static let generatedImageName = "Generated image.png"
 
-    /// The name for a picture of this kind: OpenAI's are PNG, Google's
-    /// JPEG.
+    /// The name for a picture, by its kind (a JPEG or, as any other is
+    /// named, a PNG; the store adds the kind it keeps).
     nonisolated static func generatedImageName(for mimeType: String) -> String {
         mimeType.lowercased() == "image/jpeg" ? "Generated image.jpg" : generatedImageName
     }

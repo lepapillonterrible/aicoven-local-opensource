@@ -85,7 +85,7 @@ nonisolated struct ImageGenerationService {
         case keyRefused
         /// The key's models include none that makes pictures.
         case noImageModel
-        /// OpenAI refused or failed the request, with what it said of it.
+        /// The provider refused or failed the request, with what it said of it.
         case refused(status: Int, message: String?)
         /// It answered without a picture.
         case noPicture

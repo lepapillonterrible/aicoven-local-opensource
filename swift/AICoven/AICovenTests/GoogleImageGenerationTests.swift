@@ -155,6 +155,49 @@ final class GoogleImageGenerationTests: XCTestCase {
         XCTAssertEqual(ImageGenerationService.Failure.noPicture.errorDescription, "OpenAI answered without an image.")
     }
 
+    /// The task that is making a picture, so that it can be stopped from
+    /// where Google answers. Sendable by hand, under `lock`.
+    private final class Making: @unchecked Sendable {
+        private let lock = NSLock()
+        private var task: Task<ImageGenerationService.Generated, Error>?
+        private var stopped = false
+
+        func set(_ task: Task<ImageGenerationService.Generated, Error>) {
+            let stopNow: Bool = lock.withLock {
+                self.task = task
+                return stopped
+            }
+            if stopNow { task.cancel() }
+        }
+
+        func stop() {
+            let task: Task<ImageGenerationService.Generated, Error>? = lock.withLock {
+                stopped = true
+                return self.task
+            }
+            task?.cancel()
+        }
+    }
+
+    func testAPictureThatArrivesAfterTheTurnWasStopped_isNotGiven() async {
+        let answer = picture
+        let making = Making()
+        // The turn is stopped as Google answers: the answer is on its way
+        // back, or already here, when the stop lands.
+        let service = service(keeping: Asked()) { _ in
+            making.stop()
+            return (200, answer)
+        }
+        let task = Task { try await service.generate(prompt: "A lighthouse", model: "gemini-3.1-flash-image") }
+        making.set(task)
+        do {
+            _ = try await task.value
+            XCTFail("It was stopped")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "\(error)")
+        }
+    }
+
     func testTheShapeAskedOfGoogle_isTheNearestToTheSize() {
         XCTAssertEqual(GoogleImageGenerationService.shape(for: "1024x1024"), "1:1")
         XCTAssertEqual(GoogleImageGenerationService.shape(for: "1536x1024"), "16:9")
@@ -162,6 +205,9 @@ final class GoogleImageGenerationTests: XCTestCase {
         XCTAssertEqual(GoogleImageGenerationService.shape(for: "1200x1000"), "1:1")
         XCTAssertEqual(GoogleImageGenerationService.shape(for: "large"), "1:1")
         XCTAssertEqual(GoogleImageGenerationService.shape(for: "0x10"), "1:1")
+        for notASize in ["1536xx1024", "1536xgarbagex1024", "1536x1024x2", "x1536x1024", " 1536x1024", "1536.5x1024"] {
+            XCTAssertEqual(GoogleImageGenerationService.shape(for: notASize), "1:1", notASize)
+        }
     }
 
     func testWhoseAModelIs_andWhatAProviderIsCalled() {
