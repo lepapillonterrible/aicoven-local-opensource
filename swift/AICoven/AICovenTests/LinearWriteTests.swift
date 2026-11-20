@@ -83,6 +83,22 @@ final class LinearWriteTests: XCTestCase {
         }
     }
 
+    /// What the thread's coven lets, which a test can change under way.
+    /// Sendable by hand, under `lock`.
+    private final class Covens: @unchecked Sendable {
+        private let lock = NSLock()
+        private var kept: CovenConnections?
+
+        init(_ connections: CovenConnections?) {
+            kept = connections
+        }
+
+        var connections: CovenConnections? {
+            get { lock.withLock { kept } }
+            set { lock.withLock { kept = newValue } }
+        }
+    }
+
     /// The approvals that were asked.
     private actor Seen {
         private(set) var approvals: [ToolApproval] = []
@@ -97,6 +113,7 @@ final class LinearWriteTests: XCTestCase {
         let accounts: ConnectedAccountsService
         let asked: Asked
         let seen: Seen
+        let covens: Covens
         let defaults: UserDefaults
         let suite: String
 
@@ -120,8 +137,10 @@ final class LinearWriteTests: XCTestCase {
         connections: CovenConnections? = nil,
         overriding: [String: (Int, String)] = [:],
         failing: [String: URLError.Code] = [:],
-        whileAsked: (@Sendable (ConnectedAccountsService) async -> Void)? = nil
+        whileAsked: (@Sendable (ConnectedAccountsService) async -> Void)? = nil,
+        covens: Covens? = nil
     ) async throws -> World {
+        let covens = covens ?? Covens(connections)
         let suite = "LinearWriteTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         let accounts = ConnectedAccountsService(currentUser: { "linear-write-tests" }, defaults: defaults, tokens: InMemoryTokens().store, tokenIdentity: { _, _ in .init(id: "u1", label: "ada@example.com") })
@@ -166,13 +185,13 @@ final class LinearWriteTests: XCTestCase {
                 await whileAsked?(accounts)
                 return approving ? .approved : .denied
             },
-            covenConnections: { _ in connections },
+            covenConnections: { _ in covens.connections },
             connectedAccounts: accounts,
             hasToolsPack: { true },
             appSession: URLSession(configuration: config)
         )
         await executor.setWhitelist(for: "chat", tools: PromptTemplates.linearTools)
-        return World(executor: executor, accounts: accounts, asked: asked, seen: seen, defaults: defaults, suite: suite)
+        return World(executor: executor, accounts: accounts, asked: asked, seen: seen, covens: covens, defaults: defaults, suite: suite)
     }
 
     func testAComment_isPostedToTheIssueOnceThePersonApprovesIt() async throws {
@@ -327,6 +346,63 @@ final class LinearWriteTests: XCTestCase {
         defer { first.forget() }
         let result = await first.call("linear.addComment", ["issue": AnyJSONValue("ENG-12"), "body": AnyJSONValue("Hi")])
         XCTAssertEqual(result.errorType, "linear_connection_changed")
+    }
+
+    func testAChangeApprovedAfterItsCovenStoppedWriting_orAfterAStop_isNotMade() async throws {
+        // The coven is switched to reading Linear while the person is asked.
+        let covens = Covens(nil)
+        let switched = try await world(whileAsked: { _ in covens.connections = CovenConnections(apps: ["linear": .readOnly]) }, covens: covens)
+        defer { switched.forget() }
+        var result = await switched.call("linear.updateIssue", ["issue": AnyJSONValue("ENG-12"), "title": AnyJSONValue("New")])
+        XCTAssertEqual(result.errorType, "connection_read_only")
+        XCTAssertEqual(switched.asked.kinds, ["issue(id"])
+
+        // The turn is stopped once the person has answered, before anything is sent.
+        let stopped = try await world(whileAsked: { _ in withUnsafeCurrentTask { $0?.cancel() } })
+        defer { stopped.forget() }
+        let comment = Task { await stopped.call("linear.addComment", ["issue": AnyJSONValue("ENG-12"), "body": AnyJSONValue("Hi")]) }
+        result = await comment.value
+        XCTAssertEqual(result.errorType, "cancelled")
+        XCTAssertEqual(result.error, "Stopped before the comment was posted.")
+        let update = Task { await stopped.call("linear.updateIssue", ["issue": AnyJSONValue("ENG-12"), "title": AnyJSONValue("New")]) }
+        result = await update.value
+        XCTAssertEqual(result.errorType, "cancelled")
+        XCTAssertEqual(result.error, "Stopped before the issue was changed.")
+        XCTAssertEqual(Set(stopped.asked.kinds), ["issue(id"], "Nothing was changed")
+    }
+
+    func testAnAssigneeTwoMembersAnswerTo_isToldSo_andAKeyRefusedOnAChangeIsMarked() async throws {
+        let twoAdas = try await world(overriding: ["members(": (200, #"{"data": {"team": {"members": {"nodes": [{"id": "u1", "name": "Ada", "email": "ada@example.com"}, {"id": "u2", "name": "Ada", "email": "ada2@example.com"}], "pageInfo": {"hasNextPage": false}}}}}"#)])
+        defer { twoAdas.forget() }
+        var result = await twoAdas.call("linear.updateIssue", ["issue": AnyJSONValue("ENG-12"), "assignee": AnyJSONValue("ada")])
+        XCTAssertEqual(result.field, "assignee")
+        XCTAssertEqual(result.error, "'ada' matches 2 members of team Eng; give one member's name or email.")
+        let approvals = await twoAdas.seen.approvals
+        XCTAssertEqual(approvals.count, 0)
+
+        // Linear refuses the change and, asked whose the key is, refuses that too.
+        let refused = try await world(overriding: ["issueUpdate": (401, "{}"), "viewer": (401, "{}")])
+        defer { refused.forget() }
+        result = await refused.call("linear.updateIssue", ["issue": AnyJSONValue("ENG-12"), "title": AnyJSONValue("New")])
+        XCTAssertEqual(result.errorType, "linear_key_refused")
+        let connected = await refused.accounts.getConnectedAccount(for: .linear)
+        XCTAssertNil(connected, "The connection waits for a new key")
+        let waiting = await refused.accounts.accountWaitingForAToken(for: .linear)
+        XCTAssertNotNil(waiting)
+    }
+
+    func testAChangeLinearSaysItMade_isToldAsMade_whateverElseItCouldNotTell() async throws {
+        let partial = try await world(overriding: [
+            "issueUpdate": (200, #"{"data": {"issueUpdate": {"success": true, "issue": {"identifier": "ENG-12", "url": "https://linear.app/acme/issue/ENG-12", "assignee": null}}}, "errors": [{"message": "Cannot read assignee", "path": ["issueUpdate", "issue", "assignee"]}]}"#),
+            "commentCreate": (200, #"{"data": {"commentCreate": {"success": false}}, "errors": [{"message": "Comment body is too long"}]}"#),
+        ])
+        defer { partial.forget() }
+        var result = await partial.call("linear.updateIssue", ["issue": AnyJSONValue("ENG-12"), "title": AnyJSONValue("New")])
+        XCTAssertEqual(result.status, "ok")
+        // One it did not make is refused in Linear's words.
+        result = await partial.call("linear.addComment", ["issue": AnyJSONValue("ENG-12"), "body": AnyJSONValue("Hi")])
+        XCTAssertEqual(result.errorType, "linear_refused")
+        XCTAssertEqual(result.error, "Linear did not do it: Comment body is too long")
     }
 
     func testAChangeWhoseAnswerDidNotCome_orThatWasStoppedWhileAsked_mayHaveBeenMade() async throws {

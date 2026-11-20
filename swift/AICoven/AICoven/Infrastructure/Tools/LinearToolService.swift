@@ -47,9 +47,17 @@ nonisolated enum LinearToolService {
     static let mostOfAComment = 2000
 
     /// One GraphQL request; its `data`. An answer can carry `errors`
-    /// beside its data, whatever its status: they are read first.
+    /// beside its data, whatever its status: they are read first, but
+    /// for a change that the data says `wasMade` (a change that was made
+    /// is told as made, whatever else Linear could not tell of it).
     @concurrent
-    static func ask(_ query: String, variables: [String: Any] = [:], key: String, session: URLSession = .shared) async throws -> [String: Any] {
+    static func ask(
+        _ query: String,
+        variables: [String: Any] = [:],
+        key: String,
+        session: URLSession = .shared,
+        wasMade: (@Sendable ([String: Any]) -> Bool)? = nil
+    ) async throws -> [String: Any] {
         guard let url = URL(string: endpoint) else { throw LinearError.invalidResponse }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -71,6 +79,9 @@ nonisolated enum LinearToolService {
         // limit, whatever its body says: what was asked may or may not
         // have been done.
         guard http.statusCode < 500 else { throw LinearError.notAnswered(status: http.statusCode) }
+        if let wasMade, (200 ..< 300).contains(http.statusCode), let data = body?["data"] as? [String: Any], wasMade(data) {
+            return data
+        }
         if http.statusCode == 401 || http.statusCode == 403 || kinds.contains(where: { $0.contains("authentication") }) {
             throw LinearError.keyRefused
         }
@@ -206,6 +217,11 @@ nonisolated extension LinearToolService {
         return number.boolValue
     }
 
+    /// Whether an answer's data says the change of that name was made.
+    static func saysItWasMade(_ data: [String: Any], _ change: String) -> Bool {
+        flag((data[change] as? [String: Any])?["success"]) == true
+    }
+
     /// A team's workflow states or its members, all pages of them.
     private static func all(_ field: String, wanting: String, ofTeam teamID: String, key: String, session: URLSession) async throws -> [[String: Any]] {
         let query = """
@@ -259,7 +275,7 @@ nonisolated extension LinearToolService {
             comment { url }
           }
         }
-        """, variables: ["issueId": issueID, "body": body], key: key, session: session)
+        """, variables: ["issueId": issueID, "body": body], key: key, session: session, wasMade: { saysItWasMade($0, "commentCreate") })
         // Only Linear saying it did not is a refusal; an answer that
         // does not say leaves the comment unknown.
         guard let made = data["commentCreate"] as? [String: Any], let success = flag(made["success"]) else { throw LinearError.invalidResponse }
@@ -282,7 +298,7 @@ nonisolated extension LinearToolService {
             }
           }
         }
-        """, variables: ["id": issueID, "input": changes], key: key, session: session)
+        """, variables: ["id": issueID, "input": changes], key: key, session: session, wasMade: { saysItWasMade($0, "issueUpdate") })
         guard let made = data["issueUpdate"] as? [String: Any], let success = flag(made["success"]) else { throw LinearError.invalidResponse }
         guard success else { throw LinearError.refused(message: "Linear did not update the issue") }
         return made["issue"] as? [String: Any] ?? [:]
