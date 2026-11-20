@@ -140,7 +140,7 @@ final class ShellNavigatorTests: XCTestCase {
         navigator.open(thread("s1", title: "Old"))
         navigator.open(thread("w1", covenID: "work", title: "Work"))
 
-        // Renamed while its scope is off screen: its place there is current when the person comes back to it.
+        // Renamed while its scope is off screen: the place kept for that scope holds the thread as it is now.
         navigator.updateThread(thread("s1", title: "New"))
         XCTAssertEqual(navigator.place(in: .strix)?.title, "New")
         XCTAssertEqual(navigator.place(in: .strix)?.threadValue?.title, "New")
