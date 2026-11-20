@@ -13,6 +13,9 @@ struct ShellSidebar: View {
     let personName: String
     let onOpenSettings: () -> Void
     let onCreateCoven: () -> Void
+    /// Opens the person's connected apps in Settings: Strix uses every
+    /// connection, so its Connections button leads there.
+    let onOpenConnectedApps: () -> Void
     /// Moves a coven to a place in the person's order.
     let onMoveCoven: (_ covenID: String, _ index: Int) -> Void
 
@@ -23,6 +26,9 @@ struct ShellSidebar: View {
     @State private var isSearching = false
     @State private var searchText = ""
     @FocusState private var isSearchFocused: Bool
+    #if os(macOS)
+    @Environment(\.controlActiveState) private var controlActiveState
+    #endif
     @State private var showSwitcher = false
     /// The switcher row's width, margins included, for its popover.
     @State private var switcherRowWidth: CGFloat = 0
@@ -278,20 +284,91 @@ struct ShellSidebar: View {
 
     // MARK: - Top: this scope
 
-    /// The switcher, then the scope's Overview as a row of a small list of
-    /// its own: pinned above the thread list, so only the threads scroll.
-    /// The list selects through the same binding as the thread list and
-    /// does not scroll, so it is as tall as its row.
+    /// The switcher, then the scope's Overview row and its places: pinned
+    /// above the thread list, so only the threads scroll. The Overview row
+    /// is drawn by hand, like the places under it, selected as the list
+    /// draws a selected row: a list of one row kept room above its row and
+    /// ran into the places.
     private var scopeZone: some View {
         VStack(spacing: 0) {
             switcherButton
-            List(selection: selection) {
-                Label("Overview", systemImage: "square.grid.2x2")
-                    .pinnedRow(height: pinnedRowHeight)
-                    .tag(ShellSidebarItem.overview)
-            }
-            .pinnedSidebarList(rows: 1, rowHeight: pinnedRowHeight)
+            overviewRow
+                .padding(.horizontal, Spacing.sm)
+                .padding(.bottom, Spacing.xxs)
+            placesRow
+                .padding(.horizontal, Spacing.sm)
+                .padding(.bottom, Spacing.xs)
         }
+    }
+
+    private var overviewRow: some View {
+        let isSelected = navigator.sidebarItem == .overview
+        return Button {
+            navigate(to: .overview)
+        } label: {
+            Label {
+                Text("Overview")
+                    .foregroundStyle(SidebarSelection.ink(.aicovenTextPrimary, selected: isSelected, isKey: isKeyWindow))
+            } icon: {
+                Image(systemName: "square.grid.2x2")
+                    .foregroundStyle(SidebarSelection.ink(.accentColor, selected: isSelected, isKey: isKeyWindow))
+            }
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, minHeight: pinnedRowHeight, alignment: .leading)
+            .padding(.horizontal, Spacing.xs)
+            .background(
+                RoundedRectangle(cornerRadius: BorderRadius.sm)
+                    .fill(SidebarSelection.fill(isSelected, isKey: isKeyWindow))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityIdentifier("sidebar-overview")
+    }
+
+    /// The scope's places as one row of icon-only buttons.
+    private var placesRow: some View {
+        let places: [(item: ShellSidebarItem, name: String, symbol: String)] = [
+            (.memory, "Memory", "books.vertical"),
+            (.agents, "Agents", "person.crop.circle"),
+            (.connectedApps, "Connections", "puzzlepiece.extension"),
+        ]
+        return HStack(spacing: Spacing.xxxs) {
+            ForEach(places, id: \.item) { place in
+                let isSelected = navigator.sidebarItem == place.item
+                Button {
+                    if place.item == .connectedApps, navigator.selected == .strix {
+                        onOpenConnectedApps()
+                    } else {
+                        navigate(to: place.item)
+                    }
+                } label: {
+                    Image(systemName: place.symbol)
+                        .font(.system(size: 17))
+                        .foregroundStyle(SidebarSelection.ink(.accentColor, selected: isSelected, isKey: isKeyWindow))
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                        .background(
+                            RoundedRectangle(cornerRadius: BorderRadius.sm)
+                                .fill(SidebarSelection.fill(isSelected, isKey: isKeyWindow))
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(place.name)
+                .accessibilityLabel(place.name)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+        }
+    }
+
+    /// Whether the window is key, as the list draws a selection in accent then.
+    private var isKeyWindow: Bool {
+        #if os(macOS)
+        controlActiveState == .key
+        #else
+        true
+        #endif
     }
 
     // MARK: - Top: the switcher
@@ -390,22 +467,25 @@ struct ShellSidebar: View {
     }
 }
 
-private extension View {
-    /// A sidebar list that does not scroll and is exactly its rows tall: each
-    /// row is `pinnedRow(height: rowHeight)`.
-    func pinnedSidebarList(rows: Int, rowHeight: CGFloat) -> some View {
-        listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
-            .scrollDisabled(true)
-            .contentMargins(.vertical, 0, for: .scrollContent)
-            .environment(\.defaultMinListRowHeight, rowHeight)
-            .frame(height: CGFloat(rows) * rowHeight)
+/// How a selected place button, drawn by hand, looks: what the list draws
+/// for a selected row. On the Mac it is the accent colour with white ink
+/// while the window is key, and the grey unemphasized selection with the
+/// usual ink otherwise.
+enum SidebarSelection {
+    static func fill(_ isSelected: Bool, isKey: Bool) -> Color {
+        guard isSelected else { return .clear }
+        #if os(macOS)
+        return isKey ? .accentColor : Color(nsColor: .unemphasizedSelectedContentBackgroundColor)
+        #else
+        return Color.aicovenSelected
+        #endif
     }
 
-    /// A row of a pinned sidebar list: `height` tall, with no vertical inset,
-    /// so the cell is exactly that tall.
-    func pinnedRow(height: CGFloat) -> some View {
-        frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .leading)
-            .listRowInsets(EdgeInsets(top: 0, leading: Spacing.sm, bottom: 0, trailing: Spacing.sm))
+    static func ink(_ ink: Color, selected isSelected: Bool, isKey: Bool) -> Color {
+        #if os(macOS)
+        return isSelected && isKey ? .white : ink
+        #else
+        return ink
+        #endif
     }
 }

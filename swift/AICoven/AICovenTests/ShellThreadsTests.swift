@@ -226,6 +226,24 @@ final class ShellThreadsTests: XCTestCase {
         XCTAssertEqual(CovenSwitcherList.accessibilityValue(current: .waiting("Needs your OK"), unread: true), "Needs your OK, Unread")
     }
 
+    func testAnAgentsRowSaysTheFirstLineOfItsInstructionsThatSaysAnything() {
+        XCTAssertEqual(CovenAgentsView.instructionsLine("You review code.\nBe brief."), "You review code.")
+        XCTAssertEqual(CovenAgentsView.instructionsLine("\n\n   \n  Scout for sources.  \nThen stop."), "Scout for sources.")
+        XCTAssertEqual(CovenAgentsView.instructionsLine("   "), "")
+        XCTAssertEqual(CovenAgentsView.instructionsLine(nil), "")
+    }
+
+    func testAMemoryFormOpensForTheTabTheMemoryListAsksFor() {
+        XCTAssertEqual(MemoryForm(tab: .addMemory(covenId: "work")), .add)
+        XCTAssertEqual(MemoryForm(tab: .addMemory(covenId: nil)), .add)
+        XCTAssertEqual(MemoryForm(tab: .editMemory(memoryId: "m1", memoryTitle: "A note", covenId: nil)), .edit(memoryID: "m1"))
+        XCTAssertNil(MemoryForm(tab: .memoryList(covenId: "work")), "No form")
+        XCTAssertNil(MemoryForm(tab: .memoryProposals(covenId: nil)))
+        // Each memory's form is its own sheet.
+        XCTAssertNotEqual(MemoryForm.edit(memoryID: "m1").id, MemoryForm.edit(memoryID: "m2").id)
+        XCTAssertNotEqual(MemoryForm.add.id, MemoryForm.edit(memoryID: "add").id)
+    }
+
     #if os(macOS)
     func testTheNewThreadSheetOpensItsThreadOnlyWhileThatShowingIsOnScreen() {
         let first = NewThreadSheet(covenID: "work")

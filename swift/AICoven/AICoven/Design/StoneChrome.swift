@@ -55,6 +55,15 @@ struct StoneSidebarToggle: ToolbarContent {
     }
 }
 
+extension View {
+    /// A toolbar menu as an icon-only stone button, like the buttons beside it.
+    func stoneToolbarMenu() -> some View {
+        menuStyle(.button)
+            .buttonStyle(.stoneToolbar)
+            .menuIndicator(.hidden)
+    }
+}
+
 /// An icon-only toolbar button: the icon in primary ink on the bar, a stone
 /// square while the pointer is over it, a darker one while pressed. 30 pt on
 /// the Mac, 44 pt on touch.

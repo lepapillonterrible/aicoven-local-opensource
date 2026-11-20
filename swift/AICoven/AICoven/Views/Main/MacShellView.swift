@@ -52,6 +52,7 @@ struct MacShellView: View {
                 personName: ShellSidebar.personName(name: authService.currentUser?.name, email: authService.currentUser?.email),
                 onOpenSettings: { _ = appState.openSettings(for: .settings) },
                 onCreateCoven: { showCreateCoven = true },
+                onOpenConnectedApps: { _ = appState.openSettings(for: .connectedApps) },
                 onMoveCoven: moveCoven
             )
             // On the sidebar column's content, as Apple's example attaches
@@ -61,7 +62,10 @@ struct MacShellView: View {
         } detail: {
             ShellContentView(
                 navigator: navigator,
+                threadActions: threadActions,
+                coven: selectedCoven,
                 onNewThread: newThread,
+                onNewThreadWithAgent: newThread(with:),
                 onCreateCoven: { showCreateCoven = true },
                 onOpenProviderKeys: { _ = appState.openSettings(for: .providerKeys) }
             )
@@ -120,10 +124,12 @@ struct MacShellView: View {
             shellThreads.reload()
         }
         // A thread renamed in the sidebar goes by its new name in the
-        // window's title too.
+        // window's title too, and one brought back from the archive is
+        // offered Archive again in its menu.
         .onChange(of: shellThreads.threads) { _, threads in
             guard let open = navigator.place?.threadValue,
-                  let now = threads.first(where: { $0.id == open.id }), now.title != open.title else { return }
+                  let now = threads.first(where: { $0.id == open.id }),
+                  now.title != open.title || now.isArchived != open.isArchived else { return }
             navigator.updateThread(now)
         }
     }
@@ -151,6 +157,28 @@ struct MacShellView: View {
         let ids = CovenOrder.moving(covenID, to: index, in: orderedCovens)
         covenOrder = ids
         orderStore.save(ids, for: UserScope.currentUserID)
+    }
+
+    /// A thread with one of the coven's agents, made at once and opened
+    /// (unless the person has gone elsewhere meanwhile), as tapping an agent
+    /// did in the window before.
+    private func newThread(with role: Role) {
+        guard !isMakingThread else { return }
+        isMakingThread = true
+        let account = UserScope.currentUserID
+        let asked = navigator.placeGeneration
+        Task {
+            defer { isMakingThread = false }
+            do {
+                let thread = try await ThreadService.shared.createThread(
+                    title: "Chat with \(role.name)", covenId: role.covenId, agentId: role.id, agentName: role.name
+                )
+                guard UserScope.currentUserID == account, navigator.placeGeneration == asked else { return }
+                navigator.open(thread)
+            } catch {
+                AppErrorReporter.log(message: "Could not make a thread (\(type(of: error)))", context: "MacShellView.newThreadWithAgent")
+            }
+        }
     }
 
     /// New Thread: in Strix a thread is made at once and opened; in a coven
