@@ -31,8 +31,8 @@ struct HomeView: View {
     @State private var currentWorkspace: WorkspaceType = .home
 
     /// Whether the window is the new shell (one split view, as the cloud
-    /// app's) instead of the two workspaces. Off until the shell has its
-    /// places; set by hand meanwhile to try it.
+    /// app's) instead of the two workspaces. Off until the two workspaces
+    /// are removed; set by hand meanwhile to try it.
     @AppStorage("shell.newMacWindow") private var usesNewShell = false
 
     var body: some View {

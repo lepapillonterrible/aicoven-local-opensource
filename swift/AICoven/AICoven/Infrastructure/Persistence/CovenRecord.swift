@@ -631,11 +631,23 @@ actor CovenRepository {
         return try await getRole(roleId: roleId)
     }
 
-    func deleteRole(roleId: String) async throws {
+    /// Deletes an agent of `account`'s (the signed-in account's where none
+    /// is named). `account` is whoever asked: if another has signed in by
+    /// the time this runs, nothing is deleted. An agent that is not that
+    /// account's is not found.
+    func deleteRole(roleId: String, as account: String? = nil) async throws {
+        let current = await MainActor.run { UserScope.currentUserID }
+        let uid = account ?? current
+        guard uid == current else { throw RepositoryError.accountChanged }
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        // Asked again once the database is in hand, just before the write.
+        guard await MainActor.run(body: { UserScope.currentUserID }) == uid else { throw RepositoryError.accountChanged }
 
         try await dbQueue.write { db in
-            _ = try RoleRecord.deleteOne(db, key: roleId)
+            guard let record = try RoleRecord.fetchOne(db, key: roleId), record.userId == uid else {
+                throw CovenRepositoryError.roleNotFound
+            }
+            try record.delete(db)
         }
     }
 

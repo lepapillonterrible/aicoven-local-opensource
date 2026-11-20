@@ -242,6 +242,28 @@ final class ShellThreadsTests: XCTestCase {
         XCTAssertEqual(CovenSwitcherList.accessibilityValue(current: .waiting("Needs your OK"), unread: true), "Needs your OK, Unread")
     }
 
+    func testAnAgentsRowSaysTheFirstLineOfItsInstructionsThatSaysAnything() {
+        XCTAssertEqual(CovenAgentsView.instructionsLine("You review code.\nBe brief."), "You review code.")
+        XCTAssertEqual(CovenAgentsView.instructionsLine("\n\n   \n  Scout for sources.  \nThen stop."), "Scout for sources.")
+        XCTAssertEqual(CovenAgentsView.instructionsLine("   "), "")
+        XCTAssertEqual(CovenAgentsView.instructionsLine(nil), "")
+    }
+
+    func testAMemoryFormOpensForTheTabTheMemoryListAsksFor_eachShowingItsOwn() throws {
+        let add = try XCTUnwrap(MemoryForm(tab: .addMemory(covenId: "work")))
+        XCTAssertNil(add.memoryID, "A new memory")
+        let edit = try XCTUnwrap(MemoryForm(tab: .editMemory(memoryId: "m1", memoryTitle: "A note", covenId: nil)))
+        XCTAssertEqual(edit.memoryID, "m1")
+        XCTAssertNil(MemoryForm(tab: .memoryList(covenId: "work")), "No form")
+        XCTAssertNil(MemoryForm(tab: .memoryProposals(covenId: nil)))
+
+        // Each showing is its own: a form that saves after its sheet was cancelled and the same
+        // memory's form opened again is not the one on screen, and closes nothing.
+        let again = try XCTUnwrap(MemoryForm(tab: .editMemory(memoryId: "m1", memoryTitle: "A note", covenId: nil)))
+        XCTAssertEqual(again.memoryID, "m1")
+        XCTAssertNotEqual(edit, again)
+    }
+
     func testACovensThreadIsNotMadeBeforeItsAgentsAreIn_norWithNoneChosenWhereThereAreSome() {
         func can(creating: Bool = false, coven: Bool = true, rolesIn: Bool = true, roles: Bool = true, chosen: Bool = true) -> Bool {
             NewThreadView.canCreate(isCreating: creating, inCoven: coven, rolesAreIn: rolesIn, hasRoles: roles, hasChosenRole: chosen)
@@ -254,6 +276,78 @@ final class ShellThreadsTests: XCTestCase {
         // A personal thread asks for none.
         XCTAssertTrue(can(coven: false, rolesIn: false, roles: false, chosen: false))
         XCTAssertFalse(can(creating: true, coven: false))
+    }
+
+    func testAnAgentIsDeleted_andAThreadOrAMemoryMade_onlyForTheAccountThatAsked() async throws {
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        await MainActor.run { DatabaseManager.shared.configureIfNeeded() }
+        await ThreadService.shared.reloadForCurrentUser()
+        let account = await MainActor.run { UserScope.currentUserID }
+        let coven = try await CovenService.shared.createCoven(name: "Owners \(UUID().uuidString)")
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await CovenService.shared.deleteCoven(id: coven.id)
+            await ThreadService.shared.reloadForCurrentUser()
+            await DataEncryptionService.shared.lock()
+        }
+        let scout = try await RoleService.shared.createRole(covenId: coven.id, name: "Scout")
+
+        // Asked as an account that is no longer the one signed in: nothing is deleted.
+        do {
+            try await RoleService.shared.deleteRole(roleId: scout.id, as: "someone-who-signed-out")
+            XCTFail("Deleted for an account that is not signed in")
+        } catch {
+            guard case RepositoryError.accountChanged = error else { return XCTFail("\(type(of: error))") }
+        }
+        var roles = try await RoleService.shared.loadRoles(covenId: coven.id)
+        XCTAssertEqual(roles.map(\.id), [scout.id])
+
+        // And no thread is made for it, with the first account's coven and agent in it.
+        do {
+            _ = try await ThreadService.shared.createThread(
+                title: "Chat with Scout", covenId: coven.id, agentId: scout.id, agentName: "Scout", as: "someone-who-signed-out"
+            )
+            XCTFail("Made a thread for an account that is not signed in")
+        } catch {
+            guard case RepositoryError.accountChanged = error else { return XCTFail("\(type(of: error))") }
+        }
+        let threads = try await ThreadService.shared.loadThreads(covenId: coven.id, includeArchived: true)
+        XCTAssertEqual(threads.map(\.id), [])
+
+        // Nor is a memory stored for it: what one account wrote is not kept as another's.
+        let note = "A note \(UUID().uuidString)"
+        do {
+            _ = try await MemoryRepository.shared.storeMemory(
+                scope: "user", text: note, tags: [], pii: false, createdBy: nil, source: nil, embedding: nil, as: "someone-who-signed-out"
+            )
+            XCTFail("Stored a memory for an account that is not signed in")
+        } catch {
+            guard case RepositoryError.accountChanged = error else { return XCTFail("\(type(of: error))") }
+        }
+        let kept = try await MemoryRepository.shared.loadMemories(scope: "user", limit: 500)
+        XCTAssertFalse(kept.contains { $0.text == note })
+        let stored = try await MemoryRepository.shared.storeMemory(
+            scope: "user", text: note, tags: [], pii: false, createdBy: nil, source: nil, embedding: nil, as: account
+        )
+        addTeardownBlock { try? await MemoryRepository.shared.deleteMemory(id: stored.id) }
+        XCTAssertEqual(stored.text, note)
+
+        // As the account that owns them, both are done.
+        let thread = try await ThreadService.shared.createThread(
+            title: "Chat with Scout", covenId: coven.id, agentId: scout.id, agentName: "Scout", as: account
+        )
+        addTeardownBlock { try? await ThreadService.shared.deleteThread(threadId: thread.id) }
+        XCTAssertEqual(thread.covenId, coven.id)
+        try await RoleService.shared.deleteRole(roleId: scout.id, as: account)
+        roles = try await RoleService.shared.loadRoles(covenId: coven.id)
+        XCTAssertEqual(roles.map(\.id), [])
+        // An agent that is not there (or not this account's) is not found.
+        do {
+            try await RoleService.shared.deleteRole(roleId: scout.id)
+            XCTFail("Deleted an agent that is gone")
+        } catch {
+            guard case CovenRepositoryError.roleNotFound = error else { return XCTFail("\(type(of: error))") }
+        }
     }
 
     #if os(macOS)
