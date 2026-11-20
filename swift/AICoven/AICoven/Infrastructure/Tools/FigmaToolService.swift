@@ -201,7 +201,7 @@ nonisolated extension FigmaToolService {
                 given.append(id)
             }
         case let .string(text)?:
-            if text.trimmingCharacters(in: .whitespaces).hasPrefix("["),
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("["),
                let list = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [Any] {
                 guard let ids = list as? [String] else { return nil }
                 given = ids
@@ -212,11 +212,12 @@ nonisolated extension FigmaToolService {
             return nil
         }
         var nodes: [String] = []
-        for id in given.map({ $0.trimmingCharacters(in: .whitespaces) }) where !nodes.contains(id) {
-            guard isNodeID(id) else { return nil }
+        for id in given.map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) }) where !nodes.contains(id) {
+            // More than can be rendered at once: no need to read on.
+            guard isNodeID(id), nodes.count < mostFramesAtOnce else { return nil }
             nodes.append(id)
         }
-        return (1 ... mostFramesAtOnce).contains(nodes.count) ? nodes : nil
+        return nodes.isEmpty ? nil : nodes
     }
 
     /// The scale a call asks for (`scale`): 1 when left out or unreadable,
@@ -225,7 +226,7 @@ nonisolated extension FigmaToolService {
         let asked: Double? = switch args["scale"] {
         case let .double(number)?: number
         case let .int(number)?: Double(number)
-        case let .string(text)?: Double(text.trimmingCharacters(in: .whitespaces))
+        case let .string(text)?: Double(text.trimmingCharacters(in: .whitespacesAndNewlines))
         default: nil
         }
         guard let asked, asked.isFinite, asked > 0 else { return 1 }
@@ -271,15 +272,31 @@ nonisolated extension FigmaToolService {
         case tooLarge
     }
 
+    /// The session rendered pictures are fetched with: one that keeps
+    /// nothing of what it fetches (no cache on disk or in memory, no
+    /// cookies), so that a picture does not outlive its turn on the
+    /// device.
+    static let unkeptSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.urlCredentialStorage = nil
+        return URLSession(configuration: configuration)
+    }()
+
     /// Fetches a rendered picture from where Figma put it. The token is
-    /// not sent (the link is signed), a redirect is not followed, and no
-    /// more than `largestRenderFetched` bytes are taken.
+    /// not sent (the link is signed), a redirect is not followed, no
+    /// more than `largestRenderFetched` bytes are taken, and nothing of
+    /// it is kept by the session it is fetched with.
     @concurrent
-    static func fetchRender(_ link: String, session: URLSession = .shared) async throws -> Data {
+    static func fetchRender(_ link: String, session: URLSession = unkeptSession) async throws -> Data {
         guard let url = URL(string: link), isFetchable(url) else { throw FetchFailure.notFetchable }
         var request = URLRequest(url: url)
         request.timeoutInterval = 30
         request.httpShouldHandleCookies = false
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         let (bytes, response) = try await session.bytes(for: request, delegate: NoRedirects())
         guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else { throw FetchFailure.unavailable }
         guard response.expectedContentLength <= Int64(largestRenderFetched) else { throw FetchFailure.tooLarge }
@@ -315,7 +332,7 @@ nonisolated extension FigmaToolService {
 
     /// Fetches the picture Figma made of one node and makes it what a
     /// model is sent: a JPEG, 1568 pixels on its longest edge at most.
-    static func rendered(from link: String?, session: URLSession = .shared) async -> Rendered {
+    static func rendered(from link: String?, session: URLSession = unkeptSession) async -> Rendered {
         guard let link else { return .notRendered(reason: "Figma returned no image") }
         let fetched: Data
         do {

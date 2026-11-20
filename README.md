@@ -123,7 +123,7 @@ The tools layer is provider-agnostic and designed to work with whatever keys you
 - **Connected apps** – GitHub repository tools (read/write files, create branches/PRs, search code), Google Drive, Docs, Sheets and Slides tools (list, read, upload, write), Figma tools (read a file's structure and comments, render frames as images for the model, post a comment), and Linear tools (read an issue, comment on one, change one), authenticated via user-provided tokens.
 - **MCP server tools** – Any tools exposed by connected [MCP](https://modelcontextprotocol.io) servers (e.g. email via Zapier, calendar, Slack). Tools are discovered automatically via `tools/list`, cached locally, and executed via JSON-RPC over Streamable HTTP. A tool the server marks as read-only is used directly; any other asks you first, showing what it will be sent. Semantic tool selection uses embedding-based matching when many tools are available.
 
-These tools are available both to the autonomous `AgentRunner` and to the interactive chat UI via the enhanced message composer.
+These tools are available both to the autonomous `AgentRunner` and to the interactive chat UI via the enhanced message composer, except the two that work with images (image generation and Figma frame rendering), which are for chat replies only.
 
 ### Tool calling by provider
 

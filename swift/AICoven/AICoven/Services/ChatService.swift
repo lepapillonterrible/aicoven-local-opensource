@@ -686,6 +686,10 @@ actor ChatService {
                 // instruction so the model knows to incorporate them.
                 composedUserMessage += "\n\nYou have tool results below. Use them to answer the user's question. If you need more information, call another tool. Otherwise, provide your final answer in natural language.\n\n" + toolContextLog
             }
+            // What the tools' pictures are is said every time they are
+            // sent, apart from the tool results (of which the older may
+            // have been left out by now).
+            composedUserMessage = Self.withToolPictures(composedUserMessage, turnPictures)
 
             // Build LLM context using the shared ContextBuilder, which will pull
             // in runtime info, policies, memories, and recent turns for this
@@ -1060,6 +1064,7 @@ actor ChatService {
                     composedUserMessage += "\n\n" + toolContextLog
                 }
             }
+            composedUserMessage = Self.withToolPictures(composedUserMessage, turnPictures)
 
             // For local models with tool results, drop tool docs from the
             // system prompt — the model just needs to summarize data, and
@@ -1806,6 +1811,13 @@ extension ChatService {
     /// Execute a chat tool call using ToolExecutionService and return a short summary
     /// plus an optional context block that can be fed back into the context sandwich.
     /// This enhanced version routes through the central ToolExecutionService for all tools.
+    /// A message with what the turn's tool pictures are said after it,
+    /// where there are any: they are sent with it.
+    nonisolated static func withToolPictures(_ message: String, _ pictures: TurnPictures?) -> String {
+        guard let caption = pictures?.caption else { return message }
+        return message + "\n\n" + caption
+    }
+
     nonisolated func executeChatToolCall(_ call: ChatToolInvocation, threadID: String?, pictures: TurnPictures? = nil) async throws -> (summary: String, contextBlock: String?, files: [FileAttachmentDetail]) {
         // A stopped turn starts no tool.
         try Task.checkCancellation()

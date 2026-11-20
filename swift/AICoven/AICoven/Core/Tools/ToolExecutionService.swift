@@ -20,6 +20,9 @@ actor ToolExecutionService {
     /// The session Figma and Linear are asked through; a test gives one
     /// that answers in their place.
     private let appSession: URLSession
+    /// What the pictures a tool makes for the model are fetched with:
+    /// a session that keeps nothing of them.
+    private let pictureSession: URLSession
 
     /// Asks the person before a tool changes something, and waits for the
     /// answer.
@@ -38,6 +41,7 @@ actor ToolExecutionService {
         connectedAccountsService = .shared
         hasToolsPack = Self.hasBoughtTheToolsPack
         appSession = .shared
+        pictureSession = FigmaToolService.unkeptSession
     }
 
     /// Test-friendly initializer that accepts a mock tool service, an
@@ -64,6 +68,8 @@ actor ToolExecutionService {
         self.googleDriveService = googleDriveService
         self.hasToolsPack = hasToolsPack
         self.appSession = appSession
+        // A test's scripted session answers for the pictures too.
+        pictureSession = appSession === URLSession.shared ? FigmaToolService.unkeptSession : appSession
     }
 
     // Configuration
@@ -1310,13 +1316,13 @@ actor ToolExecutionService {
         }
         let scale = FigmaToolService.scale(in: toolCall.args)
         let rendered = RenderedFrames()
-        let result = await executeFigma(toolCall: toolCall) { [appSession] file, token in
+        let result = await executeFigma(toolCall: toolCall) { [appSession, pictureSession] file, token in
             let links = try await FigmaToolService.renderLinks(key: file, nodes: nodes, scale: scale, token: token, session: appSession)
             try Task.checkCancellation()
             // Each picture is fetched from where Figma put it, together.
             let frames = await withTaskGroup(of: (Int, FigmaToolService.Rendered).self) { group in
                 for (index, node) in nodes.enumerated() {
-                    group.addTask { await (index, FigmaToolService.rendered(from: links[node], session: appSession)) }
+                    group.addTask { await (index, FigmaToolService.rendered(from: links[node], session: pictureSession)) }
                 }
                 var found = [FigmaToolService.Rendered?](repeating: nil, count: nodes.count)
                 for await (index, frame) in group {
@@ -1342,10 +1348,12 @@ actor ToolExecutionService {
         }
         let frames = rendered.frames
         var images: [LLMImage] = []
-        for case let (_, .picture(image, _, _)) in frames {
+        var labels: [String] = []
+        for case let (node, .picture(image, _, _)) in frames {
             images.append(image)
+            labels.append("Figma file \(file), node \(node)")
         }
-        let numbered = pictures.add(images)
+        let numbered = pictures.add(images, labels: labels)
         return .success(
             tool: toolCall.name,
             result: ["file": AnyJSONValue(file), "rendered": AnyJSONValue(images.count), "not_rendered": AnyJSONValue(frames.count - images.count)],
