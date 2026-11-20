@@ -184,8 +184,7 @@ struct SettingsList: View {
             }
     }
 
-    /// The rows push their pane directly, not by value: a value link finds
-    /// no destination where this list is itself pushed in another stack.
+    /// The rows push their pane directly, not by value.
     private func rows(_ panes: SettingsPane...) -> some View {
         ForEach(panes) { pane in
             NavigationLink {

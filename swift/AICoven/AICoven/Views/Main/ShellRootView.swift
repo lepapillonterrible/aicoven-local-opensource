@@ -2,8 +2,9 @@ import SwiftUI
 
 /// The cloud app's shell: one split view, with the sidebar on the left and
 /// the place open in the scope on screen beside it, under a toolbar and the
-/// window's title. The Mac's window; and the iPad's layout, where Settings
-/// is a place in it and not a window.
+/// window's title. The Mac's window. It compiles for every platform, to
+/// become the iPad's layout too, where Settings is a place in it and not a
+/// window; until it is shown there, only the Mac shows it.
 struct ShellRootView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var authService: AuthService
