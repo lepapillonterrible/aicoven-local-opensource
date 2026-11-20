@@ -21,7 +21,8 @@ struct MacShellView: View {
     @State private var covenOrder: [String] = []
     private let orderStore = CovenOrderStore()
     @State private var columnVisibility = NavigationSplitViewVisibility.automatic
-    @State private var showNewThread = false
+    /// The New Thread sheet on screen, if one is: each showing is its own.
+    @State private var newThreadSheet: NewThreadSheet?
     @State private var showCreateCoven = false
 
     /// The covens in the person's order.
@@ -76,12 +77,13 @@ struct MacShellView: View {
         .stoneWindowBar()
         .navigationTitle(shellWindowTitle(covenName: scopeName, covenPlaceTitle: navigator.placeTitle))
         .threadActionsHost(threadActions)
-        .sheet(isPresented: $showNewThread) {
-            NewThreadView(covenId: navigator.selected.covenID) { thread in
+        .sheet(item: $newThreadSheet) { sheet in
+            NewThreadView(covenId: sheet.covenID) { thread in
                 // The sheet can have been cancelled while the thread was
                 // being made: it is then in the list, and not opened over
-                // wherever the person has gone.
-                if showNewThread { navigator.open(thread) }
+                // wherever the person has gone, even if they have opened
+                // the sheet again since.
+                if sheet.opensItsThread(whileShowing: newThreadSheet) { navigator.open(thread) }
                 shellThreads.reload()
             }
         }
@@ -152,7 +154,7 @@ struct MacShellView: View {
     /// the sheet asks which agent it is for.
     private func newThread() {
         guard navigator.selected == .strix else {
-            showNewThread = true
+            newThreadSheet = NewThreadSheet(covenID: navigator.selected.covenID)
             return
         }
         let account = UserScope.currentUserID
@@ -169,6 +171,18 @@ struct MacShellView: View {
                 AppErrorReporter.log(message: "Could not make a thread (\(type(of: error)))", context: "MacShellView.newThread")
             }
         }
+    }
+}
+
+/// One showing of the New Thread sheet, for the coven it was asked in.
+struct NewThreadSheet: Identifiable, Equatable {
+    let id = UUID()
+    let covenID: String?
+
+    /// Whether the thread this sheet made is opened: only while this very
+    /// showing is still the one on screen.
+    func opensItsThread(whileShowing shown: NewThreadSheet?) -> Bool {
+        shown?.id == id
     }
 }
 #endif
