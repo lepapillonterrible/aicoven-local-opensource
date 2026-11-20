@@ -9,7 +9,7 @@ import UIKit
 /// symbol this OS can't draw is replaced by `fallback`: `cpu` for an agent, and
 /// `house` for a coven.
 struct SymbolDisc: View {
-    static let fallbackSymbol = "cpu"
+    nonisolated static let fallbackSymbol = "cpu"
 
     let symbol: String
     let tint: IconTint
@@ -18,11 +18,11 @@ struct SymbolDisc: View {
 
     /// The symbol itself when this OS can draw it, else `fallback`: a symbol
     /// picked on a newer OS can arrive on an older one.
-    static func renderable(_ symbol: String, fallback: String) -> String {
+    nonisolated static func renderable(_ symbol: String, fallback: String) -> String {
         isRenderable(symbol) ? symbol : fallback
     }
 
-    static func isRenderable(_ symbol: String) -> Bool {
+    nonisolated static func isRenderable(_ symbol: String) -> Bool {
         #if os(macOS)
         NSImage(systemSymbolName: symbol, accessibilityDescription: nil) != nil
         #else
@@ -43,5 +43,7 @@ struct SymbolDisc: View {
                     .foregroundStyle(tint.foreground)
                     .frame(width: size * 0.58, height: size * 0.58)
             }
+            // A mark, not a control: what it is of is said beside it.
+            .accessibilityHidden(true)
     }
 }

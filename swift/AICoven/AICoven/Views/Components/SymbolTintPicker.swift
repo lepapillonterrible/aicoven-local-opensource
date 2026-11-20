@@ -14,6 +14,9 @@ struct SymbolTintPicker: View {
     let suggestedSymbols: [String]
     @State private var query = ""
     @State private var results: [String] = []
+    /// The search `results` are of: nil while none has finished. What is
+    /// shown is for the text in the field, or nothing yet.
+    @State private var searched: String?
     @Environment(\.dismiss) private var dismiss
 
     // 44 pt hit areas on iPhone and iPad; the Mac's controls are smaller.
@@ -41,7 +44,13 @@ struct SymbolTintPicker: View {
                     Text(isSearching ? "Results" : "Suggested")
                         .font(.aicovenCaption)
                         .foregroundStyle(Color.aicovenTextTertiary)
-                    if isSearching, results.isEmpty {
+                    if isSearching, searched != trimmedQuery {
+                        // Still looking: neither the last search's symbols
+                        // nor "no symbols" is said of this one.
+                        ProgressView()
+                            .controlSize(.small)
+                            .accessibilityLabel("Searching symbols")
+                    } else if isSearching, results.isEmpty {
                         Text("No symbols match “\(trimmedQuery)”.")
                             .font(.aicovenBodySmall)
                             .foregroundStyle(Color.aicovenTextSecondary)
@@ -89,11 +98,13 @@ struct SymbolTintPicker: View {
             let text = trimmedQuery
             guard !text.isEmpty else {
                 results = []
+                searched = nil
                 return
             }
             let found = await Task.detached { SymbolCatalog.shared.search(text) }.value
             guard !Task.isCancelled else { return }
             results = found.filter(SymbolDisc.isRenderable)
+            searched = text
         }
     }
 

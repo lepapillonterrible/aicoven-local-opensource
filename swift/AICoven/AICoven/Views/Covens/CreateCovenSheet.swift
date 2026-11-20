@@ -6,10 +6,11 @@ struct CreateCovenSheet: View {
     @EnvironmentObject var storeService: StoreService
 
     @State private var covenName = ""
-    /// The icon the coven is made with, and whether the person chose it.
+    /// The icon the coven is made with, once it is the one to make it
+    /// with (`NewCovenIcon`).
     @State private var iconSymbol = CovenIcon.defaultSymbol
     @State private var iconTint = IconTint.warm
-    @State private var didChooseIcon = false
+    @State private var isIconReady = false
     @State private var covenDescription = ""
     @State private var isCreating = false
     @State private var errorMessage: String?
@@ -33,19 +34,7 @@ struct CreateCovenSheet: View {
                         VStack(spacing: Spacing.lg) {
                             // Header
                             VStack(spacing: Spacing.sm) {
-                                IconChoice(symbol: $iconSymbol, tint: $iconTint, suggestedSymbols: CovenIcon.suggestedSymbols) {
-                                    SymbolDisc(symbol: iconSymbol, tint: iconTint, size: 64, fallback: CovenIcon.defaultSymbol)
-                                }
-                                // It starts with a symbol and a tint no other coven shows.
-                                .task {
-                                    let start = await CovenIcon.startingIcon(among: (try? CovenService.shared.loadCovens()) ?? [])
-                                    if !didChooseIcon {
-                                        iconSymbol = start.symbol
-                                        iconTint = start.tint
-                                    }
-                                }
-                                .onChange(of: iconSymbol) { _, _ in didChooseIcon = true }
-                                .onChange(of: iconTint) { _, _ in didChooseIcon = true }
+                                NewCovenIcon(symbol: $iconSymbol, tint: $iconTint, isReady: $isIconReady)
 
                                 Text("Create a Coven")
                                     .font(.aicovenDisplaySmall)
@@ -145,7 +134,7 @@ struct CreateCovenSheet: View {
                                     .cornerRadius(BorderRadius.md)
                                 }
                                 .buttonStyle(.plain)
-                                .disabled(covenName.isEmpty || isCreating)
+                                .disabled(covenName.isEmpty || isCreating || !isIconReady)
                             }
                             .padding(.horizontal, Spacing.lg)
                         }

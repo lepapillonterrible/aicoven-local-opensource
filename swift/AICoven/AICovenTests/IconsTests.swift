@@ -1,4 +1,5 @@
 @testable import AICoven
+import GRDB
 import XCTest
 
 /// A coven has an icon and an agent a face: a symbol on one of twelve
@@ -34,6 +35,11 @@ final class IconsTests: XCTestCase {
         XCTAssertEqual(AgentFace.symbol(forEmoji: "⚙"), "gearshape")
         XCTAssertEqual(AgentFace.symbol(forEmoji: "✍️"), "pencil")
         XCTAssertEqual(AgentFace.symbol(forEmoji: "💻"), "laptopcomputer")
+        // Every emoji the app offered for an agent stands for a symbol.
+        for emoji in ["🤖", "🧠", "💡", "🎨", "📝", "🔍", "⚙️", "📊", "🚀", "💬", "🎯", "🔬", "📚", "✨", "🌟", "🎭"] {
+            XCTAssertNotNil(AgentFace.symbol(forEmoji: emoji), emoji)
+        }
+        XCTAssertEqual(AgentFace.symbol(forEmoji: "🌟"), "star")
         XCTAssertNil(AgentFace.symbol(forEmoji: "🦄"))
         XCTAssertNil(AgentFace.symbol(forEmoji: nil))
         // Every symbol an emoji stands for, and every suggested one, can be a stored symbol.
@@ -112,6 +118,12 @@ final class IconsTests: XCTestCase {
         let third = CovenIcon.startingIcon(among: [old, coven("b", settings: CovenSettings(iconSymbol: "briefcase", iconTint: "water"))])
         XCTAssertEqual(third.symbol, "book.closed")
         XCTAssertEqual(third.tint, .rust)
+        // What counts is what a coven shows: a stored symbol this system
+        // cannot draw, or that is no symbol's name, shows a house.
+        let undrawable = coven("u", settings: CovenSettings(iconSymbol: "no.such.symbol.anywhere", iconTint: "teal"))
+        XCTAssertEqual(CovenIcon.startingIcon(among: [undrawable]).symbol, "briefcase", "A house is shown already")
+        XCTAssertEqual(CovenIcon.startingIcon(among: [undrawable]).tint, .water, "And sand is worn")
+        XCTAssertEqual(CovenIcon.startingIcon(amongIcons: [("Not A Symbol", nil), ("briefcase", "water")]).symbol, "book.closed")
         // When every symbol and tint is shown, the first of each.
         let all = zip(CovenIcon.suggestedSymbols, IconTint.allCases + IconTint.allCases).map { symbol, tint in
             coven(symbol, settings: CovenSettings(iconSymbol: symbol, iconTint: tint.rawValue))
@@ -173,11 +185,31 @@ final class IconsTests: XCTestCase {
         try await CovenService.shared.setConnections(CovenConnections(), forCoven: first.id)
         stored = try await CovenService.shared.loadCovens().first { $0.id == first.id }
         XCTAssertEqual(stored?.iconSymbol, "flask")
-        // What cannot be a symbol is not stored.
+        // What cannot be a symbol is not stored, and is said to be that.
         do {
             try await CovenService.shared.setIcon(symbol: "Not A Symbol", tint: .sky, forCoven: first.id)
             XCTFail("Stored what is no symbol")
-        } catch {}
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "That is not a symbol's name")
+        }
+        do {
+            _ = try await CovenService.shared.createCoven(name: "No", icon: ("Not A Symbol", .sky))
+            XCTFail("Made a coven with what is no symbol")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "That is not a symbol's name")
+        }
+        // Covens made at once do not start with the same icon.
+        async let one = CovenService.shared.createCoven(name: "At once \(UUID().uuidString)")
+        async let two = CovenService.shared.createCoven(name: "At once \(UUID().uuidString)")
+        let together = try await [one, two]
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            for coven in together {
+                try? await CovenService.shared.deleteCoven(id: coven.id)
+            }
+        }
+        XCTAssertNotEqual(together[0].settings?.iconSymbol, together[1].settings?.iconSymbol)
+        XCTAssertNotEqual(together[0].settings?.iconTint, together[1].settings?.iconTint)
 
         // An agent starts with a face: its emoji's symbol, on a tint no other agent of the coven wears.
         let writer = try await RoleService.shared.createRole(covenId: first.id, name: "Writer", emoji: "✍️")
@@ -196,5 +228,34 @@ final class IconsTests: XCTestCase {
         XCTAssertEqual(saved.iconTintValue, .plum)
         XCTAssertEqual(saved.settings?.autonomousMode, false)
         XCTAssertEqual(saved.settings?.autonomousMaxSteps, 3)
+        XCTAssertEqual(saved.emoji, "💻", "Its emoji stays as it was stored")
+
+        // One made with a face chosen for it has that face.
+        let designer = try await RoleService.shared.createRole(covenId: first.id, name: "Designer", icon: ("paintpalette", .rose))
+        XCTAssertEqual(designer.iconSymbol, "paintpalette")
+        XCTAssertEqual(designer.iconTintValue, .rose)
+        // An agent is not made in a coven that is not the person's.
+        do {
+            _ = try await RoleService.shared.createRole(covenId: "no-such-coven-\(UUID().uuidString)", name: "Stray")
+            XCTFail("Made an agent in no coven of the person's")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "Coven not found")
+        }
+
+        // Settings that cannot be read are not written over by a new face.
+        let queue = try await MainActor.run { try XCTUnwrap(DatabaseManager.shared.dbQueue) }
+        try await queue.write { db in
+            try db.execute(sql: "UPDATE roles SET settings = ? WHERE id = ?", arguments: ["not settings", writer.id])
+        }
+        do {
+            try await RoleService.shared.setIcon(symbol: "star", tint: .plum, forRole: writer.id)
+            XCTFail("Wrote over settings that could not be read")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "This agent's settings could not be read")
+        }
+        let kept = try await queue.read { db in
+            try String.fetchOne(db, sql: "SELECT settings FROM roles WHERE id = ?", arguments: [writer.id])
+        }
+        XCTAssertEqual(kept, "not settings")
     }
 }

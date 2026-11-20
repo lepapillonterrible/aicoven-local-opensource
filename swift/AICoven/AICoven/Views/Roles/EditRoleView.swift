@@ -11,7 +11,6 @@ struct EditRoleView: View {
     @State private var loading = true
     @State private var role: Role?
     @State private var name = ""
-    @State private var emoji = "🤖"
     @State private var iconSymbol = SymbolDisc.fallbackSymbol
     @State private var iconTint = IconTint.warm
     @State private var description = ""
@@ -41,7 +40,6 @@ struct EditRoleView: View {
     /// Collaborators state
     @State private var selectedCollaborators: Set<String> = []
 
-    let emojiOptions = ["🤖", "🧠", "💡", "🎨", "📝", "🔍", "⚙️", "📊", "🚀", "💬", "🎯", "🔬", "📚", "✨", "🌟", "🎭"]
     let providerOptions = [
         ("openai", "OpenAI"),
         ("anthropic", "Anthropic"),
@@ -467,7 +465,6 @@ struct EditRoleView: View {
             // Populate form fields
             if let role {
                 name = role.name
-                emoji = role.emoji ?? "🤖"
                 iconSymbol = role.iconSymbol ?? SymbolDisc.fallbackSymbol
                 iconTint = role.iconTintValue ?? .warm
                 description = role.description ?? ""
@@ -549,7 +546,6 @@ struct EditRoleView: View {
             _ = try await RoleService.shared.updateRole(
                 roleId: roleId,
                 name: name,
-                emoji: emoji,
                 description: description.isEmpty ? nil : description,
                 systemPrompt: systemPrompt.isEmpty ? nil : systemPrompt,
                 model: model.isEmpty ? nil : model,

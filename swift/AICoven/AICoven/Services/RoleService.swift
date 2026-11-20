@@ -51,7 +51,8 @@ actor RoleService {
         autonomousMode: Bool? = nil,
         autonomousMaxSteps: Int? = nil,
         plannerMaxTasks: Int? = nil,
-        plannerMaxSeconds: Double? = nil
+        plannerMaxSeconds: Double? = nil,
+        icon: (symbol: String, tint: IconTint)? = nil
     ) async throws -> Role {
         try await CovenRepository.shared.createRole(
             covenId: covenId,
@@ -69,7 +70,8 @@ actor RoleService {
             autonomousMode: autonomousMode,
             autonomousMaxSteps: autonomousMaxSteps,
             plannerMaxTasks: plannerMaxTasks,
-            plannerMaxSeconds: plannerMaxSeconds
+            plannerMaxSeconds: plannerMaxSeconds,
+            icon: icon
         )
     }
 

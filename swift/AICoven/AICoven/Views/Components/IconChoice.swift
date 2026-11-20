@@ -48,3 +48,41 @@ private extension View {
         }
     }
 }
+
+/// The icon a new coven is made with: it starts as one no other coven
+/// shows (`CovenIcon.startingIcon`), unless the person has chosen one by
+/// then. Until that is known the coven is not made (`isReady`).
+struct NewCovenIcon: View {
+    @Binding var symbol: String
+    @Binding var tint: IconTint
+    /// The icon shown is the one the coven will be made with.
+    @Binding var isReady: Bool
+
+    /// The person chose in the picker, whatever they chose (also the
+    /// symbol or the tint that was already shown).
+    @State private var didChoose = false
+
+    var body: some View {
+        IconChoice(
+            symbol: Binding(get: { symbol }, set: { chosen in
+                symbol = chosen
+                didChoose = true
+            }),
+            tint: Binding(get: { tint }, set: { chosen in
+                tint = chosen
+                didChoose = true
+            }),
+            suggestedSymbols: CovenIcon.suggestedSymbols
+        ) {
+            SymbolDisc(symbol: symbol, tint: tint, size: 64, fallback: CovenIcon.defaultSymbol)
+        }
+        .task {
+            let start = await CovenIcon.startingIcon(among: (try? CovenService.shared.loadCovens()) ?? [])
+            if !didChoose {
+                symbol = start.symbol
+                tint = start.tint
+            }
+            isReady = true
+        }
+    }
+}
