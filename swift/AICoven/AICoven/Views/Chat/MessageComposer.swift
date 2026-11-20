@@ -12,6 +12,10 @@ struct MentionableRole: Identifiable, Hashable {
     let id: String
     let name: String
     let emoji: String?
+    /// The agent's face: its symbol, the key of its tint, and its provider.
+    var iconSymbol: String?
+    var iconTint: String?
+    var provider: String?
 }
 
 /// What a composer holds unsent: its text and its attachments.
@@ -1077,8 +1081,12 @@ struct MessageComposer: View {
                     mentionQuery = ""
                 } label: {
                     HStack(spacing: Spacing.xs) {
-                        Text(role.emoji ?? "🤖")
-                            .accessibilityHidden(true)
+                        AgentFace(
+                            symbol: role.iconSymbol ?? AgentFace.symbol(forEmoji: role.emoji),
+                            tint: role.iconTint.flatMap(IconTint.init(rawValue:)),
+                            provider: role.provider,
+                            size: 20
+                        )
                         Text(role.name)
                             .font(.aicovenBodySmall)
                     }

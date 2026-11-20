@@ -292,6 +292,7 @@ private struct CovenScopePopoverContent: View {
 
             scopeRow(
                 icon: "sparkles",
+                isStrix: true,
                 title: "Strix",
                 subtitle: "Default coven",
                 isSelected: true,
@@ -313,6 +314,7 @@ private struct CovenScopePopoverContent: View {
                 ForEach(covens) { coven in
                     scopeRow(
                         icon: "person.3.fill",
+                        coven: coven,
                         title: coven.name,
                         action: { onSelectCoven(coven) }
                     )
@@ -338,6 +340,8 @@ private struct CovenScopePopoverContent: View {
 
     private func scopeRow(
         icon: String,
+        coven: Coven? = nil,
+        isStrix: Bool = false,
         title: String,
         subtitle: String? = nil,
         isSelected: Bool = false,
@@ -346,9 +350,15 @@ private struct CovenScopePopoverContent: View {
     ) -> some View {
         Button(action: action) {
             HStack(spacing: Spacing.sm) {
-                Image(systemName: icon)
-                    .font(.aicovenBodySmall)
-                    .foregroundColor(tint)
+                if coven != nil || isStrix {
+                    // A coven is shown by its own icon, and Strix, which
+                    // is no coven here, by the sparkles mark.
+                    CovenIcon(coven: coven, size: 20)
+                } else {
+                    Image(systemName: icon)
+                        .font(.aicovenBodySmall)
+                        .foregroundColor(tint)
+                }
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)

@@ -442,8 +442,7 @@ struct MobileCovenRolesView: View {
                     selectedRole = role
                 } label: {
                     HStack(spacing: Spacing.sm) {
-                        Text(role.emoji ?? "🤖")
-                            .font(.system(size: 24))
+                        role.face(size: 28)
                         VStack(alignment: .leading, spacing: Spacing.xxs) {
                             Text(role.name)
                                 .font(.aicovenBody)

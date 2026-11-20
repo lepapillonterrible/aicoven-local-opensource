@@ -51,7 +51,8 @@ actor RoleService {
         autonomousMode: Bool? = nil,
         autonomousMaxSteps: Int? = nil,
         plannerMaxTasks: Int? = nil,
-        plannerMaxSeconds: Double? = nil
+        plannerMaxSeconds: Double? = nil,
+        icon: (symbol: String, tint: IconTint)? = nil
     ) async throws -> Role {
         try await CovenRepository.shared.createRole(
             covenId: covenId,
@@ -69,7 +70,8 @@ actor RoleService {
             autonomousMode: autonomousMode,
             autonomousMaxSteps: autonomousMaxSteps,
             plannerMaxTasks: plannerMaxTasks,
-            plannerMaxSeconds: plannerMaxSeconds
+            plannerMaxSeconds: plannerMaxSeconds,
+            icon: icon
         )
     }
 
@@ -128,6 +130,11 @@ actor RoleService {
             plannerMaxTasks: plannerMaxTasks,
             plannerMaxSeconds: plannerMaxSeconds
         )
+    }
+
+    /// Sets an agent's face.
+    func setIcon(symbol: String, tint: IconTint, forRole id: String) async throws {
+        try await CovenRepository.shared.setIcon(symbol: symbol, tint: tint, forRole: id)
     }
 
     /// Delete a role

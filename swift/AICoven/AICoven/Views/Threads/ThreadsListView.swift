@@ -202,7 +202,7 @@ struct NewThreadView: View {
                             } else {
                                 Picker("Role", selection: $selectedRoleId) {
                                     ForEach(roles) { role in
-                                        Text("\(role.emoji ?? "🤖") \(role.name)")
+                                        Text(role.name)
                                             .tag(Optional(role.id))
                                     }
                                 }

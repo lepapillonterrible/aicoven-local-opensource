@@ -6,6 +6,11 @@ struct CreateCovenSheet: View {
     @EnvironmentObject var storeService: StoreService
 
     @State private var covenName = ""
+    /// The icon the coven is made with, once it is the one to make it
+    /// with (`NewCovenIcon`).
+    @State private var iconSymbol = CovenIcon.defaultSymbol
+    @State private var iconTint = IconTint.warm
+    @State private var isIconReady = false
     @State private var covenDescription = ""
     @State private var isCreating = false
     @State private var errorMessage: String?
@@ -29,7 +34,7 @@ struct CreateCovenSheet: View {
                         VStack(spacing: Spacing.lg) {
                             // Header
                             VStack(spacing: Spacing.sm) {
-                                IconBadge(icon: "person.3", size: 80, color: .aicovenPurple)
+                                NewCovenIcon(symbol: $iconSymbol, tint: $iconTint, isReady: $isIconReady)
 
                                 Text("Create a Coven")
                                     .font(.aicovenDisplaySmall)
@@ -129,7 +134,7 @@ struct CreateCovenSheet: View {
                                     .cornerRadius(BorderRadius.md)
                                 }
                                 .buttonStyle(.plain)
-                                .disabled(covenName.isEmpty || isCreating)
+                                .disabled(covenName.isEmpty || isCreating || !isIconReady)
                             }
                             .padding(.horizontal, Spacing.lg)
                         }
@@ -150,7 +155,8 @@ struct CreateCovenSheet: View {
             do {
                 let coven = try await CovenService.shared.createCoven(
                     name: covenName,
-                    description: covenDescription.isEmpty ? nil : covenDescription
+                    description: covenDescription.isEmpty ? nil : covenDescription,
+                    icon: (iconSymbol, iconTint)
                 )
 
                 await MainActor.run {
