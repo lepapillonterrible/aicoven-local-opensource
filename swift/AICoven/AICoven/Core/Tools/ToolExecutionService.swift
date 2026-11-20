@@ -527,14 +527,7 @@ actor ToolExecutionService {
 
         // --- Linear Tools ---
         case "linear.getIssue":
-            return await executeLinear(toolCall: toolCall) { [figmaSession] issue, key in
-                let found = try await LinearToolService.issue(issue, key: key, session: figmaSession)
-                return .success(
-                    tool: toolCall.name,
-                    result: ["issue": AnyJSONValue(found["identifier"] as? String ?? issue), "url": AnyJSONValue(found["url"] as? String ?? "")],
-                    contextBlock: LinearToolService.told(issue: found)
-                )
-            }
+            return await executeLinearGetIssue(toolCall: toolCall)
 
         // --- Google Drive Tools ---
         case "google_drive.listFiles", "google_drive.list_files":
@@ -1224,6 +1217,10 @@ actor ToolExecutionService {
             // still the connection's.
             if case FigmaError.tokenRefused = error, let token {
                 await connectedAccountsService.markTokenRefused(accountID: account.id, token: token)
+                // Stopped while that was written down.
+                if Task.isCancelled {
+                    return .error(tool: toolCall.name, message: "Stopped before Figma answered.", errorType: "cancelled")
+                }
             }
             // A change whose answer did not come may have been made: it is
             // not asked for again without looking.
@@ -1296,30 +1293,35 @@ actor ToolExecutionService {
         }
     }
 
-    /// Runs a Linear tool on the issue its call names, with the connected
-    /// account's key. A key Linear refuses marks the connection as
-    /// needing a new one. A reading tool whose turn was stopped while its
-    /// answer was read tells that it was stopped.
-    private func executeLinear(toolCall: ParsedToolCall, _ run: @Sendable (_ issue: String, _ key: String) async throws -> ToolExecutionResult) async -> ToolExecutionResult {
+    /// Execute linear.getIssue: reads the issue the call names, with the
+    /// connected account's key. A key Linear refuses marks the connection
+    /// as needing a new one. A call whose turn was stopped tells that it
+    /// was stopped, wherever the stop landed.
+    private func executeLinearGetIssue(toolCall: ParsedToolCall) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .linear) else {
             return .error(tool: toolCall.name, message: Self.linearNotConnected)
         }
         guard let given = toolCall.args["issue"]?.value as? String, let issue = LinearToolService.issueReference(given) else {
             return .validationError(tool: toolCall.name, message: "Missing or unreadable 'issue'. Give a Linear issue's identifier, like 'ENG-12', or its link.", field: "issue")
         }
+        let stopped = ToolExecutionResult.error(tool: toolCall.name, message: "Stopped before the issue was read.", errorType: "cancelled")
         var key: String?
         do {
             let kept = try await connectedAccountsService.getAccessToken(forAccountId: account.id)
             key = kept
-            let result = try await run(issue, kept)
+            let found = try await LinearToolService.issue(issue, key: kept, session: figmaSession)
             try Task.checkCancellation()
-            return result
+            return .success(
+                tool: toolCall.name,
+                result: ["issue": AnyJSONValue(found["identifier"] as? String ?? issue), "url": AnyJSONValue(found["url"] as? String ?? "")],
+                contextBlock: LinearToolService.told(issue: found)
+            )
         } catch {
-            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
-                return .error(tool: toolCall.name, message: "Stopped before Linear answered.", errorType: "cancelled")
-            }
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return stopped }
             if case LinearError.keyRefused = error, let key {
                 await connectedAccountsService.markTokenRefused(accountID: account.id, token: key)
+                // Stopped while that was written down.
+                if Task.isCancelled { return stopped }
             }
             let failure = Self.linearFailure(error)
             return .error(tool: toolCall.name, message: failure.message, errorType: failure.code, isRetryable: failure.retry)

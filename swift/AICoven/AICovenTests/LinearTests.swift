@@ -141,6 +141,14 @@ final class LinearTests: XCTestCase {
         """)
         XCTAssertEqual(LinearToolService.told(issue: ["identifier": "ENG-1"]), "[Linear Issue: ENG-1] (untitled)\nState: (none) · Assignee: (no one)\n\nDescription:\n(none)")
         XCTAssertEqual([0, 1, 2, 3, 4, 9].map(LinearToolService.priorityName), ["None", "Urgent", "High", "Medium", "Low", "None"])
+
+        // A long comment is told to its limit, the mark that it was cut included.
+        let long = LinearToolService.told(issue: ["identifier": "ENG-1", "comments": ["nodes": [["body": String(repeating: "a", count: 2001), "createdAt": "t"]]]])
+        let line = try XCTUnwrap(long.split(separator: "\n").last)
+        XCTAssertEqual(line.dropFirst("- Someone, t: ".count).count, LinearToolService.mostOfAComment)
+        XCTAssertTrue(line.hasSuffix("a…"))
+        let whole = LinearToolService.told(issue: ["identifier": "ENG-1", "comments": ["nodes": [["body": String(repeating: "a", count: 2000), "createdAt": "t"]]]])
+        XCTAssertFalse(whole.hasSuffix("…"))
     }
 
     // MARK: - Connecting, and the tool
@@ -150,6 +158,7 @@ final class LinearTests: XCTestCase {
         let accounts: ConnectedAccountsService
         let tokens: InMemoryTokens
         let asked: Asked
+        let checking: Checking
         let defaults: UserDefaults
         let suite: String
 
@@ -171,7 +180,9 @@ final class LinearTests: XCTestCase {
         let suite = "LinearTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         let tokens = InMemoryTokens()
+        let checking = Checking()
         let accounts = ConnectedAccountsService(currentUser: { "linear-tests" }, defaults: defaults, tokens: tokens.store, tokenIdentity: { provider, token in
+            await checking.happens(for: provider)
             guard token != "wrong" else { throw ConnectedAccountsService.TokenRefusal.refused }
             return .init(id: token.hasSuffix("other") ? "u2" : "u1", label: provider == .linear ? "ada@linear.example" : "ada@figma.example")
         })
@@ -185,7 +196,22 @@ final class LinearTests: XCTestCase {
             figmaSession: session(keeping: asked, answer: answer)
         )
         await executor.setWhitelist(for: "chat", tools: PromptTemplates.linearTools)
-        return World(executor: executor, accounts: accounts, tokens: tokens, asked: asked, defaults: defaults, suite: suite)
+        return World(executor: executor, accounts: accounts, tokens: tokens, asked: asked, checking: checking, defaults: defaults, suite: suite)
+    }
+
+    /// What happens while an app is asked whose a token is, where a test
+    /// says something does.
+    private actor Checking {
+        private var during: [ConnectedAppProvider: @Sendable () async -> Void] = [:]
+
+        func during(_ provider: ConnectedAppProvider, _ happens: @escaping @Sendable () async -> Void) {
+            during[provider] = happens
+        }
+
+        func happens(for provider: ConnectedAppProvider) async {
+            let happens = during.removeValue(forKey: provider)
+            await happens?()
+        }
     }
 
     func testLinearConnectsWithAKey_besideFigma_eachItsOwnConnection() async throws {
@@ -221,10 +247,25 @@ final class LinearTests: XCTestCase {
         let after = await world.accounts.getAllAccounts()
         XCTAssertEqual(after.map(\.id), [figma.id, linear.id])
 
-        // Disconnecting Linear does not call off a Figma token being checked, and the other way round.
-        await world.accounts.disconnectAccount(id: linear.id)
-        let figmaStill = await world.accounts.getConnectedAccount(for: .figma)
-        XCTAssertEqual(figmaStill?.id, figma.id)
+        // Linear is disconnected while a new Figma token is being checked:
+        // the Figma token is kept all the same. One app's connection is
+        // not the other's.
+        let accounts = world.accounts
+        await world.checking.during(.figma) { await accounts.disconnectAccount(id: linear.id) }
+        let renewed = try await world.accounts.connect(.figma, token: "figd_two", replacing: figma.id)
+        XCTAssertEqual(renewed.id, figma.id)
+        let figmaToken = try await world.accounts.getAccessToken(forAccountId: figma.id)
+        XCTAssertEqual(figmaToken, "figd_two")
+        let linearNow = await world.accounts.getConnectedAccount(for: .linear)
+        XCTAssertNil(linearNow)
+        // The same app's connection disconnected meanwhile does call it off.
+        await world.checking.during(.figma) { await accounts.disconnectAccount(id: figma.id) }
+        do {
+            _ = try await world.accounts.connect(.figma, token: "figd_three", replacing: figma.id)
+            XCTFail("Figma was disconnected while its token was checked")
+        } catch {
+            XCTAssertEqual(error as? ConnectedAccountsService.TokenRefusal, .changed)
+        }
     }
 
     func testGetIssue_asksForTheIssueNamed_andTellsIt() async throws {

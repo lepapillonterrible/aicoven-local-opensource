@@ -42,6 +42,10 @@ nonisolated enum LinearToolService {
     /// The most of Linear's own words about an error that are passed on.
     static let mostOfAMessage = 300
 
+    /// The most characters of a comment a model is told, the mark that it
+    /// was cut included.
+    static let mostOfAComment = 2000
+
     /// One GraphQL request; its `data`. An answer can carry `errors`
     /// beside its data, whatever its status: they are read first.
     @concurrent
@@ -177,7 +181,7 @@ nonisolated enum LinearToolService {
             for comment in comments {
                 let author = one((comment["user"] as? [String: Any])?["name"] as? String) ?? "Someone"
                 let body = one(comment["body"] as? String) ?? ""
-                lines.append("- \(author), \(one(comment["createdAt"] as? String) ?? ""): \(body.count > 2000 ? String(body.prefix(2000)) + "…" : body)")
+                lines.append("- \(author), \(one(comment["createdAt"] as? String) ?? ""): \(body.count > mostOfAComment ? String(body.prefix(mostOfAComment - 1)) + "…" : body)")
             }
         }
         return lines.joined(separator: "\n")

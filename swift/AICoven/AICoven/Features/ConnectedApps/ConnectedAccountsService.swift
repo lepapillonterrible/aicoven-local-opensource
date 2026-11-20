@@ -273,7 +273,8 @@ actor ConnectedAccountsService {
         try Task.checkCancellation()
         guard sameOwner, attempt == tokenChanges[provider] else { throw TokenRefusal.changed }
 
-        let bundle = OAuthTokenBundle(accessToken: token, refreshToken: nil, tokenType: "pasted", expiresAt: nil, scopes: [])
+        // The kind of token is the header it is sent in.
+        let bundle = OAuthTokenBundle(accessToken: token, refreshToken: nil, tokenType: provider == .figma ? "X-Figma-Token" : "Authorization", expiresAt: nil, scopes: [])
         let now = Date()
 
         if let accountID {

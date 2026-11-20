@@ -193,6 +193,8 @@ final class FigmaConnectionTests: XCTestCase {
         XCTAssertEqual(account.status, .connected)
         XCTAssertEqual(account.displayName, "ada@example.com")
         XCTAssertEqual(account.metadata, ["figma_user_id": "42", "source": "pasted_token"])
+        let bundle = try await world.service.getTokenBundle(forAccountId: account.id)
+        XCTAssertEqual(bundle.tokenType, "X-Figma-Token", "As it was kept before Linear shared the connection")
         XCTAssertEqual(world.figma.tokensAskedAbout, ["figd_one"], "Asked about the token without the space around it")
         let connected = await world.service.getConnectedAccount(for: .figma)
         XCTAssertEqual(connected?.id, account.id)
