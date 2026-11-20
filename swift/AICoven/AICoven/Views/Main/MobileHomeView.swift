@@ -241,6 +241,9 @@ struct MobileChatsRootView: View {
                 .task(id: selectedCovenId) {
                     // Another scope's threads are another list.
                     threadActions.invalidate()
+                    // What each thread is doing, as stored for this account.
+                    // Read again from here on whenever a message is stored.
+                    activities.reload()
                     await loadThreads()
                 }
                 .threadActionsHost(threadActions)
@@ -332,7 +335,6 @@ struct MobileChatsRootView: View {
         // is anything of that other scope's touched.
         // And only the latest request for a scope is shown: one asked for
         // before the list left and came back is not.
-        activities.reload()
         let scope = selectedCovenId
         threadsLoad += 1
         let request = threadsLoad

@@ -184,6 +184,9 @@ struct WorkspaceSidebarView: View {
                 threads = []
                 return
             }
+            // What each thread is doing, as stored for this account. Read
+            // again from here on whenever a message is stored.
+            ThreadActivities.shared.reload()
             await loadThreads(covenId: covenId)
         }
         .onReceive(NotificationCenter.default.publisher(for: .didCreateThread)) { _ in
@@ -268,7 +271,6 @@ struct WorkspaceSidebarView: View {
     private func loadThreads(covenId: String) async {
         // Only the latest request is shown: one asked for before the
         // sidebar left this coven and came back is not.
-        ThreadActivities.shared.reload()
         threadsLoad += 1
         let request = threadsLoad
         do {
