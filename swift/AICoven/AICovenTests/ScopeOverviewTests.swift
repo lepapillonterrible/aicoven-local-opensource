@@ -24,6 +24,35 @@ final class ScopeOverviewTests: XCTestCase {
         XCTAssertTrue(none.stillOpen.isEmpty && none.earlier.isEmpty, "A thread put away is on neither list")
     }
 
+    func testWhileYouWereAwayListsTheRepliesNotSeenThatCameSinceTheLastVisit_latestFirst() {
+        let threads = [
+            thread("before", used: 100), thread("after", used: 600), thread("latest", used: 900),
+            thread("put-away", archived: true, used: 950), thread("seen", used: 990),
+        ]
+        let unread: [String: Date] = [
+            "before": Date(timeIntervalSince1970: 100), "after": Date(timeIntervalSince1970: 600),
+            "latest": Date(timeIntervalSince1970: 900), "put-away": Date(timeIntervalSince1970: 950),
+            "elsewhere": Date(timeIntervalSince1970: 999),
+        ]
+        let lastVisit = Date(timeIntervalSince1970: 500)
+        let away = ThreadListRules.away(threads, unreadReplyAt: unread, since: lastVisit)
+        XCTAssertEqual(away.map(\.thread.id), ["latest", "after"], "Not the one from before, the one put away, the one seen, or another scope's")
+        XCTAssertEqual(away.first?.repliedAt, Date(timeIntervalSince1970: 900))
+        // At the very moment of the visit it was seen; a first visit knows no "away".
+        XCTAssertTrue(ThreadListRules.away(threads, unreadReplyAt: unread, since: Date(timeIntervalSince1970: 900)).isEmpty)
+        XCTAssertTrue(ThreadListRules.away(threads, unreadReplyAt: unread, since: nil).isEmpty)
+        XCTAssertTrue(ThreadListRules.away(threads, unreadReplyAt: [:], since: lastVisit).isEmpty)
+        // Replies of the same moment keep one order, whatever order the threads come in.
+        let twins = [thread("b", used: 700), thread("a", used: 700)]
+        let sameMoment = ["a": Date(timeIntervalSince1970: 700), "b": Date(timeIntervalSince1970: 700)]
+        XCTAssertEqual(ThreadListRules.away(twins, unreadReplyAt: sameMoment, since: lastVisit).map(\.thread.id), ["a", "b"])
+        XCTAssertEqual(ThreadListRules.away(twins.reversed(), unreadReplyAt: sameMoment, since: lastVisit).map(\.thread.id), ["a", "b"])
+
+        XCTAssertEqual(ThreadListRules.replyDetail(agentName: "Scout"), "Scout replied")
+        XCTAssertEqual(ThreadListRules.replyDetail(agentName: "  "), "New reply")
+        XCTAssertEqual(ThreadListRules.replyDetail(agentName: nil), "New reply")
+    }
+
     func testTheOverviewSaysWhenThePersonWasLastHere() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))

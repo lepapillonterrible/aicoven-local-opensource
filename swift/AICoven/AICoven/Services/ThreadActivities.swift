@@ -47,6 +47,9 @@ final class ThreadActivities: ObservableObject {
     /// What is moving or waiting in each scope, in one line: nothing for
     /// a scope where nothing is.
     @Published private(set) var current: [ShellScope: ConversationActivity] = [:]
+    /// When the reply not yet seen was stored, for each thread that holds
+    /// one and is not on screen, by thread id.
+    @Published private(set) var unreadReplyAt: [String: Date] = [:]
 
     /// The covens with a thread holding a reply not yet seen.
     var covensWithUnread: Set<String> {
@@ -258,6 +261,7 @@ final class ThreadActivities: ObservableObject {
         let stored = marksAccount == dependencies.currentAccount() ? marks : [:]
         var activity: [String: ConversationActivity] = [:]
         var unread: Set<ShellScope> = []
+        var unreadAt: [String: Date] = [:]
         var busy: [ShellScope: [ConversationActivity]] = [:]
         // Only of the threads read from the store for this account: what
         // the engine holds is by thread, whoever's the thread is.
@@ -274,12 +278,15 @@ final class ThreadActivities: ObservableObject {
                 isShown: isShown
             )
             activity[threadID] = current
+            let isUnread = !isShown && stored[threadID]?.isUnread == true
+            if isUnread, let at = stored[threadID]?.lastReplyAt { unreadAt[threadID] = at }
             guard let scope = scopes[threadID] else { continue }
-            if !isShown, stored[threadID]?.isUnread == true { unread.insert(scope) }
+            if isUnread { unread.insert(scope) }
             if let current { busy[scope, default: []].append(current) }
         }
         if activity != self.activity { self.activity = activity }
         if unread != scopesWithUnread { scopesWithUnread = unread }
+        if unreadAt != unreadReplyAt { unreadReplyAt = unreadAt }
         let current = busy.compactMapValues { ConversationActivity.current(of: $0) }
         if current != self.current { self.current = current }
     }
