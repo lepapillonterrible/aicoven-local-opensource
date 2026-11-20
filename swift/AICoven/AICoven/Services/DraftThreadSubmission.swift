@@ -16,7 +16,10 @@ final class DraftThreadSubmission: ObservableObject {
     /// What was sent, while its thread is being made: the page shows it.
     @Published private(set) var submittedText: String?
 
+    /// Said when the message came back to the field; and when it did not,
+    /// because the field holds words typed since.
     static let couldNotStart = "The thread could not be started. Your message is still available."
+    static let couldNotStartNotGivenBack = "The thread could not be started."
 
     /// The account signed in, by its id.
     private let currentAccount: @MainActor () -> String
@@ -54,7 +57,7 @@ final class DraftThreadSubmission: ObservableObject {
         let text = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isCreatingThread else { return nil }
         // Reserved here, in the button's action, before anything waits: a
-        // second Send, or newer typing, finds it taken.
+        // second Send finds it taken; newer typing waits in the field.
         isCreatingThread = true
         errorMessage = nil
         submittedText = text
@@ -73,8 +76,12 @@ final class DraftThreadSubmission: ObservableObject {
                 // words typed since. A field holding only blank space holds
                 // nothing to keep: the message that was not sent matters more.
                 guard currentAccount() == account else { return }
-                if messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { messageText = text }
-                errorMessage = Self.couldNotStart
+                if messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    messageText = text
+                    errorMessage = Self.couldNotStart
+                } else {
+                    errorMessage = Self.couldNotStartNotGivenBack
+                }
                 return
             }
             // Another account by now: its thread list is not this text's place.
