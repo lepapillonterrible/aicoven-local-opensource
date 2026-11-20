@@ -1421,9 +1421,11 @@ actor ToolExecutionService {
     nonisolated static let linearUnconfirmed = "Linear's answer did not come or could not be read, so the change may have been made. Check with linear.getIssue before making it again."
 
     /// Whether a failed call may have reached Linear and been carried
-    /// out all the same.
+    /// out all the same: its answer could not be read, did not come, or
+    /// said the server failed (which a server can say after doing it).
     nonisolated static func linearMayHaveBeenCarriedOut(_ error: Error) -> Bool {
         if case LinearError.invalidResponse = error { return true }
+        if case let LinearError.notAnswered(status) = error, status >= 500 { return true }
         guard let failure = error as? URLError else { return false }
         return [.timedOut, .networkConnectionLost, .badServerResponse, .cannotParseResponse].contains(failure.code)
     }
@@ -1559,8 +1561,8 @@ actor ToolExecutionService {
         }
         do {
             let after = try await LinearToolService.update(issue: issueID, changes: input, key: key, session: appSession)
-            let block = "[Linear Issue Changed: \(after["identifier"] as? String ?? start.issue)]\n" + changes.map { "- \($0)" }.joined(separator: "\n") + ((after["url"] as? String).map { "\n\($0)" } ?? "")
-            return .success(tool: toolCall.name, result: ["issue": AnyJSONValue(after["identifier"] as? String ?? start.issue), "changes": AnyJSONValue(changes.count)], contextBlock: block)
+            let block = "[Linear Issue Changed: \(after["identifier"] as? String ?? issue["identifier"] as? String ?? start.issue)]\n" + changes.map { "- \($0)" }.joined(separator: "\n") + ((after["url"] as? String ?? issue["url"] as? String).map { "\n\($0)" } ?? "")
+            return .success(tool: toolCall.name, result: ["issue": AnyJSONValue(after["identifier"] as? String ?? issue["identifier"] as? String ?? start.issue), "changes": AnyJSONValue(changes.count)], contextBlock: block)
         } catch {
             return await linearResult(ofChange: error, tool: toolCall.name, key: key, accountID: start.account.id)
         }

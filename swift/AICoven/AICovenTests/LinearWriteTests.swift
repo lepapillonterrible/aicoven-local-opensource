@@ -343,12 +343,38 @@ final class LinearWriteTests: XCTestCase {
         XCTAssertEqual(result.errorType, "cancelled")
         XCTAssertEqual(result.error?.contains("may have been made"), true)
 
+        // An answer that does not say whether it was done, and one that
+        // says the server failed, leave the change unknown too.
+        for (kind, answer) in [("commentCreate", (200, #"{"data": {}}"#)), ("commentCreate", (200, #"{"data": {"commentCreate": {"comment": null}}}"#)), ("commentCreate", (502, "Bad Gateway")), ("commentCreate", (500, #"{"errors": [{"message": "Internal server error"}]}"#))] as [(String, (Int, String))] {
+            let unsure = try await world(overriding: [kind: answer])
+            defer { unsure.forget() }
+            result = await unsure.call("linear.addComment", ["issue": AnyJSONValue("ENG-12"), "body": AnyJSONValue("Hi")])
+            XCTAssertEqual(result.errorType, "linear_unconfirmed", answer.1)
+            XCTAssertFalse(result.isRetryable, answer.1)
+            XCTAssertEqual(result.toldToAModel, "[Tool Error: linear.addComment]\n\(ToolExecutionService.linearUnconfirmed)", "An agent is told to look before asking again")
+        }
+
+        // Linear says the change was made and does not tell the issue: it was made.
+        let untold = try await world(overriding: ["issueUpdate": (200, #"{"data": {"issueUpdate": {"success": true}}}"#)])
+        defer { untold.forget() }
+        result = await untold.call("linear.updateIssue", ["issue": AnyJSONValue("ENG-12"), "title": AnyJSONValue("New")])
+        XCTAssertEqual(result.status, "ok")
+        XCTAssertEqual(result.contextBlock, "[Linear Issue Changed: ENG-12]\n- Title: Header overlaps the logo → New\nhttps://linear.app/acme/issue/ENG-12")
+
         // A request that never left (no network) changed nothing, and may be made again.
         let offline = try await world(failing: ["issueUpdate": .notConnectedToInternet])
         defer { offline.forget() }
         result = await offline.call("linear.updateIssue", ["issue": AnyJSONValue("ENG-12"), "title": AnyJSONValue("New")])
         XCTAssertEqual(result.errorType, "linear_failed")
         XCTAssertTrue(result.isRetryable)
+    }
+
+    func testWhatAModelIsToldOfAResult() {
+        XCTAssertEqual(ToolExecutionResult.success(tool: "t", result: [:], contextBlock: "found").toldToAModel, "found")
+        XCTAssertNil(ToolExecutionResult.success(tool: "t", result: [:]).toldToAModel)
+        XCTAssertEqual(ToolExecutionResult.error(tool: "t", message: "It failed.").toldToAModel, "[Tool Error: t]\nIt failed.")
+        XCTAssertEqual(ToolExecutionResult.validationError(tool: "t", message: "No 'x'.", field: "x").toldToAModel, "[Tool Error: t]\nNo 'x'.")
+        XCTAssertEqual(ToolExecutionResult.denied(tool: "t", reason: "No.").toldToAModel, "[Tool Permission Denied: t]\nNo.")
     }
 
     /// A session whose every request is answered by `answer`, given the
@@ -392,6 +418,24 @@ final class LinearWriteTests: XCTestCase {
             XCTFail("More, with no cursor")
         } catch {
             guard case LinearError.invalidResponse = error else { return XCTFail("\(error)") }
+        }
+
+        // A page that cannot be read whole is no page: the name looked
+        // for, or a second of it, may be in what is not seen.
+        for page in [
+            #"{"nodes": [{"id": "s1", "name": "Todo"}]}"#,
+            #"{"nodes": [{"id": "s1", "name": "Todo"}], "pageInfo": {}}"#,
+            #"{"pageInfo": {"hasNextPage": false}}"#,
+            #"{"nodes": [{"id": "s1"}], "pageInfo": {"hasNextPage": false}}"#,
+            #"{"nodes": ["Todo"], "pageInfo": {"hasNextPage": false}}"#,
+        ] {
+            let unreadable = session { _ in #"{"data": {"team": {"states": \#(page)}}}"# }
+            do {
+                _ = try await LinearToolService.states(ofTeam: "t1", key: "lin_api_TEST", session: unreadable)
+                XCTFail("Read as a whole page: \(page)")
+            } catch {
+                guard case LinearError.invalidResponse = error else { return XCTFail("\(error)") }
+            }
         }
 
         // Pages that never end are not followed for ever, and a name is

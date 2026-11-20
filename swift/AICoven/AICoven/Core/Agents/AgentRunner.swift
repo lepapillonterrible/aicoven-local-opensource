@@ -205,8 +205,9 @@ final class AgentRunner {
                     // Execute via Service
                     let result = await toolExecutionService.execute(toolCall: toolCall, agentType: profile.type, threadID: tID)
 
-                    // Accumulate context
-                    if let block = result.contextBlock {
+                    // Accumulate context: what the tool found, or that it
+                    // did not go through and why.
+                    if let block = result.toldToAModel {
                         if toolContextLog.isEmpty {
                             toolContextLog = block
                         } else {

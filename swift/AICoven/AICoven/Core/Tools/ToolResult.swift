@@ -120,6 +120,17 @@ struct ToolExecutionResult: Codable {
         )
     }
 
+    /// What a model is told of this result: what the tool found, or, for
+    /// one that did not go through, that it did not and why. (A model that
+    /// is not told a change may have been made would ask for it again.)
+    nonisolated var toldToAModel: String? {
+        switch status {
+        case "ok": contextBlock
+        case "denied": "[Tool Permission Denied: \(tool)]\n\(error ?? "Permission denied")"
+        default: "[Tool Error: \(tool)]\n\(error ?? "Unknown error")"
+        }
+    }
+
     /// Create a denied result (user declined approval).
     nonisolated static func denied(tool: String, reason: String = "The person was asked and said no. Do not try this again unless they ask for it.") -> ToolExecutionResult {
         ToolExecutionResult(

@@ -73,7 +73,9 @@ nonisolated enum LinearToolService {
         if http.statusCode == 429 || kinds.contains(where: { $0.contains("ratelimit") }) {
             throw LinearError.rateLimited(retryAfter: http.value(forHTTPHeaderField: "Retry-After").flatMap(Int.init))
         }
-        if let first = errors.first {
+        // An error in an answer that says the server failed (5xx) is no
+        // refusal: what was asked may or may not have been done.
+        if let first = errors.first, http.statusCode < 500 {
             let said = (first["message"] as? String).map { String($0.prefix(mostOfAMessage)) } ?? "no reason given"
             throw LinearError.refused(message: said)
         }
@@ -213,11 +215,16 @@ nonisolated extension LinearToolService {
             var variables: [String: Any] = ["id": teamID]
             if let after { variables["after"] = after }
             let data = try await ask(query, variables: variables, key: key, session: session)
-            guard let page = (data["team"] as? [String: Any])?[field] as? [String: Any] else { throw LinearError.invalidResponse }
-            found += page["nodes"] as? [[String: Any]] ?? []
-            let info = page["pageInfo"] as? [String: Any]
-            guard info?["hasNextPage"] as? Bool == true else { return found }
-            guard let next = info?["endCursor"] as? String, !next.isEmpty else { throw LinearError.invalidResponse }
+            // A page that cannot be read whole is no page: what is not
+            // seen there may be the name looked for, or a second of it.
+            guard let page = (data["team"] as? [String: Any])?[field] as? [String: Any],
+                  let nodes = page["nodes"] as? [[String: Any]],
+                  nodes.allSatisfy({ $0["id"] is String && $0["name"] is String }),
+                  let info = page["pageInfo"] as? [String: Any],
+                  let more = info["hasNextPage"] as? Bool else { throw LinearError.invalidResponse }
+            found += nodes
+            guard more else { return found }
+            guard let next = info["endCursor"] as? String, !next.isEmpty else { throw LinearError.invalidResponse }
             after = next
         }
         // More than can be read: a name not found among these may yet be there.
@@ -244,14 +251,16 @@ nonisolated extension LinearToolService {
           }
         }
         """, variables: ["issueId": issueID, "body": body], key: key, session: session)
-        guard let made = data["commentCreate"] as? [String: Any], made["success"] as? Bool == true else {
-            throw LinearError.refused(message: "Linear did not add the comment")
-        }
+        // Only Linear saying it did not is a refusal; an answer that
+        // does not say leaves the comment unknown.
+        guard let made = data["commentCreate"] as? [String: Any], let success = made["success"] as? Bool else { throw LinearError.invalidResponse }
+        guard success else { throw LinearError.refused(message: "Linear did not add the comment") }
         return (made["comment"] as? [String: Any])?["url"] as? String
     }
 
     /// Changes an issue (`changes` is Linear's `IssueUpdateInput`); the
-    /// issue as it is afterwards.
+    /// issue as it is afterwards (nothing of it, where Linear says the
+    /// change was made and does not tell the issue).
     static func update(issue issueID: String, changes: [String: Any], key: String, session: URLSession = .shared) async throws -> [String: Any] {
         let data = try await ask("""
         mutation ($id: String!, $input: IssueUpdateInput!) {
@@ -265,10 +274,9 @@ nonisolated extension LinearToolService {
           }
         }
         """, variables: ["id": issueID, "input": changes], key: key, session: session)
-        guard let made = data["issueUpdate"] as? [String: Any], made["success"] as? Bool == true, let issue = made["issue"] as? [String: Any] else {
-            throw LinearError.refused(message: "Linear did not update the issue")
-        }
-        return issue
+        guard let made = data["issueUpdate"] as? [String: Any], let success = made["success"] as? Bool else { throw LinearError.invalidResponse }
+        guard success else { throw LinearError.refused(message: "Linear did not update the issue") }
+        return made["issue"] as? [String: Any] ?? [:]
     }
 
     // MARK: What a call asks to change
