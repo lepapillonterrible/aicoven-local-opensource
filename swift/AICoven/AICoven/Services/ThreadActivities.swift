@@ -20,7 +20,8 @@ final class ThreadActivities: ObservableObject {
         var loadMarks: @Sendable (_ account: String) async throws -> [String: ThreadMarks]
         var markRead: @Sendable (_ threadID: String, _ date: Date, _ account: String) async throws -> Void
         /// Each of the account's threads' coven, by thread id (none for a
-        /// personal thread).
+        /// personal thread, or one that is archived: a reply in a thread
+        /// put away marks its row, not its coven).
         var loadCovens: @Sendable () async throws -> [String: String]
         /// Whether a thread's composer holds something unsent, where that
         /// is known since the app started.

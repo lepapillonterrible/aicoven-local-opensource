@@ -30,8 +30,15 @@ final class ThreadActions: ObservableObject {
 
         static let live = Dependencies(
             rename: { _ = try await ThreadService.shared.updateThread(threadId: $0, title: $1) },
-            setArchived: { _ = try await ThreadService.shared.updateThread(threadId: $0, isArchived: $1) },
-            delete: { try await ThreadService.shared.deleteThread(threadId: $0) },
+            setArchived: {
+                _ = try await ThreadService.shared.updateThread(threadId: $0, isArchived: $1)
+                // Which covens hold an unread reply follows what is put away.
+                ThreadActivities.shared.reload()
+            },
+            delete: {
+                try await ThreadService.shared.deleteThread(threadId: $0)
+                ThreadActivities.shared.reload()
+            },
             stopTurn: { TurnEngine.shared.stop(threadID: $0) },
             currentAccount: { UserScope.currentUserID },
             export: .live

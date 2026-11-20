@@ -398,4 +398,30 @@ final class ThreadActivityTests: XCTestCase {
         let others = try await store.threadMarks(for: "someone-else")
         XCTAssertNil(others[threadID])
     }
+
+    func testAThreadsCovenIsTold_untilTheThreadIsArchived() async throws {
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        await MainActor.run { DatabaseManager.shared.configureIfNeeded() }
+        await ThreadService.shared.reloadForCurrentUser()
+        let coven = "coven-\(UUID().uuidString)"
+        let inCoven = try await ThreadService.shared.createThread(title: "In a coven \(UUID().uuidString)", covenId: coven)
+        let personal = try await ThreadService.shared.createThread(title: "Personal \(UUID().uuidString)")
+        let made = [inCoven.id, personal.id]
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            for threadID in made {
+                try? await ThreadService.shared.deleteThread(threadId: threadID)
+            }
+            await ThreadService.shared.reloadForCurrentUser()
+            await DataEncryptionService.shared.lock()
+        }
+
+        var covens = try await ThreadService.shared.covensOfThreads()
+        XCTAssertEqual(covens[inCoven.id], coven)
+        XCTAssertNil(covens[personal.id], "A personal thread is in none")
+        // Put away, its reply marks its row, not its coven.
+        _ = try await ThreadService.shared.updateThread(threadId: inCoven.id, isArchived: true)
+        covens = try await ThreadService.shared.covensOfThreads()
+        XCTAssertNil(covens[inCoven.id])
+    }
 }
