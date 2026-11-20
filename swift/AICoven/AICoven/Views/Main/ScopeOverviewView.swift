@@ -30,7 +30,11 @@ struct ScopeOverviewView: View {
 
     var body: some View {
         let scope = navigator.selected
-        let listed = shellThreads.scope == scope ? shellThreads.threads : []
+        // What the loader says is of the scope it read, which for a moment
+        // after switching is not yet the one on screen.
+        let isRead = shellThreads.scope == scope
+        let listed = isRead ? shellThreads.threads : []
+        let canAsk = Self.canAsk(in: scope, coven: coven)
         let lists = ThreadListRules.overview(listed) { activities.activity[$0.id]?.isStillOpen == true }
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.lg) {
@@ -48,7 +52,12 @@ struct ScopeOverviewView: View {
                         ForEach(lists.stillOpen) { thread in row(thread) }
                     }
                 }
-                earlier(lists.earlier, nothingListed: listed.contains { !$0.isArchived } == false)
+                earlier(
+                    lists.earlier,
+                    nothingListed: listed.contains { !$0.isArchived } == false,
+                    state: (failed: isRead && shellThreads.failed, hasLoaded: isRead && shellThreads.hasLoaded),
+                    emptyLine: Self.emptyLine(hasArchived: !listed.isEmpty, canAsk: canAsk)
+                )
             }
             .frame(maxWidth: 980, alignment: .leading)
             .frame(maxWidth: .infinity)
@@ -58,7 +67,7 @@ struct ScopeOverviewView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             // No asking in a coven that is not in yet: there is no saying
             // whose agents it would go to, and it must not go to Strix.
-            if scope == .strix || coven != nil {
+            if canAsk {
                 composer
             }
         }
@@ -67,6 +76,32 @@ struct ScopeOverviewView: View {
         // shows it, as well as shown.
         .onChange(of: shellThreads.failed, initial: true) { _, failed in
             if failed, shellThreads.scope == navigator.selected {
+                AccessibilityNotification.Announcement("Couldn't load threads.").post()
+            }
+        }
+    }
+
+    /// Whether a thread can be asked for here: on Strix, and in a coven
+    /// that is in.
+    static func canAsk(in scope: ShellScope, coven: Coven?) -> Bool {
+        scope == .strix || coven != nil
+    }
+
+    /// What is said where no thread is listed: there are none, or none
+    /// that is not archived; and to ask below only where that can be done.
+    static func emptyLine(hasArchived: Bool, canAsk: Bool) -> String {
+        let none = hasArchived ? "No open threads." : "No threads yet."
+        return canAsk ? none + " Ask below to start one." : none
+    }
+
+    /// Reads the threads again, and says so if they still cannot be read
+    /// (nothing on screen changes then).
+    private func tryAgain() {
+        let scope = navigator.selected
+        guard let reading = shellThreads.reload() else { return }
+        Task {
+            await reading.value
+            if shellThreads.failed, shellThreads.scope == scope, navigator.selected == scope {
                 AccessibilityNotification.Announcement("Couldn't load threads.").post()
             }
         }
@@ -93,25 +128,27 @@ struct ScopeOverviewView: View {
     /// The earlier threads; or, with no threads at all, why: they could
     /// not be read, they are on their way, or there are none yet.
     @ViewBuilder
-    private func earlier(_ earlier: [Thread], nothingListed: Bool) -> some View {
-        if nothingListed, shellThreads.failed {
+    private func earlier(
+        _ earlier: [Thread], nothingListed: Bool, state: (failed: Bool, hasLoaded: Bool), emptyLine: String
+    ) -> some View {
+        if nothingListed, state.failed {
             section("Earlier") {
                 HStack(spacing: Spacing.sm) {
                     Text("Couldn't load threads.")
                         .font(.aicovenBodySmall)
                         .foregroundStyle(Color.aicovenError)
-                    Button("Try again") { shellThreads.reload() }
+                    Button("Try again") { tryAgain() }
                         .buttonStyle(.bordered)
                 }
             }
-        } else if nothingListed, !shellThreads.hasLoaded {
+        } else if nothingListed, !state.hasLoaded {
             section("Earlier") {
                 ProgressView()
                     .controlSize(.small)
                     .accessibilityLabel("Loading threads")
             }
         } else if nothingListed {
-            Text("No threads yet. Ask below to start one.")
+            Text(emptyLine)
                 .font(.aicovenBodySmall)
                 .foregroundColor(.aicovenTextSecondary)
         } else if !earlier.isEmpty {

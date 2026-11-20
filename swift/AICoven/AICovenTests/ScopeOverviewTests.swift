@@ -86,12 +86,34 @@ final class ScopeOverviewTests: XCTestCase {
         XCTAssertNil(store.lastVisit(in: .strix, for: "grace"), "And each account")
         store.arrive(in: .strix, at: monday, for: "grace")
 
+        // A coven that is gone takes its own visits along, and nobody else's.
+        store.arrive(in: .coven("gone"), at: monday, for: "ada")
+        store.arrive(in: .coven("gone"), at: monday, for: "grace")
+        store.forget(.coven("gone"), for: "ada")
+        XCTAssertNil(store.lastVisit(in: .coven("gone"), for: "ada"))
+        XCTAssertEqual(store.lastVisit(in: .coven("gone"), for: "grace"), monday)
+
         // Kept across runs; an account that is deleted takes its visits with it.
         XCTAssertEqual(ScopeVisitStore(defaults: defaults).lastVisit(in: .coven("work"), for: "ada"), tuesday)
         store.remove(for: "ada")
         XCTAssertNil(store.lastVisit(in: .strix, for: "ada"))
         XCTAssertNil(store.lastVisit(in: .coven("work"), for: "ada"))
         XCTAssertEqual(store.lastVisit(in: .strix, for: "grace"), monday)
+    }
+
+    @MainActor
+    func testWhatAnOverviewWithNoThreadsSays_isTrueOfWhatIsOnScreen() {
+        // Asking is offered on Strix and in a coven that is in; not in a coven that is not in yet (or no longer).
+        let coven = Coven(id: "work", name: "Work", createdAt: Date(), updatedAt: Date())
+        XCTAssertTrue(ScopeOverviewView.canAsk(in: .strix, coven: nil))
+        XCTAssertTrue(ScopeOverviewView.canAsk(in: .coven("work"), coven: coven))
+        XCTAssertFalse(ScopeOverviewView.canAsk(in: .coven("work"), coven: nil))
+
+        // "Ask below" is said only where there is a composer below; "yet" only where there are no threads at all.
+        XCTAssertEqual(ScopeOverviewView.emptyLine(hasArchived: false, canAsk: true), "No threads yet. Ask below to start one.")
+        XCTAssertEqual(ScopeOverviewView.emptyLine(hasArchived: false, canAsk: false), "No threads yet.")
+        XCTAssertEqual(ScopeOverviewView.emptyLine(hasArchived: true, canAsk: true), "No open threads. Ask below to start one.")
+        XCTAssertEqual(ScopeOverviewView.emptyLine(hasArchived: true, canAsk: false), "No open threads.")
     }
 
     @MainActor
