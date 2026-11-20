@@ -3,7 +3,8 @@ import SwiftUI
 /// The coven switcher's list, as the cloud app's: Strix first, then the
 /// person's covens in their own order, each with one line of what is moving
 /// or waiting there and an unread dot, then New Coven, then the person's
-/// row. A popover from the sidebar's switcher.
+/// row. A popover from the sidebar's switcher; on a phone, a sheet from
+/// the bar's.
 ///
 /// A coven is moved by dragging it onto another row, or with Move Up and
 /// Move Down in its context menu (and for VoiceOver). Strix does not move,
@@ -12,7 +13,9 @@ struct CovenSwitcherList: View {
     /// The covens in the person's order. Strix is not among them.
     let covens: [Coven]
     let rowMinHeight: CGFloat
-    let popoverWidth: CGFloat
+    /// The popover's width; nil in a sheet, which is as wide as it is and
+    /// lets the rows have its height.
+    let popoverWidth: CGFloat?
     let selected: ShellScope
     /// What is moving or waiting in a scope.
     let current: (ShellScope) -> ConversationActivity?
@@ -41,10 +44,12 @@ struct CovenSwitcherList: View {
                 }
                 .padding(Spacing.xs)
             }
-            // The rows' height, with their current lines, up to a cap.
+            // In a popover: the rows' height, with their current lines, up
+            // to a cap. A sheet gives them what it has.
             .frame(
-                minHeight: min(420, CGFloat(covens.count + 1) * (rowMinHeight + 2) + currentLinesHeight + Spacing.xs * 2),
-                maxHeight: 420
+                minHeight: popoverWidth == nil
+                    ? nil : min(420, CGFloat(covens.count + 1) * (rowMinHeight + 2) + currentLinesHeight + Spacing.xs * 2),
+                maxHeight: popoverWidth == nil ? .infinity : 420
             )
             Divider()
             VStack(alignment: .leading, spacing: 2) {
