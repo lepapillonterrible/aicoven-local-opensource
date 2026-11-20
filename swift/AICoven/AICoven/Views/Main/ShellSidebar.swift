@@ -363,13 +363,8 @@ struct ShellSidebar: View {
 
     /// The scope's places as one row of icon-only buttons.
     private var placesRow: some View {
-        let places: [(item: ShellSidebarItem, name: String, symbol: String)] = [
-            (.memory, "Memory", "books.vertical"),
-            (.agents, "Agents", "person.crop.circle"),
-            (.connectedApps, "Connections", "puzzlepiece.extension"),
-        ]
-        return HStack(spacing: Spacing.xxxs) {
-            ForEach(places, id: \.item) { place in
+        HStack(spacing: Spacing.xxxs) {
+            ForEach(ShellSidebarItem.scopePlaces, id: \.item) { place in
                 let isSelected = navigator.sidebarItem == place.item
                 Button {
                     onOpenPlace(place.item)

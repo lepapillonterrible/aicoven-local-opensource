@@ -26,6 +26,14 @@ nonisolated enum ShellSidebarItem: Hashable {
     case memory
     case agents
     case connectedApps
+
+    /// A scope's places as a row of buttons shows them, in the sidebar and
+    /// on a phone's Overview: each with its name and its symbol.
+    static let scopePlaces: [(item: ShellSidebarItem, name: String, symbol: String)] = [
+        (.memory, "Memory", "books.vertical"),
+        (.agents, "Agents", "person.crop.circle"),
+        (.connectedApps, "Connections", "puzzlepiece.extension"),
+    ]
 }
 
 /// Navigation state for the split-view shell, as the cloud app's.

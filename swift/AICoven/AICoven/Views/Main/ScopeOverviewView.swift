@@ -54,7 +54,6 @@ struct ScopeOverviewView: View {
         let isRead = shellThreads.scope == scope
         let listed = isRead ? shellThreads.threads : []
         let canAsk = Self.canAsk(in: scope, coven: coven)
-        let lists = ThreadListRules.overview(listed) { activities.activity[$0.id]?.isStillOpen == true }
         let away = ThreadListRules.away(listed, unreadReplyAt: activities.unreadReplyAt, since: navigator.previousVisit(in: scope))
         let nothingListed = listed.contains { !$0.isArchived } == false
         let state = (failed: isRead && shellThreads.failed, hasLoaded: isRead && shellThreads.hasLoaded)
@@ -67,7 +66,7 @@ struct ScopeOverviewView: View {
                     scope: scope, listed: listed, away: away, nothingListed: nothingListed, state: state, emptyLine: emptyLine
                 )
             } else {
-                regularScroll(scope: scope, lists: lists, away: away, nothingListed: nothingListed, state: state, emptyLine: emptyLine)
+                regularScroll(scope: scope, listed: listed, away: away, nothingListed: nothingListed, state: state, emptyLine: emptyLine)
             }
         }
         #if os(iOS)
@@ -114,10 +113,11 @@ struct ScopeOverviewView: View {
     }
 
     private func regularScroll(
-        scope: ShellScope, lists: (stillOpen: [Thread], earlier: [Thread]), away: [(thread: Thread, repliedAt: Date)],
+        scope: ShellScope, listed: [Thread], away: [(thread: Thread, repliedAt: Date)],
         nothingListed: Bool, state: (failed: Bool, hasLoaded: Bool), emptyLine: String
     ) -> some View {
-        ScrollView {
+        let lists = ThreadListRules.overview(listed) { activities.activity[$0.id]?.isStillOpen == true }
+        return ScrollView {
             VStack(alignment: .leading, spacing: Spacing.lg) {
                 // Strix says how to get an answer where none can be had yet.
                 if scope == .strix {
@@ -208,7 +208,7 @@ struct ScopeOverviewView: View {
                 threadRows(found.earlier, isLast: true)
             }
             if !found.archived.isEmpty {
-                archivedHeaderRow(isOpen: showsArchived || isSearching)
+                archivedHeaderRow(isOpen: showsArchived || isSearching, isHeldOpen: isSearching)
                 // A search that finds something there shows it.
                 if showsArchived || isSearching {
                     threadRows(found.archived, isLast: false)
@@ -241,8 +241,9 @@ struct ScopeOverviewView: View {
             .listRowBackground(Color.clear)
     }
 
-    /// Archived stays closed until the person opens it, or searches.
-    private func archivedHeaderRow(isOpen: Bool) -> some View {
+    /// Archived stays closed until the person opens it, or searches. A
+    /// search holds it open: the header then opens and closes nothing.
+    private func archivedHeaderRow(isOpen: Bool, isHeldOpen: Bool) -> some View {
         Button {
             showsArchived.toggle()
         } label: {
@@ -259,6 +260,7 @@ struct ScopeOverviewView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(isHeldOpen)
         .accessibilityAddTraits(.isHeader)
         .accessibilityValue(isOpen ? "Expanded" : "Collapsed")
         .listRowInsets(EdgeInsets(top: 0, leading: Spacing.md, bottom: 0, trailing: Spacing.md))
@@ -283,13 +285,8 @@ struct ScopeOverviewView: View {
     /// The scope's places as one row of icon buttons of equal width, as in
     /// the sidebar: Memory, Agents, Connections.
     private func placesRow(_ open: @escaping (ShellSidebarItem) -> Void) -> some View {
-        let places: [(item: ShellSidebarItem, name: String, symbol: String)] = [
-            (.memory, "Memory", "books.vertical"),
-            (.agents, "Agents", "person.crop.circle"),
-            (.connectedApps, "Connections", "puzzlepiece.extension"),
-        ]
-        return HStack(spacing: Spacing.xxxs) {
-            ForEach(places, id: \.item) { place in
+        HStack(spacing: Spacing.xxxs) {
+            ForEach(ShellSidebarItem.scopePlaces, id: \.item) { place in
                 Button {
                     open(place.item)
                 } label: {
