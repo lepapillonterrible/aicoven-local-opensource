@@ -263,6 +263,52 @@ final class MemoryServiceIntegrationTests: XCTestCase {
         XCTAssertEqual(still, "pending", "It is still theirs to review")
     }
 
+    func testSavingAProposalWhoseAccountChangedWhileItWaited_storesAndMarksNothing() async throws {
+        let scope = "proposal_save_account_" + UUID().uuidString
+        let record = try await proposal(in: scope)
+        let me = UserScope.currentUserID
+        let asked = Counter()
+        let service = MemoryService(
+            memoryStore: MemoryRepository.shared,
+            embed: { _ in nil },
+            currentAccount: { await asked.next() == 1 ? me : "someone-else" }
+        )
+        do {
+            _ = try await service.saveProposalAsMemory(proposalId: record.id, content: "As edited")
+            XCTFail("Saved as another account")
+        } catch {
+            XCTAssertEqual(error as? RepositoryError, .accountChanged)
+        }
+        let made = try await memories(in: scope)
+        XCTAssertTrue(made.isEmpty)
+        let still = try await status(of: record.id)
+        XCTAssertEqual(still, "pending")
+    }
+
+    func testAProposalWhoseMemoryCouldNotBeStored_isPendingAgain_andCanBeApprovedThen() async throws {
+        let scope = "proposal_store_fails_" + UUID().uuidString
+        let record = try await proposal(in: scope)
+        // The store refuses the memory, as it does while it cannot be written.
+        let failing = MemoryService(memoryStore: RefusingStore(), embed: { _ in nil })
+        do {
+            _ = try await failing.reviewProposal(proposalId: record.id, action: "approve")
+            XCTFail("Approved with nothing stored")
+        } catch {
+            XCTAssertEqual(error as? RepositoryError, .databaseUnavailable)
+        }
+        let reopened = try await status(of: record.id)
+        XCTAssertEqual(reopened, "pending", "Not left approved with no memory behind it")
+        let none = try await memories(in: scope)
+        XCTAssertTrue(none.isEmpty)
+
+        // Tried again once the store takes it: approved, with its one memory.
+        let service = MemoryService(memoryStore: MemoryRepository.shared, embed: { _ in nil })
+        let approved = try await service.reviewProposal(proposalId: record.id, action: "approve")
+        XCTAssertEqual(approved.status, "approved")
+        let made = try await memories(in: scope)
+        XCTAssertEqual(made.count, 1)
+    }
+
     func testSavingAProposalAsAMemory_storesItOnceAsEdited_andItIsNoLongerPending() async throws {
         let scope = "proposal_saved_" + UUID().uuidString
         let record = try await proposal(in: scope, content: "As the agent put it")
@@ -299,6 +345,29 @@ final class MemoryServiceIntegrationTests: XCTestCase {
         // Settled, so they do not wait in later runs.
         _ = try await service.reviewProposal(proposalId: personal.id, action: "reject")
         _ = try await service.reviewProposal(proposalId: inCoven.id, action: "reject")
+    }
+}
+
+/// A store that keeps nothing: every write is refused.
+private struct RefusingStore: MemoryStore {
+    func storeMemory(
+        scope _: String, text _: String, tags _: [String], pii _: Bool, createdBy _: String?, source _: String?, embedding _: [Float]?
+    ) async throws -> LocalMemoryChunk {
+        throw RepositoryError.databaseUnavailable
+    }
+
+    func loadMemories(scope _: String?, limit _: Int) async throws -> [LocalMemoryChunk] {
+        []
+    }
+
+    func loadMemory(id _: String) async throws -> LocalMemoryChunk? {
+        nil
+    }
+
+    func deleteMemory(id _: String) async throws {}
+
+    func updateMemory(id _: String, newText _: String, newTags _: [String], newEmbedding _: [Float]?) async throws -> LocalMemoryChunk? {
+        nil
     }
 }
 

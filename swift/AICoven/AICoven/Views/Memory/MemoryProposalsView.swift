@@ -158,8 +158,12 @@ struct MemoryProposalsView: View {
             }
         } catch {
             guard UserScope.currentUserID == account else { return }
+            // Reviewed already, here or in another window: the card was out
+            // of date. The list is read again and shows it as it is; that
+            // load says for itself what it finds, and nothing is said over
+            // a newer one.
             if error as? ProposalReviewError == .alreadyReviewed {
-                await loadProposals()
+                return await loadProposals()
             }
             errorMessage = "Failed to \(what): \(error.localizedDescription)"
         }
