@@ -3,8 +3,7 @@ import SwiftUI
 
 /// The Mac window as the cloud app's shell: one split view, with the
 /// sidebar on the left and the place open in the scope on screen beside it,
-/// under a toolbar and the window's title. Built beside the two workspaces
-/// the window has had, which it replaces once its places are in.
+/// under a toolbar and the window's title.
 struct MacShellView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var authService: AuthService
@@ -94,6 +93,11 @@ struct MacShellView: View {
                 // the sheet again since.
                 if sheet.opensItsThread(whileShowing: newThreadSheet) { navigator.open(thread) }
                 shellThreads.reload()
+                // A coven's thread made, and its agent given it.
+                if let covenID = thread.covenId {
+                    AnalyticsService.shared.trackThreadCreate(threadId: thread.id, covenId: covenID, hasTitle: thread.title != nil)
+                    if let agentID = thread.agentId { AnalyticsService.shared.trackRoleAssign(roleId: agentID, threadId: thread.id) }
+                }
             }
         }
         .sheet(isPresented: $showCreateCoven) {
@@ -112,6 +116,11 @@ struct MacShellView: View {
             // Another scope's threads are another list.
             threadActions.invalidate()
             shellThreads.load(navigator.selected)
+            if let covenID = navigator.selected.covenID { AnalyticsService.shared.trackCovenView(covenId: covenID) }
+        }
+        // The events the window's tabs sent when one was opened.
+        .onChange(of: navigator.place?.id) { _, _ in
+            if let place = navigator.place { AnalyticsService.shared.trackTabOpened(tabType: place.type.analyticsName) }
         }
         .onAppear {
             threadActions.onChanged = { [shellThreads] in shellThreads.reload() }
@@ -179,6 +188,8 @@ struct MacShellView: View {
                 let thread = try await ThreadService.shared.createThread(
                     title: "Chat with \(role.name)", covenId: role.covenId, agentId: role.id, agentName: role.name, as: account
                 )
+                AnalyticsService.shared.trackThreadCreate(threadId: thread.id, covenId: role.covenId, hasTitle: true)
+                AnalyticsService.shared.trackRoleAssign(roleId: role.id, threadId: thread.id)
                 guard UserScope.currentUserID == account, navigator.placeGeneration == asked else { return }
                 navigator.open(thread)
             } catch {
@@ -197,6 +208,7 @@ struct MacShellView: View {
             return
         }
         isMakingThread = true
+        AnalyticsService.shared.trackNewChatTapped(source: "mac_shell")
         let account = UserScope.currentUserID
         let asked = navigator.placeGeneration
         Task {

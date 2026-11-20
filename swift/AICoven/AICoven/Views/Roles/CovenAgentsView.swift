@@ -63,6 +63,7 @@ struct CovenAgentsView: View {
 
                 row {
                     Button {
+                        AnalyticsService.shared.trackFeatureUsage(featureName: "add_role")
                         form = .add(showing: UUID())
                     } label: {
                         HStack(spacing: Spacing.sm) {
@@ -88,6 +89,7 @@ struct CovenAgentsView: View {
 
                 ForEach(roles) { role in
                     row {
+                        // The form records the view of the agent itself.
                         AgentListRow(role: role, rowHeight: rowHeight) { form = .edit(role, showing: UUID()) }
                     }
                     .accessibilityAction(named: "Delete") { askDelete(role) }
@@ -200,6 +202,7 @@ struct CovenAgentsView: View {
         defer { deletingIDs.remove(role.id) }
         do {
             try await RoleService.shared.deleteRole(roleId: role.id, as: account)
+            AnalyticsService.shared.trackRoleDelete(roleId: role.id)
             deleteFailed = false
         } catch {
             AppErrorReporter.log(message: "Could not delete an agent (\(type(of: error)))", context: "CovenAgentsView.delete")

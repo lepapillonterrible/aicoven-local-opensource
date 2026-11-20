@@ -29,6 +29,9 @@ struct ShellContentView: View {
             case let .memoryList(covenID):
                 ShellMemoryPlace(covenID: covenID)
                     .id(covenID)
+                    // Once for each opening of a scope's memory: outside the
+                    // list, which is made anew after every save.
+                    .onAppear { AnalyticsService.shared.trackMemoryListOpened(covenId: covenID) }
             case let .covenAgents(covenID):
                 // Only for the coven on screen; while it is not in, or it is
                 // another's, the Overview.
@@ -196,5 +199,74 @@ struct StartConversationPrompt: View {
             Spacer()
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+/// Welcome screen for personal workspace
+struct WelcomeToPersonalChat: View {
+    let onNewChat: () -> Void
+    let onCreateCoven: () -> Void
+    let onOpenProviderKeys: () -> Void
+
+    var body: some View {
+        VStack(spacing: Spacing.xl) {
+            Spacer()
+
+            // Static icon instead of animated cauldron
+            IconBadge(icon: "sparkles", size: 100, color: .aicovenTeal)
+
+            VStack(spacing: Spacing.md) {
+                Text("Welcome to AICoven")
+                    .font(.aicovenDisplayMedium)
+                    .foregroundColor(.aicovenTextPrimary)
+
+                Text("Start a new conversation or create a coven to collaborate with multiple AI roles")
+                    .font(.aicovenBody)
+                    .foregroundColor(.aicovenTextSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 500)
+            }
+
+            // Quick actions - now clickable
+            HStack(spacing: Spacing.md) {
+                Button(action: onNewChat) {
+                    VStack(spacing: Spacing.sm) {
+                        IconBadge(icon: "message", size: 60, color: .aicovenTeal)
+                        Text("Personal Chat")
+                            .font(.aicovenBodyMedium)
+                            .foregroundColor(.aicovenTextPrimary)
+                        Text("One-on-one with AI")
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextTertiary)
+                    }
+                    .frame(width: 200, height: 160)
+                    .glassMorphism()
+                }
+                .buttonStyle(.plain)
+
+                Button(action: onCreateCoven) {
+                    VStack(spacing: Spacing.sm) {
+                        IconBadge(icon: "person.3", size: 60, color: .aicovenPurple)
+                        Text("Create Coven")
+                            .font(.aicovenBodyMedium)
+                            .foregroundColor(.aicovenTextPrimary)
+                        Text("Multi-AI collaboration")
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextTertiary)
+                    }
+                    .frame(width: 200, height: 160)
+                    .glassMorphism()
+                }
+                .buttonStyle(.plain)
+            }
+
+            // Provider keys call-to-action when no keys are configured
+            AddProviderKeysCard(onOpenProviderKeys: onOpenProviderKeys)
+                .padding(.top, Spacing.lg)
+                .padding(.horizontal, Spacing.xl)
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
