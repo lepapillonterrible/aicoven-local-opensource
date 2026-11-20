@@ -53,6 +53,10 @@ final class ThreadListTests: XCTestCase {
 
         XCTAssertEqual(ThreadListRules.name(from: "  Plans for May \n"), "Plans for May")
         XCTAssertEqual(ThreadListRules.name(from: "Two\nlines"), "Two lines")
+        // As the store keeps a title: runs of white space as one space, 120 characters at most.
+        XCTAssertEqual(ThreadListRules.name(from: "A  B\t C"), "A B C")
+        XCTAssertEqual(ThreadListRules.name(from: String(repeating: "a", count: 200))?.count, 120)
+        XCTAssertEqual(ThreadListRules.name(from: "A  B"), ThreadInputValidator.normalizedTitle("A  B", defaultTitle: "x"))
         XCTAssertNil(ThreadListRules.name(from: ""))
         XCTAssertNil(ThreadListRules.name(from: " \n\t"))
 
@@ -134,7 +138,6 @@ final class ThreadListTests: XCTestCase {
                 askedRolesOf.append(covenID)
                 return [Role(id: "r1", covenId: covenID, name: "Coder", emoji: nil, description: nil, systemPrompt: nil, model: nil, provider: nil, providerAccountId: nil, temperature: nil, maxTokens: nil, settings: nil, createdAt: Date(), updatedAt: Date())]
             },
-            currentAccount: { "ada" },
             writeClipboard: { _ in true }
         )
 
@@ -146,6 +149,46 @@ final class ThreadListTests: XCTestCase {
         askedRolesOf = []
         _ = try await ThreadMarkdownExport.makeDocument(thread: thread("p", title: "Mine"), dependencies: dependencies)
         XCTAssertEqual(askedRolesOf, [])
+    }
+
+    func testEveryMessageIsRead_aPageAtATime_fromTheNewestBack() async throws {
+        // 1,201 messages, oldest "0": pages of 500 from the newest back.
+        let all = (0 ... 1200).map { message(String($0), "user", "m\($0)") }
+        var asked: [String?] = []
+        let read = try await ThreadMarkdownExport.allMessages { before in
+            asked.append(before)
+            let end = before.flatMap { id in all.firstIndex { $0.id == id } } ?? all.count
+            return Array(all[max(0, end - ThreadMarkdownExport.pageSize) ..< end])
+        }
+        XCTAssertEqual(read.map(\.id), all.map(\.id), "The whole thread, oldest first")
+        XCTAssertEqual(asked, [nil, "701", "201"])
+
+        // A thread of exactly one page asks once more and finds nothing.
+        let page = Array(all.prefix(ThreadMarkdownExport.pageSize))
+        asked = []
+        let one = try await ThreadMarkdownExport.allMessages { before in
+            asked.append(before)
+            return before == nil ? page : []
+        }
+        XCTAssertEqual(one.count, ThreadMarkdownExport.pageSize)
+        XCTAssertEqual(asked, [nil, "0"])
+        // A store that keeps answering with the same page is not asked for ever.
+        let stuck = try await ThreadMarkdownExport.allMessages { _ in page }
+        XCTAssertEqual(stuck.count, ThreadMarkdownExport.pageSize * 2)
+        let empty = try await ThreadMarkdownExport.allMessages { _ in [] }
+        XCTAssertEqual(empty.count, 0)
+    }
+
+    func testAThreadIsAsLatelyUsedAsItsLastMessage() {
+        let made = thread("t", made: 100)
+        XCTAssertNil(made.lastMessageAt)
+        let used = made.lastUsed(at: Date(timeIntervalSince1970: 500))
+        XCTAssertEqual(used.lastMessageAt, Date(timeIntervalSince1970: 500))
+        XCTAssertEqual(used.title, made.title)
+        XCTAssertEqual(used.createdAt, made.createdAt)
+        XCTAssertEqual(used.lastUsed(at: Date(timeIntervalSince1970: 400)).lastMessageAt, Date(timeIntervalSince1970: 500), "Never earlier than it was")
+        XCTAssertEqual(used.lastUsed(at: nil).lastMessageAt, Date(timeIntervalSince1970: 500))
+        XCTAssertEqual(ThreadListRules.ordered([thread("new", made: 300), used]).map(\.id), ["t", "new"], "An old thread used now comes first")
     }
 
     // MARK: - What a list lets the person do
@@ -185,7 +228,6 @@ final class ThreadListTests: XCTestCase {
                     },
                     loadUnfinished: { _ in [] },
                     loadRoles: { _ in [] },
-                    currentAccount: { self.account },
                     writeClipboard: { text in
                         guard self.clipboardTakes else { return false }
                         self.clipboard = text
@@ -347,6 +389,15 @@ final class ThreadListTests: XCTestCase {
         try await store.beginTurn(id: "done-\(threadID)", userMessage: TurnProgress.message(in: threadID, role: "user", content: "Second try"))
         let reply = TurnProgress.message(in: threadID, role: "assistant", content: "Here it is.", metadata: ["role_name": AnyJSONValue("Strix")])
         _ = try await store.endTurn(id: "done-\(threadID)", outcome: .completed, message: reply)
+
+        // The thread is as lately used as its last message, in what the
+        // service holds and in what is read from the store afresh.
+        let held = try await ThreadService.shared.loadThreads().first { $0.id == threadID }
+        XCTAssertEqual(held?.lastMessageAt.map { Int($0.timeIntervalSince1970) }, reply.createdAt.map { Int($0.timeIntervalSince1970) })
+        await ThreadService.shared.reloadForCurrentUser()
+        let reread = try await ThreadService.shared.loadThreads().first { $0.id == threadID }
+        XCTAssertEqual(reread?.lastMessageAt.map { Int($0.timeIntervalSince1970) }, reply.createdAt.map { Int($0.timeIntervalSince1970) })
+        XCTAssertNotNil(reread?.lastMessageAt)
 
         let unfinished = try await store.messagesOfTurnsNotCompleted(threadID: threadID)
         XCTAssertEqual(unfinished, [failure.id])

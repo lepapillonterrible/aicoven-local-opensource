@@ -238,6 +238,10 @@ struct MobileChatsRootView: View {
                     await loadThreads()
                 }
                 .threadActionsHost(threadActions)
+                // A thread was used: the order follows it.
+                .onReceive(NotificationCenter.default.publisher(for: ThreadService.threadUsed)) { _ in
+                    Task { await loadThreads() }
+                }
                 .onAppear {
                     threadActions.onChanged = { Task { await loadThreads() } }
                     threadActions.onLeft = { left in
@@ -317,17 +321,24 @@ struct MobileChatsRootView: View {
     }
 
     private func loadThreads() async {
+        // Whose threads these are: the list can have moved to another
+        // scope by the time they are read, and they are then not shown, nor
+        // is anything of that other scope's touched.
+        let scope = selectedCovenId
         isLoading = true
-        defer { isLoading = false }
         do {
             // With those archived: the list shows them in a section of their own.
-            threads = try await ThreadService.shared.loadThreads(covenId: selectedCovenId, includeArchived: true)
+            let stored = try await ThreadService.shared.loadThreads(covenId: scope, includeArchived: true)
+            guard selectedCovenId == scope else { return }
+            threads = stored
         } catch {
+            guard selectedCovenId == scope else { return }
             AppErrorReporter.log(error: error, context: "MobileChatsRootView.loadThreads")
             threads = []
             selectedThread = nil
             errorMessage = "Couldn’t load chats for this workspace."
         }
+        isLoading = false
     }
 
     private func threadRow(_ thread: Thread) -> some View {

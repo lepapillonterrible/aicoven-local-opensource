@@ -251,7 +251,10 @@ struct WorkspaceSidebarView: View {
     private func loadThreads(covenId: String) async {
         do {
             // With those archived: the list shows them in a section of their own.
-            threads = try await ThreadService.shared.loadThreads(covenId: covenId, includeArchived: true)
+            let stored = try await ThreadService.shared.loadThreads(covenId: covenId, includeArchived: true)
+            // The sidebar can be showing another coven by now: these are not its threads.
+            guard selectedCoven?.id == covenId else { return }
+            threads = stored
         } catch {
             print("❌ Failed to load threads: \(error.localizedDescription)")
         }
@@ -627,10 +630,12 @@ struct ThreadManagementView: View {
                                 threadRow(thread)
                             }
                             if !sections.archived.isEmpty {
-                                ArchivedThreadsHeader(isExpanded: $showArchived)
+                                // A search shows what it found among them: the
+                                // section is then open, and says so.
+                                ArchivedThreadsHeader(isExpanded: searchText.isEmpty ? $showArchived : .constant(true))
+                                    .disabled(!searchText.isEmpty)
                                     .padding(.horizontal, Spacing.sm)
                                     .padding(.top, Spacing.sm)
-                                // A search shows what it found among them.
                                 if showArchived || !searchText.isEmpty {
                                     ForEach(sections.archived) { thread in
                                         threadRow(thread)
@@ -648,6 +653,17 @@ struct ThreadManagementView: View {
         .onAppear {
             threadActions.onChanged = { Task { await reload() } }
             threadActions.onLeft = { close($0) }
+        }
+        // The list is left: a copy under way is called off, and nothing
+        // more is told to a list that is not there.
+        .onDisappear {
+            threadActions.invalidate()
+            threadActions.onChanged = nil
+            threadActions.onLeft = nil
+        }
+        // A thread was used: the order follows it.
+        .onReceive(NotificationCenter.default.publisher(for: ThreadService.threadUsed)) { _ in
+            Task { await reload() }
         }
         // Another coven's threads are another list.
         .onChange(of: selectedCoven?.id) { _, _ in threadActions.invalidate() }

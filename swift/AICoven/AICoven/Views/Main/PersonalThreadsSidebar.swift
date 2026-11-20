@@ -35,6 +35,17 @@ struct PersonalThreadsSidebar: View {
                 threadActions.onChanged = { Task { await onRefresh() } }
                 threadActions.onLeft = onThreadLeft
             }
+            // The sidebar is left: a copy under way is called off, and
+            // nothing more is told to a list that is not there.
+            .onDisappear {
+                threadActions.invalidate()
+                threadActions.onChanged = nil
+                threadActions.onLeft = nil
+            }
+            // A thread was used: the order follows it.
+            .onReceive(NotificationCenter.default.publisher(for: ThreadService.threadUsed)) { _ in
+                Task { await onRefresh() }
+            }
     }
 
     private func threadRow(_ thread: Thread) -> some View {

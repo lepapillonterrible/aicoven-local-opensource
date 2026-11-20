@@ -151,6 +151,8 @@ final class ThreadActions: ObservableObject {
     private func run(_ failureTitle: String, leaving left: Thread? = nil, _ change: @escaping () async throws -> Void) {
         let account = dependencies.currentAccount()
         Task { [weak self, dependencies] in
+            // Another account signed in before this began: it is not made.
+            guard dependencies.currentAccount() == account else { return }
             do {
                 try await change()
                 guard let self, dependencies.currentAccount() == account else { return }

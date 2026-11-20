@@ -19,15 +19,16 @@ struct ThreadMarkdownExportDependencies {
     /// `ThreadRepository.messagesOfTurnsNotCompleted`).
     let loadUnfinished: (_ threadID: String) async throws -> Set<String>
     let loadRoles: (_ covenID: String) async throws -> [Role]
-    /// Who is signed in.
-    let currentAccount: @MainActor () -> String
     let writeClipboard: @MainActor (String) -> Bool
 
     static let live = ThreadMarkdownExportDependencies(
-        loadMessages: { try await ChatService.shared.loadMessages(threadId: $0, limit: ThreadMarkdownExport.mostMessages) },
+        loadMessages: { threadID in
+            try await ThreadMarkdownExport.allMessages { before in
+                try await ChatService.shared.loadMessages(threadId: threadID, limit: ThreadMarkdownExport.pageSize, before: before)
+            }
+        },
         loadUnfinished: { try await ThreadRepository.shared.messagesOfTurnsNotCompleted(threadID: $0) },
         loadRoles: { try await RoleService.shared.loadRoles(covenId: $0) },
-        currentAccount: { UserScope.currentUserID },
         writeClipboard: ThreadMarkdownExport.writeClipboard
     )
 }
@@ -59,8 +60,26 @@ struct ThreadMarkdownExportNotice: Identifiable, Equatable {
 /// heading, then each sent message and completed reply under the name of
 /// who said it.
 nonisolated enum ThreadMarkdownExport {
-    /// The most messages of a thread that are copied.
-    static let mostMessages = 100_000
+    /// How many messages are read at a time.
+    static let pageSize = 500
+
+    /// Every message of a thread, oldest first, read a page at a time
+    /// from the newest back (`page(before:)` gives the page before the
+    /// message of that id, oldest first; the newest page for nil). The
+    /// whole thread, however long: a copy that says it is the full thread
+    /// is.
+    static func allMessages(page: (_ before: String?) async throws -> [ChatMessage]) async throws -> [ChatMessage] {
+        var all: [ChatMessage] = []
+        var before: String?
+        while true {
+            try Task.checkCancellation()
+            let older = try await page(before)
+            all.insert(contentsOf: older, at: 0)
+            // A page that is not full, or that goes no further back, is the last.
+            guard older.count >= pageSize, let oldest = older.first?.id, oldest != before else { return all }
+            before = oldest
+        }
+    }
 
     /// The words said of each way it can end.
     static let copied = "The full thread was copied as Markdown."
@@ -92,7 +111,8 @@ nonisolated enum ThreadMarkdownExport {
     }
 
     /// Who said a message: the person ("You"), or the agent by the name
-    /// the reply was kept under, else the thread's agent, else "Agent".
+    /// the reply was kept under, else the name of the role its metadata
+    /// names, else the thread's agent, else "Agent".
     static func speaker(of message: ChatMessage, roles: [String: String], threadAgent: String?) -> String {
         if message.role == "user" { return "You" }
         if let kept = (message.metadata?["role_name"]?.value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !kept.isEmpty {
@@ -126,7 +146,8 @@ nonisolated enum ThreadMarkdownExport {
         try Task.checkCancellation()
         let messages = try await dependencies.loadMessages(thread.id)
         let unfinished = try await dependencies.loadUnfinished(thread.id)
-        let roles = try await thread.covenId.asyncMap(dependencies.loadRoles) ?? []
+        var roles: [Role] = []
+        if let covenID = thread.covenId { roles = try await dependencies.loadRoles(covenID) }
         try Task.checkCancellation()
         let names = Dictionary(roles.map { ($0.id.lowercased(), $0.name) }, uniquingKeysWith: { first, _ in first })
         let entries = messages.filter { isIncluded($0, unfinished: unfinished) }.map { message in
@@ -150,12 +171,5 @@ nonisolated enum ThreadMarkdownExport {
         #else
         return false
         #endif
-    }
-}
-
-private extension Optional {
-    func asyncMap<Mapped>(_ transform: (Wrapped) async throws -> Mapped) async rethrows -> Mapped? {
-        guard let self else { return nil }
-        return try await transform(self)
     }
 }

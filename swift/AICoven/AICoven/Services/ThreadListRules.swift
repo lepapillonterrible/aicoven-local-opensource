@@ -30,10 +30,11 @@ nonisolated enum ThreadListRules {
         return title.isEmpty ? "Untitled" : title
     }
 
-    /// The name a thread is given from what was typed: trimmed, on one
-    /// line; nil if nothing is left.
+    /// The name a thread is given from what was typed, as it is kept
+    /// (`ThreadInputValidator`): on one line, its runs of white space as
+    /// one space, 120 characters at most; nil if nothing is left.
     static func name(from typed: String) -> String? {
-        let name = typed.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = ThreadInputValidator.normalizedTitle(typed, defaultTitle: "")
         return name.isEmpty ? nil : name
     }
 

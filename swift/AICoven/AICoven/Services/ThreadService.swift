@@ -20,6 +20,21 @@ actor ThreadService {
 
     private init() {}
 
+    /// Posted when a thread was used (a message was stored in it): lists
+    /// of threads read theirs again, since their order follows it.
+    static let threadUsed = Notification.Name("ThreadService.threadUsed")
+
+    /// A message was stored in a thread at `date`: the thread, if it is
+    /// among those loaded, is as lately used as that.
+    func noteMessage(in threadID: String, at date: Date) {
+        guard let index = personalThreads.firstIndex(where: { $0.id == threadID }) else { return }
+        personalThreads[index] = personalThreads[index].lastUsed(at: date)
+        // Posted on the main actor: the lists that hear it are views.
+        Task { @MainActor in
+            NotificationCenter.default.post(name: Self.threadUsed, object: nil)
+        }
+    }
+
     /// Forget the loaded threads. Call after a user switch or sign-out; the
     /// next read loads the current account's.
     func reloadForCurrentUser() {
