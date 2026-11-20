@@ -114,6 +114,8 @@ struct CovenRow: View {
             }
 
             Spacer()
+
+            CovenUnreadDot(covenID: coven.id)
         }
         .padding(.vertical, 4)
     }

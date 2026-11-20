@@ -122,7 +122,7 @@ final class TurnEngine: ObservableObject {
     private var settling: Set<String> = []
     /// The text of a send that failed after its thread had left the screen,
     /// and why, by thread id: given back when the thread is next opened.
-    private var unsent: [String: (text: String, reason: String)] = [:]
+    @Published private(set) var unsent: [String: (text: String, reason: String)] = [:]
 
     /// The turns picked up since the app started, by id: each is picked up
     /// once, and ends through that.

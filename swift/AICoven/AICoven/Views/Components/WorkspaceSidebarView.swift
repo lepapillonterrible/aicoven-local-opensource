@@ -184,6 +184,9 @@ struct WorkspaceSidebarView: View {
                 threads = []
                 return
             }
+            // What each thread is doing, as stored for this account. Read
+            // again from here on whenever a message is stored.
+            ThreadActivities.shared.reload()
             await loadThreads(covenId: covenId)
         }
         .onReceive(NotificationCenter.default.publisher(for: .didCreateThread)) { _ in
@@ -471,6 +474,8 @@ struct CovenMenuItem: View {
 
                 Spacer()
 
+                CovenUnreadDot(covenID: coven.id)
+
                 if isSelected {
                     Image(systemName: "checkmark")
                         .font(.aicovenCaption)
@@ -581,6 +586,8 @@ struct ThreadManagementView: View {
     let onReload: () async -> Void
     /// Rename, archive, delete and copy, for this list's threads.
     @StateObject private var threadActions = ThreadActions()
+    /// What each thread is doing, for its row and the list's order.
+    @ObservedObject private var activities = ThreadActivities.shared
     @State private var showArchived = false
 
     var filteredThreads: [Thread] {
@@ -652,7 +659,7 @@ struct ThreadManagementView: View {
                             EmptyThreadsView(message: "No threads yet, create one to begin")
                         } else {
                             // Newest first, then those archived, under a header of their own.
-                            let sections = ThreadListRules.sections(filteredThreads)
+                            let sections = ThreadListRules.sections(filteredThreads) { activities.activity[$0.id]?.isStillOpen == true }
                             ForEach(sections.open) { thread in
                                 threadRow(thread)
                             }
@@ -695,6 +702,7 @@ struct ThreadManagementView: View {
     private func threadRow(_ thread: Thread) -> some View {
         ThreadListItem(
             thread: thread,
+            activity: activities.activity[thread.id],
             isSelected: activeTabId == thread.id
         )
         .onTapGesture {
@@ -724,15 +732,19 @@ struct ThreadManagementView: View {
 /// Individual thread list item with hover state
 struct ThreadListItem: View {
     let thread: Thread
+    /// What the thread is doing, if a row says it.
+    var activity: ConversationActivity?
     let isSelected: Bool
     @State private var isHovering = false
 
     var body: some View {
         HStack(spacing: Spacing.sm) {
-            Image(systemName: "bubble.left.and.bubble.right.fill")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(isSelected ? .aicovenTeal : .aicovenTextTertiary)
-                .frame(width: 16, alignment: .center)
+            ConversationActivityGlyph(activity: activity) {
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(isSelected ? .aicovenTeal : .aicovenTextTertiary)
+            }
+            .frame(width: 16, alignment: .center)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(ThreadListRules.title(of: thread))
@@ -767,6 +779,8 @@ struct ThreadListItem: View {
                         .foregroundColor(.aicovenTextTertiary)
                 }
                 .lineLimit(1)
+
+                ConversationActivityCaption(activity: activity)
             }
 
             Spacer()
@@ -791,6 +805,10 @@ struct ThreadListItem: View {
                 isHovering = hovering
             }
         }
+        // One thing to VoiceOver: its name, its agent and date, and what it is doing.
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .threadActivityValue(activity)
     }
 }
 

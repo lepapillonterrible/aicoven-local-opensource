@@ -183,7 +183,7 @@ final class ShellNavigatorTests: XCTestCase {
     }
 
     @MainActor
-    func testThePlaceGenerationAdvancesOnlyWhenThePersonMoves() {
+    func testThePlaceGenerationAdvancesWhenTheScopeOnScreenOrItsPlaceChanges() {
         let navigator = ShellNavigator()
         var generation = navigator.placeGeneration
         func moved(_ what: String, file: StaticString = #filePath, line: UInt = #line) {
@@ -200,12 +200,20 @@ final class ShellNavigatorTests: XCTestCase {
         navigator.showOverview()
         moved("Going to the Overview")
 
-        // What changes off screen is not the person moving.
+        // What changes off screen changes nothing on screen.
         navigator.updateThread(thread("s1", title: "Renamed"))
         navigator.removeThread(id: "s1")
         navigator.handleCovenGone(covenID: "elsewhere")
         navigator.select(.coven("work"))
         XCTAssertEqual(navigator.placeGeneration, generation)
+
+        // The open thread deleted, or the coven on screen gone: the place changed, though the person did not move.
+        navigator.open(thread("w1", covenID: "work"))
+        moved("Opening a thread")
+        navigator.removeThread(id: "w1")
+        moved("The open thread was deleted")
+        navigator.handleCovenGone(covenID: "work")
+        moved("The coven on screen is gone")
     }
 
     func testAScopeIsStrixOrACoven() {

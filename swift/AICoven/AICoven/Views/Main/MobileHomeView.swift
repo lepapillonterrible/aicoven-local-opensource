@@ -80,6 +80,8 @@ struct MobileChatsRootView: View {
     @State private var errorMessage: String?
     /// Rename, archive, delete and copy, for this list's threads.
     @StateObject private var threadActions = ThreadActions()
+    /// What each thread is doing, for its row and the list's order.
+    @ObservedObject private var activities = ThreadActivities.shared
     @State private var showArchived = false
     /// Counts the list's loads, so that only the latest one is shown.
     @State private var threadsLoad = 0
@@ -179,7 +181,7 @@ struct MobileChatsRootView: View {
                                 .listRowBackground(Color.clear)
                             } else {
                                 // Newest first, then those archived, under a header of their own.
-                                let sections = ThreadListRules.sections(threads)
+                                let sections = ThreadListRules.sections(threads) { activities.activity[$0.id]?.isStillOpen == true }
                                 ForEach(sections.open) { thread in
                                     threadRow(thread)
                                 }
@@ -239,6 +241,9 @@ struct MobileChatsRootView: View {
                 .task(id: selectedCovenId) {
                     // Another scope's threads are another list.
                     threadActions.invalidate()
+                    // What each thread is doing, as stored for this account.
+                    // Read again from here on whenever a message is stored.
+                    activities.reload()
                     await loadThreads()
                 }
                 .threadActionsHost(threadActions)
@@ -361,8 +366,10 @@ struct MobileChatsRootView: View {
         Button {
             selectedThread = thread
         } label: {
-            ThreadRowView(thread: thread)
+            ThreadRowView(thread: thread, activity: activities.activity[thread.id])
         }
+        // On the button, which is the element VoiceOver reads.
+        .threadActivityValue(activities.activity[thread.id])
         .listRowBackground(Color.aicovenGlass)
         .threadRowActions(thread, threadActions)
     }
@@ -387,9 +394,14 @@ struct MobileChatsRootView: View {
 
 struct ThreadRowView: View {
     let thread: Thread
+    /// What the thread is doing, if a row says it.
+    var activity: ConversationActivity?
     var body: some View {
         HStack(spacing: Spacing.sm) {
-            IconBadge(icon: "message", size: 28, color: .aicovenTeal)
+            ConversationActivityGlyph(activity: activity) {
+                IconBadge(icon: "message", size: 28, color: .aicovenTeal)
+            }
+            .frame(width: 28)
             VStack(alignment: .leading, spacing: Spacing.xxs) {
                 HStack(spacing: 4) {
                     Text(ThreadListRules.title(of: thread))
@@ -416,6 +428,7 @@ struct ThreadRowView: View {
                         .font(.aicovenCaption)
                         .foregroundColor(.aicovenTextSecondary)
                 }
+                ConversationActivityCaption(activity: activity)
             }
             Spacer()
             Image(systemName: "chevron.right")

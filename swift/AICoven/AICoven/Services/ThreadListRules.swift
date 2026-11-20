@@ -18,10 +18,15 @@ nonisolated enum ThreadListRules {
     }
 
     /// A list's two sections: the threads, and those archived, each
-    /// newest first.
-    static func sections(_ threads: [Thread]) -> (open: [Thread], archived: [Thread]) {
+    /// newest first. Among the threads, those still open (`isStillOpen`:
+    /// working, waiting for the person, stopped on a problem, or holding
+    /// an unsent message) come before the rest.
+    static func sections(
+        _ threads: [Thread], isStillOpen: (Thread) -> Bool = { _ in false }
+    ) -> (open: [Thread], archived: [Thread]) {
         let ordered = ordered(threads)
-        return (ordered.filter { !$0.isArchived }, ordered.filter(\.isArchived))
+        let listed = ordered.filter { !$0.isArchived }
+        return (listed.filter(isStillOpen) + listed.filter { !isStillOpen($0) }, ordered.filter(\.isArchived))
     }
 
     /// A thread's title as a row shows it.

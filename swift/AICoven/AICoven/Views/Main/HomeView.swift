@@ -103,6 +103,9 @@ struct HomeView: View {
     }
 
     private func loadInitialData() async {
+        // What each thread is doing, as stored for this account. Read again
+        // from here on whenever a message is stored.
+        ThreadActivities.shared.reload()
         await loadCovens()
         await loadPersonalThreads()
     }

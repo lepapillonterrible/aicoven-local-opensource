@@ -415,6 +415,31 @@ nonisolated struct AgentRun: Codable, Equatable {
     var origin: String?
 }
 
+/// What is stored of a thread that its row in a list shows beside its
+/// name: none of it is content.
+nonisolated struct ThreadMarks: Equatable {
+    /// When the thread was last on screen (for a thread from before read
+    /// marks were kept, when they began; for a new one, when it was made).
+    /// Nil only for a row made some other way.
+    var readAt: Date?
+    /// When the last message that is not the person's own was stored.
+    var lastReplyAt: Date?
+    /// Whether text typed in its composer and not sent is kept with it.
+    var hasDraft = false
+    /// How its latest turn stands, as stored.
+    var latestTurn: TurnOutcome?
+    /// Whether that turn is an agent's own run, which goes on without
+    /// this app.
+    var latestTurnHasRun = false
+
+    /// A reply was stored since the thread was last on screen. A thread
+    /// with no read mark counts as read.
+    var isUnread: Bool {
+        guard let readAt, let lastReplyAt else { return false }
+        return lastReplyAt > readAt
+    }
+}
+
 /// A turn still recorded as running.
 nonisolated struct RunningTurn: Equatable {
     let id: String
@@ -475,6 +500,54 @@ extension ThreadRepository {
 
         try await dbQueue.write { db in
             try Self.upsert(thread, payload: payload, userId: session.userID, in: db)
+        }
+    }
+
+    /// What the lists show of each of `userID`'s threads beside its name,
+    /// by thread id.
+    func threadMarks(for userID: String) async throws -> [String: ThreadMarks] {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        return try await dbQueue.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT t.id AS id, t.read_at AS read_at, (t.draft_ciphertext IS NOT NULL) AS has_draft,
+                    (SELECT MAX(m.created_at) FROM messages m WHERE m.thread_id = t.id AND m.role <> 'user') AS last_reply,
+                    u.status AS turn_status, (u.run_ciphertext IS NOT NULL) AS turn_has_run
+                FROM threads t
+                LEFT JOIN turns u ON u.id = (
+                    SELECT id FROM turns WHERE thread_id = t.id AND user_id = t.user_id
+                    ORDER BY started_at DESC, rowid DESC LIMIT 1
+                )
+                WHERE t.user_id = ? AND t.payload_ciphertext IS NOT NULL
+                """,
+                arguments: [userID]
+            )
+            var marks: [String: ThreadMarks] = [:]
+            for row in rows {
+                guard let id: String = row["id"] else { continue }
+                let status: String? = row["turn_status"]
+                marks[id] = ThreadMarks(
+                    readAt: row["read_at"],
+                    lastReplyAt: row["last_reply"],
+                    hasDraft: row["has_draft"] ?? false,
+                    latestTurn: status.flatMap(TurnOutcome.init(rawValue:)),
+                    latestTurnHasRun: row["turn_has_run"] ?? false
+                )
+            }
+            return marks
+        }
+    }
+
+    /// Notes that a thread of `userID`'s was on screen at `date`: what was
+    /// stored in it up to then has been seen. Never moves the mark back.
+    func markRead(threadID: String, at date: Date, for userID: String) async throws {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        try await dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE threads SET read_at = ? WHERE id = ? AND user_id = ? AND (read_at IS NULL OR read_at < ?)",
+                arguments: [date, threadID, userID, date]
+            )
         }
     }
 
@@ -959,6 +1032,9 @@ extension ThreadRepository {
                 metadata: nil,
                 payloadCiphertext: payload
             ).insert(db)
+            // Read up to now: a reply stored in it from here on, while it is
+            // not on screen, is one the person has not seen.
+            try db.execute(sql: "UPDATE threads SET read_at = ? WHERE id = ? AND user_id = ?", arguments: [Date(), thread.id, userId])
         }
     }
 }
