@@ -421,6 +421,10 @@ final class ThreadActivityTests: XCTestCase {
         let activities = world.activities()
         await activities.reload().value
         XCTAssertEqual(activities.scopesWithUnread, [.strix, .coven("hiring")], "A thread put away marks its row, not its scope")
+        XCTAssertEqual(activities.unreadReplyAt, [
+            "s-unread": Date(timeIntervalSince1970: 200), "h-waits": Date(timeIntervalSince1970: 300),
+            "put-away": Date(timeIntervalSince1970: 400),
+        ], "When each reply not yet seen was stored")
         XCTAssertEqual(activities.covensWithUnread, ["hiring"])
         XCTAssertEqual(activities.current, [:])
 
@@ -439,6 +443,7 @@ final class ThreadActivityTests: XCTestCase {
         // Strix's unread thread comes on screen: Strix holds none.
         activities.show("s-unread")
         XCTAssertEqual(activities.scopesWithUnread, [.coven("hiring")])
+        XCTAssertNil(activities.unreadReplyAt["s-unread"], "It is being read")
     }
 
     // MARK: - From what is stored

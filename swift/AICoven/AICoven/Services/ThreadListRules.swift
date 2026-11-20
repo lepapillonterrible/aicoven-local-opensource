@@ -37,6 +37,26 @@ nonisolated enum ThreadListRules {
         return (listed.filter(isStillOpen), listed.filter { !isStillOpen($0) })
     }
 
+    /// The threads with a reply that came while the person was away from
+    /// the scope: those not archived whose reply not yet seen (`unreadReplyAt`,
+    /// by thread id) was stored after `lastVisit`, the latest reply first.
+    /// None when this device does not know the last visit.
+    static func away(_ threads: [Thread], unreadReplyAt: [String: Date], since lastVisit: Date?) -> [(thread: Thread, repliedAt: Date)] {
+        guard let lastVisit else { return [] }
+        return threads
+            .compactMap { thread -> (thread: Thread, repliedAt: Date)? in
+                guard !thread.isArchived, let at = unreadReplyAt[thread.id], at > lastVisit else { return nil }
+                return (thread, at)
+            }
+            .sorted { $0.repliedAt == $1.repliedAt ? $0.thread.id < $1.thread.id : $0.repliedAt > $1.repliedAt }
+    }
+
+    /// What a reply's row says under the thread's title: who replied.
+    static func replyDetail(agentName: String?) -> String {
+        let name = agentName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? "New reply" : "\(name) replied"
+    }
+
     /// The threads a search for `query` shows: those whose title, as a row
     /// shows it, holds what was typed, whatever its case or accents. All
     /// of them while nothing is typed.

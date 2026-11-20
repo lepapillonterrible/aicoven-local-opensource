@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// A scope's Overview, as the cloud app's: when the person was last here,
-/// then the threads still open and the earlier ones, each only when it has
-/// something to show, with the composer at the foot; asking from it starts
+/// then the threads still open, the replies that came while they were
+/// away, and the earlier threads, each only when it has something to show
+/// (in two columns when there were replies), with the composer at the foot; asking from it starts
 /// a thread and opens it, if the person is still here when it is made.
 ///
 /// What it knows is this device's: what moves or waits comes from the
@@ -31,6 +32,8 @@ struct ScopeOverviewView: View {
         let scope = navigator.selected
         let listed = shellThreads.scope == scope ? shellThreads.threads : []
         let lists = ThreadListRules.overview(listed) { activities.activity[$0.id]?.isStillOpen == true }
+        let away = ThreadListRules.away(listed, unreadReplyAt: activities.unreadReplyAt, since: navigator.previousVisit(in: scope))
+        let nothingListed = listed.contains { !$0.isArchived } == false
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.lg) {
                 // Strix says how to get an answer where none can be had yet.
@@ -42,12 +45,21 @@ struct ScopeOverviewView: View {
                         .font(.aicovenBody)
                         .foregroundColor(.aicovenTextSecondary)
                 }
-                if !lists.stillOpen.isEmpty {
-                    section("Still open") {
-                        ForEach(lists.stillOpen) { thread in row(thread) }
+                if away.isEmpty {
+                    // Nothing for a second column: one column, no blank half.
+                    stillOpen(lists.stillOpen)
+                    earlier(lists.earlier, nothingListed: nothingListed)
+                } else {
+                    HStack(alignment: .top, spacing: Spacing.xxl) {
+                        VStack(alignment: .leading, spacing: Spacing.lg) {
+                            stillOpen(lists.stillOpen)
+                            earlier(lists.earlier, nothingListed: nothingListed)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        awaySection(away)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                earlier(lists.earlier, nothingListed: listed.contains { !$0.isArchived } == false)
             }
             .frame(maxWidth: 980, alignment: .leading)
             .frame(maxWidth: .infinity)
@@ -72,6 +84,32 @@ struct ScopeOverviewView: View {
             .background(Color.aicovenSurface)
         }
         .background(Color.aicovenSurface)
+    }
+
+    @ViewBuilder
+    private func stillOpen(_ threads: [Thread]) -> some View {
+        if !threads.isEmpty {
+            section("Still open") {
+                ForEach(threads) { thread in row(thread) }
+            }
+        }
+    }
+
+    /// The replies that came since the person was last here, the latest
+    /// first: each opens its thread.
+    private func awaySection(_ away: [(thread: Thread, repliedAt: Date)]) -> some View {
+        section("While you were away") {
+            ForEach(away, id: \.thread.id) { reply in
+                OverviewRow(
+                    activity: .unread,
+                    title: ThreadListRules.title(of: reply.thread),
+                    date: reply.repliedAt,
+                    detail: ThreadListRules.replyDetail(agentName: reply.thread.agentName)
+                ) {
+                    navigator.open(reply.thread)
+                }
+            }
+        }
     }
 
     /// The earlier threads; or, with no threads at all, why: they could
@@ -134,6 +172,9 @@ private struct OverviewRow: View {
     let activity: ConversationActivity?
     let title: String
     let date: Date
+    /// A line under the title in place of what the thread is doing: who
+    /// replied, on a reply's row.
+    var detail: String?
     let action: () -> Void
 
     /// 44 pt targets on touch; Mac rows are 28 pt at least.
@@ -158,6 +199,12 @@ private struct OverviewRow: View {
                             .lineLimit(1)
                         Spacer(minLength: Spacing.xs)
                         ThreadRowDate(date: date)
+                    }
+                    if let detail {
+                        Text(detail)
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextSecondary)
+                            .lineLimit(1)
                     }
                     ConversationActivityCaption(activity: activity)
                 }
