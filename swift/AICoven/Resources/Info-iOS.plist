@@ -111,6 +111,8 @@
 	<string>We need access to save images to your photo library.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>We need access to your camera to take photos to share with AI agents.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>AICoven turns your voice messages into text on this device.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_react-native-packager._tcp</string>

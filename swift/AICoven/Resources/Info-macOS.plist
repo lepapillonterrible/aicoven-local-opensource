@@ -3,6 +3,8 @@
 <plist version="1.0">
 <dict>
 
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>AICoven turns your voice messages into text on this device.</string>
 	<key>APP_ENV</key>
 	<string>$(APP_ENV)</string>
 	<key>CFBundleDevelopmentRegion</key>
