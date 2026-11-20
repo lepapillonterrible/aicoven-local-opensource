@@ -233,7 +233,7 @@ actor ToolExecutionService {
             return failed ?? .error(tool: toolCall.name, message: "The image could not be made.", errorType: "image_generation_failed")
         }
         do {
-            let kept = try await AttachmentStore.shared.add(made.data, named: Self.generatedImageName(for: made.mimeType), mimeType: made.mimeType, toThread: threadID)
+            let kept = try await AttachmentStore.shared.add(made.data, named: Self.generatedImageName, mimeType: made.mimeType, toThread: threadID)
             // Stopped while it was being kept: it goes with no reply, so
             // it is not left behind.
             if Task.isCancelled {
@@ -259,14 +259,9 @@ actor ToolExecutionService {
         }
     }
 
-    /// What a generated image is called; the store adds the kind it keeps.
+    /// What a generated image is called; the store gives it the ending of
+    /// the kind it keeps (a Google JPEG ends `.jpg`).
     nonisolated static let generatedImageName = "Generated image.png"
-
-    /// The name for a picture, by its kind (a JPEG or, as any other is
-    /// named, a PNG; the store adds the kind it keeps).
-    nonisolated static func generatedImageName(for mimeType: String) -> String {
-        mimeType.lowercased() == "image/jpeg" ? "Generated image.jpg" : generatedImageName
-    }
 
     /// Where a tool's result lists the files it made for the person, each
     /// as a message keeps an attachment.

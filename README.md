@@ -60,7 +60,7 @@ The Swift sources live under `swift/` and are organized as:
   - `Infrastructure/Keychain` – `SecretsStore` and Keychain-backed implementation.
   - `Infrastructure/Design` – Design system and shared styles.
   - `Infrastructure/Security` – `DataEncryptionService` for encrypted storage.
-  - `Infrastructure/Tools` – `ToolService` (time, web search, attachment analysis, file generation) and `ImageGenerationService` (images, for the `image.generate` tool).
+  - `Infrastructure/Tools` – `ToolService` (time, web search, attachment analysis, file generation) and `ImageGenerationService` and `GoogleImageGenerationService` (images with an OpenAI or a Google key, for the `image.generate` tool).
 - `swift/AICoven/AICoven/Models` – Domain model types (threads, messages, memories, provider configs, agent runs/steps).
 - `swift/AICoven/AICoven/Networking` – Environment configuration.
 - `swift/AICoven/AICoven/Features` – Feature-oriented SwiftUI modules (chat, settings, etc.).

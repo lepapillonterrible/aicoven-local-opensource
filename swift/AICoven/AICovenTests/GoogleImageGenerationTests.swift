@@ -140,9 +140,9 @@ final class GoogleImageGenerationTests: XCTestCase {
         why = await failure { _ in (400, #"{"error": {"message": "Unknown aspect ratio"}}"#) }
         XCTAssertEqual(why, .refused(status: 400, message: "Unknown aspect ratio"))
         why = await failure { _ in (200, #"{"promptFeedback": {"blockReason": "SAFETY"}}"#) }
-        XCTAssertEqual(why, .refused(status: 200, message: "Google made no image (SAFETY)."))
+        XCTAssertEqual(why, .refused(status: 200, message: "no image came back (SAFETY)"))
         why = await failure { _ in (200, #"{"candidates": [{"content": {"parts": [{"text": "I cannot."}]}, "finishReason": "IMAGE_SAFETY"}]}"#) }
-        XCTAssertEqual(why, .refused(status: 200, message: "Google made no image (IMAGE_SAFETY)."))
+        XCTAssertEqual(why, .refused(status: 200, message: "no image came back (IMAGE_SAFETY)"))
         why = await failure { _ in (200, #"{"candidates": [{"content": {"parts": [{"text": "Here."}]}, "finishReason": "STOP"}]}"#) }
         XCTAssertEqual(why, .noPicture)
         why = await failure(model: nil) { _ in (200, #"{"models": [{"name": "models/gemini-3-pro", "supportedGenerationMethods": ["generateContent"]}]}"#) }
@@ -153,6 +153,7 @@ final class GoogleImageGenerationTests: XCTestCase {
         XCTAssertEqual(ImageGenerationService.Failure.keyRefused.said(of: .google), "Google refused the key. Check the Google connection in Settings.")
         XCTAssertEqual(ImageGenerationService.Failure.noPicture.said(of: .openai), "OpenAI answered without an image.")
         XCTAssertEqual(ImageGenerationService.Failure.noPicture.errorDescription, "OpenAI answered without an image.")
+        XCTAssertEqual(ImageGenerationService.Failure.refused(status: 200, message: "no image came back (SAFETY)").said(of: .google), "Google did not make the image (200): no image came back (SAFETY)")
     }
 
     /// The task that is making a picture, so that it can be stopped from
@@ -225,8 +226,6 @@ final class GoogleImageGenerationTests: XCTestCase {
         XCTAssertEqual(ImageProvider(named: "gemini"), .google)
         XCTAssertEqual(ImageProvider(named: "OpenAI"), .openai)
         XCTAssertNil(ImageProvider(named: "anthropic"))
-        XCTAssertEqual(ToolExecutionService.generatedImageName(for: "image/jpeg"), "Generated image.jpg")
-        XCTAssertEqual(ToolExecutionService.generatedImageName(for: "image/png"), "Generated image.png")
     }
 
     // MARK: - Which key is asked

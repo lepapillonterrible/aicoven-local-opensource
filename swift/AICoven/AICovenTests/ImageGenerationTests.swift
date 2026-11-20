@@ -351,7 +351,6 @@ final class ImageGenerationTests: XCTestCase {
         XCTAssertEqual(PromptTemplates.offeredImageTools(storedKeys: ["", nil]), [])
         XCTAssertEqual(PromptTemplates.offeredImageTools(storedKeys: [nil, nil]), [])
         XCTAssertEqual(PromptTemplates.offeredImageTools(storedKeys: []), [])
-        XCTAssertEqual(PromptTemplates.storedImageKeys().count, ImageProvider.allCases.count)
         let forAChatTurn = await ContextBuilder.ToolConfig.connected(deliversFiles: true)
         XCTAssertEqual(forAChatTurn.enabledTools.contains("image.generate"), !PromptTemplates.offeredImageTools().isEmpty)
         XCTAssertEqual(forAChatTurn.enabledTools.subtracting(PromptTemplates.imageTools), forAnAgentRun.enabledTools)

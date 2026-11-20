@@ -200,7 +200,7 @@ nonisolated struct GoogleImageGenerationService {
         guard let picture = pictures.first(where: { $0.data?.isEmpty == false }), let encoded = picture.data, let bytes = Data(base64Encoded: encoded), !bytes.isEmpty else {
             // Google says why where it would not make it.
             if let why = answer.promptFeedback?.blockReason ?? answer.candidates?.compactMap(\.finishReason).first(where: { $0 != "STOP" }) {
-                throw Failure.refused(status: status, message: "Google made no image (\(why)).")
+                throw Failure.refused(status: status, message: "no image came back (\(why))")
             }
             throw Failure.noPicture
         }
