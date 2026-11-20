@@ -92,6 +92,19 @@ final class DraftThreadTests: XCTestCase {
         XCTAssertEqual(drafts.submission(for: .strix).messageText, "For Strix")
     }
 
+    func testACovenIsGoneWhenItIsNoLongerAmongTheCovensRead_onScreenOrNot() {
+        func coven(_ id: String) -> Coven {
+            Coven(id: id, name: id, createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0))
+        }
+        let known = [coven("a"), coven("b"), coven("c")]
+        XCTAssertEqual(CovenOrder.gone(known: known, selected: .strix, among: known), [])
+        XCTAssertEqual(CovenOrder.gone(known: known, selected: .strix, among: [coven("a")]), ["b", "c"], "Gone while another scope is on screen")
+        XCTAssertEqual(CovenOrder.gone(known: known, selected: .coven("b"), among: [coven("a"), coven("c"), coven("new")]), ["b"])
+        // The one on screen counts even before any covens were known.
+        XCTAssertEqual(CovenOrder.gone(known: [], selected: .coven("z"), among: [coven("a")]), ["z"])
+        XCTAssertEqual(CovenOrder.gone(known: [], selected: .coven("a"), among: [coven("a")]), [])
+    }
+
     // MARK: - Where the shell is meanwhile
 
     @MainActor

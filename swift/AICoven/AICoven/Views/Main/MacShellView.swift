@@ -148,13 +148,14 @@ struct MacShellView: View {
         do {
             let loaded = try await CovenService.shared.loadCovens()
             guard reading == covensLoad, UserScope.currentUserID == account else { return }
-            covens = loaded
-            covenOrder = orderStore.ids(for: account)
-            // The coven on screen can be gone by now.
-            if let covenID = navigator.selected.covenID, !loaded.contains(where: { $0.id == covenID }) {
+            // A coven that is gone, on screen or not, takes its place and
+            // what was being written for it along.
+            for covenID in CovenOrder.gone(known: covens, selected: navigator.selected, among: loaded) {
                 navigator.handleCovenGone(covenID: covenID)
                 drafts.forget(.coven(covenID))
             }
+            covens = loaded
+            covenOrder = orderStore.ids(for: account)
         } catch {
             // The kind of failure only. The covens shown stay as they are.
             AppErrorReporter.log(message: "Could not read the covens (\(type(of: error)))", context: "MacShellView.loadCovens")
@@ -178,7 +179,6 @@ struct MacShellView: View {
 
     /// The new-thread page, with one of the coven's agents as who it goes to.
     private func newThread(with role: Role) {
-        AnalyticsService.shared.trackNewChatTapped(source: "mac_shell_agent")
         navigator.requestNewThread(agentID: role.id)
     }
 
