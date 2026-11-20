@@ -39,7 +39,8 @@ final class DraftThreadSubmission: ObservableObject {
     ///   (or holds it unsent).
     ///
     /// If the thread cannot be made, the text goes back to the composer,
-    /// unless something newer was typed meanwhile. If another account is
+    /// unless words were typed there meanwhile (blank space alone gives
+    /// way to it). If another account is
     /// signed in by the time the thread is made, nothing is sent into it
     /// and nothing is said or given back: the text was the first
     /// account's.
@@ -69,7 +70,8 @@ final class DraftThreadSubmission: ObservableObject {
                 thread = try await createThread(ThreadTitleGenerator.title(from: text), account)
             } catch {
                 // Never into another account's composer, and never over
-                // what was typed since.
+                // words typed since. A field holding only blank space holds
+                // nothing to keep: the message that was not sent matters more.
                 guard currentAccount() == account else { return }
                 if messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { messageText = text }
                 errorMessage = Self.couldNotStart
