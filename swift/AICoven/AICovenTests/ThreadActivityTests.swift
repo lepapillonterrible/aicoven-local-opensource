@@ -120,6 +120,7 @@ final class ThreadActivityTests: XCTestCase {
         var beforeLoading: (() async -> Void)?
         /// Held after the marks were read, before the reading lands.
         var beforeCovens: (() async -> Void)?
+        var covensFailing = false
 
         func activities() -> ThreadActivities {
             ThreadActivities(dependencies: .init(
@@ -131,6 +132,7 @@ final class ThreadActivityTests: XCTestCase {
                 markRead: { threadID, date, account in await self.note(threadID, date, account) },
                 loadCovens: {
                     await self.beforeCovens?()
+                    if await self.covensFailing { throw URLError(.cannotOpenFile) }
                     return await self.covens
                 },
                 holdsDraft: { self.drafts[$0] },
@@ -363,9 +365,22 @@ final class ThreadActivityTests: XCTestCase {
         XCTAssertEqual(activities.activity, [:], "The older reading landed last and is not kept")
 
         // A store that cannot be read leaves what was read for this account as it was.
+        world.stored = ["t": marks(read: 100, reply: 200)]
+        world.covens = ["t": "c1"]
+        await activities.reload().value
+        XCTAssertEqual(activities.activity, ["t": .unread])
         world.failing = true
         await activities.reload().value
-        XCTAssertEqual(activities.activity, [:])
+        XCTAssertEqual(activities.activity, ["t": .unread])
+        XCTAssertEqual(activities.covensWithUnread, ["c1"])
+
+        // The marks are kept when only the threads' covens cannot be read, with the covens as they were held.
+        world.failing = false
+        world.covensFailing = true
+        world.stored["u"] = marks(read: 100, reply: 300)
+        await activities.reload().value
+        XCTAssertEqual(activities.activity, ["t": .unread, "u": .unread])
+        XCTAssertEqual(activities.covensWithUnread, ["c1"])
     }
 
     // MARK: - From what is stored

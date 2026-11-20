@@ -368,6 +368,8 @@ struct MobileChatsRootView: View {
         } label: {
             ThreadRowView(thread: thread, activity: activities.activity[thread.id])
         }
+        // On the button, which is the element VoiceOver reads.
+        .threadActivityValue(activities.activity[thread.id])
         .listRowBackground(Color.aicovenGlass)
         .threadRowActions(thread, threadActions)
     }
@@ -434,7 +436,6 @@ struct ThreadRowView: View {
                 .foregroundColor(.aicovenTextTertiary)
         }
         .padding(.vertical, Spacing.xs)
-        .threadActivityValue(activity)
     }
 }
 

@@ -184,7 +184,15 @@ final class ThreadActivities: ObservableObject {
             }
             do {
                 let marks = try await dependencies.loadMarks(account)
-                let covens = try await dependencies.loadCovens()
+                // Which coven each thread is in needs the threads themselves,
+                // which can be locked or on their way when the marks are not:
+                // the marks are kept all the same, with the covens as held.
+                var covens: [String: String]?
+                do {
+                    covens = try await dependencies.loadCovens()
+                } catch {
+                    AppErrorReporter.log(message: "Could not read the threads' covens (\(type(of: error)))", context: "ThreadActivities.reload")
+                }
                 // Only the latest reading, and only as the account it was read
                 // for. Either way what is said is worked out again: nothing
                 // of an account that is gone stays said.
@@ -193,7 +201,7 @@ final class ThreadActivities: ObservableObject {
                     return
                 }
                 self.marks = readHereAccount == account ? marks.readUp(to: readHere) : marks
-                self.covens = covens
+                self.covens = covens ?? (marksAccount == account ? self.covens : [:])
                 marksAccount = account
             } catch {
                 guard reading == readings else {

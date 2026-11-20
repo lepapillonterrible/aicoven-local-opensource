@@ -418,8 +418,9 @@ nonisolated struct AgentRun: Codable, Equatable {
 /// What is stored of a thread that its row in a list shows beside its
 /// name: none of it is content.
 nonisolated struct ThreadMarks: Equatable {
-    /// When the thread was last on screen; nil for a thread that has not
-    /// been since read marks were kept.
+    /// When the thread was last on screen (for a thread from before read
+    /// marks were kept, when they began; for a new one, when it was made).
+    /// Nil only for a row made some other way.
     var readAt: Date?
     /// When the last message that is not the person's own was stored.
     var lastReplyAt: Date?
@@ -432,7 +433,7 @@ nonisolated struct ThreadMarks: Equatable {
     var latestTurnHasRun = false
 
     /// A reply was stored since the thread was last on screen. A thread
-    /// with no read mark counts as read: it was there before marks were.
+    /// with no read mark counts as read.
     var isUnread: Bool {
         guard let readAt, let lastReplyAt else { return false }
         return lastReplyAt > readAt
