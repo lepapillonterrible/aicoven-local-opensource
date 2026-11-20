@@ -357,9 +357,14 @@ final class TurnEngine: ObservableObject {
     }
 
     /// Keeps the text of a send that could not be started, for a thread that
-    /// is no longer on screen to give it back to.
+    /// is no longer on screen to give it back to. What was kept for it
+    /// before stays, in front: nothing unsent is lost to what came after.
     func keepUnsent(_ text: String, for threadID: String, because reason: String) {
-        unsent[threadID] = (text, reason)
+        if let earlier = unsent[threadID] {
+            unsent[threadID] = (earlier.text + "\n" + text, reason)
+        } else {
+            unsent[threadID] = (text, reason)
+        }
     }
 
     /// The text of a send to this thread that failed while the thread was

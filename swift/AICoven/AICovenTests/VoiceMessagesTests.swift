@@ -23,6 +23,28 @@ final class VoiceMessagesTests: XCTestCase {
 
     func testMacSpaceHoldAllowsReleaseWhileRecordingEvenIfBusy() {
         XCTAssertTrue(VoiceHoldToTalkPolicy.isMacSpaceHoldEligible(messageText: "", isDisabled: true, isVoiceBusy: true, isRecordingVoice: true, isAttaching: false, hasVoiceCallbacks: true))
+        // While the recording is still starting (busy, not yet recording),
+        // letting go and Esc must still reach the composer.
+        XCTAssertTrue(VoiceHoldToTalkPolicy.isMacSpaceHoldEligible(messageText: "", isDisabled: false, isVoiceBusy: true, isRecordingVoice: false, isPressActive: true, isAttaching: false, hasVoiceCallbacks: true))
+        XCTAssertFalse(VoiceHoldToTalkPolicy.isMacSpaceHoldEligible(messageText: "", isDisabled: false, isVoiceBusy: true, isRecordingVoice: false, isPressActive: false, isAttaching: false, hasVoiceCallbacks: true))
+        XCTAssertFalse(VoiceHoldToTalkPolicy.isMicDisabled(isRecordingVoice: false, isPressActive: true, isVoiceBusy: true, isDisabled: false, isSubmittingSend: false, isAttaching: false, hasVoiceCallbacks: true), "A finger on the mic keeps it on while the recording starts")
+        XCTAssertTrue(VoiceHoldToTalkPolicy.isMicDisabled(isRecordingVoice: false, isPressActive: true, isVoiceBusy: true, isDisabled: false, isSubmittingSend: true, isAttaching: false, hasVoiceCallbacks: true))
+    }
+
+    func testWordsAreSentOnlyIntoTheThreadTheyWereSaidIn_whileItIsOnScreen() {
+        XCTAssertTrue(PersonalChatView.sendsVoiceMessage(for: "a", shown: "a", thread: "a", isOnScreen: true))
+        XCTAssertFalse(PersonalChatView.sendsVoiceMessage(for: "a", shown: "a", thread: "a", isOnScreen: false), "The thread's view has gone")
+        XCTAssertFalse(PersonalChatView.sendsVoiceMessage(for: "a", shown: "b", thread: "b", isOnScreen: true))
+        XCTAssertFalse(PersonalChatView.sendsVoiceMessage(for: "a", shown: "a", thread: "b", isOnScreen: true))
+        XCTAssertFalse(PersonalChatView.sendsVoiceMessage(for: "a", shown: nil, thread: "a", isOnScreen: true))
+    }
+
+    func testTheRouteIsByTheProviderATurnIsFor() {
+        XCTAssertEqual(ChatService.voiceRoute(provider: "openai", isLocal: false), .init(preferring: .openai, onDeviceOnly: false))
+        XCTAssertEqual(ChatService.voiceRoute(provider: "gemini", isLocal: false), .init(preferring: .google, onDeviceOnly: false))
+        XCTAssertEqual(ChatService.voiceRoute(provider: "anthropic", isLocal: false), .init(preferring: nil, onDeviceOnly: false))
+        XCTAssertEqual(ChatService.voiceRoute(provider: "ollama", isLocal: true), .init(preferring: nil, onDeviceOnly: true), "What is said to a local model goes to no provider")
+        XCTAssertEqual(ChatService.voiceRoute(provider: "openai_compatible", isLocal: true), .init(preferring: nil, onDeviceOnly: true))
     }
 
     func testReleaseActionSendsOnlyWhenRecordingWasNotCancelled() {
@@ -120,7 +142,7 @@ final class VoiceMessagesTests: XCTestCase {
         let capture = FakeCapture()
         let account = Account()
         let kept = Kept()
-        let voice = VoiceMessages(capture: capture, currentUser: { account.id }, route: { route }, transcribe: transcribe, keep: { kept.words.append(($0, $1)) }, shortest: shortest)
+        let voice = VoiceMessages(capture: capture, currentUser: { account.id }, route: { _ in route }, transcribe: transcribe, keep: { kept.words.append(($0, $1)) }, shortest: shortest)
         return World(voice: voice, capture: capture, account: account, kept: kept)
     }
 
@@ -160,6 +182,7 @@ final class VoiceMessagesTests: XCTestCase {
         let heard = world.voice.takeHeard()
         XCTAssertEqual(heard?.text, "Send this at nine.")
         XCTAssertEqual(heard?.destination, here)
+        XCTAssertEqual(heard?.account, "ada", "Whose words they are goes with them")
         XCTAssertNil(world.voice.takeHeard(), "Taken once")
         XCTAssertNil(world.voice.heard)
         let file = try? XCTUnwrap(heardFile)

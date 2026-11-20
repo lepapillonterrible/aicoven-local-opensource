@@ -265,6 +265,14 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertEqual(kept?.text, "Do not lose this")
         XCTAssertEqual(kept?.reason, "The data is locked")
         XCTAssertNil(engine.takeUnsent(for: threadID))
+
+        // What is kept for a thread that already has something kept is
+        // added after it: neither is lost.
+        engine.keepUnsent("First", for: threadID, because: "The data is locked")
+        engine.keepUnsent("Second", for: threadID, because: "The thread was left")
+        let both = engine.takeUnsent(for: threadID)
+        XCTAssertEqual(both?.text, "First\nSecond")
+        XCTAssertEqual(both?.reason, "The thread was left")
     }
 
     // MARK: - Stop

@@ -333,26 +333,7 @@ actor ChatService {
         // Resolve provider + model: prefer role-specific settings when a
         // roleId is provided (coven agent threads), otherwise fall back to
         // the user's global preference from UserDefaults.
-        let prefProvider: String
-        let prefModel: String
-
-        if let roleId,
-           let role = try? await RoleService.shared.getRole(roleId: roleId),
-           let roleProvider = role.provider, !roleProvider.isEmpty,
-           let roleModel = role.model, !roleModel.isEmpty {
-            prefProvider = roleProvider.lowercased()
-            prefModel = roleModel
-            #if DEBUG
-            AppErrorReporter.log(message: "Role '\(role.name)' resolved provider=\(prefProvider) model=\(prefModel)", context: "ChatService.streamMessage.roleResolution")
-            #endif
-        } else {
-            let (globalProvider, globalModel) = resolveProviderAndModel()
-            prefProvider = globalProvider
-            prefModel = globalModel
-            #if DEBUG
-            AppErrorReporter.log(message: "No role override (roleId=\(roleId ?? "nil")); using global provider=\(prefProvider) model=\(prefModel)", context: "ChatService.streamMessage.roleResolution")
-            #endif
-        }
+        let (prefProvider, prefModel) = await preferredProviderAndModel(roleId: roleId)
 
         // Hermes is an agent, not a model: it runs the turn itself, with its
         // own tools and memory, and this app follows the run.
@@ -1473,13 +1454,39 @@ actor ChatService {
             .map { HermesAgentClient.Message(role: $0.role, content: $0.content) }
     }
 
-    /// How a voice message for the model chosen now is put into words:
-    /// the key of that model's provider is asked first, and where the
-    /// model runs on this device or this network only the device is
-    /// asked, so that what is said to a local model goes to no provider.
-    func voiceRoute() -> VoiceMessages.Route {
-        let (provider, _) = resolveProviderAndModel()
-        return VoiceMessages.Route(preferring: TranscriptionSource(providerID: provider), onDeviceOnly: isLocalDeployment(providerID: provider))
+    /// The provider and model a turn is for: the role's own where it has
+    /// them (an agent of a coven), else the person's choice in Settings.
+    private func preferredProviderAndModel(roleId: String?) async -> (provider: String, model: String) {
+        if let roleId,
+           let role = try? await RoleService.shared.getRole(roleId: roleId),
+           let roleProvider = role.provider, !roleProvider.isEmpty,
+           let roleModel = role.model, !roleModel.isEmpty {
+            #if DEBUG
+            AppErrorReporter.log(message: "Role '\(role.name)' resolved provider=\(roleProvider.lowercased()) model=\(roleModel)", context: "ChatService.streamMessage.roleResolution")
+            #endif
+            return (roleProvider.lowercased(), roleModel)
+        }
+        let (globalProvider, globalModel) = resolveProviderAndModel()
+        #if DEBUG
+        AppErrorReporter.log(message: "No role override (roleId=\(roleId ?? "nil")); using global provider=\(globalProvider) model=\(globalModel)", context: "ChatService.streamMessage.roleResolution")
+        #endif
+        return (globalProvider, globalModel)
+    }
+
+    /// How a voice message for a turn of this role is put into words: the
+    /// key of the turn's provider is asked first, and where its model runs
+    /// on this device or this network only the device is asked, so that
+    /// what is said to a local model goes to no provider. Read as a turn
+    /// reads it, after the same look at what is connected now: a model
+    /// chosen a moment ago is the one that counts.
+    func voiceRoute(roleID: String?) async -> VoiceMessages.Route {
+        await ensureEnvironment()
+        let provider = await preferredProviderAndModel(roleId: roleID).provider
+        return Self.voiceRoute(provider: provider, isLocal: isLocalDeployment(providerID: provider))
+    }
+
+    nonisolated static func voiceRoute(provider: String, isLocal: Bool) -> VoiceMessages.Route {
+        VoiceMessages.Route(preferring: TranscriptionSource(providerID: provider), onDeviceOnly: isLocal)
     }
 
     /// Returns `true` when the given provider is running locally \u2014 either

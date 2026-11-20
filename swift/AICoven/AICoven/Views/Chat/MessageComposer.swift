@@ -180,6 +180,10 @@ struct MessageComposer: View {
     /// has moved far enough away to call the recording off.
     @State private var isVoicePressActive = false
     @State private var isVoicePressCancelled = false
+    #if os(iOS)
+    /// A finger is on the mic now: its press ends when it is lifted.
+    @State private var isFingerOnMic = false
+    #endif
     #if os(macOS)
     /// The recording was started by holding Space, not by clicking the mic.
     @State private var isSpaceHoldRecording = false
@@ -242,84 +246,103 @@ struct MessageComposer: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true)
-        .onChange(of: messageText) { _, _ in suggestMentions() }
-        .onAppear(perform: takeReturned)
-        .onChange(of: hasReturnedDraft) { _, _ in takeReturned() }
-        // The composer is gone (its thread view replaced or popped): what
-        // is still being chosen or attached for it is not taken.
-        .onDisappear {
-            attachingTask = nil
-            choosingFiles = nil
-            #if os(iOS)
-            // The camera covers the whole screen, the composer with it:
-            // the composer is not gone for that, and the photo is still
-            // taken. If the composer does go, the camera goes with it.
-            if !showCamera { choosingPictures = nil }
-            #else
-            choosingPictures = nil
-            #endif
-        }
-        .onChange(of: threadId) { _, _ in
-            // A recording does not follow the composer to another thread
-            // (its owner calls it off); nor does a press of the mic.
-            isVoicePressActive = false
-            isVoicePressCancelled = false
-            attachingTask = nil
-            attachFailure = nil
-            choosingFiles = nil
-            choosingPictures = nil
-            showPhotoLibrary = false
-            #if os(iOS)
-            showFileImporter = false
-            showCamera = false
-            #endif
-        }
-        .photosPicker(
-            isPresented: $showPhotoLibrary,
-            selection: $pickedPhotos,
-            maxSelectionCount: ComposerRules.mostPhotosAtOnce,
-            selectionBehavior: .ordered,
-            matching: .images,
-            preferredItemEncoding: .current
-        )
-        .onChange(of: pickedPhotos) { _, picked in
-            guard !picked.isEmpty else { return }
-            pickedPhotos = []
-            // For the library that is open, or not taken.
-            guard let choosing = choosingPictures else { return }
-            Task { await attach(picked.map(AttachSource.photo), chosen: (.pictures, choosing)) }
-        }
-        #if os(iOS)
-        .fileImporter(
-            isPresented: $showFileImporter,
-            allowedContentTypes: [.item],
-            allowsMultipleSelection: true
-        ) { result in
-            // For the chooser that is open, or not taken: the one a
-            // thread was left with is closed, and returns nothing here.
-            guard let choosing = choosingFiles else { return }
-            switch result {
-            case let .success(urls):
-                Task { await attach(urls.map(AttachSource.file), chosen: (.files, choosing)) }
-            case let .failure(error):
+        #if os(macOS)
+            // Esc calls a recording off wherever in the composer the keyboard
+            // is (on the mic, say), not only in the field.
+            .onExitCommand {
+                if isRecordingVoice || isVoicePressActive { cancelVoicePress() }
+            }
+        #endif
+            .onChange(of: messageText) { _, _ in suggestMentions() }
+            // A press that no finger holds (a click on the Mac, VoiceOver's
+            // activation) has no letting go of its own: it is over when the
+            // recording could not start, or has ended some other way.
+            .onChange(of: isVoiceBusy) { _, busy in
+                if !busy, !isRecordingVoice { endPressNoFingerHolds() }
+            }
+            .onChange(of: isRecordingVoice) { _, recording in
+                if !recording { endPressNoFingerHolds() }
+            }
+            .onAppear(perform: takeReturned)
+            .onChange(of: hasReturnedDraft) { _, _ in takeReturned() }
+            // The composer is gone (its thread view replaced or popped): what
+            // is still being chosen or attached for it is not taken.
+            .onDisappear {
+                attachingTask = nil
                 choosingFiles = nil
-                Self.log("The file chooser failed", error)
-                say("The file could not be opened.", after: [])
+                #if os(iOS)
+                // The camera covers the whole screen, the composer with it:
+                // the composer is not gone for that, and the photo is still
+                // taken. If the composer does go, the camera goes with it.
+                if !showCamera { choosingPictures = nil }
+                #else
+                choosingPictures = nil
+                #endif
             }
-        }
-        .fullScreenCover(isPresented: $showCamera) {
-            CameraPicker { photo in
-                // For the camera that is open, or not taken.
+            .onChange(of: threadId) { _, _ in
+                // A recording does not follow the composer to another thread
+                // (its owner calls it off); nor does a press of the mic.
+                isVoicePressActive = false
+                isVoicePressCancelled = false
+                #if os(iOS)
+                isFingerOnMic = false
+                #endif
+                attachingTask = nil
+                attachFailure = nil
+                choosingFiles = nil
+                choosingPictures = nil
+                showPhotoLibrary = false
+                #if os(iOS)
+                showFileImporter = false
+                showCamera = false
+                #endif
+            }
+            .photosPicker(
+                isPresented: $showPhotoLibrary,
+                selection: $pickedPhotos,
+                maxSelectionCount: ComposerRules.mostPhotosAtOnce,
+                selectionBehavior: .ordered,
+                matching: .images,
+                preferredItemEncoding: .current
+            )
+            .onChange(of: pickedPhotos) { _, picked in
+                guard !picked.isEmpty else { return }
+                pickedPhotos = []
+                // For the library that is open, or not taken.
                 guard let choosing = choosingPictures else { return }
-                Task { await attach([.picture(photo, name: ComposerRules.photoName(fileExtension: "jpg"))], chosen: (.pictures, choosing)) }
+                Task { await attach(picked.map(AttachSource.photo), chosen: (.pictures, choosing)) }
             }
-            .ignoresSafeArea()
-        }
-        .onChange(of: isDisabled) { _, disabled in
-            // The composer can render before it can be typed in; focus once
-            // it can.
-            if autoFocus, !disabled { isTextFieldFocused = true }
-        }
+        #if os(iOS)
+            .fileImporter(
+                isPresented: $showFileImporter,
+                allowedContentTypes: [.item],
+                allowsMultipleSelection: true
+            ) { result in
+                // For the chooser that is open, or not taken: the one a
+                // thread was left with is closed, and returns nothing here.
+                guard let choosing = choosingFiles else { return }
+                switch result {
+                case let .success(urls):
+                    Task { await attach(urls.map(AttachSource.file), chosen: (.files, choosing)) }
+                case let .failure(error):
+                    choosingFiles = nil
+                    Self.log("The file chooser failed", error)
+                    say("The file could not be opened.", after: [])
+                }
+            }
+            .fullScreenCover(isPresented: $showCamera) {
+                CameraPicker { photo in
+                    // For the camera that is open, or not taken.
+                    guard let choosing = choosingPictures else { return }
+                    Task { await attach([.picture(photo, name: ComposerRules.photoName(fileExtension: "jpg"))], chosen: (.pictures, choosing)) }
+                }
+                .ignoresSafeArea()
+            }
+            .onChange(of: isDisabled) { _, disabled in
+                // The composer can render before it can be typed in; focus once
+                // it can.
+                if autoFocus, !disabled { isTextFieldFocused = true }
+            }
         #endif
     }
 
@@ -491,7 +514,7 @@ struct MessageComposer: View {
                 onVoiceHoldStart: spaceHoldEligible ? { beginVoicePress(bySpace: true) } : nil,
                 onVoiceHoldStop: spaceHoldEligible ? { endVoicePress() } : nil,
                 onVoiceHoldCancel: spaceHoldEligible ? { cancelVoicePress() } : nil,
-                onEscape: isRecordingVoice ? { cancelVoicePress() } : nil
+                onEscape: isRecordingVoice || isVoicePressActive ? { cancelVoicePress() } : nil
             )
             .frame(height: macInputHeight)
             if messageText.isEmpty {
@@ -740,6 +763,7 @@ struct MessageComposer: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
+                        isFingerOnMic = true
                         if !isVoicePressActive { beginVoicePress(bySpace: false) }
                         let distance = hypot(value.translation.width, value.translation.height)
                         isVoicePressCancelled = isVoicePressCancelled || distance > VoiceHoldToTalkPolicy.cancelDistance
@@ -747,6 +771,7 @@ struct MessageComposer: View {
                     .onEnded { value in
                         let distance = hypot(value.translation.width, value.translation.height)
                         isVoicePressCancelled = isVoicePressCancelled || distance > VoiceHoldToTalkPolicy.cancelDistance
+                        isFingerOnMic = false
                         endVoicePress()
                     }
             )
@@ -791,6 +816,7 @@ struct MessageComposer: View {
     private var micIsDisabled: Bool {
         VoiceHoldToTalkPolicy.isMicDisabled(
             isRecordingVoice: isRecordingVoice,
+            isPressActive: isVoicePressActive,
             isVoiceBusy: isVoiceBusy,
             isDisabled: isDisabled,
             isSubmittingSend: isSubmittingSend,
@@ -806,6 +832,7 @@ struct MessageComposer: View {
             isDisabled: isDisabled,
             isVoiceBusy: isVoiceBusy,
             isRecordingVoice: isRecordingVoice,
+            isPressActive: isVoicePressActive,
             isAttaching: isAttaching,
             hasVoiceCallbacks: hasVoiceCallbacks
         )
@@ -835,6 +862,14 @@ struct MessageComposer: View {
         case .cancel: onVoiceRecordCancel?()
         case .none: break
         }
+    }
+
+    private func endPressNoFingerHolds() {
+        #if os(iOS)
+        guard !isFingerOnMic else { return }
+        #endif
+        isVoicePressActive = false
+        isVoicePressCancelled = false
     }
 
     private func cancelVoicePress() {

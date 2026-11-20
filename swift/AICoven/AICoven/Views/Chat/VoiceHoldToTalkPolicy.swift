@@ -18,20 +18,22 @@ nonisolated enum VoiceHoldToTalkPolicy {
     static let cancelDistance: CGFloat = 72
 
     /// Holding Space never takes typing: it talks only while the composer
-    /// is otherwise idle and holds no text. Once a recording has started,
-    /// letting go still counts though the composer may by then be busy.
+    /// is otherwise idle and holds no text. Once a press has begun (the
+    /// recording starting, or running), letting go and Esc still count
+    /// though the composer is by then busy.
     static func isMacSpaceHoldEligible(
         messageText: String,
         isDisabled: Bool,
         isVoiceBusy: Bool,
         isRecordingVoice: Bool,
+        isPressActive: Bool = false,
         isAttaching: Bool,
         hasVoiceCallbacks: Bool
     ) -> Bool {
         guard hasVoiceCallbacks else { return false }
         guard messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         guard !isAttaching else { return false }
-        if isRecordingVoice { return true }
+        if isRecordingVoice || isPressActive { return true }
         return !isDisabled && !isVoiceBusy
     }
 
@@ -40,10 +42,12 @@ nonisolated enum VoiceHoldToTalkPolicy {
         return wasCancelled ? .cancel : .send
     }
 
-    /// Whether the mic is off. While a recording runs it stays on (it is
-    /// how the recording is sent), but for a send under way.
+    /// Whether the mic is off. While a recording runs, or a press of it
+    /// is under way (the recording still starting), it stays on: it is
+    /// how the recording is sent or called off. Not during a send.
     static func isMicDisabled(
         isRecordingVoice: Bool,
+        isPressActive: Bool = false,
         isVoiceBusy: Bool,
         isDisabled: Bool,
         isSubmittingSend: Bool,
@@ -51,7 +55,7 @@ nonisolated enum VoiceHoldToTalkPolicy {
         hasVoiceCallbacks: Bool
     ) -> Bool {
         if isSubmittingSend || !hasVoiceCallbacks || isAttaching { return true }
-        if isRecordingVoice { return false }
+        if isRecordingVoice || isPressActive { return false }
         return isVoiceBusy || isDisabled
     }
 }

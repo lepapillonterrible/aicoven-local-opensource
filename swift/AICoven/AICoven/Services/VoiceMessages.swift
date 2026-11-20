@@ -30,6 +30,8 @@ final class VoiceMessages: ObservableObject {
         let id = UUID()
         let text: String
         let destination: Destination
+        /// Whose words they are: they are sent only as that account.
+        let account: String
 
         static func == (lhs: Heard, rhs: Heard) -> Bool {
             lhs.id == rhs.id
@@ -52,7 +54,7 @@ final class VoiceMessages: ObservableObject {
 
     private let capture: VoiceCapturing
     private let currentUser: () -> String
-    private let route: () async -> Route
+    private let route: (Destination) async -> Route
     private let transcribe: (URL, Route) async throws -> VoiceTranscription.Heard
     private let keep: @MainActor (_ text: String, _ threadID: String) -> Void
     /// A recording shorter than this is a slip of the finger (or was let
@@ -70,7 +72,7 @@ final class VoiceMessages: ObservableObject {
     init(
         capture: VoiceCapturing? = nil,
         currentUser: @escaping () -> String = { UserScope.currentUserID },
-        route: @escaping () async -> Route = { await ChatService.shared.voiceRoute() },
+        route: @escaping (Destination) async -> Route = { await ChatService.shared.voiceRoute(roleID: $0.roleID) },
         transcribe: @escaping (URL, Route) async throws -> VoiceTranscription.Heard = { url, route in
             try await VoiceTranscription.transcribe(
                 url,
@@ -118,10 +120,12 @@ final class VoiceMessages: ObservableObject {
                 owner = (destination, account)
                 startedAt = .now
                 isRecording = true
+                AccessibilityAnnouncements.say("Listening")
             } catch {
                 if Task.isCancelled || error is CancellationError { return }
-                failure = "Unable to start recording: \(error.localizedDescription)"
-                AccessibilityAnnouncements.say(failure)
+                // Said only to the one who asked.
+                guard currentUser() == account else { return }
+                say("Unable to start recording: \(error.localizedDescription)")
             }
         }
     }
@@ -146,9 +150,11 @@ final class VoiceMessages: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             await startTask?.value
+            let wasRecording = isRecording
             capture.cancelRecording()
             isRecording = false
             owner = nil
+            if wasRecording { AccessibilityAnnouncements.say("Voice message cancelled") }
         }
     }
 
@@ -185,6 +191,7 @@ final class VoiceMessages: ObservableObject {
         }
         isBusy = true
         defer { isBusy = false }
+        AccessibilityAnnouncements.say("Sending your voice message…")
         let recording: URL
         do {
             recording = try capture.stopRecording()
@@ -199,12 +206,12 @@ final class VoiceMessages: ObservableObject {
         // another is signed in: its keys are not this recording's.
         guard currentUser() == owner.account, !Task.isCancelled else { return }
         do {
-            let route = await route()
+            let route = await route(owner.destination)
             guard currentUser() == owner.account, !Task.isCancelled else { return }
             let words = try await transcribe(recording, route)
             guard currentUser() == owner.account, !Task.isCancelled else { return }
             if isShown {
-                heard = Heard(text: words.text, destination: owner.destination)
+                heard = Heard(text: words.text, destination: owner.destination, account: owner.account)
             } else {
                 keep(words.text, owner.destination.threadID)
             }

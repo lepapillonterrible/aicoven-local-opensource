@@ -275,6 +275,8 @@ struct PersonalChatView: View {
     @ObservedObject private var approvals = ToolApprovals.shared
     /// The voice message being recorded or put into words here.
     @StateObject private var voice = VoiceMessages()
+    /// The composer is on screen: what is heard is sent only while it is.
+    @State private var isComposerOnScreen = true
     /// The thread this view's state belongs to. The view is reused when the
     /// thread changes, so work that waited checks it before touching state.
     @State private var shownThreadID: String?
@@ -522,15 +524,19 @@ struct PersonalChatView: View {
             // What a voice message was heard to say is sent as a message.
             .onChange(of: voice.heard) { _, heard in
                 guard heard != nil, let words = voice.takeHeard() else { return }
+                // Where they go is decided when they are sent, not here:
+                // the thread can leave the screen in between.
                 Task { await sendVoiceMessage(words) }
             }
             // A recording is for the thread it was started in, while that
             // thread is on screen and the app is in front.
             .onDisappear {
+                isComposerOnScreen = false
                 voice.cancel()
                 voice.setShown(false)
             }
             .onAppear {
+                isComposerOnScreen = true
                 voice.setShown(true)
                 // What was heard while this was off screen comes back.
                 if shownThreadID == thread.id, let unsent = TurnEngine.shared.takeUnsent(for: thread.id) {
@@ -823,11 +829,19 @@ struct PersonalChatView: View {
     /// unseen; the words are kept for when it is opened.
     @MainActor
     private func sendVoiceMessage(_ heard: VoiceMessages.Heard) async {
-        guard shownThreadID == heard.destination.threadID, thread.id == heard.destination.threadID else {
+        // Only as the account that said them; another's is signed in now.
+        guard UserScope.currentUserID == heard.account else { return }
+        guard Self.sendsVoiceMessage(for: heard.destination.threadID, shown: shownThreadID, thread: thread.id, isOnScreen: isComposerOnScreen) else {
             TurnEngine.shared.keepUnsent(heard.text, for: heard.destination.threadID, because: VoiceMessages.leftTheThread)
             return
         }
         _ = await send(heard.text, attachments: [], isFromTheField: false)
+    }
+
+    /// Whether words heard for a thread are sent now: only into the thread
+    /// they were said in, while it is the one shown and on screen.
+    static func sendsVoiceMessage(for heardIn: String, shown: String?, thread: String, isOnScreen: Bool) -> Bool {
+        isOnScreen && shown == heardIn && thread == heardIn
     }
 
     /// Sends `text` to this thread, or has it wait for the turn that
