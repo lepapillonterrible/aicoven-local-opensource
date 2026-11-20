@@ -284,10 +284,13 @@ actor ConnectedAccountsService {
     }
 
     /// Marks a Figma connection as one whose token Figma has refused: it
-    /// is not used again until the person gives it a new token.
-    func markFigmaTokenRefused(accountID: String) async {
-        await ensureAccountsLoaded()
-        guard let index = accountsCache?.firstIndex(where: { $0.id == accountID && $0.provider == .figma && $0.status == .connected }) else { return }
+    /// is not used again until the person gives it a new token. Only if
+    /// `token` is still the one it keeps: a refusal of a token that has
+    /// since been replaced says nothing of the new one.
+    func markFigmaTokenRefused(accountID: String, token: String) async {
+        let owner = await ensureAccountsLoaded()
+        guard let index = accountsCache?.firstIndex(where: { $0.id == accountID && $0.provider == .figma && $0.status == .connected }),
+              (try? tokenBundle(forAccountId: accountID, of: owner))?.accessToken == token else { return }
         accountsCache?[index].status = .error
         accountsCache?[index].updatedAt = Date()
         saveAccountsToStorage()

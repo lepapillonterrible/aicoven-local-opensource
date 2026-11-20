@@ -1122,7 +1122,6 @@ actor ToolExecutionService {
         switch value {
         case let .bool(flag): flag
         case let .string(text): ["true", "1", "yes"].contains(text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
-        case let .int(number): number == 1
         default: false
         }
     }
@@ -1147,11 +1146,16 @@ actor ToolExecutionService {
         return .success(tool: "figma.readFile", result: ["file": AnyJSONValue(file), "depth": AnyJSONValue(depth), "truncated": AnyJSONValue(outline.omitted > 0)], contextBlock: block)
     }
 
+    /// What a model is told where Figma is not connected.
+    nonisolated static var figmaNotConnected: String {
+        "Figma not connected. The person can connect it in Settings > \(SettingsPane.connectedApps.listedTitle)."
+    }
+
     /// What a model is told when Figma would not answer a call.
     nonisolated static func figmaFailure(_ error: Error) -> (message: String, code: String, retry: Bool) {
         switch error as? FigmaError {
         case .tokenRefused:
-            ("Figma refused the token. The person can give Figma a new token in Settings > Connected Apps.", "figma_token_refused", false)
+            ("Figma refused the token. The person can give Figma a new token in Settings > \(SettingsPane.connectedApps.listedTitle).", "figma_token_refused", false)
         case .notAnswered(status: 403):
             ("Figma does not let this account see that file, or do that with it.", "figma_forbidden", false)
         case .notAnswered(status: 404):
@@ -1170,21 +1174,26 @@ actor ToolExecutionService {
     /// needing a new one.
     private func executeFigma(toolCall: ParsedToolCall, _ run: @Sendable (_ file: String, _ token: String) async throws -> ToolExecutionResult) async -> ToolExecutionResult {
         guard let account = await connectedAccountsService.getConnectedAccount(for: .figma) else {
-            return .error(tool: toolCall.name, message: "Figma not connected. The person can connect it in Settings > Connected Apps.")
+            return .error(tool: toolCall.name, message: Self.figmaNotConnected)
         }
         guard let given = toolCall.args["file"]?.value as? String, let file = FigmaToolService.fileKey(given) else {
             return .validationError(tool: toolCall.name, message: "Missing or unreadable 'file'. Give a Figma file's key or its link (https://www.figma.com/design/<key>/...).", field: "file")
         }
+        var token: String?
         do {
-            let token = try await connectedAccountsService.getAccessToken(forAccountId: account.id)
-            return try await run(file, token)
-        } catch FigmaError.tokenRefused {
-            await connectedAccountsService.markFigmaTokenRefused(accountID: account.id)
-            let failure = Self.figmaFailure(FigmaError.tokenRefused)
-            return .error(tool: toolCall.name, message: failure.message, errorType: failure.code, isRetryable: failure.retry)
-        } catch is CancellationError {
-            return .error(tool: toolCall.name, message: "Stopped before Figma answered.", errorType: "cancelled")
+            let kept = try await connectedAccountsService.getAccessToken(forAccountId: account.id)
+            token = kept
+            return try await run(file, kept)
         } catch {
+            // Stopped, however that showed (the request cancelled too).
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
+                return .error(tool: toolCall.name, message: "Stopped before Figma answered.", errorType: "cancelled")
+            }
+            // The token that was refused is the one marked, if it is
+            // still the connection's.
+            if case FigmaError.tokenRefused = error, let token {
+                await connectedAccountsService.markFigmaTokenRefused(accountID: account.id, token: token)
+            }
             let failure = Self.figmaFailure(error)
             return .error(tool: toolCall.name, message: failure.message, errorType: failure.code, isRetryable: failure.retry)
         }
@@ -1209,7 +1218,7 @@ actor ToolExecutionService {
             return .validationError(tool: toolCall.name, message: "Missing or unreadable 'file'. Give a Figma file's key or its link (https://www.figma.com/design/<key>/...).", field: "file")
         }
         guard await connectedAccountsService.getConnectedAccount(for: .figma) != nil else {
-            return .error(tool: toolCall.name, message: "Figma not connected. The person can connect it in Settings > Connected Apps.")
+            return .error(tool: toolCall.name, message: Self.figmaNotConnected)
         }
         if let refusal = await refusal(ofAppChange: toolCall, in: threadID, { .figmaComment(file: named, replyTo: replyTo, message: message, threadID: $0) }) {
             return refusal

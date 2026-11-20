@@ -97,7 +97,9 @@ nonisolated extension FigmaToolService {
                 (UInt8(ascii: "a") ... UInt8(ascii: "z")).contains(byte) || (UInt8(ascii: "A") ... UInt8(ascii: "Z")).contains(byte) || (UInt8(ascii: "0") ... UInt8(ascii: "9")).contains(byte)
             }
         }
-        if text.lowercased().hasPrefix("http") {
+        // A link has a scheme and steps; a key has neither a colon nor a
+        // slash (a key may itself begin "http").
+        if text.contains(":") || text.contains("/") {
             guard let link = URLComponents(string: text), link.scheme == "https", let host = link.host?.lowercased(), host == "figma.com" || host == "www.figma.com" else { return nil }
             let steps = link.path.split(separator: "/").map(String.init)
             guard steps.count >= 2, fileEditors.contains(steps[0]), isKey(steps[1], atLeast: 10) else { return nil }
@@ -185,9 +187,20 @@ nonisolated extension FigmaToolService {
     /// The newest comments a model is told of.
     static let mostComments = 200
 
+    /// Text on one line: each line break in it (of any kind) made a space.
+    static func oneLine(_ text: String) -> String {
+        text.split(whereSeparator: \.isNewline).joined(separator: " ")
+    }
+
+    /// How many nodes a node is, with all those under it.
+    static func count(of node: [String: Any]) -> Int {
+        1 + (node["children"] as? [[String: Any]] ?? []).reduce(0) { $0 + count(of: $1) }
+    }
+
     /// A node and those under it as an outline, a line each: its name,
     /// then its id and kind. No more than `left` nodes are written; where
-    /// a node's children were left out, its line says how many.
+    /// a node's children were left out, its line says how many of them,
+    /// and `omitted` counts every node left out, with those under them.
     static func outline(of node: [String: Any], left: inout Int, indent: Int = 0) -> (lines: [String], omitted: Int) {
         left -= 1
         let children = node["children"] as? [[String: Any]] ?? []
@@ -202,8 +215,8 @@ nonisolated extension FigmaToolService {
             kept += 1
         }
         let cut = children.count - kept
-        omitted += cut
-        let name = (node["name"] as? String).map { $0.replacingOccurrences(of: "\n", with: " ") } ?? "(unnamed)"
+        omitted += children.dropFirst(kept).reduce(0) { $0 + count(of: $1) }
+        let name = (node["name"] as? String).map(oneLine) ?? "(unnamed)"
         let line = String(repeating: "  ", count: indent) + "- \(name) [\(node["id"] as? String ?? "?"), \(node["type"] as? String ?? "?")]"
             + (cut > 0 ? " (\(cut) more under it not shown)" : "")
         return ([line] + lines, omitted)
@@ -228,7 +241,7 @@ nonisolated extension FigmaToolService {
             if let parent = comment["parent_id"] as? String, !parent.isEmpty { notes.append("reply to \(parent)") }
             if let node = (comment["client_meta"] as? [String: Any])?["node_id"] as? String { notes.append("on node \(node)") }
             if isResolved(comment) { notes.append("resolved") }
-            let message = (comment["message"] as? String ?? "").replacingOccurrences(of: "\n", with: " ")
+            let message = oneLine(comment["message"] as? String ?? "")
             return "- [\(id)] \(author), \(when)\(notes.isEmpty ? "" : " (\(notes.joined(separator: ", ")))"): \(message)"
         }
         return (Array(lines), shown.count > mostComments)

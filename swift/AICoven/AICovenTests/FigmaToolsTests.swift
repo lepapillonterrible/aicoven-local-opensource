@@ -14,6 +14,7 @@ final class FigmaToolsTests: XCTestCase {
     func testAFileIsNamedByItsKeyOrItsLink() {
         XCTAssertEqual(FigmaToolService.fileKey("AbCdEfGhIjKl"), "AbCdEfGhIjKl")
         XCTAssertEqual(FigmaToolService.fileKey("  AbCd1234  "), "AbCd1234")
+        XCTAssertEqual(FigmaToolService.fileKey("httpABC123"), "httpABC123", "A key may begin with those letters")
         for editor in ["design", "file", "board", "proto", "slides", "deck", "make"] {
             XCTAssertEqual(FigmaToolService.fileKey("https://www.figma.com/\(editor)/AbCdEfGhIjKl/Home-page?node-id=3-21&t=x"), "AbCdEfGhIjKl", editor)
         }
@@ -73,6 +74,21 @@ final class FigmaToolsTests: XCTestCase {
             "    - Home screen [1:2, FRAME] (1 more under it not shown)",
         ])
         XCTAssertEqual(cut.omitted, 3)
+
+        // What is left out is counted with all that is under it; and a
+        // name's line breaks, of any kind, are spaces.
+        let deep = try object(#"""
+        {"id": "0:0", "name": "Top\r\nof\rit", "type": "FRAME", "children": [
+          {"id": "1:1", "name": "Kept", "type": "TEXT"},
+          {"id": "1:2", "name": "Group", "type": "GROUP", "children": [{"id": "1:3", "type": "TEXT"}, {"id": "1:4", "type": "TEXT"}]}
+        ]}
+        """#)
+        left = 2
+        let counted = FigmaToolService.outline(of: deep, left: &left)
+        XCTAssertEqual(counted.lines, ["- Top of it [0:0, FRAME] (1 more under it not shown)", "  - Kept [1:1, TEXT]"])
+        XCTAssertEqual(counted.omitted, 3, "The group and the two under it")
+        XCTAssertEqual(FigmaToolService.count(of: deep), 5)
+        XCTAssertEqual(FigmaToolService.oneLine("a\r\nb\rc\nd"), "a b c d")
     }
 
     func testCommentsAreToldNewestFirst_andAReplyIsResolvedWhenItsThreadIs() throws {
@@ -80,7 +96,7 @@ final class FigmaToolsTests: XCTestCase {
         [
           {"id": "1", "message": "Too dark", "created_at": "2026-11-01T10:00:00Z", "user": {"handle": "Ada"}, "resolved_at": "2026-11-02T10:00:00Z", "client_meta": {"node_id": "1:2"}},
           {"id": "2", "parent_id": "1", "message": "Fixed", "created_at": "2026-11-01T11:00:00Z", "user": {"handle": "Grace"}},
-          {"id": "3", "message": "Logo is\noff centre", "created_at": "2026-11-03T09:00:00Z", "user": {"handle": "Ada"}, "client_meta": {"x": 10, "y": 20}},
+          {"id": "3", "message": "Logo is\r\noff centre", "created_at": "2026-11-03T09:00:00Z", "user": {"handle": "Ada"}, "client_meta": {"x": 10, "y": 20}},
           {"id": "4", "parent_id": "3", "message": "Agreed", "created_at": "2026-11-03T10:00:00Z"}
         ]
         """#.utf8)) as? [[String: Any]])
@@ -268,6 +284,13 @@ final class FigmaToolsTests: XCTestCase {
         XCTAssertEqual(open.contextBlock, "[Figma Comments: AbCdEfGhIjKl]\n- [3] Ada, 2026-11-03T09:00:00Z: Off centre")
         let all = await world.call("figma.readComments", ["file": AnyJSONValue("AbCdEfGhIjKl"), "include_resolved": AnyJSONValue("yes")])
         XCTAssertEqual(all.result?["count"]?.value as? Int, 2)
+        XCTAssertTrue(ToolExecutionService.isYes(.bool(true)))
+        XCTAssertTrue(ToolExecutionService.isYes(.string(" TRUE ")))
+        XCTAssertTrue(ToolExecutionService.isYes(.string("1")))
+        for no in [AnyJSONValue.bool(false), .string("no"), .int(1), .null] {
+            XCTAssertFalse(ToolExecutionService.isYes(no), "\(no)")
+        }
+        XCTAssertFalse(ToolExecutionService.isYes(nil))
         XCTAssertEqual(world.asked.requests.map(\.url), ["https://api.figma.com/v1/files/AbCdEfGhIjKl/comments", "https://api.figma.com/v1/files/AbCdEfGhIjKl/comments"])
 
         let none = try await self.world { _ in (200, "{}", [:]) }
@@ -319,15 +342,26 @@ final class FigmaToolsTests: XCTestCase {
         defer { refused.forget() }
         result = await refused.call("figma.readComments", ["file": AnyJSONValue("AbCdEfGhIjKl")])
         XCTAssertEqual(result.errorType, "figma_token_refused")
-        XCTAssertEqual(result.error, "Figma refused the token. The person can give Figma a new token in Settings > Connected Apps.")
+        XCTAssertEqual(result.error, "Figma refused the token. The person can give Figma a new token in Settings > \(SettingsPane.connectedApps.listedTitle).")
         connection = await refused.accounts.getConnectedAccount(for: .figma)
         XCTAssertNil(connection)
         let waiting = await refused.accounts.figmaAccountNeedingAToken()
         XCTAssertNotNil(waiting)
         let before = refused.asked.requests.count
         result = await refused.call("figma.readFile", ["file": AnyJSONValue("AbCdEfGhIjKl")])
-        XCTAssertEqual(result.error, "Figma not connected. The person can connect it in Settings > Connected Apps.")
+        XCTAssertEqual(result.error, ToolExecutionService.figmaNotConnected)
         XCTAssertEqual(refused.asked.requests.count, before, "A refused token is not sent again")
+
+        // A refusal of a token that has since been replaced says nothing
+        // of the new one.
+        let replaced = try XCTUnwrap(waiting)
+        _ = try await refused.accounts.connectFigma(token: "figd_NEW", replacing: replaced.id)
+        await refused.accounts.markFigmaTokenRefused(accountID: replaced.id, token: "figd_TEST")
+        connection = await refused.accounts.getConnectedAccount(for: .figma)
+        XCTAssertNotNil(connection, "The new token's connection stands")
+        await refused.accounts.markFigmaTokenRefused(accountID: replaced.id, token: "figd_NEW")
+        connection = await refused.accounts.getConnectedAccount(for: .figma)
+        XCTAssertNil(connection)
 
         // No such file; too many requests; a node Figma does not have.
         let missing = try await world { request in
@@ -372,7 +406,7 @@ final class FigmaToolsTests: XCTestCase {
         defer { unconnected.forget() }
         for (tool, args) in [("figma.readFile", ["file": AnyJSONValue("AbCdEfGhIjKl")]), ("figma.addComment", ["file": AnyJSONValue("AbCdEfGhIjKl"), "message": AnyJSONValue("Hi")])] as [(String, [String: AnyJSONValue])] {
             let result = await unconnected.call(tool, args)
-            XCTAssertEqual(result.error, "Figma not connected. The person can connect it in Settings > Connected Apps.", tool)
+            XCTAssertEqual(result.error, ToolExecutionService.figmaNotConnected, tool)
         }
         XCTAssertEqual(unconnected.asked.requests, [])
         let asked = await unconnected.seen.approvals
