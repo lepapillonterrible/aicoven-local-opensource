@@ -9,11 +9,15 @@ struct ShellContentView: View {
     @ObservedObject var navigator: ShellNavigator
     /// Rename, archive, delete and copy, for the open thread's menu.
     @ObservedObject var threadActions: ThreadActions
+    /// What each scope's new-thread page holds unsent.
+    let drafts: DraftThreads
     /// The coven on screen; nil for Strix, or while the covens are not in.
     let coven: Coven?
     let onNewThread: () -> Void
     /// Starts a thread with one of the coven's agents.
     let onNewThreadWithAgent: (Role) -> Void
+    /// Told of a thread the new-thread page made.
+    let onThreadCreated: (Thread) -> Void
     let onCreateCoven: () -> Void
     let onOpenProviderKeys: () -> Void
 
@@ -26,6 +30,20 @@ struct ShellContentView: View {
                 PersonalChatView(thread: thread, onEditAgent: nil, onBack: nil, showsHeader: false)
                     .id(thread.id)
                     .toolbar { threadActionsMenu(thread) }
+            case let .draftThread(covenID):
+                // A coven's page only once the coven is in: it is the
+                // coven's agents the message can go to.
+                if covenID == nil || coven?.id == covenID {
+                    DraftThreadView(
+                        coven: coven,
+                        askedAgentID: navigator.draftAgent(in: navigator.selected),
+                        submission: drafts.submission(for: navigator.selected),
+                        onThreadCreated: onThreadCreated
+                    )
+                    .id(navigator.selected)
+                } else {
+                    overview
+                }
             case let .memoryList(covenID):
                 ShellMemoryPlace(covenID: covenID)
                     .id(covenID)
