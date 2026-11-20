@@ -137,7 +137,8 @@ actor AttachmentStore {
     /// account's and holds no payload. It is no thread to list, open or
     /// count: the readers of chat threads take only rows with a payload,
     /// and the older readers of every row leave this one out by its id
-    /// (`ThreadRepository.loadThread`, `fetchAllThreads`, `isThread`).
+    /// (`ThreadRepository.loadThread`, `fetchAllThreads`, `isThread`,
+    /// `covenID(ofThread:for:)`).
     /// Made here if it is not there yet, after what earlier runs
     /// left attached has been cleared (a file attached before would go
     /// with that). Throws while the data is locked, and if the account

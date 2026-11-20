@@ -132,6 +132,14 @@ struct MacShellView: View {
         .onReceive(NotificationCenter.default.publisher(for: .didCreateThread)) { _ in
             shellThreads.reload()
         }
+        // A thread was deleted, by whatever did it (a new thread whose
+        // files could not go into it is deleted again, with no list's
+        // action behind it): it is no longer listed, open or marked.
+        .onReceive(NotificationCenter.default.publisher(for: .didDeleteThread)) { deleted in
+            if let id = deleted.userInfo?[Notification.Name.threadIDKey] as? String { navigator.removeThread(id: id) }
+            shellThreads.reload()
+            ThreadActivities.shared.reload()
+        }
         // A thread renamed in the sidebar goes by its new name in the
         // window's title too, and one brought back from the archive is
         // offered Archive again in its menu.

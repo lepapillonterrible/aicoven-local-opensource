@@ -44,7 +44,8 @@ final class DraftThreadSubmission: ObservableObject {
             },
             discardThread: { thread, account in
                 // Only as the account it was made for; a thread that cannot
-                // be deleted is left, empty.
+                // be deleted is left, empty. The deletion is told to what
+                // lists the thread (`.didDeleteThread`).
                 guard UserScope.currentUserID == account else { return }
                 do {
                     try await ThreadService.shared.deleteThread(threadId: thread.id)

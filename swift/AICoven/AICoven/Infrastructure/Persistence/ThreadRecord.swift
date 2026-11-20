@@ -939,6 +939,8 @@ extension ThreadRepository {
     /// form cannot be read.
     func covenID(ofThread threadID: String, for userID: String) async throws -> String? {
         guard let queue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        // The row the account's files wait under is no thread of theirs.
+        guard threadID != AttachmentStore.holdingThreadID(for: userID) else { throw ThreadLookupError.noSuchThread }
         let stored = try await queue.read { db in
             try ThreadRecord
                 .filter(ThreadRecord.Columns.id == threadID)
