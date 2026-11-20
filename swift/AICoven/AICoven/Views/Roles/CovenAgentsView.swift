@@ -51,6 +51,7 @@ struct CovenAgentsView: View {
 
                 row {
                     Button {
+                        AnalyticsService.shared.trackFeatureUsage(featureName: "add_role")
                         adding = true
                     } label: {
                         HStack(spacing: Spacing.sm) {
@@ -76,12 +77,12 @@ struct CovenAgentsView: View {
 
                 ForEach(roles) { role in
                     row {
-                        AgentListRow(role: role, rowHeight: rowHeight) { editing = role }
+                        AgentListRow(role: role, rowHeight: rowHeight) { edit(role) }
                     }
                     .accessibilityAction(named: "Delete") { askDelete(role) }
                     .contextMenu {
                         Button("New Thread with \(role.name)") { onNewThread(role) }
-                        Button("Edit…") { editing = role }
+                        Button("Edit…") { edit(role) }
                         Button("Delete…", role: .destructive) { askDelete(role) }
                     }
                 }
@@ -140,6 +141,11 @@ struct CovenAgentsView: View {
             .foregroundStyle(Color.aicovenError)
     }
 
+    private func edit(_ role: Role) {
+        AnalyticsService.shared.trackRoleView(roleId: role.id)
+        editing = role
+    }
+
     private func askDelete(_ role: Role) {
         deleting = role
         askingDelete = true
@@ -169,6 +175,7 @@ struct CovenAgentsView: View {
         defer { deletingIDs.remove(role.id) }
         do {
             try await RoleService.shared.deleteRole(roleId: role.id)
+            AnalyticsService.shared.trackRoleDelete(roleId: role.id)
             deleteFailed = false
         } catch {
             AppErrorReporter.log(message: "Could not delete an agent (\(type(of: error)))", context: "CovenAgentsView.delete")

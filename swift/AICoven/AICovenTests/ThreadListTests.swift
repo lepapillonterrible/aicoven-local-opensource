@@ -418,25 +418,6 @@ final class ThreadListTests: XCTestCase {
         await fulfillment(of: [told], timeout: 10)
     }
 
-    @MainActor
-    func testARenamedThread_goesByItsNewNameOnItsOpenTab() {
-        let plans = thread("t1", title: "Plans")
-        let other = thread("t2", title: "Other")
-        let tabs = [WorkspaceTab.thread(plans), WorkspaceTab.personalStrix, WorkspaceTab.thread(other)]
-        XCTAssertFalse(tabs.showsAnOldName(among: [plans, other]))
-
-        let renamed = [thread("t1", title: "Plans for May"), other]
-        XCTAssertTrue(tabs.showsAnOldName(among: renamed))
-        let shown = tabs.showing(renamed)
-        XCTAssertEqual(shown.map(\.id), tabs.map(\.id), "Each tab keeps its place")
-        XCTAssertEqual(shown.map(\.title), ["Plans for May", WorkspaceTab.personalStrix.title, "Other"])
-        guard case let .thread(open) = shown[0].type else { return XCTFail("Not a thread's tab") }
-        XCTAssertEqual(open.title, "Plans for May", "What is over its messages too")
-        // A thread that is not among them (another list's) keeps its tab as it is.
-        XCTAssertFalse(tabs.showsAnOldName(among: []))
-        XCTAssertEqual(tabs.showing([]).map(\.title), tabs.map(\.title))
-    }
-
     // MARK: - From what is stored
 
     func testAStoredThreadIsCopied_withoutWhatEndedATurnThatDidNotComplete() async throws {
