@@ -155,4 +155,159 @@ final class MemoryServiceIntegrationTests: XCTestCase {
         let chunks = try await MemoryRepository.shared.loadMemories(scope: uniqueScope, limit: 10)
         XCTAssertTrue(chunks.isEmpty, "Expected no memory chunks to be created when rejecting a proposal")
     }
+
+    // MARK: - A proposal is reviewed once, as the account that reviewed it, in its own scope
+
+    /// A pending proposal in a scope of its own, so its memories can be counted.
+    private func proposal(in scope: String, covenID: String? = nil, content: String = "What was proposed") async throws -> MemoryProposalRecord {
+        try await MemoryProposalRepository.shared.insertProposal(
+            eventId: nil, covenId: covenID, proposedContent: content, proposedTags: ["one"], scope: scope, reason: nil,
+            sourceMessageId: nil, proposedBy: "tester", title: nil
+        )
+    }
+
+    private func memories(in scope: String) async throws -> [LocalMemoryChunk] {
+        try await MemoryRepository.shared.loadMemories(scope: scope, limit: 20)
+    }
+
+    private func status(of id: String) async throws -> String? {
+        try await MemoryProposalRepository.shared.loadProposal(id: id, for: UserScope.currentUserID)?.status
+    }
+
+    func testAProposalIsSettledOnce_approvedTwiceMakesOneMemoryAndARejectionIsNotOverwritten() async throws {
+        let scope = "proposal_once_" + UUID().uuidString
+        let service = MemoryService(memoryStore: MemoryRepository.shared)
+
+        let approved = try await proposal(in: scope)
+        _ = try await service.reviewProposal(proposalId: approved.id, action: "approve")
+        for action in ["approve", "reject"] {
+            do {
+                _ = try await service.reviewProposal(proposalId: approved.id, action: action)
+                XCTFail("Reviewed again: \(action)")
+            } catch {
+                XCTAssertEqual(error as? ProposalReviewError, .alreadyReviewed, action)
+            }
+        }
+        let made = try await memories(in: scope)
+        XCTAssertEqual(made.count, 1, "One memory, however often it is approved")
+        let stays = try await status(of: approved.id)
+        XCTAssertEqual(stays, "approved", "A later rejection does not undo it")
+
+        // Rejected first: an approval after it stores nothing.
+        let rejectedScope = "proposal_rejected_" + UUID().uuidString
+        let rejected = try await proposal(in: rejectedScope)
+        _ = try await service.reviewProposal(proposalId: rejected.id, action: "reject")
+        do {
+            _ = try await service.reviewProposal(proposalId: rejected.id, action: "approve")
+            XCTFail("Approved what was rejected")
+        } catch {
+            XCTAssertEqual(error as? ProposalReviewError, .alreadyReviewed)
+        }
+        let none = try await memories(in: rejectedScope)
+        XCTAssertTrue(none.isEmpty)
+    }
+
+    func testASecondReviewWhileOneIsUnderWay_isRefused_andOneMemoryIsMade() async throws {
+        let scope = "proposal_two_presses_" + UUID().uuidString
+        // The embedding is held, as a slow provider holds it, until the test lets it go.
+        let (reached, reach) = AsyncStream<Void>.makeStream()
+        let (released, release) = AsyncStream<Void>.makeStream()
+        let service = MemoryService(memoryStore: MemoryRepository.shared, embed: { _ in
+            reach.yield()
+            for await _ in released {
+                break
+            }
+            return nil
+        })
+        let record = try await proposal(in: scope)
+        let first = Task { try await service.reviewProposal(proposalId: record.id, action: "approve") }
+        for await _ in reached {
+            break
+        }
+        // Pressed again, and Reject pressed, while the first approval waits.
+        for action in ["approve", "reject"] {
+            do {
+                _ = try await service.reviewProposal(proposalId: record.id, action: action)
+                XCTFail("A second review ran: \(action)")
+            } catch {
+                XCTAssertEqual(error as? ProposalReviewError, .underWay, action)
+            }
+        }
+        release.yield()
+        let settled = try await first.value
+        XCTAssertEqual(settled.status, "approved")
+        let made = try await memories(in: scope)
+        XCTAssertEqual(made.count, 1)
+    }
+
+    func testAnApprovalWhoseAccountChangedWhileItWaited_storesAndMarksNothing() async throws {
+        let scope = "proposal_account_" + UUID().uuidString
+        let record = try await proposal(in: scope)
+        let me = UserScope.currentUserID
+        // Who is signed in: the reviewer when the review begins, another by the time the embedding is made.
+        let asked = Counter()
+        let service = MemoryService(
+            memoryStore: MemoryRepository.shared,
+            embed: { _ in nil },
+            currentAccount: { await asked.next() == 1 ? me : "someone-else" }
+        )
+        do {
+            _ = try await service.reviewProposal(proposalId: record.id, action: "approve")
+            XCTFail("Approved as another account")
+        } catch {
+            XCTAssertEqual(error as? RepositoryError, .accountChanged)
+        }
+        let made = try await memories(in: scope)
+        XCTAssertTrue(made.isEmpty, "Nothing of one account's is stored once another is signed in")
+        let still = try await status(of: record.id)
+        XCTAssertEqual(still, "pending", "It is still theirs to review")
+    }
+
+    func testSavingAProposalAsAMemory_storesItOnceAsEdited_andItIsNoLongerPending() async throws {
+        let scope = "proposal_saved_" + UUID().uuidString
+        let record = try await proposal(in: scope, content: "As the agent put it")
+        let service = MemoryService(memoryStore: MemoryRepository.shared)
+
+        let saved = try await service.saveProposalAsMemory(proposalId: record.id, content: "  As the person put it\n")
+        XCTAssertEqual(saved.status, "rejected", "Reviewed, as the app has always marked one saved by hand")
+        let made = try await memories(in: scope)
+        XCTAssertEqual(made.map(\.text), ["As the person put it"], "Once, and as edited")
+        XCTAssertEqual(made.first?.tags, ["one"])
+
+        do {
+            _ = try await service.saveProposalAsMemory(proposalId: record.id, content: "Again")
+            XCTFail("Saved twice")
+        } catch {
+            XCTAssertEqual(error as? ProposalReviewError, .alreadyReviewed)
+        }
+        let after = try await memories(in: scope)
+        XCTAssertEqual(after.count, 1)
+    }
+
+    func testAScopesProposalsAreItsOwn_strixsAreThoseMadeInNoCoven() async throws {
+        let scope = "proposal_scopes_" + UUID().uuidString
+        let coven = "coven_" + UUID().uuidString
+        let personal = try await proposal(in: scope)
+        let inCoven = try await proposal(in: scope, covenID: coven)
+        let service = MemoryService(memoryStore: MemoryRepository.shared)
+
+        let strix = try await service.listProposals(covenId: nil, status: "all")
+        XCTAssertTrue(strix.contains { $0.id == personal.id })
+        XCTAssertFalse(strix.contains { $0.id == inCoven.id }, "A coven's proposal is not reviewed from Strix")
+        let covens = try await service.listProposals(covenId: coven, status: "all")
+        XCTAssertEqual(covens.map(\.id), [inCoven.id])
+        // Settled, so they do not wait in later runs.
+        _ = try await service.reviewProposal(proposalId: personal.id, action: "reject")
+        _ = try await service.reviewProposal(proposalId: inCoven.id, action: "reject")
+    }
+}
+
+/// Counts the times it is asked.
+private actor Counter {
+    private var count = 0
+
+    func next() -> Int {
+        count += 1
+        return count
+    }
 }
