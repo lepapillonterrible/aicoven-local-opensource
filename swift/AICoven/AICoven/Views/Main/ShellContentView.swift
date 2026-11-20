@@ -29,6 +29,9 @@ struct ShellContentView: View {
             case let .memoryList(covenID):
                 ShellMemoryPlace(covenID: covenID)
                     .id(covenID)
+                    // Once for each opening of a scope's memory: outside the
+                    // list, which is made anew after every save.
+                    .onAppear { AnalyticsService.shared.trackMemoryListOpened(covenId: covenID) }
             case let .covenAgents(covenID):
                 // Only for the coven on screen; while it is not in, or it is
                 // another's, the Overview.
@@ -109,7 +112,6 @@ private struct ShellMemoryPlace: View {
     var body: some View {
         MemoryListView(covenId: covenID, openTabs: tabs, activeTabId: .constant(nil))
             .id(saves)
-            .onAppear { AnalyticsService.shared.trackMemoryListOpened(covenId: covenID) }
             .sheet(item: $form) { form in
                 ShellFormSheet(onCancel: { self.form = nil }) {
                     if let memoryID = form.memoryID {

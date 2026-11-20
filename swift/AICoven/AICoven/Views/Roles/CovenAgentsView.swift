@@ -89,12 +89,13 @@ struct CovenAgentsView: View {
 
                 ForEach(roles) { role in
                     row {
-                        AgentListRow(role: role, rowHeight: rowHeight) { edit(role) }
+                        // The form records the view of the agent itself.
+                        AgentListRow(role: role, rowHeight: rowHeight) { form = .edit(role, showing: UUID()) }
                     }
                     .accessibilityAction(named: "Delete") { askDelete(role) }
                     .contextMenu {
                         Button("New Thread with \(role.name)") { onNewThread(role) }
-                        Button("Edit…") { edit(role) }
+                        Button("Edit…") { form = .edit(role, showing: UUID()) }
                         Button("Delete…", role: .destructive) { askDelete(role) }
                     }
                 }
@@ -166,11 +167,6 @@ struct CovenAgentsView: View {
     private func failed(_ text: String) {
         guard isOnScreen else { return }
         AccessibilityNotification.Announcement(text).post()
-    }
-
-    /// Opens an agent's form, which records the view of the agent itself.
-    private func edit(_ role: Role) {
-        form = .edit(role, showing: UUID())
     }
 
     private func askDelete(_ role: Role) {
