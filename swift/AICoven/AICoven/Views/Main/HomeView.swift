@@ -11,7 +11,7 @@ struct HomeView: View {
 
     var body: some View {
         // Its state is one account's: another account starts afresh.
-        MacShellView()
+        ShellRootView()
             .id(authService.currentUser?.id ?? UserScope.localUserID)
             .task {
                 AnalyticsService.shared.trackScreenView(screenName: "HomeView", screenClass: "HomeView")

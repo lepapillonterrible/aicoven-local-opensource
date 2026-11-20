@@ -24,6 +24,22 @@ struct ShellContentView: View {
 
     var body: some View {
         Group {
+            if case let .settings(pane) = navigator.personPlace {
+                // The person's own place covers the scope's. Made anew for
+                // each ask, so it opens at the pane now asked for.
+                SettingsWorkspaceView(initialPane: pane)
+                    .id(navigator.personPlaceRequest)
+            } else {
+                scopePlace
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(NebulaBackground())
+    }
+
+    /// The place open in the scope on screen, or else its Overview.
+    private var scopePlace: some View {
+        Group {
             switch navigator.place?.type {
             case let .thread(thread):
                 // Its name is the window's title, so it shows none of its own.
@@ -89,8 +105,6 @@ struct ShellContentView: View {
                 overview
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(NebulaBackground())
     }
 
     private var overview: some View {
