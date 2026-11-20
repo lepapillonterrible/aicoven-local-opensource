@@ -42,6 +42,11 @@ final class ScopeOverviewTests: XCTestCase {
         XCTAssertTrue(ThreadListRules.away(threads, unreadReplyAt: unread, since: Date(timeIntervalSince1970: 900)).isEmpty)
         XCTAssertTrue(ThreadListRules.away(threads, unreadReplyAt: unread, since: nil).isEmpty)
         XCTAssertTrue(ThreadListRules.away(threads, unreadReplyAt: [:], since: lastVisit).isEmpty)
+        // Replies of the same moment keep one order, whatever order the threads come in.
+        let twins = [thread("b", used: 700), thread("a", used: 700)]
+        let sameMoment = ["a": Date(timeIntervalSince1970: 700), "b": Date(timeIntervalSince1970: 700)]
+        XCTAssertEqual(ThreadListRules.away(twins, unreadReplyAt: sameMoment, since: lastVisit).map(\.thread.id), ["a", "b"])
+        XCTAssertEqual(ThreadListRules.away(twins.reversed(), unreadReplyAt: sameMoment, since: lastVisit).map(\.thread.id), ["a", "b"])
 
         XCTAssertEqual(ThreadListRules.replyDetail(agentName: "Scout"), "Scout replied")
         XCTAssertEqual(ThreadListRules.replyDetail(agentName: "  "), "New reply")
