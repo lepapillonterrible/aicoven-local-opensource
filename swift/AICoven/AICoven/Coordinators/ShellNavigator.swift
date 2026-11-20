@@ -56,6 +56,10 @@ final class ShellNavigator: ObservableObject {
     /// The app went inactive since it was last active: coming back enters
     /// the scope on screen again.
     private var wasInactive = false
+    /// The app has been in front since the window opened. Until then it
+    /// has not been anywhere to come back from: a window that opens
+    /// inactive, or flickers so while it opens, is not a time away.
+    private var hasBeenActive = false
 
     /// `arrive` notes an arrival in a scope and gives back the visit
     /// before it. The shell starts in Strix: that arrival is noted here.
@@ -70,15 +74,17 @@ final class ShellNavigator: ObservableObject {
         previousVisits[scope]
     }
 
-    /// The app went inactive; coming back enters the scope on screen again.
+    /// The app went inactive, after being in front; coming back enters the
+    /// scope on screen again.
     func appWentInactive() {
-        wasInactive = true
+        if hasBeenActive { wasInactive = true }
     }
 
     /// The app is in front again, after it went inactive: the scope on
     /// screen is entered again, so its last visit reads as it was before
     /// the time away. Moves nothing.
     func appBecameActive() {
+        hasBeenActive = true
         guard wasInactive else { return }
         wasInactive = false
         previousVisits[selected] = arrive?(selected)
