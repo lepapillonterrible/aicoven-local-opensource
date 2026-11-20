@@ -48,9 +48,6 @@ struct ShellRootView: View {
     /// to open, done once the sheet has gone so nothing opens under it.
     @State private var showSwitcher = false
     @State private var switcherFollowUp: SwitcherFollowUp?
-    /// What moves or waits in each scope, and which hold an unread reply,
-    /// for the phone's switcher (the sidebar reads the same for its own).
-    @ObservedObject private var activities = ThreadActivities.shared
 
     /// What the switcher sheet was asked to open as it closes.
     private enum SwitcherFollowUp {
@@ -174,7 +171,13 @@ struct ShellRootView: View {
                 .navigationBarTitleDisplayMode(.inline)
             #endif
                 .toolbar {
-                    StoneToolbarItem(placement: .principal) { switcherTitle }
+                    StoneToolbarItem(placement: .principal) {
+                        PhoneSwitcherTitle(
+                            covens: orderedCovens, selected: navigator.selected, coven: selectedCoven, scopeName: scopeName
+                        ) {
+                            showSwitcher = true
+                        }
+                    }
                     StoneToolbarItem(placement: .primaryAction) {
                         Button(action: newThread) {
                             Label("New Thread", systemImage: "square.and.pencil")
@@ -187,47 +190,10 @@ struct ShellRootView: View {
         .sheet(isPresented: $showSwitcher, onDismiss: runSwitcherFollowUp) { switcherSheet }
     }
 
-    /// The scope's name in the phone's bar, which opens the switcher, with
-    /// one line beneath for another scope where something moves or waits.
-    private var switcherTitle: some View {
-        let other = ShellSidebar.othersCurrent(covens: orderedCovens, selected: navigator.selected, current: activities.current).first
-        return Button {
-            showSwitcher = true
-        } label: {
-            VStack(spacing: 0) {
-                HStack(spacing: Spacing.xxs) {
-                    CovenIcon(coven: selectedCoven, size: 30)
-                        .padding(.trailing, Spacing.xxs)
-                    Text(scopeName ?? "Loading…")
-                        .font(.aicovenH2)
-                        .foregroundColor(.aicovenTextPrimary)
-                        .lineLimit(1)
-                    Image(systemName: "chevron.down")
-                        .font(.aicovenCaption.weight(.semibold))
-                        .foregroundColor(.aicovenTextSecondary)
-                }
-                if let other {
-                    OtherCovenCurrentLine(name: other.name, current: other.current)
-                }
-            }
-            .frame(minHeight: 44)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Coven: \(scopeName ?? "loading")")
-        .accessibilityValue(other.map { "\($0.name), \($0.current.accessibilityWords)" } ?? "")
-        .accessibilityHint("Switch coven")
-        .accessibilityIdentifier("coven-switcher")
-    }
-
     private var switcherSheet: some View {
-        CovenSwitcherList(
+        PhoneSwitcherSheet(
             covens: orderedCovens,
-            rowMinHeight: 56,
-            popoverWidth: nil,
             selected: navigator.selected,
-            current: { activities.current[$0] },
-            hasUnread: { activities.scopesWithUnread.contains($0) },
             personName: ShellSidebar.personName(name: authService.currentUser?.name, email: authService.currentUser?.email),
             onSelect: { scope in
                 showSwitcher = false
@@ -243,10 +209,6 @@ struct ShellRootView: View {
             },
             onMoveCoven: moveCoven
         )
-        .padding(.top, Spacing.md)
-        .background(Color.aicovenSurfaceElevated.ignoresSafeArea())
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
     }
 
     /// Opens what the switcher was asked for, now that its sheet has gone.
@@ -383,11 +345,12 @@ struct ShellRootView: View {
     /// New Thread: the scope's new-thread page. Its thread is made when
     /// its first message is sent.
     private func newThread() {
-        // Where the shell is: the Mac's window, or the iPad's layout.
+        // Where the shell is: the Mac's window, the iPad's layout, or the
+        // phone's.
         #if os(macOS)
         AnalyticsService.shared.trackNewChatTapped(source: "mac_shell")
         #else
-        AnalyticsService.shared.trackNewChatTapped(source: "ipad_shell")
+        AnalyticsService.shared.trackNewChatTapped(source: isSplit ? "ipad_shell" : "phone_shell")
         #endif
         navigator.requestNewThread()
     }
@@ -413,5 +376,79 @@ struct ShellRootView: View {
             AnalyticsService.shared.trackThreadCreate(threadId: thread.id, covenId: covenID, hasTitle: thread.title != nil)
             if let agentID = thread.agentId { AnalyticsService.shared.trackRoleAssign(roleId: agentID, threadId: thread.id) }
         }
+    }
+}
+
+/// The scope's name in the phone's bar, which opens the switcher, with one
+/// line beneath for another scope where something moves or waits. A view of
+/// its own: what moves is read here, not by the root both layouts share.
+private struct PhoneSwitcherTitle: View {
+    let covens: [Coven]
+    let selected: ShellScope
+    let coven: Coven?
+    let scopeName: String?
+    let action: () -> Void
+    @ObservedObject private var activities = ThreadActivities.shared
+
+    var body: some View {
+        let other = ShellSidebar.othersCurrent(covens: covens, selected: selected, current: activities.current).first
+        Button(action: action) {
+            VStack(spacing: 0) {
+                HStack(spacing: Spacing.xxs) {
+                    CovenIcon(coven: coven, size: 30)
+                        .padding(.trailing, Spacing.xxs)
+                    Text(scopeName ?? "Loading…")
+                        .font(.aicovenH2)
+                        .foregroundColor(.aicovenTextPrimary)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.aicovenCaption.weight(.semibold))
+                        .foregroundColor(.aicovenTextSecondary)
+                }
+                if let other {
+                    OtherCovenCurrentLine(name: other.name, current: other.current)
+                }
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Coven: \(scopeName ?? "loading")")
+        .accessibilityValue(other.map { "\($0.name), \($0.current.accessibilityWords)" } ?? "")
+        .accessibilityHint("Switch coven")
+        .accessibilityIdentifier("coven-switcher")
+    }
+}
+
+/// The phone's switcher: the switcher's list in a sheet, with what moves or
+/// waits in each scope and which hold an unread reply, read here.
+private struct PhoneSwitcherSheet: View {
+    let covens: [Coven]
+    let selected: ShellScope
+    let personName: String
+    let onSelect: (ShellScope) -> Void
+    let onCreateCoven: () -> Void
+    let onOpenSettings: () -> Void
+    let onMoveCoven: (_ covenID: String, _ index: Int) -> Void
+    @ObservedObject private var activities = ThreadActivities.shared
+
+    var body: some View {
+        CovenSwitcherList(
+            covens: covens,
+            rowMinHeight: 56,
+            popoverWidth: nil,
+            selected: selected,
+            current: { activities.current[$0] },
+            hasUnread: { activities.scopesWithUnread.contains($0) },
+            personName: personName,
+            onSelect: onSelect,
+            onCreateCoven: onCreateCoven,
+            onOpenSettings: onOpenSettings,
+            onMoveCoven: onMoveCoven
+        )
+        .padding(.top, Spacing.md)
+        .background(Color.aicovenSurfaceElevated.ignoresSafeArea())
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 }
