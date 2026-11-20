@@ -177,6 +177,8 @@ struct NewThreadView: View {
     @State private var selectedRoleId: String?
     @State private var roles: [Role] = []
     @State private var isLoadingRoles = false
+    /// The coven's agents have been read (or could not be).
+    @State private var didLoadRoles = false
     @State private var isCreating = false
     @State private var errorMessage: String?
 
@@ -229,12 +231,10 @@ struct NewThreadView: View {
                                 await createThread()
                             }
                         }
-                        // For coven threads, require a primary role when roles
-                        // are available so each thread has a clear agent.
-                        .disabled(
-                            isCreating ||
-                                (covenId != nil && !roles.isEmpty && selectedRoleId == nil)
-                        )
+                        .disabled(!Self.canCreate(
+                            isCreating: isCreating, inCoven: covenId != nil, rolesAreIn: didLoadRoles,
+                            hasRoles: !roles.isEmpty, hasChosenRole: selectedRoleId != nil
+                        ))
                     }
                 }
                 .alert("Error", isPresented: Binding(
@@ -253,11 +253,24 @@ struct NewThreadView: View {
         }
     }
 
+    /// Whether Create is offered. A coven's thread needs a primary agent
+    /// where the coven has agents, so it is not made before they are in
+    /// (it would be made with none) nor with none chosen.
+    static func canCreate(isCreating: Bool, inCoven: Bool, rolesAreIn: Bool, hasRoles: Bool, hasChosenRole: Bool) -> Bool {
+        guard !isCreating else { return false }
+        guard inCoven else { return true }
+        return rolesAreIn && (!hasRoles || hasChosenRole)
+    }
+
     /// Load coven roles when covenId is set
     private func loadRolesIfNeeded() async {
         guard let covenId, roles.isEmpty else { return }
         isLoadingRoles = true
-        defer { isLoadingRoles = false }
+        defer {
+            isLoadingRoles = false
+            // In, or not to be had: either way no longer on their way.
+            didLoadRoles = true
+        }
         do {
             roles = try await RoleService.shared.loadRoles(covenId: covenId)
             // Preselect first role if available
@@ -270,12 +283,19 @@ struct NewThreadView: View {
     }
 
     private func createThread() async {
+        // Asked again here, before anything waits: a second click can come
+        // before the button is seen to be off.
+        guard Self.canCreate(
+            isCreating: isCreating, inCoven: covenId != nil, rolesAreIn: didLoadRoles,
+            hasRoles: !roles.isEmpty, hasChosenRole: selectedRoleId != nil
+        ) else { return }
         isCreating = true
         errorMessage = nil
         defer { isCreating = false }
 
         do {
-            AppErrorReporter.log(message: "Creating thread '\(title)' covenId=\(covenId ?? "nil") roleId=\(selectedRoleId ?? "none")", context: "NewThreadView.createThread")
+            // What it is called is the person's own words: not logged.
+            AppErrorReporter.log(message: "Creating thread covenId=\(covenId ?? "nil") roleId=\(selectedRoleId ?? "none")", context: "NewThreadView.createThread")
             let selectedRole = roles.first(where: { $0.id == selectedRoleId })
             let thread = try await ThreadService.shared.createThread(
                 title: title.isEmpty ? nil : title,

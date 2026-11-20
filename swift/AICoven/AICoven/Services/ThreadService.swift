@@ -144,15 +144,15 @@ actor ThreadService {
         return includeArchived ? filtered : filtered.filter { !$0.isArchived }
     }
 
-    /// The coven of each of the account's threads that is in one and is
-    /// not archived, by thread id.
-    func covensOfThreads() async throws -> [String: String] {
+    /// Where each of the account's threads that is not archived belongs
+    /// (Strix, or its coven), by thread id.
+    func scopesOfThreads() async throws -> [String: ShellScope] {
         try await ensureLoaded()
-        var covens: [String: String] = [:]
+        var scopes: [String: ShellScope] = [:]
         for thread in personalThreads where !thread.isArchived {
-            if let coven = thread.covenId { covens[thread.id] = coven }
+            scopes[thread.id] = ShellScope(covenID: thread.covenId)
         }
-        return covens
+        return scopes
     }
 
     /// Create a new thread in a coven or personal

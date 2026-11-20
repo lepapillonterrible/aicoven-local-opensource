@@ -19,10 +19,10 @@ final class ThreadActivities: ObservableObject {
         var currentAccount: @MainActor () -> String
         var loadMarks: @Sendable (_ account: String) async throws -> [String: ThreadMarks]
         var markRead: @Sendable (_ threadID: String, _ date: Date, _ account: String) async throws -> Void
-        /// Each of the account's threads' coven, by thread id (none for a
-        /// personal thread, or one that is archived: a reply in a thread
-        /// put away marks its row, not its coven).
-        var loadCovens: @Sendable () async throws -> [String: String]
+        /// Where each of the account's threads belongs (Strix, or its
+        /// coven), by thread id. None for one that is archived: a reply in
+        /// a thread put away marks its row, not its scope.
+        var loadScopes: @Sendable () async throws -> [String: ShellScope]
         /// Whether a thread's composer holds something unsent, where that
         /// is known since the app started.
         var holdsDraft: @MainActor (_ threadID: String) -> Bool?
@@ -32,7 +32,7 @@ final class ThreadActivities: ObservableObject {
             currentAccount: { UserScope.currentUserID },
             loadMarks: { try await ThreadRepository.shared.threadMarks(for: $0) },
             markRead: { try await ThreadRepository.shared.markRead(threadID: $0, at: $1, for: $2) },
-            loadCovens: { try await ThreadService.shared.covensOfThreads() },
+            loadScopes: { try await ThreadService.shared.scopesOfThreads() },
             holdsDraft: { ComposerDrafts.shared.holdsDraft(for: $0) },
             now: { Date() }
         )
@@ -41,13 +41,22 @@ final class ThreadActivities: ObservableObject {
     /// What each thread is doing, by thread id; a thread doing nothing a
     /// row says is not in it.
     @Published private(set) var activity: [String: ConversationActivity] = [:]
+    /// The scopes (Strix, a coven) with a thread holding a reply not yet
+    /// seen.
+    @Published private(set) var scopesWithUnread: Set<ShellScope> = []
+    /// What is moving or waiting in each scope, in one line: nothing for
+    /// a scope where nothing is.
+    @Published private(set) var current: [ShellScope: ConversationActivity] = [:]
+
     /// The covens with a thread holding a reply not yet seen.
-    @Published private(set) var covensWithUnread: Set<String> = []
+    var covensWithUnread: Set<String> {
+        Set(scopesWithUnread.compactMap(\.covenID))
+    }
 
     private let dependencies: Dependencies
     /// What is stored with each thread, as last read, and whose they are.
     private var marks: [String: ThreadMarks] = [:]
-    private var covens: [String: String] = [:]
+    private var scopes: [String: ShellScope] = [:]
     private var marksAccount: String?
     /// Up to when each thread was read here, by thread id, for the account
     /// `readHereAccount`: a reading of the store that began before a thread
@@ -144,7 +153,7 @@ final class ThreadActivities: ObservableObject {
     @discardableResult
     func accountChanged() -> Task<Void, Never> {
         marks = [:]
-        covens = [:]
+        scopes = [:]
         marksAccount = nil
         readHere = [:]
         readHereAccount = nil
@@ -184,14 +193,14 @@ final class ThreadActivities: ObservableObject {
             }
             do {
                 let marks = try await dependencies.loadMarks(account)
-                // Which coven each thread is in needs the threads themselves,
+                // Where each thread belongs needs the threads themselves,
                 // which can be locked or on their way when the marks are not:
-                // the marks are kept all the same, with the covens as held.
-                var covens: [String: String]?
+                // the marks are kept all the same, with the scopes as held.
+                var scopes: [String: ShellScope]?
                 do {
-                    covens = try await dependencies.loadCovens()
+                    scopes = try await dependencies.loadScopes()
                 } catch {
-                    AppErrorReporter.log(message: "Could not read the threads' covens (\(type(of: error)))", context: "ThreadActivities.reload")
+                    AppErrorReporter.log(message: "Could not read the threads' scopes (\(type(of: error)))", context: "ThreadActivities.reload")
                 }
                 // Only the latest reading, and only as the account it was read
                 // for. Either way what is said is worked out again: nothing
@@ -201,7 +210,7 @@ final class ThreadActivities: ObservableObject {
                     return
                 }
                 self.marks = readHereAccount == account ? marks.readUp(to: readHere) : marks
-                self.covens = covens ?? (marksAccount == account ? self.covens : [:])
+                self.scopes = scopes ?? (marksAccount == account ? self.scopes : [:])
                 marksAccount = account
             } catch {
                 guard reading == readings else {
@@ -212,7 +221,7 @@ final class ThreadActivities: ObservableObject {
                 AppErrorReporter.log(message: "Could not read the threads' marks (\(type(of: error)))", context: "ThreadActivities.reload")
                 if dependencies.currentAccount() != marksAccount {
                     marks = [:]
-                    covens = [:]
+                    scopes = [:]
                     marksAccount = nil
                 }
             }
@@ -248,7 +257,8 @@ final class ThreadActivities: ObservableObject {
         // What is stored is one account's: another's is not gone by.
         let stored = marksAccount == dependencies.currentAccount() ? marks : [:]
         var activity: [String: ConversationActivity] = [:]
-        var unreadCovens: Set<String> = []
+        var unread: Set<ShellScope> = []
+        var busy: [ShellScope: [ConversationActivity]] = [:]
         // Only of the threads read from the store for this account: what
         // the engine holds is by thread, whoever's the thread is.
         for threadID in stored.keys {
@@ -264,12 +274,14 @@ final class ThreadActivities: ObservableObject {
                 isShown: isShown
             )
             activity[threadID] = current
-            if !isShown, stored[threadID]?.isUnread == true, let coven = covens[threadID] {
-                unreadCovens.insert(coven)
-            }
+            guard let scope = scopes[threadID] else { continue }
+            if !isShown, stored[threadID]?.isUnread == true { unread.insert(scope) }
+            if let current { busy[scope, default: []].append(current) }
         }
         if activity != self.activity { self.activity = activity }
-        if unreadCovens != covensWithUnread { covensWithUnread = unreadCovens }
+        if unread != scopesWithUnread { scopesWithUnread = unread }
+        let current = busy.compactMapValues { ConversationActivity.current(of: $0) }
+        if current != self.current { self.current = current }
     }
 }
 

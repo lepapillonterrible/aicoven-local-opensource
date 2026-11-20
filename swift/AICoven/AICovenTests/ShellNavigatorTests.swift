@@ -272,5 +272,9 @@ final class ShellNavigatorTests: XCTestCase {
         store.save(["z"], for: "grace")
         XCTAssertEqual(store.ids(for: "ada"), ["b", "a"])
         XCTAssertEqual(CovenOrderStore(defaults: defaults).ids(for: "grace"), ["z"], "Kept across runs")
+        // An account that is deleted takes its order with it; the other's stays.
+        store.remove(for: "ada")
+        XCTAssertEqual(store.ids(for: "ada"), [])
+        XCTAssertEqual(store.ids(for: "grace"), ["z"])
     }
 }

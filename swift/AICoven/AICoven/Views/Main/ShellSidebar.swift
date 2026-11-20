@@ -1,19 +1,20 @@
 import SwiftUI
 
-/// The shell's sidebar, as the cloud app's: the scope on screen at the top
-/// with its Overview row, then its threads (those archived in a section of
+/// The shell's sidebar, as the cloud app's: the switcher at the top, naming
+/// the scope on screen, with its Overview row, then its threads (those archived in a section of
 /// their own) with a search of their titles, and the person's row at the
 /// bottom. Only the threads scroll.
 struct ShellSidebar: View {
     @ObservedObject var navigator: ShellNavigator
     @ObservedObject var shellThreads: ShellThreads
     @ObservedObject var threadActions: ThreadActions
-    /// The coven on screen; nil for Strix.
-    let coven: Coven?
-    /// The name of the scope on screen; nil while it is not known.
-    let scopeName: String?
+    /// The person's covens, in their own order. Strix is not among them.
+    let covens: [Coven]
     let personName: String
     let onOpenSettings: () -> Void
+    let onCreateCoven: () -> Void
+    /// Moves a coven to a place in the person's order.
+    let onMoveCoven: (_ covenID: String, _ index: Int) -> Void
 
     /// What each thread is doing, for its row and the list's order.
     @ObservedObject private var activities = ThreadActivities.shared
@@ -22,6 +23,9 @@ struct ShellSidebar: View {
     @State private var isSearching = false
     @State private var searchText = ""
     @FocusState private var isSearchFocused: Bool
+    @State private var showSwitcher = false
+    /// The switcher row's width, margins included, for its popover.
+    @State private var switcherRowWidth: CGFloat = 0
     /// A pinned row's height, growing with the text size.
     @ScaledMetric(relativeTo: .body) private var pinnedRowHeight: CGFloat = 34
 
@@ -35,6 +39,30 @@ struct ShellSidebar: View {
         if let name = name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty { return name }
         if let email = email?.trimmingCharacters(in: .whitespacesAndNewlines), !email.isEmpty { return email }
         return "Account"
+    }
+
+    /// The coven on screen; nil for Strix, or while the covens are not in.
+    private var coven: Coven? {
+        navigator.selected.covenID.flatMap { id in covens.first { $0.id == id } }
+    }
+
+    /// The name of the scope on screen; nil for a coven that is not in yet.
+    private var scopeName: String? {
+        navigator.selected == .strix ? "Strix" : coven?.name
+    }
+
+    /// Up to two other scopes with something moving or waiting, in the
+    /// switcher's order (Strix first), for the lines under the name of the
+    /// scope on screen.
+    static func othersCurrent(
+        covens: [Coven], selected: ShellScope, current: [ShellScope: ConversationActivity]
+    ) -> [(name: String, current: ConversationActivity)] {
+        let scopes: [(scope: ShellScope, name: String)] = [(.strix, "Strix")] + covens.map { (.coven($0.id), $0.name) }
+        let busy = scopes.compactMap { item -> (name: String, current: ConversationActivity)? in
+            guard item.scope != selected, let activity = current[item.scope] else { return nil }
+            return (item.name, activity)
+        }
+        return Array(busy.prefix(2))
     }
 
     /// The scope's threads as the search leaves them, in their two sections:
@@ -250,30 +278,83 @@ struct ShellSidebar: View {
 
     // MARK: - Top: this scope
 
-    /// The scope on screen, then its Overview as a row of a small list of
+    /// The switcher, then the scope's Overview as a row of a small list of
     /// its own: pinned above the thread list, so only the threads scroll.
     /// The list selects through the same binding as the thread list and
     /// does not scroll, so it is as tall as its row.
     private var scopeZone: some View {
         VStack(spacing: 0) {
-            HStack(spacing: Spacing.xs) {
-                CovenIcon(coven: coven, size: 22)
-                Text(scopeName ?? "")
-                    .font(.aicovenH2)
-                    .foregroundColor(.aicovenTextPrimary)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, Spacing.sm)
-            .padding(.vertical, Spacing.xs)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Coven: \(scopeName ?? "")")
+            switcherButton
             List(selection: selection) {
                 Label("Overview", systemImage: "square.grid.2x2")
                     .pinnedRow(height: pinnedRowHeight)
                     .tag(ShellSidebarItem.overview)
             }
             .pinnedSidebarList(rows: 1, rowHeight: pinnedRowHeight)
+        }
+    }
+
+    // MARK: - Top: the switcher
+
+    private var switcherButton: some View {
+        let others = Self.othersCurrent(covens: covens, selected: navigator.selected, current: activities.current)
+        return Button {
+            showSwitcher = true
+        } label: {
+            HStack(spacing: Spacing.xs) {
+                CovenIcon(coven: coven, size: 22)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(scopeName ?? "Loading…")
+                        .font(.aicovenH2)
+                        .foregroundColor(.aicovenTextPrimary)
+                        .lineLimit(1)
+                    ForEach(others.indices, id: \.self) { index in
+                        OtherCovenCurrentLine(name: others[index].name, current: others[index].current)
+                    }
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.aicovenCaption)
+                    .foregroundColor(.aicovenTextTertiary)
+            }
+            .padding(.horizontal, Spacing.sm)
+            .padding(.vertical, Spacing.xs)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, Spacing.xs)
+        .padding(.bottom, Spacing.xs)
+        .accessibilityLabel("Coven: \(scopeName ?? "loading")")
+        .accessibilityValue(others.map { "\($0.name), \($0.current.accessibilityWords)" }.joined(separator: "; "))
+        .accessibilityHint("Switch coven")
+        .accessibilityIdentifier("coven-switcher")
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { switcherRowWidth = $0 }
+        // Below the button and as wide as it, so it never overhangs the
+        // sidebar's left edge, which is the window's.
+        .popover(isPresented: $showSwitcher, arrowEdge: .bottom) {
+            CovenSwitcherList(
+                covens: covens,
+                rowMinHeight: 34,
+                popoverWidth: max(switcherRowWidth - Spacing.xs * 2, 220),
+                selected: navigator.selected,
+                current: { activities.current[$0] },
+                hasUnread: { activities.scopesWithUnread.contains($0) },
+                personName: personName,
+                onSelect: { scope in
+                    showSwitcher = false
+                    navigator.select(scope)
+                },
+                onCreateCoven: {
+                    showSwitcher = false
+                    onCreateCoven()
+                },
+                onOpenSettings: {
+                    showSwitcher = false
+                    onOpenSettings()
+                },
+                onMoveCoven: onMoveCoven
+            )
+            .presentationBackground(Color.aicovenSurfaceElevated)
         }
     }
 

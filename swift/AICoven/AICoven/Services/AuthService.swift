@@ -332,6 +332,7 @@ class AuthService: ObservableObject {
 
         // Clear user-specific UserDefaults
         UserDefaults.standard.removeObject(forKey: AuthService.onboardingKey(for: userId))
+        CovenOrderStore().remove(for: userId)
 
         // Delete the Firebase Auth user
         do {

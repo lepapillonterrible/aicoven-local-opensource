@@ -198,6 +198,64 @@ final class ShellThreadsTests: XCTestCase {
         XCTAssertEqual(ShellSidebar.personName(name: nil, email: nil), "Account")
     }
 
+    func testTheSwitcherNamesUpToTwoOtherScopesWithSomethingMovingOrWaiting_inItsOwnOrder() {
+        func coven(_ id: String) -> Coven {
+            Coven(id: id, name: id.capitalized, createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0))
+        }
+        let covens = [coven("work"), coven("hiring"), coven("home")]
+        let current: [ShellScope: ConversationActivity] = [
+            .strix: .moving("Thinking"), .coven("work"): .moving("2 moving"), .coven("hiring"): .waiting("Needs your OK"),
+            .coven("home"): .moving("Reading"),
+        ]
+        func names(_ selected: ShellScope) -> [String] {
+            ShellSidebar.othersCurrent(covens: covens, selected: selected, current: current).map(\.name)
+        }
+        XCTAssertEqual(names(.strix), ["Work", "Hiring"], "Not the scope on screen; two at most")
+        XCTAssertEqual(names(.coven("work")), ["Strix", "Hiring"], "Strix first")
+        XCTAssertEqual(names(.coven("home")), ["Strix", "Work"])
+        let others = ShellSidebar.othersCurrent(covens: covens, selected: .strix, current: [.coven("home"): .moving("Reading")])
+        XCTAssertEqual(others.map(\.name), ["Home"])
+        XCTAssertEqual(others.first?.current, .moving("Reading"))
+        XCTAssertTrue(ShellSidebar.othersCurrent(covens: covens, selected: .strix, current: [.strix: .moving("Thinking")]).isEmpty)
+    }
+
+    func testACovenDroppedOnARowTakesThatRowsPlace_andOnStrixBecomesTheFirst() {
+        func coven(_ id: String) -> Coven {
+            Coven(id: id, name: id, createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0))
+        }
+        let covens = [coven("a"), coven("b"), coven("c")]
+        XCTAssertEqual(CovenSwitcherList.dropIndex(of: "c", onto: .coven("a"), in: covens), 0)
+        XCTAssertEqual(CovenSwitcherList.dropIndex(of: "a", onto: .coven("c"), in: covens), 2)
+        XCTAssertEqual(CovenSwitcherList.dropIndex(of: "b", onto: .coven("b"), in: covens), 1, "On itself: where it is")
+        XCTAssertEqual(CovenSwitcherList.dropIndex(of: "c", onto: .strix, in: covens), 0, "Strix stays first: the first after it")
+        XCTAssertNil(CovenSwitcherList.dropIndex(of: "something-else", onto: .coven("a"), in: covens), "Not one of the covens")
+        XCTAssertNil(CovenSwitcherList.dropIndex(of: "a", onto: .coven("gone"), in: covens))
+        // The place it is given is the one the order then puts it in.
+        XCTAssertEqual(CovenOrder.moving("c", to: 0, in: covens), ["c", "a", "b"])
+        XCTAssertEqual(CovenOrder.moving("a", to: 2, in: covens), ["b", "c", "a"])
+    }
+
+    func testWhatVoiceOverReadsAfterAScopesNameInTheSwitcher() {
+        XCTAssertEqual(CovenSwitcherList.accessibilityValue(current: nil, unread: false), "")
+        XCTAssertEqual(CovenSwitcherList.accessibilityValue(current: nil, unread: true), "Unread")
+        XCTAssertEqual(CovenSwitcherList.accessibilityValue(current: .moving("Reading"), unread: false), "Reading")
+        XCTAssertEqual(CovenSwitcherList.accessibilityValue(current: .waiting("Needs your OK"), unread: true), "Needs your OK, Unread")
+    }
+
+    func testACovensThreadIsNotMadeBeforeItsAgentsAreIn_norWithNoneChosenWhereThereAreSome() {
+        func can(creating: Bool = false, coven: Bool = true, rolesIn: Bool = true, roles: Bool = true, chosen: Bool = true) -> Bool {
+            NewThreadView.canCreate(isCreating: creating, inCoven: coven, rolesAreIn: rolesIn, hasRoles: roles, hasChosenRole: chosen)
+        }
+        XCTAssertTrue(can())
+        XCTAssertFalse(can(creating: true), "Not twice")
+        XCTAssertFalse(can(rolesIn: false, roles: false, chosen: false), "The coven's agents are still on their way")
+        XCTAssertFalse(can(chosen: false), "It has agents, and none is chosen")
+        XCTAssertTrue(can(roles: false, chosen: false), "A coven with no agents")
+        // A personal thread asks for none.
+        XCTAssertTrue(can(coven: false, rolesIn: false, roles: false, chosen: false))
+        XCTAssertFalse(can(creating: true, coven: false))
+    }
+
     #if os(macOS)
     func testTheNewThreadSheetOpensItsThreadOnlyWhileThatShowingIsOnScreen() {
         let first = NewThreadSheet(covenID: "work")
