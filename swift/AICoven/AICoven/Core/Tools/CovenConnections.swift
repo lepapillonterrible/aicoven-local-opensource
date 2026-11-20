@@ -122,6 +122,7 @@ nonisolated enum CovenConnectionRules {
         "google_drive.uploadFile", "google_drive.upload_file",
         "google_sheets.updateValues", "google_sheets.writeValues", "google_sheets.write_values",
         "google_sheets.batchUpdate", "google_docs.update", "google_slides.update",
+        "figma.addComment",
     ]
 
     static func isWriteTool(_ tool: String) -> Bool {

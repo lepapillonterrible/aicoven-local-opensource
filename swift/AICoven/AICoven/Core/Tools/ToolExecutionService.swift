@@ -17,6 +17,10 @@ actor ToolExecutionService {
     /// Whether the person has the Tools Pack.
     private let hasToolsPack: @Sendable () async -> Bool
 
+    /// The session Figma is asked through; a test gives one that answers
+    /// in Figma's place.
+    private let figmaSession: URLSession
+
     /// Asks the person before a tool changes something, and waits for the
     /// answer.
     private let ask: @Sendable (ToolApproval) async -> ApprovalAnswer
@@ -33,6 +37,7 @@ actor ToolExecutionService {
         googleDriveService = .shared
         connectedAccountsService = .shared
         hasToolsPack = Self.hasBoughtTheToolsPack
+        figmaSession = .shared
     }
 
     /// Test-friendly initializer that accepts a mock tool service, an
@@ -48,7 +53,8 @@ actor ToolExecutionService {
         connectedAccounts: ConnectedAccountsService = .shared,
         githubService: GitHubToolService = .shared,
         googleDriveService: GoogleDriveToolService = .shared,
-        hasToolsPack: @escaping @Sendable () async -> Bool = ToolExecutionService.hasBoughtTheToolsPack
+        hasToolsPack: @escaping @Sendable () async -> Bool = ToolExecutionService.hasBoughtTheToolsPack,
+        figmaSession: URLSession = .shared
     ) {
         self.toolService = toolService
         self.ask = ask
@@ -57,6 +63,7 @@ actor ToolExecutionService {
         self.githubService = githubService
         self.googleDriveService = googleDriveService
         self.hasToolsPack = hasToolsPack
+        self.figmaSession = figmaSession
     }
 
     // Configuration
@@ -498,6 +505,25 @@ actor ToolExecutionService {
 
         case "github.listPullRequestFiles", "github.list_pull_request_files", "github.list_pr_files":
             return await executeGitHubListPRFiles(toolCall: toolCall)
+
+        // --- Figma Tools ---
+        case "figma.readFile":
+            return await executeFigma(toolCall: toolCall) { [figmaSession] file, token in
+                try await Self.figmaFile(file, args: toolCall.args, token: token, session: figmaSession)
+            }
+
+        case "figma.readComments":
+            return await executeFigma(toolCall: toolCall) { [figmaSession] file, token in
+                let comments = try await FigmaToolService.comments(key: file, token: token, session: figmaSession)
+                let told = FigmaToolService.told(comments: comments, includingResolved: Self.isYes(toolCall.args["include_resolved"]))
+                let block = "[Figma Comments: \(file)]\n"
+                    + (told.lines.isEmpty ? "(No comments)" : told.lines.joined(separator: "\n"))
+                    + (told.more ? "\n(Older comments are not shown.)" : "")
+                return .success(tool: toolCall.name, result: ["file": AnyJSONValue(file), "count": AnyJSONValue(told.lines.count)], contextBlock: block)
+            }
+
+        case "figma.addComment":
+            return await executeFigmaAddComment(toolCall: toolCall, threadID: threadID)
 
         // --- Google Drive Tools ---
         case "google_drive.listFiles", "google_drive.list_files":
@@ -1085,6 +1111,114 @@ actor ToolExecutionService {
             )
         } catch {
             return await .error(tool: toolCall.name, message: error.localizedDescription)
+        }
+    }
+
+    // MARK: - Figma Tool Implementations
+
+    /// Whether an argument says yes: true, or the words a model writes
+    /// for it.
+    nonisolated static func isYes(_ value: AnyJSONValue?) -> Bool {
+        switch value {
+        case let .bool(flag): flag
+        case let .string(text): ["true", "1", "yes"].contains(text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+        case let .int(number): number == 1
+        default: false
+        }
+    }
+
+    /// What `figma.readFile` tells of a file: its name and an outline of
+    /// its nodes, to the depth asked for.
+    nonisolated static func figmaFile(_ file: String, args: [String: AnyJSONValue], token: String, session: URLSession) async throws -> ToolExecutionResult {
+        var node: String?
+        if let given = args["node"], !(given.value is NSNull) {
+            guard let id = given.value as? String, FigmaToolService.isNodeID(id) else {
+                return .validationError(tool: "figma.readFile", message: "'node' must be a node's id as Figma writes it, like '3:21'. figma.readFile without 'node' tells each node's id.", field: "node")
+            }
+            node = id
+        }
+        let depth = min(FigmaToolService.deepest, max(1, GitHubToolArguments.whole("depth", in: args) ?? FigmaToolService.standardDepth))
+        let tree = try await FigmaToolService.fileTree(key: file, node: node, depth: depth, token: token, session: session)
+        var left = FigmaToolService.mostNodes
+        let outline = FigmaToolService.outline(of: tree.document, left: &left)
+        let block = "[Figma File: \(tree.name ?? file)]\nRead to \(depth) \(depth == 1 ? "level" : "levels")\(node.map { " under node \($0)" } ?? ""). Each line is a node: its name, then its id and kind.\n"
+            + outline.lines.joined(separator: "\n")
+            + (outline.omitted > 0 ? "\n(\(outline.omitted) nodes were left out. Read under one node with 'node' to see more.)" : "")
+        return .success(tool: "figma.readFile", result: ["file": AnyJSONValue(file), "depth": AnyJSONValue(depth), "truncated": AnyJSONValue(outline.omitted > 0)], contextBlock: block)
+    }
+
+    /// What a model is told when Figma would not answer a call.
+    nonisolated static func figmaFailure(_ error: Error) -> (message: String, code: String, retry: Bool) {
+        switch error as? FigmaError {
+        case .tokenRefused:
+            ("Figma refused the token. The person can give Figma a new token in Settings > Connected Apps.", "figma_token_refused", false)
+        case .notAnswered(status: 403):
+            ("Figma does not let this account see that file, or do that with it.", "figma_forbidden", false)
+        case .notAnswered(status: 404):
+            ("Figma found no such file, node or comment. Check the file's key or link, or use figma.readFile or figma.readComments to find the right id.", "figma_not_found", false)
+        case let .rateLimited(retryAfter):
+            (FigmaError.rateLimited(retryAfter: retryAfter).errorDescription ?? "Figma is limiting how often this account asks.", "figma_rate_limited", true)
+        case let failure?:
+            (failure.errorDescription ?? "Figma did not answer.", "figma_failed", true)
+        case nil:
+            ("Figma could not be reached.", "figma_failed", true)
+        }
+    }
+
+    /// Runs a Figma tool on the file its call names, with the connected
+    /// account's token. A token Figma refuses marks the connection as
+    /// needing a new one.
+    private func executeFigma(toolCall: ParsedToolCall, _ run: @Sendable (_ file: String, _ token: String) async throws -> ToolExecutionResult) async -> ToolExecutionResult {
+        guard let account = await connectedAccountsService.getConnectedAccount(for: .figma) else {
+            return .error(tool: toolCall.name, message: "Figma not connected. The person can connect it in Settings > Connected Apps.")
+        }
+        guard let given = toolCall.args["file"]?.value as? String, let file = FigmaToolService.fileKey(given) else {
+            return .validationError(tool: toolCall.name, message: "Missing or unreadable 'file'. Give a Figma file's key or its link (https://www.figma.com/design/<key>/...).", field: "file")
+        }
+        do {
+            let token = try await connectedAccountsService.getAccessToken(forAccountId: account.id)
+            return try await run(file, token)
+        } catch FigmaError.tokenRefused {
+            await connectedAccountsService.markFigmaTokenRefused(accountID: account.id)
+            let failure = Self.figmaFailure(FigmaError.tokenRefused)
+            return .error(tool: toolCall.name, message: failure.message, errorType: failure.code, isRetryable: failure.retry)
+        } catch is CancellationError {
+            return .error(tool: toolCall.name, message: "Stopped before Figma answered.", errorType: "cancelled")
+        } catch {
+            let failure = Self.figmaFailure(error)
+            return .error(tool: toolCall.name, message: failure.message, errorType: failure.code, isRetryable: failure.retry)
+        }
+    }
+
+    /// Execute figma.addComment: a comment on a file, or a reply to one,
+    /// posted as the person once they have approved it.
+    private func executeFigmaAddComment(toolCall: ParsedToolCall, threadID: String?) async -> ToolExecutionResult {
+        guard let message = Self.given((toolCall.args["message"]?.value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return .validationError(tool: toolCall.name, message: "Missing required argument: 'message'", field: "message")
+        }
+        var replyTo: String?
+        if let given = toolCall.args["reply_to"], !(given.value is NSNull) {
+            guard let id = given.value as? String, GoogleToolArguments.isID(id) else {
+                return .validationError(tool: toolCall.name, message: "'reply_to' must be a comment's id (figma.readComments tells each comment's id), or be left out.", field: "reply_to")
+            }
+            replyTo = id
+        }
+        // The file is read from the call here too, so that what is not a
+        // file is told before anyone is asked.
+        guard let given = toolCall.args["file"]?.value as? String, let named = FigmaToolService.fileKey(given) else {
+            return .validationError(tool: toolCall.name, message: "Missing or unreadable 'file'. Give a Figma file's key or its link (https://www.figma.com/design/<key>/...).", field: "file")
+        }
+        guard await connectedAccountsService.getConnectedAccount(for: .figma) != nil else {
+            return .error(tool: toolCall.name, message: "Figma not connected. The person can connect it in Settings > Connected Apps.")
+        }
+        if let refusal = await refusal(ofAppChange: toolCall, in: threadID, { .figmaComment(file: named, replyTo: replyTo, message: message, threadID: $0) }) {
+            return refusal
+        }
+        return await executeFigma(toolCall: toolCall) { [figmaSession] file, token in
+            let posted = try await FigmaToolService.postComment(key: file, message: message, replyTo: replyTo, token: token, session: figmaSession)
+            let id = posted["id"] as? String
+            let block = "[Figma Comment Posted: \(file)]\n" + (id.map { "Comment \($0)" } ?? "Posted") + (replyTo.map { ", in reply to \($0)" } ?? "") + "."
+            return .success(tool: toolCall.name, result: ["file": AnyJSONValue(file), "comment_id": AnyJSONValue(id ?? "")], contextBlock: block)
         }
     }
 

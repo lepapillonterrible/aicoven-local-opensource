@@ -465,6 +465,17 @@ nonisolated extension ToolApproval {
         )
     }
 
+    /// A comment posted to a Figma file as the person: which file, whether
+    /// it answers another comment, and all of it up to the limit.
+    static func figmaComment(file: String, replyTo: String?, message: String, threadID: String) -> ToolApproval {
+        ToolApproval(
+            threadID: threadID,
+            question: "Post this comment in Figma?",
+            details: "File \(file)\(replyTo.map { ", in reply to comment \($0)" } ?? "")\nPosted as you · \(size(of: message))\n\n\(shown(message))",
+            toolName: "figma.addComment"
+        )
+    }
+
     /// The kinds of Google file a model can ask to be changed in Google's
     /// own form of requests.
     enum GoogleFile {
