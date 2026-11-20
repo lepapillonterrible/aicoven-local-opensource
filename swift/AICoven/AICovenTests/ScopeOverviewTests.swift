@@ -152,8 +152,13 @@ final class ScopeOverviewTests: XCTestCase {
         navigator.select(.strix)
         XCTAssertEqual(navigator.previousVisit(in: .strix), Date(timeIntervalSince1970: 1000))
 
-        // Coming back to the app after it went inactive enters the scope on screen again; without that, nothing.
+        // A window that opens inactive and then comes to the front has not been away: the visit before stays.
         clock = Date(timeIntervalSince1970: 4000)
+        navigator.appWentInactive()
+        navigator.appBecameActive()
+        XCTAssertEqual(arrivals.count, 4, "It had not been in front yet")
+        XCTAssertEqual(navigator.previousVisit(in: .strix), Date(timeIntervalSince1970: 1000))
+        // Coming back to the app after it went inactive enters the scope on screen again; without that, nothing.
         navigator.appBecameActive()
         XCTAssertEqual(arrivals.count, 4, "It was never away")
         navigator.appWentInactive()

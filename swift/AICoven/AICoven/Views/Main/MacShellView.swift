@@ -119,8 +119,10 @@ struct MacShellView: View {
             // A thread deleted or archived is no longer open.
             threadActions.onLeft = { [navigator] in navigator.removeThread(id: $0.id) }
         }
-        // Coming back to the app is coming back to the scope on screen.
-        .onChange(of: scenePhase) { _, phase in
+        // Coming back to the app is coming back to the scope on screen. The
+        // phase the window opens in is told too, so the navigator knows
+        // when the app was first in front.
+        .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active { navigator.appBecameActive() } else { navigator.appWentInactive() }
         }
         // A thread was used, or made: the list follows it.
