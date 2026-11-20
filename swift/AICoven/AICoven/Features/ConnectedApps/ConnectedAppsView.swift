@@ -207,7 +207,7 @@ struct ConnectedAppsView: View {
                 .padding(.horizontal, 16)
 
             // Navigation link to full MCP management view
-            NavigationLink(destination: MCPServerManagementView()) {
+            NavigationLink(destination: MCPServerManagementView().onAppear { AnalyticsService.shared.trackMCPServersOpened() }) {
                 GlassCard {
                     HStack(spacing: 16) {
                         // Icon badge for MCP servers
