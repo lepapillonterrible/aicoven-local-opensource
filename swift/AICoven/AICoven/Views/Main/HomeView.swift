@@ -32,7 +32,7 @@ struct HomeView: View {
 
     /// Whether the window is the new shell (one split view, as the cloud
     /// app's) instead of the two workspaces. Off until the shell has its
-    /// switcher and places; set by hand meanwhile to try it.
+    /// places; set by hand meanwhile to try it.
     @AppStorage("shell.newMacWindow") private var usesNewShell = false
 
     var body: some View {

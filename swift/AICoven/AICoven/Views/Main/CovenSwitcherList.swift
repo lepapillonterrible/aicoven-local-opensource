@@ -103,8 +103,7 @@ struct CovenSwitcherList: View {
         // Dropping a coven on a row puts it in that row's place; on Strix,
         // which always stays first, it becomes the first coven after it.
         .dropDestination(for: String.self) { ids, _ in
-            guard let dragged = ids.first, covens.contains(where: { $0.id == dragged }) else { return false }
-            let index = scope.covenID.flatMap { id in covens.firstIndex { $0.id == id } } ?? 0
+            guard let dragged = ids.first, let index = Self.dropIndex(of: dragged, onto: scope, in: covens) else { return false }
             onMoveCoven(dragged, index)
             return true
         } isTargeted: { isTargeted in
@@ -118,6 +117,16 @@ struct CovenSwitcherList: View {
         .accessibilityLabel(name)
         .accessibilityValue(Self.accessibilityValue(current: currentActivity, unread: unread))
         .accessibilityAddTraits(scope == selected ? .isSelected : [])
+    }
+
+    /// Where among the covens a coven dropped on a row goes: that row's
+    /// place, or first when dropped on Strix (which stays above them all).
+    /// Nil for what is not one of the covens, or a row that is no longer
+    /// there.
+    static func dropIndex(of dragged: String, onto scope: ShellScope, in covens: [Coven]) -> Int? {
+        guard covens.contains(where: { $0.id == dragged }) else { return nil }
+        guard let covenID = scope.covenID else { return 0 }
+        return covens.firstIndex { $0.id == covenID }
     }
 
     /// Move Up and Move Down, for the context menu and VoiceOver: the paths

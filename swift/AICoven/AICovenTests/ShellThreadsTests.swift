@@ -219,6 +219,22 @@ final class ShellThreadsTests: XCTestCase {
         XCTAssertTrue(ShellSidebar.othersCurrent(covens: covens, selected: .strix, current: [.strix: .moving("Thinking")]).isEmpty)
     }
 
+    func testACovenDroppedOnARowTakesThatRowsPlace_andOnStrixBecomesTheFirst() {
+        func coven(_ id: String) -> Coven {
+            Coven(id: id, name: id, createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0))
+        }
+        let covens = [coven("a"), coven("b"), coven("c")]
+        XCTAssertEqual(CovenSwitcherList.dropIndex(of: "c", onto: .coven("a"), in: covens), 0)
+        XCTAssertEqual(CovenSwitcherList.dropIndex(of: "a", onto: .coven("c"), in: covens), 2)
+        XCTAssertEqual(CovenSwitcherList.dropIndex(of: "b", onto: .coven("b"), in: covens), 1, "On itself: where it is")
+        XCTAssertEqual(CovenSwitcherList.dropIndex(of: "c", onto: .strix, in: covens), 0, "Strix stays first: the first after it")
+        XCTAssertNil(CovenSwitcherList.dropIndex(of: "something-else", onto: .coven("a"), in: covens), "Not one of the covens")
+        XCTAssertNil(CovenSwitcherList.dropIndex(of: "a", onto: .coven("gone"), in: covens))
+        // The place it is given is the one the order then puts it in.
+        XCTAssertEqual(CovenOrder.moving("c", to: 0, in: covens), ["c", "a", "b"])
+        XCTAssertEqual(CovenOrder.moving("a", to: 2, in: covens), ["b", "c", "a"])
+    }
+
     func testWhatVoiceOverReadsAfterAScopesNameInTheSwitcher() {
         XCTAssertEqual(CovenSwitcherList.accessibilityValue(current: nil, unread: false), "")
         XCTAssertEqual(CovenSwitcherList.accessibilityValue(current: nil, unread: true), "Unread")
