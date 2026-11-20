@@ -3,6 +3,8 @@
 <plist version="1.0">
 <dict>
 
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Voice messages are turned into text on this device when none of your AI keys can transcribe them.</string>
 	<key>APP_ENV</key>
 	<string>$(APP_ENV)</string>
 	<key>CFBundleDevelopmentRegion</key>
