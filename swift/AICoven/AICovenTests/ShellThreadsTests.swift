@@ -297,7 +297,7 @@ final class ShellThreadsTests: XCTestCase {
         XCTAssertFalse(can(creating: true, coven: false))
     }
 
-    func testAnAgentIsDeleted_andAThreadMade_onlyForTheAccountThatAsked() async throws {
+    func testAnAgentIsDeleted_andAThreadOrAMemoryMade_onlyForTheAccountThatAsked() async throws {
         await DataEncryptionService.shared.unlockForTestingEphemeral()
         await MainActor.run { DatabaseManager.shared.configureIfNeeded() }
         await ThreadService.shared.reloadForCurrentUser()
@@ -332,6 +332,24 @@ final class ShellThreadsTests: XCTestCase {
         }
         let threads = try await ThreadService.shared.loadThreads(covenId: coven.id, includeArchived: true)
         XCTAssertEqual(threads.map(\.id), [])
+
+        // Nor is a memory stored for it: what one account wrote is not kept as another's.
+        let note = "A note \(UUID().uuidString)"
+        do {
+            _ = try await MemoryRepository.shared.storeMemory(
+                scope: "user", text: note, tags: [], pii: false, createdBy: nil, source: nil, embedding: nil, as: "someone-who-signed-out"
+            )
+            XCTFail("Stored a memory for an account that is not signed in")
+        } catch {
+            guard case RepositoryError.accountChanged = error else { return XCTFail("\(type(of: error))") }
+        }
+        let kept = try await MemoryRepository.shared.loadMemories(scope: "user", limit: 500)
+        XCTAssertFalse(kept.contains { $0.text == note })
+        let stored = try await MemoryRepository.shared.storeMemory(
+            scope: "user", text: note, tags: [], pii: false, createdBy: nil, source: nil, embedding: nil, as: account
+        )
+        addTeardownBlock { try? await MemoryRepository.shared.deleteMemory(id: stored.id) }
+        XCTAssertEqual(stored.text, note)
 
         // As the account that owns them, both are done.
         let thread = try await ThreadService.shared.createThread(
