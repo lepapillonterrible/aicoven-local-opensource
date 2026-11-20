@@ -175,7 +175,12 @@ final class ThreadActivities: ObservableObject {
         let onScreen = Array(shown.keys)
         return Task { [dependencies] in
             for threadID in onScreen {
-                try? await dependencies.markRead(threadID, now, account)
+                do {
+                    try await dependencies.markRead(threadID, now, account)
+                } catch {
+                    // The kind of failure only.
+                    AppErrorReporter.log(message: "Could not keep a read mark (\(type(of: error)))", context: "ThreadActivities.reload")
+                }
             }
             do {
                 let marks = try await dependencies.loadMarks(account)
