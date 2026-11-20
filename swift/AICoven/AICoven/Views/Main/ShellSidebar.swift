@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The shell's sidebar, as the cloud app's: the switcher at the top, naming
-/// the scope on screen, with its Overview row, then its threads (those archived in a section of
+/// the scope on screen, with its Overview row and its places (Memory,
+/// Agents, Connections), then its threads (those archived in a section of
 /// their own) with a search of their titles, and the person's row at the
 /// bottom. Only the threads scroll.
 struct ShellSidebar: View {
@@ -34,6 +35,9 @@ struct ShellSidebar: View {
     @State private var switcherRowWidth: CGFloat = 0
     /// A pinned row's height, growing with the text size.
     @ScaledMetric(relativeTo: .body) private var pinnedRowHeight: CGFloat = 34
+    /// A place button and its icon, growing with the text size like the row above them.
+    @ScaledMetric(relativeTo: .body) private var placeButtonHeight: CGFloat = 32
+    @ScaledMetric(relativeTo: .body) private var placeIconSize: CGFloat = 17
 
     /// The pinned zones' text sizes: past xxxLarge they would leave the
     /// threads no room. The threads keep every size.
@@ -345,9 +349,9 @@ struct ShellSidebar: View {
                     }
                 } label: {
                     Image(systemName: place.symbol)
-                        .font(.system(size: 17))
+                        .font(.system(size: placeIconSize))
                         .foregroundStyle(SidebarSelection.ink(.accentColor, selected: isSelected, isKey: isKeyWindow))
-                        .frame(maxWidth: .infinity, minHeight: 32)
+                        .frame(maxWidth: .infinity, minHeight: placeButtonHeight)
                         .background(
                             RoundedRectangle(cornerRadius: BorderRadius.sm)
                                 .fill(SidebarSelection.fill(isSelected, isKey: isKeyWindow))

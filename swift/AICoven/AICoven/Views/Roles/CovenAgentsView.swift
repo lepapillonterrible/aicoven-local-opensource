@@ -33,11 +33,16 @@ struct CovenAgentsView: View {
 
     /// The first line of an agent's instructions that says anything.
     static func instructionsLine(_ instructions: String?) -> String {
-        (instructions ?? "")
-            .split(whereSeparator: \.isNewline)
-            .lazy
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .first { !$0.isEmpty } ?? ""
+        var first = ""
+        // Read a line at a time, and no further than the first that says something.
+        instructions?.enumerateLines { line, stop in
+            let said = line.trimmingCharacters(in: .whitespaces)
+            if !said.isEmpty {
+                first = said
+                stop = true
+            }
+        }
+        return first
     }
 
     var body: some View {
@@ -150,6 +155,8 @@ struct CovenAgentsView: View {
     /// and another opened), and the agents are read again either way.
     private func completed(_ shown: AgentForm) {
         if form == shown { form = nil }
+        // Something was done since a delete failed: that is no longer what to say.
+        deleteFailed = false
         Task { await load() }
     }
 
@@ -165,21 +172,20 @@ struct CovenAgentsView: View {
         askingDelete = true
     }
 
-    /// Reads the coven's agents. Those of another coven (the page moved on
-    /// while they were read) are not shown.
+    /// Reads the coven's agents. The page is one coven's (it is made anew
+    /// for another), so what is read is this coven's.
     private func load() async {
         // Only the latest reading is shown: one begun before a save or a
         // delete can land after the one begun for it.
         readings += 1
         let reading = readings
-        let covenID = coven.id
         do {
-            let loaded = try await RoleService.shared.loadRoles(covenId: covenID)
-            guard reading == readings, covenID == coven.id else { return }
+            let loaded = try await RoleService.shared.loadRoles(covenId: coven.id)
+            guard reading == readings else { return }
             roles = loaded
             loadFailed = false
         } catch {
-            guard reading == readings, covenID == coven.id else { return }
+            guard reading == readings else { return }
             // The kind of failure only.
             AppErrorReporter.log(message: "Could not read the agents (\(type(of: error)))", context: "CovenAgentsView.load")
             loadFailed = true
@@ -213,12 +219,10 @@ private struct AgentListRow: View {
     let action: () -> Void
     @State private var hovering = false
 
-    private var instructionsLine: String {
-        CovenAgentsView.instructionsLine(role.systemPrompt)
-    }
-
     var body: some View {
-        Button(action: action) {
+        // Worked out once for the row, not for each place it is used.
+        let instructionsLine = CovenAgentsView.instructionsLine(role.systemPrompt)
+        return Button(action: action) {
             HStack(spacing: Spacing.sm) {
                 role.face(size: 44)
                 VStack(alignment: .leading, spacing: Spacing.xxxs) {

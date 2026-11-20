@@ -254,6 +254,9 @@ struct NewThreadView: View {
         .task {
             await loadRolesIfNeeded()
         }
+        // Nor closed any other way (Escape, a swipe down) while the thread
+        // is being made.
+        .interactiveDismissDisabled(isCreating)
     }
 
     /// Whether Create is offered. A coven's thread needs a primary agent
