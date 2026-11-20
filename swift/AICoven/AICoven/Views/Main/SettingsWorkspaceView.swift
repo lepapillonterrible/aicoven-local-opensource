@@ -3,6 +3,23 @@ import SwiftUI
 /// The person's Settings: the standard Settings window on the Mac, a tab
 /// per pane; on the iPad and iPhone, a list that pushes each pane.
 struct SettingsWorkspaceView: View {
+    /// The place in Settings this was opened at, where a request named one.
+    private let initialPane: WorkspaceTabType?
+    #if !os(macOS)
+    /// The panes pushed over the list: the one asked for, to begin with.
+    @State private var path: [SettingsPane]
+    #endif
+
+    /// Opens at the pane `initialPane` names (Provider Keys, Connected
+    /// Apps, …); otherwise the Mac shows the pane its window last showed,
+    /// and the iPad and iPhone the list.
+    init(initialPane: WorkspaceTabType? = nil) {
+        self.initialPane = initialPane
+        #if !os(macOS)
+        _path = State(initialValue: initialPane.flatMap { SettingsPane($0) }.map { [$0] } ?? [])
+        #endif
+    }
+
     #if os(macOS)
     @EnvironmentObject private var appState: AppState
     /// The last request for a legal page, which About opens on.
@@ -42,7 +59,11 @@ struct SettingsWorkspaceView: View {
                 .tag(pane)
             }
         }
-        .onAppear { showRequestedPane() }
+        .onAppear {
+            // Opened at a pane: shown as any request for one is.
+            if let initialPane { appState.requestedSettingsPane = initialPane }
+            showRequestedPane()
+        }
         .onChange(of: appState.requestedSettingsPane) { _, _ in showRequestedPane() }
     }
 
@@ -59,8 +80,8 @@ struct SettingsWorkspaceView: View {
     }
     #else
     private var content: some View {
-        NavigationStack {
-            SettingsList()
+        NavigationStack(path: $path) {
+            SettingsList(request: initialPane)
         }
     }
     #endif

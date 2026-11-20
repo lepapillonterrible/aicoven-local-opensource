@@ -28,16 +28,34 @@ nonisolated enum ShellSidebarItem: Hashable {
     case connectedApps
 }
 
-/// Navigation state for the Mac's split-view shell, as the cloud app's.
+/// Navigation state for the split-view shell, as the cloud app's.
 ///
 /// The shell shows one scope at a time: Strix or a coven. It starts on
 /// Strix's Overview. Switching to a scope opens its Overview, even where a
 /// thread was open in it earlier; the other places the person opens (a
-/// thread, Memory, Agents, …) stay open until they move.
+/// thread, Memory, Agents, …) stay open until they move. Settings, where it
+/// is no window of its own, is the person's and not a scope's: it covers
+/// the scope's content while open.
 ///
 /// Owns navigation state only: no rendering, no loading, no analytics.
 @MainActor
 final class ShellNavigator: ObservableObject {
+    /// A place that is the person's own, whatever scope is on screen.
+    nonisolated enum PersonPlace: Equatable {
+        /// Settings, opened at `pane` where a request names one (Provider
+        /// Keys, Connected Apps, …).
+        case settings(pane: WorkspaceTabType?)
+    }
+
+    /// The person's place on screen, over the scope's; nil for none.
+    @Published private(set) var personPlace: PersonPlace? {
+        didSet { if personPlace != oldValue { placeGeneration += 1 } }
+    }
+
+    /// Counts the asks for a person's place, so Settings asked for again
+    /// is shown anew, at the pane now asked for.
+    @Published private(set) var personPlaceRequest = 0
+
     /// The scope on screen.
     @Published private(set) var selected: ShellScope = .strix {
         didSet {
@@ -129,6 +147,8 @@ final class ShellNavigator: ObservableObject {
     /// Agents for the agents and their forms, Memory for the memory and its
     /// forms, the Overview for none. Nil for a place that has no row.
     var sidebarItem: ShellSidebarItem? {
+        // The person's own place belongs to no row of the scope's.
+        guard personPlace == nil else { return nil }
         guard let place else { return .overview }
         switch place.type {
         case let .thread(thread): return .thread(thread.id)
@@ -142,7 +162,9 @@ final class ShellNavigator: ObservableObject {
 
     /// The current place's name for the window title: a thread's title
     /// ("Untitled" for none), any other place's own; nil on the Overview.
+    /// Settings', while it covers the scope's place.
     var placeTitle: String? {
+        if case .settings = personPlace { return "Settings" }
         guard let place else { return nil }
         return place.threadValue.map(ThreadListRules.title(of:)) ?? place.title
     }
@@ -151,6 +173,7 @@ final class ShellNavigator: ObservableObject {
     /// open in it earlier. Selecting the scope already on screen keeps its
     /// current place.
     func select(_ scope: ShellScope) {
+        personPlace = nil
         guard scope != selected else { return }
         selected = scope
         places[scope] = nil
@@ -163,6 +186,7 @@ final class ShellNavigator: ObservableObject {
 
     /// Switches to `scope` and opens `tab` there.
     func open(_ tab: WorkspaceTab, in scope: ShellScope) {
+        personPlace = nil
         selected = scope
         places[scope] = tab
     }
@@ -173,7 +197,16 @@ final class ShellNavigator: ObservableObject {
     }
 
     func showOverview() {
+        personPlace = nil
         places[selected] = nil
+    }
+
+    /// Opens a place of the person's own over the scope on screen. Asked
+    /// for again, it is shown anew. Any move of the person leaves it:
+    /// choosing a scope, opening a place or a thread, the Overview.
+    func openPersonPlace(_ place: PersonPlace) {
+        personPlace = place
+        personPlaceRequest += 1
     }
 
     /// Opens the new-thread page in the selected scope: the thread is made
@@ -302,10 +335,13 @@ final class ShellNavigator: ObservableObject {
     }
 }
 
-/// The Mac window's title for the shell's current place: "<Coven> —
-/// <Place>", the place being "Overview" where none is open; "AICoven"
-/// while the scope has no name yet.
-nonisolated func shellWindowTitle(covenName: String?, covenPlaceTitle: String?) -> String {
+/// The window's title for the shell's current place: "<Coven> — <Place>",
+/// the place being Settings while it covers the scope's, and "Overview"
+/// where none is open; "AICoven" while the scope has no name yet.
+nonisolated func shellWindowTitle(
+    covenName: String?, personPlace: ShellNavigator.PersonPlace? = nil, covenPlaceTitle: String?
+) -> String {
     guard let covenName else { return "AICoven" }
+    if case .settings = personPlace { return "\(covenName) — Settings" }
     return "\(covenName) — \(covenPlaceTitle ?? "Overview")"
 }

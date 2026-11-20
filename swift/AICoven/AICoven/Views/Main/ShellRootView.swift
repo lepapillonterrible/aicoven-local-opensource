@@ -1,10 +1,10 @@
-#if os(macOS)
 import SwiftUI
 
-/// The Mac window as the cloud app's shell: one split view, with the
-/// sidebar on the left and the place open in the scope on screen beside it,
-/// under a toolbar and the window's title.
-struct MacShellView: View {
+/// The cloud app's shell: one split view, with the sidebar on the left and
+/// the place open in the scope on screen beside it, under a toolbar and the
+/// window's title. The Mac's window; and the iPad's layout, where Settings
+/// is a place in it and not a window.
+struct ShellRootView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var authService: AuthService
 
@@ -57,7 +57,7 @@ struct MacShellView: View {
                 threadActions: threadActions,
                 covens: orderedCovens,
                 personName: ShellSidebar.personName(name: authService.currentUser?.name, email: authService.currentUser?.email),
-                onOpenSettings: { _ = appState.openSettings(for: .settings) },
+                onOpenSettings: { openSettings(.settings) },
                 onCreateCoven: { showCreateCoven = true },
                 onOpenPlace: openPlace,
                 onMoveCoven: moveCoven
@@ -77,7 +77,7 @@ struct MacShellView: View {
                 onNewThreadWithAgent: newThread(with:),
                 onThreadCreated: threadCreated,
                 onThreadAsked: threadMade,
-                onOpenProviderKeys: { _ = appState.openSettings(for: .providerKeys) }
+                onOpenProviderKeys: { openSettings(.providerKeys) }
             )
             .toolbar {
                 StoneSidebarToggle(visibility: $columnVisibility, systemShowsSidebar: splitViewProbe.sidebarIsShowing)
@@ -93,7 +93,7 @@ struct MacShellView: View {
             }
         }
         .stoneWindowBar()
-        .navigationTitle(shellWindowTitle(covenName: scopeName, covenPlaceTitle: navigator.placeTitle))
+        .navigationTitle(shellWindowTitle(covenName: scopeName, personPlace: navigator.personPlace, covenPlaceTitle: navigator.placeTitle))
         .threadActionsHost(threadActions)
         // What this window offers the menu bar while it is in front.
         .focusedSceneValue(\.shellCommands, shellCommands)
@@ -176,7 +176,7 @@ struct MacShellView: View {
             covenOrder = orderStore.ids(for: account)
         } catch {
             // The kind of failure only. The covens shown stay as they are.
-            AppErrorReporter.log(message: "Could not read the covens (\(type(of: error)))", context: "MacShellView.loadCovens")
+            AppErrorReporter.log(message: "Could not read the covens (\(type(of: error)))", context: "ShellRootView.loadCovens")
         }
     }
 
@@ -215,10 +215,20 @@ struct MacShellView: View {
     /// the person's connected apps, in Settings.
     private func openPlace(_ item: ShellSidebarItem) {
         if item == .connectedApps, navigator.selected == .strix {
-            _ = appState.openSettings(for: .connectedApps)
+            openSettings(.connectedApps)
         } else {
             navigator.openPlace(item)
         }
+    }
+
+    /// Settings, or a place in it: the Settings window on the Mac, a place
+    /// in the shell where there is no such window.
+    private func openSettings(_ place: WorkspaceTabType) {
+        #if os(macOS)
+        _ = appState.openSettings(for: place)
+        #else
+        navigator.openPersonPlace(.settings(pane: place == .settings ? nil : place))
+        #endif
     }
 
     /// New Thread: the scope's new-thread page. Its thread is made when
@@ -251,4 +261,3 @@ struct MacShellView: View {
         }
     }
 }
-#endif

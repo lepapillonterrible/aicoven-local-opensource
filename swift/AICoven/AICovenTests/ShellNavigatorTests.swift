@@ -216,6 +216,74 @@ final class ShellNavigatorTests: XCTestCase {
         moved("The coven on screen is gone")
     }
 
+    @MainActor
+    func testSettingsCoversTheScopesPlace_untilThePersonMoves() {
+        let navigator = ShellNavigator()
+        navigator.select(.coven("work"))
+        navigator.open(.thread(thread("t1", covenID: "work")))
+        XCTAssertNil(navigator.personPlace)
+
+        let before = navigator.placeGeneration
+        navigator.openPersonPlace(.settings(pane: .providerKeys))
+        XCTAssertEqual(navigator.personPlace, .settings(pane: .providerKeys))
+        XCTAssertEqual(navigator.personPlaceRequest, 1)
+        XCTAssertGreaterThan(navigator.placeGeneration, before, "The person has moved")
+        // It belongs to no row of the scope's, and names the window; the scope's place waits underneath.
+        XCTAssertNil(navigator.sidebarItem)
+        XCTAssertEqual(navigator.placeTitle, "Settings")
+        XCTAssertEqual(navigator.place?.id, "t1")
+        XCTAssertEqual(navigator.selected, .coven("work"))
+
+        // Asked for again, also for the same: shown anew.
+        navigator.openPersonPlace(.settings(pane: .providerKeys))
+        XCTAssertEqual(navigator.personPlaceRequest, 2)
+        navigator.openPersonPlace(.settings(pane: nil))
+        XCTAssertEqual(navigator.personPlace, .settings(pane: nil))
+        XCTAssertEqual(navigator.personPlaceRequest, 3)
+
+        // What is no move of the person leaves it open: a thread renamed, one deleted, a coven that is gone.
+        navigator.updateThread(thread("t1", covenID: "work", title: "Renamed"))
+        navigator.removeThread(id: "t1")
+        navigator.handleCovenGone(covenID: "work")
+        XCTAssertEqual(navigator.personPlace, .settings(pane: nil))
+        XCTAssertEqual(navigator.selected, .strix)
+
+        // Each move of the person leaves it.
+        let moves: [(String, (ShellNavigator) -> Void)] = [
+            ("the scope on screen, chosen again", { $0.select(.strix) }),
+            ("another scope", { $0.select(.coven("home")) }),
+            ("the Overview", { $0.showOverview() }),
+            ("a place", { $0.openPlace(.memory) }),
+            ("a thread", { $0.open(self.thread("t2", covenID: nil)) }),
+            ("a new thread", { $0.requestNewThread() }),
+        ]
+        for (name, move) in moves {
+            navigator.openPersonPlace(.settings(pane: nil))
+            let generation = navigator.placeGeneration
+            move(navigator)
+            XCTAssertNil(navigator.personPlace, name)
+            XCTAssertGreaterThan(navigator.placeGeneration, generation, name)
+        }
+    }
+
+    @MainActor
+    func testAThreadMadeWhileSettingsIsOpen_doesNotTakeItsPlace() {
+        // Asked for from an Overview, then Settings: the thread waits in its list.
+        let navigator = ShellNavigator()
+        let ask = navigator.askFromOverview()
+        navigator.openPersonPlace(.settings(pane: nil))
+        navigator.openThreadAskedFromOverview(thread("asked", covenID: nil), ask: ask)
+        XCTAssertEqual(navigator.personPlace, .settings(pane: nil))
+        XCTAssertNil(navigator.place)
+
+        // A new-thread page's thread takes the page's place underneath, and Settings stays on screen.
+        navigator.requestNewThread()
+        navigator.openPersonPlace(.settings(pane: nil))
+        navigator.handleCreatedThread(thread("made", covenID: nil))
+        XCTAssertEqual(navigator.personPlace, .settings(pane: nil))
+        XCTAssertEqual(navigator.place?.id, "made")
+    }
+
     func testAScopeIsStrixOrACoven() {
         XCTAssertEqual(ShellScope(covenID: nil), .strix)
         XCTAssertEqual(ShellScope(covenID: "work"), .coven("work"))
@@ -228,6 +296,8 @@ final class ShellNavigatorTests: XCTestCase {
     func testTheWindowIsTitledByTheCovenAndThePlace() {
         XCTAssertEqual(shellWindowTitle(covenName: "Strix", covenPlaceTitle: nil), "Strix — Overview")
         XCTAssertEqual(shellWindowTitle(covenName: "Work", covenPlaceTitle: "Plans for May"), "Work — Plans for May")
+        XCTAssertEqual(shellWindowTitle(covenName: "Work", personPlace: .settings(pane: .providerKeys), covenPlaceTitle: "Plans for May"), "Work — Settings")
+        XCTAssertEqual(shellWindowTitle(covenName: nil, personPlace: .settings(pane: nil), covenPlaceTitle: nil), "AICoven")
         XCTAssertEqual(shellWindowTitle(covenName: nil, covenPlaceTitle: "Plans"), "AICoven", "No scope named yet")
     }
 
