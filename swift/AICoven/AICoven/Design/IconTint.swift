@@ -39,7 +39,8 @@ nonisolated enum IconTint: String, CaseIterable, Identifiable {
         colors.foreground
     }
 
-    /// The first tint no agent wears, or the first of all when every one is
+    /// The first tint that is not worn (by an agent of a coven, or by a
+    /// coven), or the first of all when every one is
     /// worn. `worn` is the stored keys; an unknown or missing key wears none.
     static func nextUnused(worn: [String?]) -> IconTint {
         let used = Set(worn.compactMap(\.self))
