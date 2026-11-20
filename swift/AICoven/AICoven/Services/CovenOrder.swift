@@ -27,6 +27,15 @@ nonisolated enum CovenOrder {
         return ids
     }
 
+    /// The covens that are gone: those that were known, and the one on
+    /// screen, that are not among the covens as read now.
+    static func gone(known: [Coven], selected: ShellScope, among loaded: [Coven]) -> Set<String> {
+        let there = Set(loaded.map(\.id))
+        var were = Set(known.map(\.id))
+        if let onScreen = selected.covenID { were.insert(onScreen) }
+        return were.subtracting(there)
+    }
+
     /// Whether `covenID` can move one place up, or down, among `covens`.
     static func canMove(_ covenID: String, up: Bool, in covens: [Coven]) -> Bool {
         guard let index = covens.firstIndex(where: { $0.id == covenID }) else { return false }

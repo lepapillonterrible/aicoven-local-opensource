@@ -114,7 +114,9 @@ struct NewThreadComposer: View {
             )
         }
         .task(id: coven?.id) { await loadRoles() }
-        .onChange(of: submission.errorMessage) { _, message in
+        // Said to VoiceOver when it comes, and when the person comes back
+        // to a page that is still saying it.
+        .onChange(of: submission.errorMessage, initial: true) { _, message in
             if let message { AccessibilityNotification.Announcement(message).post() }
         }
     }
