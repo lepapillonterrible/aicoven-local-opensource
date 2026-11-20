@@ -1140,7 +1140,7 @@ actor ToolExecutionService {
         let tree = try await FigmaToolService.fileTree(key: file, node: node, depth: depth, token: token, session: session)
         var left = FigmaToolService.mostNodes
         let outline = FigmaToolService.outline(of: tree.document, left: &left)
-        let block = "[Figma File: \(tree.name ?? file)]\nRead to \(depth) \(depth == 1 ? "level" : "levels")\(node.map { " under node \($0)" } ?? ""). Each line is a node: its name, then its id and kind.\n"
+        let block = "[Figma File: \(tree.name.map(FigmaToolService.oneLine) ?? file)]\nRead to \(depth) \(depth == 1 ? "level" : "levels")\(node.map { " under node \($0)" } ?? ""). Each line is a node: its name, then its id and kind.\n"
             + outline.lines.joined(separator: "\n")
             + (outline.omitted > 0 ? "\n(\(outline.omitted) nodes were left out. Read under one node with 'node' to see more.)" : "")
         return .success(tool: "figma.readFile", result: ["file": AnyJSONValue(file), "depth": AnyJSONValue(depth), "truncated": AnyJSONValue(outline.omitted > 0)], contextBlock: block)
@@ -1164,9 +1164,23 @@ actor ToolExecutionService {
             (FigmaError.rateLimited(retryAfter: retryAfter).errorDescription ?? "Figma is limiting how often this account asks.", "figma_rate_limited", true)
         case let failure?:
             (failure.errorDescription ?? "Figma did not answer.", "figma_failed", true)
-        case nil:
+        case nil where error is URLError:
             ("Figma could not be reached.", "figma_failed", true)
+        case nil where error is ConnectedAccountError:
+            // The token is not where it is kept: asking again will not find it.
+            ("Figma's token could not be read on this device. The person can give Figma a new token in Settings > \(SettingsPane.connectedApps.listedTitle).", "figma_token_unreadable", false)
+        case nil:
+            ("The call to Figma could not be made.", "figma_failed", false)
         }
+    }
+
+    /// Whether a failed call may have reached Figma and been carried out
+    /// all the same: its answer could not be read, or did not come. (A
+    /// refusal, and a request that was never sent, did nothing.)
+    nonisolated static func mayHaveBeenCarriedOut(_ error: Error) -> Bool {
+        if case FigmaError.invalidResponse = error { return true }
+        guard let failure = error as? URLError else { return false }
+        return [.timedOut, .networkConnectionLost, .badServerResponse, .cannotParseResponse].contains(failure.code)
     }
 
     /// Runs a Figma tool on the file its call names, with the connected
@@ -1199,6 +1213,11 @@ actor ToolExecutionService {
             // still the connection's.
             if case FigmaError.tokenRefused = error, let token {
                 await connectedAccountsService.markFigmaTokenRefused(accountID: account.id, token: token)
+            }
+            // A change whose answer did not come may have been made: it is
+            // not asked for again without looking.
+            if changes, Self.mayHaveBeenCarriedOut(error) {
+                return .error(tool: toolCall.name, message: "Figma's answer did not come or could not be read, so the comment may have been posted. Check with figma.readComments before posting it again.", errorType: "figma_unconfirmed", isRetryable: false)
             }
             let failure = Self.figmaFailure(error)
             return .error(tool: toolCall.name, message: failure.message, errorType: failure.code, isRetryable: failure.retry)

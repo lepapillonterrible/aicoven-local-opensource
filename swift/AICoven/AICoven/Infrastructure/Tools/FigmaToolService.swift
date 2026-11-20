@@ -236,7 +236,7 @@ nonisolated extension FigmaToolService {
             .sorted { ($0["created_at"] as? String ?? "") > ($1["created_at"] as? String ?? "") }
         let lines = shown.prefix(mostComments).map { comment -> String in
             let id = comment["id"] as? String ?? "?"
-            let author = (comment["user"] as? [String: Any])?["handle"] as? String ?? "Someone"
+            let author = ((comment["user"] as? [String: Any])?["handle"] as? String).map(oneLine) ?? "Someone"
             let when = comment["created_at"] as? String ?? ""
             var notes: [String] = []
             if let parent = comment["parent_id"] as? String, !parent.isEmpty { notes.append("reply to \(parent)") }

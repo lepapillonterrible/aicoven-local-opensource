@@ -316,6 +316,24 @@ final class FigmaToolsTests: XCTestCase {
         let sent = try XCTUnwrap(JSONSerialization.jsonObject(with: Data((world.asked.requests.first?.sent ?? "").utf8)) as? NSDictionary)
         XCTAssertEqual(sent, ["message": "The header overlaps the logo.", "comment_id": "12"] as NSDictionary)
 
+        // Figma took the request and its answer cannot be read: the comment
+        // may be there, so it is not to be posted again without looking.
+        let unread = try await self.world { _ in (200, "not json", [:]) }
+        defer { unread.forget() }
+        let unconfirmed = await unread.call("figma.addComment", ["file": AnyJSONValue("AbCdEfGhIjKl"), "message": AnyJSONValue("Hi")])
+        XCTAssertEqual(unconfirmed.errorType, "figma_unconfirmed")
+        XCTAssertFalse(unconfirmed.isRetryable)
+        XCTAssertEqual(unconfirmed.error?.contains("may have been posted"), true)
+        // A reading call whose answer cannot be read is just a failure to try again.
+        let unreadable = await unread.call("figma.readComments", ["file": AnyJSONValue("AbCdEfGhIjKl")])
+        XCTAssertEqual(unreadable.errorType, "figma_failed")
+        XCTAssertTrue(unreadable.isRetryable)
+        XCTAssertTrue(ToolExecutionService.mayHaveBeenCarriedOut(URLError(.timedOut)))
+        XCTAssertFalse(ToolExecutionService.mayHaveBeenCarriedOut(URLError(.notConnectedToInternet)))
+        XCTAssertFalse(ToolExecutionService.mayHaveBeenCarriedOut(FigmaError.notAnswered(status: 403)))
+        XCTAssertEqual(ToolExecutionService.figmaFailure(ConnectedAccountError.tokenNotFound(accountId: "x")).code, "figma_token_unreadable")
+        XCTAssertEqual(ToolExecutionService.figmaFailure(URLError(.notConnectedToInternet)).message, "Figma could not be reached.")
+
         // Denied, or with no thread to ask in: nothing is sent.
         let denying = try await self.world(approving: false) { _ in (200, "{}", [:]) }
         defer { denying.forget() }
