@@ -118,6 +118,8 @@ final class ThreadActivityTests: XCTestCase {
         var failing = false
         /// Held until the test lets a reading of the store go on.
         var beforeLoading: (() async -> Void)?
+        /// Held after the marks were read, before the reading lands.
+        var beforeCovens: (() async -> Void)?
 
         func activities() -> ThreadActivities {
             ThreadActivities(dependencies: .init(
@@ -127,7 +129,10 @@ final class ThreadActivityTests: XCTestCase {
                     return try await self.marks(for: account)
                 },
                 markRead: { threadID, date, account in await self.note(threadID, date, account) },
-                loadCovens: { await self.covens },
+                loadCovens: {
+                    await self.beforeCovens?()
+                    return await self.covens
+                },
                 holdsDraft: { self.drafts[$0] },
                 now: { self.now }
             ))
@@ -206,6 +211,51 @@ final class ThreadActivityTests: XCTestCase {
     }
 
     @MainActor
+    func testAThreadReadWhileTheStoreIsBeingRead_staysRead_andANewThreadIsPickedUpWhenShown() async {
+        let world = World()
+        world.stored = ["t": marks(read: 100, reply: 200)]
+        world.covens = ["t": "c1"]
+        let activities = world.activities()
+        await activities.reload().value
+        XCTAssertEqual(activities.activity, ["t": .unread])
+
+        // A reading has the marks and is still on its way; the thread is opened and left meanwhile.
+        var held: CheckedContinuation<Void, Never>?
+        let (reached, reach) = AsyncStream<Void>.makeStream()
+        world.beforeCovens = {
+            reach.yield()
+            await withCheckedContinuation { held = $0 }
+        }
+        let reading = activities.reload()
+        for await _ in reached {
+            break
+        }
+        world.beforeCovens = nil
+        world.now = Date(timeIntervalSince1970: 2000)
+        await activities.show("t").value
+        await activities.hide("t").value
+        XCTAssertNil(activities.activity["t"])
+        // The reading lands with the mark as it was before: the thread stays read.
+        world.stored["t"]?.readAt = Date(timeIntervalSince1970: 100)
+        held?.resume()
+        await reading.value
+        XCTAssertNil(activities.activity["t"], "Its older mark is not brought back")
+        XCTAssertEqual(activities.covensWithUnread, [])
+        // A reply stored after that is unread as ever.
+        world.stored["t"] = marks(read: 2000, reply: 2500)
+        await activities.reload().value
+        XCTAssertEqual(activities.activity["t"], .unread)
+
+        // A thread made since the store was read: shown, it is read for; left with a draft, its row says so.
+        world.stored["fresh"] = marks(read: 2600)
+        world.drafts["fresh"] = true
+        await activities.show("fresh").value
+        XCTAssertNil(activities.activity["fresh"], "On screen, it is being written")
+        await activities.hide("fresh").value
+        XCTAssertEqual(activities.activity["fresh"], .unsent)
+    }
+
+    @MainActor
     func testRowsSayWhatTheEngineRuns_andWhatTheComposerHolds() async {
         let world = World()
         world.stored = ["t": marks(read: 100, reply: 200, draft: true, turn: .running), "kept": marks()]
@@ -243,7 +293,11 @@ final class ThreadActivityTests: XCTestCase {
         XCTAssertEqual(activities.activity["t"], .unsent)
         activities.setUnsent(handedBack: [], kept: ["t", "new"])
         XCTAssertEqual(activities.activity["t"], .unsent)
-        XCTAssertEqual(activities.activity["new"], .unsent, "A thread the store has not been read for yet")
+        // Only of the account's own threads, as read from the store: the engine's are by thread, whoever's.
+        XCTAssertNil(activities.activity["new"])
+        activities.setTurns(["someone-elses": .init(message: "Thinking")])
+        XCTAssertNil(activities.activity["someone-elses"])
+        activities.setTurns([:])
         activities.setUnsent(kept: [])
         XCTAssertEqual(activities.activity["t"], .unread)
     }
@@ -257,13 +311,15 @@ final class ThreadActivityTests: XCTestCase {
         await activities.reload().value
         XCTAssertEqual(activities.activity, ["t": .unread])
 
-        // Another account signs in: nothing of the first's is said, even before the store is read again.
+        XCTAssertEqual(activities.covensWithUnread, ["c1"])
+
+        // Another account signs in: nothing of the first's is said from that moment, before the store is read again.
         world.account = "grace"
-        activities.setAsking([])
+        world.covens = [:]
+        let changing = activities.accountChanged()
         XCTAssertEqual(activities.activity, [:])
         XCTAssertEqual(activities.covensWithUnread, [])
-        world.covens = [:]
-        await activities.reload().value
+        await changing.value
         XCTAssertEqual(activities.activity, ["grace-thread": .unread])
 
         // A reading begun as one account that lands after another signed in is not kept.

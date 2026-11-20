@@ -28,13 +28,6 @@ struct ConversationActivityGlyph<Idle: View>: View {
     }
 }
 
-extension ConversationActivityGlyph where Idle == Color {
-    /// With nothing in the slot for a row that has no mark.
-    init(activity: ConversationActivity?) {
-        self.init(activity: activity) { Color.clear }
-    }
-}
-
 /// The caption line under a thread's title, in the turn's own words: water
 /// for moving, semibold secondary ink for waiting, rust for broken. Nothing
 /// for a finished or unread thread. VoiceOver reads the words from the row.

@@ -49,6 +49,11 @@ final class ThreadActivities: ObservableObject {
     private var marks: [String: ThreadMarks] = [:]
     private var covens: [String: String] = [:]
     private var marksAccount: String?
+    /// Up to when each thread was read here, by thread id, for the account
+    /// `readHereAccount`: a reading of the store that began before a thread
+    /// was read does not bring its older mark back.
+    private var readHere: [String: Date] = [:]
+    private var readHereAccount: String?
     private var turns: [String: ConversationActivity.Turn] = [:]
     private var asking: Set<String> = []
     private var ended: [String: TurnOutcome] = [:]
@@ -124,7 +129,27 @@ final class ThreadActivities: ObservableObject {
     @discardableResult
     func show(_ threadID: String) -> Task<Void, Never> {
         shown[threadID, default: 0] += 1
-        return read(threadID)
+        let reading = read(threadID)
+        // A thread nothing is held of (made since the store was last read):
+        // the store is read again, so its row can say what it is doing.
+        guard marksAccount != dependencies.currentAccount() || marks[threadID] == nil else { return reading }
+        return Task {
+            await reading.value
+            await reload().value
+        }
+    }
+
+    /// Another account signed in, or this one signed out: nothing of the
+    /// one before is said, and the store is read for the one there is now.
+    @discardableResult
+    func accountChanged() -> Task<Void, Never> {
+        marks = [:]
+        covens = [:]
+        marksAccount = nil
+        readHere = [:]
+        readHereAccount = nil
+        work()
+        return reload()
     }
 
     /// A thread left the screen (once for each time it came on): it is
@@ -155,14 +180,23 @@ final class ThreadActivities: ObservableObject {
             do {
                 let marks = try await dependencies.loadMarks(account)
                 let covens = try await dependencies.loadCovens()
-                // Only the latest reading, and only as the account it was read for.
-                guard reading == readings, dependencies.currentAccount() == account else { return }
-                self.marks = marks
+                // Only the latest reading, and only as the account it was read
+                // for. Either way what is said is worked out again: nothing
+                // of an account that is gone stays said.
+                guard reading == readings, dependencies.currentAccount() == account else {
+                    work()
+                    return
+                }
+                self.marks = readHereAccount == account ? marks.readUp(to: readHere) : marks
                 self.covens = covens
                 marksAccount = account
             } catch {
-                guard reading == readings else { return }
-                AppErrorReporter.log(error: error, context: "ThreadActivities.reload")
+                guard reading == readings else {
+                    work()
+                    return
+                }
+                // The kind of failure only: nothing of what was read.
+                AppErrorReporter.log(message: "Could not read the threads' marks (\(type(of: error)))", context: "ThreadActivities.reload")
                 if dependencies.currentAccount() != marksAccount {
                     marks = [:]
                     covens = [:]
@@ -179,16 +213,19 @@ final class ThreadActivities: ObservableObject {
     private func read(_ threadID: String) -> Task<Void, Never> {
         let account = dependencies.currentAccount()
         let now = dependencies.now()
-        if marksAccount == account, var mark = marks[threadID], (mark.readAt ?? .distantPast) < now {
-            mark.readAt = now
-            marks[threadID] = mark
+        if readHereAccount != account {
+            readHere = [:]
+            readHereAccount = account
         }
+        readHere[threadID] = max(now, readHere[threadID] ?? now)
+        if marksAccount == account { marks = marks.readUp(to: [threadID: now]) }
         work()
         return Task { [dependencies] in
             do {
                 try await dependencies.markRead(threadID, now, account)
             } catch {
-                AppErrorReporter.log(error: error, context: "ThreadActivities.markRead")
+                // The kind of failure only.
+                AppErrorReporter.log(message: "Could not keep a read mark (\(type(of: error)))", context: "ThreadActivities.markRead")
             }
         }
     }
@@ -199,8 +236,9 @@ final class ThreadActivities: ObservableObject {
         let stored = marksAccount == dependencies.currentAccount() ? marks : [:]
         var activity: [String: ConversationActivity] = [:]
         var unreadCovens: Set<String> = []
-        let threadIDs = Set(stored.keys).union(turns.keys).union(ended.keys).union(handedBack).union(keptUnsent)
-        for threadID in threadIDs {
+        // Only of the threads read from the store for this account: what
+        // the engine holds is by thread, whoever's the thread is.
+        for threadID in stored.keys {
             let isShown = shown[threadID] != nil
             let hasUnsent = handedBack.contains(threadID) || keptUnsent.contains(threadID)
                 || dependencies.holdsDraft(threadID) ?? stored[threadID]?.hasDraft ?? false
@@ -219,5 +257,19 @@ final class ThreadActivities: ObservableObject {
         }
         if activity != self.activity { self.activity = activity }
         if unreadCovens != covensWithUnread { covensWithUnread = unreadCovens }
+    }
+}
+
+extension [String: ThreadMarks] {
+    /// These marks, each thread in `read` read up to its time there, never
+    /// to an earlier time than its mark says.
+    func readUp(to read: [String: Date]) -> [String: ThreadMarks] {
+        var marks = self
+        for (threadID, date) in read {
+            guard var mark = marks[threadID], (mark.readAt ?? .distantPast) < date else { continue }
+            mark.readAt = date
+            marks[threadID] = mark
+        }
+        return marks
     }
 }

@@ -76,6 +76,7 @@ class AuthService: ObservableObject {
                     // Reload all services for the newly signed-in user to ensure
                     // user-scoped data isolation (prevents seeing other users' data)
                     await ThreadService.shared.reloadForCurrentUser()
+                    ThreadActivities.shared.accountChanged()
 
                     // One-time cleanup: clear stale test purchases that were cached
                     // during automated testing. This runs once per user.
@@ -181,6 +182,7 @@ class AuthService: ObservableObject {
             await DataEncryptionService.shared.lock()
             // Reload threads for the (now nil) user context.
             await ThreadService.shared.reloadForCurrentUser()
+            ThreadActivities.shared.accountChanged()
         }
         // Only call Firebase signOut if available
         if isFirebaseAvailable {
