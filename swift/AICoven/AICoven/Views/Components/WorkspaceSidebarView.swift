@@ -281,6 +281,10 @@ struct WorkspaceSidebarView: View {
             threads = stored
         } catch {
             AppErrorReporter.log(error: error, context: "WorkspaceSidebarView.loadThreads")
+            // The list stays as it is, unless the data is locked or the
+            // account another's by now.
+            guard request == threadsLoad, selectedCoven?.id == covenId, !ThreadListRules.keepsShownList(after: error) else { return }
+            threads = []
         }
     }
 
@@ -661,9 +665,9 @@ struct ThreadManagementView: View {
                             }
                             if !sections.archived.isEmpty {
                                 // A search shows what it found among them: the
-                                // section is then open, and says so.
+                                // section is then open, says so, and stays open
+                                // (not disabled, which VoiceOver would call dimmed).
                                 ArchivedThreadsHeader(isExpanded: searchText.isEmpty ? $showArchived : .constant(true))
-                                    .disabled(!searchText.isEmpty)
                                     .padding(.horizontal, Spacing.sm)
                                     .padding(.top, Spacing.sm)
                                 if showArchived || !searchText.isEmpty {

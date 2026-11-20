@@ -43,6 +43,16 @@ nonisolated enum ThreadListRules {
         return name.isEmpty ? nil : name
     }
 
+    /// Whether a list already shown stays when reading it again failed
+    /// with `error`. Not when the account's data is locked or the account
+    /// changed: what is shown is then not this reader's to see.
+    static func keepsShownList(after error: Error) -> Bool {
+        switch error as? RepositoryError {
+        case .dataLocked, .accountChanged: false
+        case .databaseUnavailable, nil: true
+        }
+    }
+
     /// What is asked before a thread is deleted.
     static func deleteQuestion(for thread: Thread) -> String {
         "Delete “\(title(of: thread))”?"

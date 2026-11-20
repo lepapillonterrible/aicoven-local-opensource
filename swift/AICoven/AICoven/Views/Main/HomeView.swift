@@ -14,6 +14,8 @@ struct HomeView: View {
     @State private var personalThreads: [Thread] = []
     /// Counts the loads of the personal threads, so that only the latest is shown.
     @State private var personalThreadsLoad = 0
+    /// Whether the personal threads have been shown since the app started.
+    @State private var hasLoadedPersonalThreads = false
     @State private var isLoadingCovens = true
     @State private var showCreateCoven = false
 
@@ -132,9 +134,14 @@ struct HomeView: View {
             let stored = try await ThreadService.shared.loadThreads(covenId: nil, includeArchived: true)
             guard request == personalThreadsLoad else { return }
             personalThreads = stored
+            hasLoadedPersonalThreads = true
         } catch {
             guard request == personalThreadsLoad else { return }
             AppErrorReporter.log(error: error, context: "HomeView.loadPersonalThreads")
+            // A list already shown stays as it is: it was only being read
+            // again. Unless the data is locked or the account another's.
+            guard !(hasLoadedPersonalThreads && ThreadListRules.keepsShownList(after: error)) else { return }
+            hasLoadedPersonalThreads = false
             personalThreads = []
         }
     }
