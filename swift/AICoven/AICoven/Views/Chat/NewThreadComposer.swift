@@ -116,6 +116,9 @@ struct NewThreadComposer: View {
             )
         }
         .task(id: coven?.id) { await loadRoles() }
+        // Asked for another agent by name while the page is open ("New
+        // Thread with Scout"): that is who it goes to, over an earlier pick.
+        .onChange(of: askedAgentID) { _, _ in chosenAgentID = nil }
         // Said to VoiceOver when it comes, and when the person comes back
         // to a page that is still saying it.
         .onChange(of: submission.errorMessage, initial: true) { _, message in
@@ -165,6 +168,8 @@ struct NewThreadComposer: View {
                 )
             },
             keepUnsent: { thread, text, error in
+                // The kind of failure only.
+                AppErrorReporter.log(message: "Could not send a new thread's first message (\(type(of: error)))", context: "NewThreadComposer.send")
                 // The thread's own composer gives it back, with why.
                 TurnEngine.shared.keepUnsent(text, for: thread.id, because: error.localizedDescription)
             },
