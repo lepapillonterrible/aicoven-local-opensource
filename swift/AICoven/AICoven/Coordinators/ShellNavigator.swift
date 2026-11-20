@@ -53,6 +53,13 @@ final class ShellNavigator: ObservableObject {
     /// result that arrives late can tell whether the person has moved since.
     private(set) var placeGeneration = 0
 
+    /// The agent a scope's new thread was asked for by name ("New Thread
+    /// with Scout"), by its id; the composer otherwise chooses.
+    @Published private var draftAgents: [ShellScope: String] = [:]
+    /// The latest ask from an Overview: its identity, the scope it was
+    /// sent in, and the place generation then.
+    private var overviewAsk: (id: UUID, scope: ShellScope, generation: Int)?
+
     /// The selected scope's current place; `nil` is its Overview.
     var place: WorkspaceTab? {
         places[selected]
@@ -73,6 +80,7 @@ final class ShellNavigator: ObservableObject {
         case .memoryList, .memoryProposals, .addMemory, .editMemory: return .memory
         case .covenAgents, .addRole, .editRole, .personalStrixSettings: return .agents
         case .covenConnections: return .connectedApps
+        // The new-thread page belongs to no row.
         default: return nil
         }
     }
@@ -111,6 +119,50 @@ final class ShellNavigator: ObservableObject {
 
     func showOverview() {
         places[selected] = nil
+    }
+
+    /// Opens the new-thread page in the selected scope: the thread is made
+    /// when its first message is sent. `agentID` names the agent it is to
+    /// go to where the person chose one; asked again without one, the
+    /// composer chooses as it does.
+    func requestNewThread(agentID: String? = nil) {
+        draftAgents[selected] = agentID
+        open(.draftThread(covenId: selected.covenID))
+    }
+
+    /// The agent the new thread in `scope` was asked for by name, if any.
+    func draftAgent(in scope: ShellScope) -> String? {
+        draftAgents[scope]
+    }
+
+    /// The new-thread page's thread was made: it is shown in place of the
+    /// page, in whichever scope it was started. Only where the page still
+    /// is: the person may have moved on while the thread was being made,
+    /// and it then waits in the list.
+    func handleCreatedThread(_ thread: Thread) {
+        let scope = ShellScope(covenID: thread.covenId)
+        draftAgents[scope] = nil
+        guard case .draftThread = places[scope]?.type else { return }
+        places[scope] = .thread(thread)
+    }
+
+    /// The person asked from the selected scope's Overview. Returns the
+    /// ask's identity; the thread it starts opens only if they are still
+    /// where they asked and have asked nothing since.
+    func askFromOverview() -> UUID {
+        let id = UUID()
+        placeGeneration += 1
+        overviewAsk = (id, selected, placeGeneration)
+        return id
+    }
+
+    /// Opens the thread the ask `askID` started, unless the person has
+    /// moved or asked again since: then it waits in its scope's list.
+    func openThreadAskedFromOverview(_ thread: Thread, ask askID: UUID) {
+        let scope = ShellScope(covenID: thread.covenId)
+        guard let ask = overviewAsk, ask.id == askID, ask.scope == scope, ask.generation == placeGeneration else { return }
+        overviewAsk = nil
+        open(.thread(thread), in: scope)
     }
 
     /// Opens one of the selected scope's places, for its sidebar row. A
@@ -157,6 +209,7 @@ final class ShellNavigator: ObservableObject {
     func handleCovenGone(covenID: String) {
         let scope = ShellScope.coven(covenID)
         places[scope] = nil
+        draftAgents[scope] = nil
         if selected == scope {
             selected = .strix
             places[.strix] = nil
