@@ -297,6 +297,8 @@ struct MessageComposer: View {
                 choosingPictures = nil
                 #endif
             }
+            // The menu bar's Stop (⌘.), while there is a turn to stop.
+            .focusedSceneValue(\.stopTurn, isAgentRunning && !isStopping ? onStop : nil)
             .onChange(of: threadId) { _, _ in
                 // A recording does not follow the composer to another thread
                 // (its owner calls it off); nor does a press of the mic.

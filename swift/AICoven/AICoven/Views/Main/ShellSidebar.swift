@@ -155,6 +155,11 @@ struct ShellSidebar: View {
         }
         // Another scope's threads are not this search's: the box closes.
         .onChange(of: navigator.selected) { _, _ in closeSearch() }
+        // Search Threads (⌘K), also one asked for while the sidebar was
+        // hidden: it is answered as the sidebar comes on screen.
+        .onChange(of: navigator.searchAsked, initial: true) { _, _ in
+            if navigator.takeSearchRequest() { openSearch() }
+        }
     }
 
     // MARK: - Selection
@@ -231,7 +236,7 @@ struct ShellSidebar: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Search threads")
             .accessibilityAddTraits(isSearching ? .isSelected : [])
-            .help("Search Threads")
+            .help("Search Threads (⌘K)")
         }
     }
 

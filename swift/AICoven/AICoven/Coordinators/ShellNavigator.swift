@@ -106,6 +106,11 @@ final class ShellNavigator: ObservableObject {
     /// Counts the asks for a new-thread page, so the page knows it was
     /// asked for again, also for the agent it already had.
     @Published private(set) var draftRequests = 0
+    /// Counts the asks for the sidebar's thread search (⌘K), and how many
+    /// the sidebar has answered: one asked while the sidebar was not on
+    /// screen is answered when it is.
+    @Published private(set) var searchAsked = 0
+    private var searchAnswered = 0
     /// The latest ask from an Overview: its identity, the scope it was
     /// sent in, and the place generation then.
     private var overviewAsk: (id: UUID, scope: ShellScope, generation: Int)?
@@ -229,6 +234,19 @@ final class ShellNavigator: ObservableObject {
         case let (.connectedApps, .coven(covenID)): open(.covenConnections(covenId: covenID))
         case (.connectedApps, .strix), (.thread, _): break
         }
+    }
+
+    /// Asks the sidebar to open its thread search.
+    func requestSearch() {
+        searchAsked += 1
+    }
+
+    /// Whether the search was asked for and not yet opened; answered by
+    /// this, once.
+    func takeSearchRequest() -> Bool {
+        guard searchAnswered != searchAsked else { return false }
+        searchAnswered = searchAsked
+        return true
     }
 
     /// Leaves a finished place (a saved form, a deleted item) for the place
