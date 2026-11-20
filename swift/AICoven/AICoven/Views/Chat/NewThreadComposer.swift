@@ -8,8 +8,10 @@ import SwiftUI
 struct DraftThreadView: View {
     /// The coven the thread is for; nil for Strix.
     let coven: Coven?
-    /// The agent the thread was asked for by name, if any.
+    /// The agent the thread was asked for by name, if any, and which ask
+    /// for the page this is (it can be asked for again).
     let askedAgentID: String?
+    var request = 0
     /// What the page holds unsent, kept by whoever shows the page so it is
     /// still there when the person comes back to it.
     @ObservedObject var submission: DraftThreadSubmission
@@ -37,7 +39,8 @@ struct DraftThreadView: View {
                 }
             }
             NewThreadComposer(
-                coven: coven, askedAgentID: askedAgentID, submission: submission, autoFocus: true, onThreadCreated: onThreadCreated
+                coven: coven, askedAgentID: askedAgentID, request: request, submission: submission, autoFocus: true,
+                onThreadCreated: onThreadCreated
             )
             .padding(Spacing.md)
         }
@@ -51,6 +54,9 @@ struct DraftThreadView: View {
 struct NewThreadComposer: View {
     let coven: Coven?
     let askedAgentID: String?
+    /// Which ask for the page this is: asked for again, an agent picked
+    /// in the menu before gives way to the one asked for.
+    var request = 0
     @ObservedObject var submission: DraftThreadSubmission
     var autoFocus = false
     /// Told when a send is taken, before its thread is made.
@@ -108,7 +114,9 @@ struct NewThreadComposer: View {
                 threadId: WorkspaceTab.draftThread(covenId: coven?.id).id,
                 autoFocus: autoFocus,
                 recipientName: recipientName,
-                recipientChoices: roles,
+                // No choosing while the thread is being made: the message has
+                // gone to the agent shown when Send was pressed.
+                recipientChoices: submission.isCreatingThread ? [] : roles,
                 recipientID: recipient?.id,
                 onChooseRecipient: { chosenAgentID = $0.id },
                 allowsAttachments: false,
@@ -116,9 +124,12 @@ struct NewThreadComposer: View {
             )
         }
         .task(id: coven?.id) { await loadRoles() }
-        // Asked for another agent by name while the page is open ("New
-        // Thread with Scout"): that is who it goes to, over an earlier pick.
-        .onChange(of: askedAgentID) { _, _ in chosenAgentID = nil }
+        // Asked for again while the page is open ("New Thread with Scout"):
+        // the agent asked for is who it goes to, over an earlier pick.
+        .onChange(of: request) { _, _ in chosenAgentID = nil }
+        .onChange(of: submission.isCreatingThread) { _, creating in
+            if creating { AccessibilityNotification.Announcement("Starting a thread…").post() }
+        }
         // Said to VoiceOver when it comes, and when the person comes back
         // to a page that is still saying it.
         .onChange(of: submission.errorMessage, initial: true) { _, message in
@@ -138,7 +149,13 @@ struct NewThreadComposer: View {
         readings += 1
         let reading = readings
         let account = UserScope.currentUserID
-        let loaded = try? await RoleService.shared.loadRoles(covenId: covenID)
+        var loaded: [Role]?
+        do {
+            loaded = try await RoleService.shared.loadRoles(covenId: covenID)
+        } catch {
+            // The kind of failure only.
+            AppErrorReporter.log(message: "Could not read the coven's agents (\(type(of: error)))", context: "NewThreadComposer.loadRoles")
+        }
         // Only the latest reading, for the coven still shown and the account that asked.
         guard reading == readings, coven?.id == covenID, UserScope.currentUserID == account else { return }
         // Agents that could not be read are none: Strix answers, as in a coven that has none.
