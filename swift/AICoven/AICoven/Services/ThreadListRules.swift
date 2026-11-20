@@ -37,6 +37,19 @@ nonisolated enum ThreadListRules {
         return (listed.filter(isStillOpen), listed.filter { !isStillOpen($0) })
     }
 
+    /// A scope's Overview on a phone, where it is one list with a search
+    /// over it: what a search for `query` leaves of the threads still
+    /// open, of the earlier ones and of those archived, each newest first;
+    /// and whether a search found nothing at all.
+    static func compactOverview(
+        _ threads: [Thread], query: String, isStillOpen: (Thread) -> Bool
+    ) -> (stillOpen: [Thread], earlier: [Thread], archived: [Thread], noMatch: Bool) {
+        let found = matching(threads, query: query)
+        let lists = overview(found, isStillOpen: isStillOpen)
+        let isSearching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return (lists.stillOpen, lists.earlier, ordered(found).filter(\.isArchived), isSearching && found.isEmpty)
+    }
+
     /// The threads with a reply that came while the person was away from
     /// the scope: those not archived whose reply not yet seen (`unreadReplyAt`,
     /// by thread id) was stored after `lastVisit`, the latest reply first.

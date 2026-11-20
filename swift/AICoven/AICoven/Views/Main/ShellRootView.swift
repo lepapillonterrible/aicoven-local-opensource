@@ -4,7 +4,14 @@ import SwiftUI
 /// the place open in the scope on screen beside it, under a toolbar and the
 /// window's title. The Mac's window, and the iPad's layout at regular
 /// width, where Settings is a place in it and not a window.
+///
+/// It has a second layout over the same state, for a phone: no sidebar,
+/// the scope's Overview as the root of one stack. Being the same view, a
+/// device that changes between the two keeps where it is.
 struct ShellRootView: View {
+    /// The split layout (sidebar and content); false is the phone's.
+    var isSplit = true
+
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var authService: AuthService
 
@@ -34,6 +41,9 @@ struct ShellRootView: View {
     /// What each scope's new-thread page holds unsent.
     @StateObject private var drafts = DraftThreads()
     @State private var showCreateCoven = false
+    /// The phone's search over the Overview's threads.
+    @State private var threadSearch = ""
+    @State private var isSearchingThreads = false
 
     /// The covens in the person's order.
     private var orderedCovens: [Coven] {
@@ -50,6 +60,110 @@ struct ShellRootView: View {
     }
 
     var body: some View {
+        layout
+            .stoneWindowBar()
+            .navigationTitle(shellWindowTitle(covenName: scopeName, personPlace: navigator.personPlace, covenPlaceTitle: navigator.placeTitle))
+            .threadActionsHost(threadActions)
+            // What this window offers the menu bar while it is in front.
+            .focusedSceneValue(\.shellCommands, shellCommands)
+            .sheet(isPresented: $showCreateCoven) {
+                CreateCovenSheet(onCreated: { _ in
+                    Task { await loadCovens() }
+                })
+                .environmentObject(StoreService.shared)
+            }
+            .task {
+                // What each thread is doing, as stored for this account. Read
+                // again from here on whenever a message is stored.
+                ThreadActivities.shared.reload()
+                await loadCovens()
+            }
+            .task(id: navigator.selected) {
+                // Another scope's threads are another list, searched
+                // afresh: in whichever layout the scope changed, since the
+                // search is kept across a change of layout.
+                threadSearch = ""
+                isSearchingThreads = false
+                threadActions.invalidate()
+                shellThreads.load(navigator.selected)
+                if let covenID = navigator.selected.covenID { AnalyticsService.shared.trackCovenView(covenId: covenID) }
+            }
+            // The events the window's tabs sent when one was opened.
+            .onChange(of: navigator.place?.id) { _, _ in
+                if let place = navigator.place { AnalyticsService.shared.trackTabOpened(tabType: place.type.analyticsName) }
+            }
+            .onAppear {
+                threadActions.onChanged = { [shellThreads] in shellThreads.reload() }
+                // A thread deleted or archived is no longer open.
+                threadActions.onLeft = { [navigator] in navigator.removeThread(id: $0.id) }
+            }
+            // Coming back to the app is coming back to the scope on screen. The
+            // phase the window opens in is told too, so the navigator knows
+            // when the app was first in front.
+            .onChange(of: scenePhase, initial: true) { _, phase in
+                if phase == .active { navigator.appBecameActive() } else { navigator.appWentInactive() }
+            }
+            // A thread was used, or made: the list follows it.
+            .onReceive(NotificationCenter.default.publisher(for: ThreadService.threadUsed)) { _ in
+                shellThreads.reload()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .didCreateThread)) { _ in
+                shellThreads.reload()
+            }
+            // A thread was deleted, by whatever did it (a new thread whose
+            // files could not go into it is deleted again, with no list's
+            // action behind it): it is no longer listed, open or marked.
+            .onReceive(NotificationCenter.default.publisher(for: .didDeleteThread)) { deleted in
+                if let id = deleted.userInfo?[Notification.Name.threadIDKey] as? String { navigator.removeThread(id: id) }
+                shellThreads.reload()
+                ThreadActivities.shared.reload()
+            }
+            // A thread renamed in the sidebar goes by its new name in the
+            // window's title too, and one brought back from the archive is
+            // offered Archive again in its menu.
+            .onChange(of: shellThreads.threads) { _, threads in
+                guard let open = navigator.place?.threadValue,
+                      let now = threads.first(where: { $0.id == open.id }),
+                      now.title != open.title || now.isArchived != open.isArchived else { return }
+                navigator.updateThread(now)
+            }
+    }
+
+    @ViewBuilder
+    private var layout: some View {
+        if isSplit {
+            split
+        } else {
+            phone
+        }
+    }
+
+    /// The phone's layout: the scope's Overview as a list, with a search
+    /// over its threads.
+    private var phone: some View {
+        NavigationStack {
+            ScopeOverviewView(
+                navigator: navigator,
+                shellThreads: shellThreads,
+                threadActions: threadActions,
+                submission: drafts.submission(for: navigator.selected),
+                coven: selectedCoven,
+                onOpenProviderKeys: { openSettings(.providerKeys) },
+                onThreadAsked: threadMade,
+                searchText: threadSearch,
+                isSearchFieldActive: isSearchingThreads,
+                onOpenPlace: openPlace
+            )
+            .id(navigator.selected)
+            .searchable(text: $threadSearch, isPresented: $isSearchingThreads, prompt: "Search threads")
+            .navigationTitle(scopeName ?? "AICoven")
+            #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+            #endif
+        }
+    }
+
+    private var split: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             ShellSidebar(
                 navigator: navigator,
@@ -91,68 +205,6 @@ struct ShellRootView: View {
                     .accessibilityIdentifier("new-thread")
                 }
             }
-        }
-        .stoneWindowBar()
-        .navigationTitle(shellWindowTitle(covenName: scopeName, personPlace: navigator.personPlace, covenPlaceTitle: navigator.placeTitle))
-        .threadActionsHost(threadActions)
-        // What this window offers the menu bar while it is in front.
-        .focusedSceneValue(\.shellCommands, shellCommands)
-        .sheet(isPresented: $showCreateCoven) {
-            CreateCovenSheet(onCreated: { _ in
-                Task { await loadCovens() }
-            })
-            .environmentObject(StoreService.shared)
-        }
-        .task {
-            // What each thread is doing, as stored for this account. Read
-            // again from here on whenever a message is stored.
-            ThreadActivities.shared.reload()
-            await loadCovens()
-        }
-        .task(id: navigator.selected) {
-            // Another scope's threads are another list.
-            threadActions.invalidate()
-            shellThreads.load(navigator.selected)
-            if let covenID = navigator.selected.covenID { AnalyticsService.shared.trackCovenView(covenId: covenID) }
-        }
-        // The events the window's tabs sent when one was opened.
-        .onChange(of: navigator.place?.id) { _, _ in
-            if let place = navigator.place { AnalyticsService.shared.trackTabOpened(tabType: place.type.analyticsName) }
-        }
-        .onAppear {
-            threadActions.onChanged = { [shellThreads] in shellThreads.reload() }
-            // A thread deleted or archived is no longer open.
-            threadActions.onLeft = { [navigator] in navigator.removeThread(id: $0.id) }
-        }
-        // Coming back to the app is coming back to the scope on screen. The
-        // phase the window opens in is told too, so the navigator knows
-        // when the app was first in front.
-        .onChange(of: scenePhase, initial: true) { _, phase in
-            if phase == .active { navigator.appBecameActive() } else { navigator.appWentInactive() }
-        }
-        // A thread was used, or made: the list follows it.
-        .onReceive(NotificationCenter.default.publisher(for: ThreadService.threadUsed)) { _ in
-            shellThreads.reload()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .didCreateThread)) { _ in
-            shellThreads.reload()
-        }
-        // A thread was deleted, by whatever did it (a new thread whose
-        // files could not go into it is deleted again, with no list's
-        // action behind it): it is no longer listed, open or marked.
-        .onReceive(NotificationCenter.default.publisher(for: .didDeleteThread)) { deleted in
-            if let id = deleted.userInfo?[Notification.Name.threadIDKey] as? String { navigator.removeThread(id: id) }
-            shellThreads.reload()
-            ThreadActivities.shared.reload()
-        }
-        // A thread renamed in the sidebar goes by its new name in the
-        // window's title too, and one brought back from the archive is
-        // offered Archive again in its menu.
-        .onChange(of: shellThreads.threads) { _, threads in
-            guard let open = navigator.place?.threadValue,
-                  let now = threads.first(where: { $0.id == open.id }),
-                  now.title != open.title || now.isArchived != open.isArchived else { return }
-            navigator.updateThread(now)
         }
     }
 

@@ -12,6 +12,38 @@ final class ScopeOverviewTests: XCTestCase {
         )
     }
 
+    func testAPhonesOverviewIsOneSearchedList_stillOpen_earlier_andArchived() {
+        let threads = [
+            thread("Plan the release", used: 300), thread("Pricing notes", used: 200), thread("Release notes", used: 100),
+            thread("Old release plan", archived: true, used: 50), thread("Other", archived: true, used: 400),
+        ]
+        let open: (AICoven.Thread) -> Bool = { $0.id == "Pricing notes" }
+
+        // Nothing typed: every thread in its section, each newest first; nothing "not found".
+        let all = ThreadListRules.compactOverview(threads, query: "  ", isStillOpen: open)
+        XCTAssertEqual(all.stillOpen.map(\.id), ["Pricing notes"])
+        XCTAssertEqual(all.earlier.map(\.id), ["Plan the release", "Release notes"])
+        XCTAssertEqual(all.archived.map(\.id), ["Other", "Old release plan"])
+        XCTAssertFalse(all.noMatch)
+
+        // A search narrows each section, the archived one too, whatever the case.
+        let found = ThreadListRules.compactOverview(threads, query: "RELEASE", isStillOpen: open)
+        XCTAssertEqual(found.stillOpen.map(\.id), [])
+        XCTAssertEqual(found.earlier.map(\.id), ["Plan the release", "Release notes"])
+        XCTAssertEqual(found.archived.map(\.id), ["Old release plan"])
+        XCTAssertFalse(found.noMatch)
+
+        // Found only among the archived: that is still a find.
+        let onlyArchived = ThreadListRules.compactOverview(threads, query: "other", isStillOpen: open)
+        XCTAssertEqual(onlyArchived.archived.map(\.id), ["Other"])
+        XCTAssertFalse(onlyArchived.noMatch)
+
+        // Nothing matches: said only of a search, never of an empty scope.
+        XCTAssertTrue(ThreadListRules.compactOverview(threads, query: "zebra", isStillOpen: open).noMatch)
+        XCTAssertFalse(ThreadListRules.compactOverview([], query: "", isStillOpen: open).noMatch)
+        XCTAssertTrue(ThreadListRules.compactOverview([], query: "zebra", isStillOpen: open).noMatch)
+    }
+
     func testTheOverviewListsTheThreadsStillOpen_thenTheEarlierOnes_andNoneArchived() {
         let threads = [
             thread("old-open", used: 10), thread("new", used: 400), thread("new-open", used: 300),

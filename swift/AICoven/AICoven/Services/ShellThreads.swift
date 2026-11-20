@@ -65,4 +65,16 @@ final class ShellThreads: ObservableObject {
     func reload() -> Task<Void, Never>? {
         scope.map { load($0) }
     }
+
+    /// Reads the shown scope's threads again because the person asked, and
+    /// says whether that reading failed: true only if it is still the
+    /// latest reading when it ends, of the scope still shown, and nothing
+    /// could be read. A reading that another has overtaken says nothing of
+    /// its own.
+    func retry() async -> Bool {
+        guard let scope, let reading = reload() else { return false }
+        let mine = readings
+        await reading.value
+        return mine == readings && self.scope == scope && failed
+    }
 }

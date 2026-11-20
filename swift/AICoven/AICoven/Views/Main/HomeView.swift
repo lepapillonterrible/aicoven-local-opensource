@@ -58,17 +58,33 @@ struct HomeView: View {
         #if os(macOS)
         ShellRootView()
         #else
-        if usesSplitLayout {
-            ShellRootView()
+        if usesSplitLayout || Self.showsThePhoneLayout {
+            // One view for both layouts, so a device that changes between
+            // them keeps where it is. The phone's layout always sees
+            // compact width, as on any iPhone: a large one in landscape is
+            // regular wide, and its views would otherwise draw their wide
+            // shapes.
+            ShellRootView(isSplit: usesSplitLayout)
+                .environment(\.horizontalSizeClass, usesSplitLayout ? horizontalSizeClass : .compact)
         } else {
-            // The phone's layout always sees compact width, as on any
-            // iPhone: a large one in landscape is regular wide, and its
-            // views would otherwise draw their wide shapes.
             MobileRootView()
                 .environment(\.horizontalSizeClass, .compact)
         }
         #endif
     }
+
+    #if !os(macOS)
+    /// Whether the shell's phone layout stands in for the old root. Not
+    /// yet: it is being built, and is shown only to a debug build started
+    /// with `-phoneRoot YES`.
+    static var showsThePhoneLayout: Bool {
+        #if DEBUG
+        UserDefaults.standard.bool(forKey: "phoneRoot")
+        #else
+        false
+        #endif
+    }
+    #endif
 
     /// The place in Settings a deep link leads to.
     static func settingsPlace(for target: DeepLinkTarget) -> WorkspaceTabType {
