@@ -1,0 +1,106 @@
+import SwiftUI
+
+/// The mark at the start of a thread row: a turning ring while work
+/// happens, a still ring when it is paused, the waiting mark when it waits
+/// for the person, a water dot for a reply not yet seen. A row with none of
+/// these shows `idle` there (its own icon, or nothing).
+struct ConversationActivityGlyph<Idle: View>: View {
+    let activity: ConversationActivity?
+    @ViewBuilder var idle: () -> Idle
+
+    var body: some View {
+        Group {
+            switch activity {
+            case .moving:
+                StatusRing(isTurning: true)
+            case .paused:
+                StatusRing(isTurning: false)
+            case .waiting:
+                WaitingMark()
+            case .unread:
+                ActivityDot()
+            case .broken, .unsent, nil:
+                idle()
+            }
+        }
+        .frame(minWidth: 12, minHeight: 12)
+        .accessibilityHidden(true)
+    }
+}
+
+extension ConversationActivityGlyph where Idle == Color {
+    /// With nothing in the slot for a row that has no mark.
+    init(activity: ConversationActivity?) {
+        self.init(activity: activity) { Color.clear }
+    }
+}
+
+/// The caption line under a thread's title, in the turn's own words: water
+/// for moving, semibold secondary ink for waiting, rust for broken. Nothing
+/// for a finished or unread thread. VoiceOver reads the words from the row.
+struct ConversationActivityCaption: View {
+    let activity: ConversationActivity?
+    var font: Font = .aicovenCaption
+
+    var body: some View {
+        if let activity, let caption = activity.caption {
+            Text(caption)
+                .font(activity.isWaiting ? font.weight(.semibold) : font)
+                .foregroundStyle(color(activity))
+                .lineLimit(1)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func color(_ activity: ConversationActivity) -> Color {
+        switch activity {
+        case .moving: .aicovenWater
+        case .broken: .aicovenError
+        case .waiting, .paused, .unsent, .unread: .aicovenTextSecondary
+        }
+    }
+}
+
+/// The 7 pt water dot for unread.
+struct ActivityDot: View {
+    var body: some View {
+        Circle()
+            .fill(Color.aicovenWater)
+            .frame(width: 7, height: 7)
+            .accessibilityHidden(true)
+    }
+}
+
+/// The waiting mark: a 7 pt secondary-ink square with 2 pt corners, for
+/// what waits for the person. Never a count.
+struct WaitingMark: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 2)
+            .fill(Color.aicovenTextSecondary)
+            .frame(width: 7, height: 7)
+            .accessibilityHidden(true)
+    }
+}
+
+/// The unread dot beside a coven that holds a reply not yet seen.
+struct CovenUnreadDot: View {
+    let covenID: String
+    @ObservedObject private var activities = ThreadActivities.shared
+
+    var body: some View {
+        if activities.covensWithUnread.contains(covenID) {
+            Circle()
+                .fill(Color.aicovenWater)
+                .frame(width: 7, height: 7)
+                .accessibilityLabel("Unread")
+        }
+    }
+}
+
+extension View {
+    /// What VoiceOver reads after a thread row's title: what the thread is
+    /// doing, or that it holds a reply not yet seen.
+    func threadActivityValue(_ activity: ConversationActivity?) -> some View {
+        accessibilityValue(activity?.accessibilityWords ?? "")
+    }
+}

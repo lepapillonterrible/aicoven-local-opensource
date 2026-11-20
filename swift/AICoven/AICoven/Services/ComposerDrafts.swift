@@ -71,6 +71,13 @@ final class ComposerDrafts {
         self.currentAccount = currentAccount
     }
 
+    /// Whether the thread's composer holds something unsent, as far as is
+    /// known since the app started: nil for a thread whose draft has not
+    /// been read or set in this run (what is kept with the thread says).
+    func holdsDraft(for threadID: String) -> Bool? {
+        drafts[Key(account: currentAccount(), threadID: threadID)].map { !$0.isEmpty }
+    }
+
     /// The thread's draft: what was set since the app started, or else the
     /// text kept with the thread. Empty when there is none, it cannot be
     /// read for now, or the account changed while it was read.

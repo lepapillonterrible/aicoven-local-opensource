@@ -122,6 +122,7 @@ struct HomeView: View {
         // Only the latest request is shown: the list is read again on every
         // message stored and after every change, and an earlier reading can
         // come back after a later one.
+        ThreadActivities.shared.reload()
         personalThreadsLoad += 1
         let request = personalThreadsLoad
         do {

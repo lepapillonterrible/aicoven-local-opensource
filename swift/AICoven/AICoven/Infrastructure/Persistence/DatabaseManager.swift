@@ -406,6 +406,15 @@ final class DatabaseManager {
                 """)
             }
 
+            // v13: when each thread was last on screen, so that a reply
+            // stored since is known not to have been seen. A time, kept as
+            // it is. A thread from before this starts as read: it has none.
+            migrator.registerMigration("v13_thread_read_at") { db in
+                try db.alter(table: "threads") { t in
+                    t.add(column: "read_at", .datetime)
+                }
+            }
+
             try migrator.migrate(queue)
             dbQueue = queue
         } catch {

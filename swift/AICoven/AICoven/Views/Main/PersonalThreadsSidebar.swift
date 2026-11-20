@@ -24,6 +24,8 @@ struct PersonalThreadsSidebar: View {
     @State private var showCovenMenu = false
     /// Rename, archive, delete and copy, for this list's threads.
     @StateObject private var threadActions = ThreadActions()
+    /// What each thread is doing, for its row and the list's order.
+    @ObservedObject private var activities = ThreadActivities.shared
     @State private var showArchived = false
 
     var body: some View {
@@ -51,6 +53,7 @@ struct PersonalThreadsSidebar: View {
     private func threadRow(_ thread: Thread) -> some View {
         PersonalThreadRow(
             thread: thread,
+            activity: activities.activity[thread.id],
             isSelected: selectedThread?.id == thread.id,
             preferredModel: strixSettings?.model,
             onTap: {
@@ -215,7 +218,7 @@ struct PersonalThreadsSidebar: View {
                             .padding(.vertical, Spacing.xl)
                         } else {
                             // Newest first, then those archived, under a header of their own.
-                            let sections = ThreadListRules.sections(threads)
+                            let sections = ThreadListRules.sections(threads) { activities.activity[$0.id]?.isStillOpen == true }
                             LazyVStack(spacing: Spacing.xs) {
                                 ForEach(sections.open) { thread in
                                     threadRow(thread)
@@ -413,6 +416,8 @@ private struct CovenScopePopoverContent: View {
 
                 Spacer()
 
+                if let coven { CovenUnreadDot(covenID: coven.id) }
+
                 if isSelected {
                     Image(systemName: "checkmark")
                         .font(.system(size: 10, weight: .semibold))
@@ -432,6 +437,8 @@ private struct CovenScopePopoverContent: View {
 /// Individual thread row in sidebar
 struct PersonalThreadRow: View {
     let thread: Thread
+    /// What the thread is doing, if a row says it.
+    var activity: ConversationActivity?
     let isSelected: Bool
     /// The preferred model from Strix settings, used as fallback when thread has no model
     let preferredModel: String?
@@ -448,10 +455,13 @@ struct PersonalThreadRow: View {
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: Spacing.sm) {
-                // Icon
-                Image(systemName: "message.fill")
-                    .font(.system(size: 14))
-                    .foregroundColor(isSelected ? .aicovenTeal : .aicovenTextSecondary)
+                // What it is doing, or else its icon
+                ConversationActivityGlyph(activity: activity) {
+                    Image(systemName: "message.fill")
+                        .font(.system(size: 14))
+                        .foregroundColor(isSelected ? .aicovenTeal : .aicovenTextSecondary)
+                }
+                .frame(width: 18)
 
                 // Title
                 VStack(alignment: .leading, spacing: 2) {
@@ -475,6 +485,8 @@ struct PersonalThreadRow: View {
                     Text(VisitWords.rowDate(ThreadListRules.lastUsed(thread)))
                         .font(.aicovenCaption)
                         .foregroundColor(.aicovenTextTertiary)
+
+                    ConversationActivityCaption(activity: activity)
                 }
 
                 Spacer()
@@ -499,6 +511,7 @@ struct PersonalThreadRow: View {
                     )
             )
         }
+        .threadActivityValue(activity)
         .buttonStyle(.plain)
     }
 }
