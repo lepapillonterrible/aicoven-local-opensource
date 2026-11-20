@@ -142,6 +142,15 @@ struct MessageComposer: View {
     var autoFocus: Bool = false
     /// Who the next message goes to.
     let recipientName: String
+    /// The agents the message can go to, where there is a choice (a new
+    /// thread in a coven); none shows no menu. `recipientID` is the one
+    /// chosen.
+    var recipientChoices: [Role] = []
+    var recipientID: String?
+    var onChooseRecipient: ((Role) -> Void)?
+    /// Whether files can be attached here: not to a thread that is not
+    /// made yet, which has nowhere to keep them.
+    var allowsAttachments: Bool = true
     /// Something the thread has to say above the box: why waiting messages
     /// were not sent. Whoever sets it announces it, once.
     var notice: String?
@@ -373,11 +382,13 @@ struct MessageComposer: View {
                 )
             }
             HStack(alignment: .bottom, spacing: Spacing.xxs) {
-                attachButton
+                if allowsAttachments { attachButton }
                 field
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .layoutPriority(1)
-                micButton
+                // No mic where a voice message has nowhere to go (a
+                // thread that is not made yet), not one that does nothing.
+                if hasVoiceCallbacks { micButton }
                 // The field takes the spare width, never the slot's.
                 actionSlot
                     .fixedSize()
@@ -518,7 +529,7 @@ struct MessageComposer: View {
                 autoFocus: autoFocus,
                 onSend: send,
                 onFocusChange: onFocusChange,
-                onAttach: attachPastedOrDropped,
+                onAttach: pastedOrDroppedHandler,
                 // Whether Space may start talking changes as the composer
                 // does; letting go of it, and calling it off, are always
                 // heard, or a hold under way could not be ended.
@@ -752,6 +763,13 @@ struct MessageComposer: View {
             let urls = response == .OK ? panel.urls : []
             Task { await attach(urls.map(AttachSource.file), chosen: (.files, choosing)) }
         }
+    }
+
+    /// Takes what is pasted or dropped on the field as attachments, where
+    /// files can be attached here at all.
+    private var pastedOrDroppedHandler: ((_ files: [URL], _ pictures: [Data]) -> Void)? {
+        guard allowsAttachments else { return nil }
+        return { files, pictures in attachPastedOrDropped(files: files, pictures: pictures) }
     }
 
     /// Files and pictures pasted or dropped into the field.
@@ -1020,19 +1038,63 @@ struct MessageComposer: View {
 
     // MARK: - Recipient
 
+    /// The recipient's name; where there is a choice of agents, a menu of
+    /// them, the chosen one checked.
+    @ViewBuilder
+    private var recipient: some View {
+        let name = Text(recipientName)
+            .font(.aicovenBodySmall.weight(.semibold))
+            .foregroundStyle(Color.aicovenTextSecondary)
+            // One line, so a long name shortens before it pushes past
+            // the box.
+            .lineLimit(1)
+            .truncationMode(.tail)
+        if recipientChoices.isEmpty {
+            name
+                .accessibilityLabel("To \(recipientName)")
+                .accessibilityIdentifier("composer-recipient")
+        } else {
+            Menu {
+                // A toggle for each agent gives it a checked state that
+                // VoiceOver reports; the model is the row's second line.
+                ForEach(recipientChoices) { role in
+                    Toggle(isOn: Binding(
+                        get: { recipientID == role.id },
+                        set: { _ in onChooseRecipient?(role) }
+                    )) {
+                        Text(role.name)
+                        if let model = role.model, !model.isEmpty {
+                            Text(model)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    name
+                    Image(systemName: "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(Color.aicovenTextTertiary)
+                        .accessibilityHidden(true)
+                }
+                .contentShape(Rectangle())
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            #if os(macOS)
+                .menuIndicator(.hidden)
+            #endif
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel("To \(recipientName)")
+                .accessibilityHint("Choose who the next message goes to")
+                .accessibilityIdentifier("composer-recipient")
+        }
+    }
+
     /// Who the message goes to, at the box's bottom left, with when it can
     /// be sent beside it once there is text while a turn runs.
     private var recipientRow: some View {
         HStack(spacing: Spacing.xs) {
-            Text(recipientName)
-                .font(.aicovenBodySmall.weight(.semibold))
-                .foregroundStyle(Color.aicovenTextSecondary)
-                // One line, so a long name shortens before it pushes past
-                // the box.
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .accessibilityLabel("To \(recipientName)")
-                .accessibilityIdentifier("composer-recipient")
+            recipient
             if !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                let note = ComposerRules.waitNote(isAgentRunning: isAgentRunning, runningName: recipientName) {
                 Text(note)

@@ -71,6 +71,40 @@ final class DraftThreadTests: XCTestCase {
         XCTAssertEqual(LastUsedAgentStore(defaults: defaults).agentID(inCoven: "work", for: "grace"), "scout")
     }
 
+    func testTheComposerSaysWhoANewThreadGoesTo() {
+        XCTAssertEqual(NewThreadComposer.recipientName(inCoven: false, agentsAreIn: false, recipient: nil), "Strix")
+        XCTAssertEqual(NewThreadComposer.recipientName(inCoven: true, agentsAreIn: false, recipient: nil), "Loading agents…")
+        XCTAssertEqual(NewThreadComposer.recipientName(inCoven: true, agentsAreIn: true, recipient: role("scout")), "Scout")
+        XCTAssertEqual(NewThreadComposer.recipientName(inCoven: true, agentsAreIn: true, recipient: nil), "Strix", "A coven with no agents")
+    }
+
+    @MainActor
+    func testEachScopesNewThreadPageKeepsWhatItHoldsUnsent_whileTheWindowIsOpen() {
+        let drafts = DraftThreads()
+        drafts.submission(for: .strix).messageText = "For Strix"
+        drafts.submission(for: .coven("work")).messageText = "For work"
+        XCTAssertEqual(drafts.submission(for: .strix).messageText, "For Strix", "There again on coming back")
+        XCTAssertEqual(drafts.submission(for: .coven("work")).messageText, "For work")
+        XCTAssertEqual(drafts.submission(for: .coven("home")).messageText, "")
+        // A coven that is gone takes what was being written for it.
+        drafts.forget(.coven("work"))
+        XCTAssertEqual(drafts.submission(for: .coven("work")).messageText, "")
+        XCTAssertEqual(drafts.submission(for: .strix).messageText, "For Strix")
+    }
+
+    func testACovenIsGoneWhenItIsNoLongerAmongTheCovensRead_onScreenOrNot() {
+        func coven(_ id: String) -> Coven {
+            Coven(id: id, name: id, createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0))
+        }
+        let known = [coven("a"), coven("b"), coven("c")]
+        XCTAssertEqual(CovenOrder.gone(known: known, selected: .strix, among: known), [])
+        XCTAssertEqual(CovenOrder.gone(known: known, selected: .strix, among: [coven("a")]), ["b", "c"], "Gone while another scope is on screen")
+        XCTAssertEqual(CovenOrder.gone(known: known, selected: .coven("b"), among: [coven("a"), coven("c"), coven("new")]), ["b"])
+        // The one on screen counts even before any covens were known.
+        XCTAssertEqual(CovenOrder.gone(known: [], selected: .coven("z"), among: [coven("a")]), ["z"])
+        XCTAssertEqual(CovenOrder.gone(known: [], selected: .coven("a"), among: [coven("a")]), [])
+    }
+
     // MARK: - Where the shell is meanwhile
 
     @MainActor
@@ -90,6 +124,11 @@ final class DraftThreadTests: XCTestCase {
         // Asked again without an agent: the composer chooses as it does.
         navigator.requestNewThread()
         XCTAssertNil(navigator.draftAgent(in: .coven("work")))
+        // Each ask is counted, so a page asked for again for the same agent knows it was.
+        let asks = navigator.draftRequests
+        navigator.requestNewThread(agentID: "scout")
+        navigator.requestNewThread(agentID: "scout")
+        XCTAssertEqual(navigator.draftRequests, asks + 2)
 
         // A coven that is gone takes its page and what was asked for it along.
         navigator.requestNewThread(agentID: "scout")

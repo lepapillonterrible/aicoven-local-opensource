@@ -22,12 +22,9 @@ struct MacShellView: View {
     @State private var covenOrder: [String] = []
     private let orderStore = CovenOrderStore()
     @State private var columnVisibility = NavigationSplitViewVisibility.automatic
-    /// The New Thread sheet on screen, if one is: each showing is its own.
-    @State private var newThreadSheet: NewThreadSheet?
+    /// What each scope's new-thread page holds unsent.
+    @StateObject private var drafts = DraftThreads()
     @State private var showCreateCoven = false
-    /// A thread is being made for New Thread in Strix: a second click makes
-    /// no second one.
-    @State private var isMakingThread = false
 
     /// The covens in the person's order.
     private var orderedCovens: [Coven] {
@@ -64,9 +61,11 @@ struct MacShellView: View {
             ShellContentView(
                 navigator: navigator,
                 threadActions: threadActions,
+                drafts: drafts,
                 coven: selectedCoven,
                 onNewThread: newThread,
                 onNewThreadWithAgent: newThread(with:),
+                onThreadCreated: threadCreated,
                 onCreateCoven: { showCreateCoven = true },
                 onOpenProviderKeys: { _ = appState.openSettings(for: .providerKeys) }
             )
@@ -77,6 +76,8 @@ struct MacShellView: View {
                         Label("New Thread", systemImage: "square.and.pencil")
                     }
                     .buttonStyle(.stoneToolbar)
+                    // ⌘N comes with the menus: until then it is the
+                    // system's New Window.
                     .help("New Thread")
                     .accessibilityIdentifier("new-thread")
                 }
@@ -85,21 +86,6 @@ struct MacShellView: View {
         .stoneWindowBar()
         .navigationTitle(shellWindowTitle(covenName: scopeName, covenPlaceTitle: navigator.placeTitle))
         .threadActionsHost(threadActions)
-        .sheet(item: $newThreadSheet) { sheet in
-            NewThreadView(covenId: sheet.covenID) { thread in
-                // The sheet can have been cancelled while the thread was
-                // being made: it is then in the list, and not opened over
-                // wherever the person has gone, even if they have opened
-                // the sheet again since.
-                if sheet.opensItsThread(whileShowing: newThreadSheet) { navigator.open(thread) }
-                shellThreads.reload()
-                // A coven's thread made, and its agent given it.
-                if let covenID = thread.covenId {
-                    AnalyticsService.shared.trackThreadCreate(threadId: thread.id, covenId: covenID, hasTitle: thread.title != nil)
-                    if let agentID = thread.agentId { AnalyticsService.shared.trackRoleAssign(roleId: agentID, threadId: thread.id) }
-                }
-            }
-        }
         .sheet(isPresented: $showCreateCoven) {
             CreateCovenSheet(onCreated: { _ in
                 Task { await loadCovens() }
@@ -154,12 +140,14 @@ struct MacShellView: View {
         do {
             let loaded = try await CovenService.shared.loadCovens()
             guard reading == covensLoad, UserScope.currentUserID == account else { return }
+            // A coven that is gone, on screen or not, takes its place and
+            // what was being written for it along.
+            for covenID in CovenOrder.gone(known: covens, selected: navigator.selected, among: loaded) {
+                navigator.handleCovenGone(covenID: covenID)
+                drafts.forget(.coven(covenID))
+            }
             covens = loaded
             covenOrder = orderStore.ids(for: account)
-            // The coven on screen can be gone by now.
-            if let covenID = navigator.selected.covenID, !loaded.contains(where: { $0.id == covenID }) {
-                navigator.handleCovenGone(covenID: covenID)
-            }
         } catch {
             // The kind of failure only. The covens shown stay as they are.
             AppErrorReporter.log(message: "Could not read the covens (\(type(of: error)))", context: "MacShellView.loadCovens")
@@ -174,68 +162,27 @@ struct MacShellView: View {
         orderStore.save(ids, for: UserScope.currentUserID)
     }
 
-    /// A thread with one of the coven's agents, made at once and opened
-    /// (unless the person has gone elsewhere meanwhile), as tapping an agent
-    /// did in the window before.
-    private func newThread(with role: Role) {
-        guard !isMakingThread else { return }
-        isMakingThread = true
-        let account = UserScope.currentUserID
-        let asked = navigator.placeGeneration
-        Task {
-            defer { isMakingThread = false }
-            do {
-                let thread = try await ThreadService.shared.createThread(
-                    title: "Chat with \(role.name)", covenId: role.covenId, agentId: role.id, agentName: role.name, as: account
-                )
-                AnalyticsService.shared.trackThreadCreate(threadId: thread.id, covenId: role.covenId, hasTitle: true)
-                AnalyticsService.shared.trackRoleAssign(roleId: role.id, threadId: thread.id)
-                guard UserScope.currentUserID == account, navigator.placeGeneration == asked else { return }
-                navigator.open(thread)
-            } catch {
-                AppErrorReporter.log(message: "Could not make a thread (\(type(of: error)))", context: "MacShellView.newThreadWithAgent")
-            }
-        }
-    }
-
-    /// New Thread: in Strix a thread is made at once and opened; in a coven
-    /// the sheet asks which agent it is for.
+    /// New Thread: the scope's new-thread page. Its thread is made when
+    /// its first message is sent.
     private func newThread() {
-        // One at a time, whichever way it is asked for.
-        guard !isMakingThread else { return }
-        guard navigator.selected == .strix else {
-            newThreadSheet = NewThreadSheet(covenID: navigator.selected.covenID)
-            return
-        }
-        isMakingThread = true
         AnalyticsService.shared.trackNewChatTapped(source: "mac_shell")
-        let account = UserScope.currentUserID
-        let asked = navigator.placeGeneration
-        Task {
-            defer { isMakingThread = false }
-            do {
-                let thread = try await ThreadService.shared.createThread(title: "New Chat", covenId: nil, agentId: nil, as: account)
-                // Opened only for the account that asked, and only if the
-                // person has not gone elsewhere meanwhile: it is in the list
-                // either way.
-                guard UserScope.currentUserID == account, navigator.placeGeneration == asked else { return }
-                navigator.open(thread)
-            } catch {
-                AppErrorReporter.log(message: "Could not make a thread (\(type(of: error)))", context: "MacShellView.newThread")
-            }
-        }
+        navigator.requestNewThread()
     }
-}
 
-/// One showing of the New Thread sheet, for the coven it was asked in.
-struct NewThreadSheet: Identifiable, Equatable {
-    let id = UUID()
-    let covenID: String?
+    /// The new-thread page, with one of the coven's agents as who it goes to.
+    private func newThread(with role: Role) {
+        navigator.requestNewThread(agentID: role.id)
+    }
 
-    /// Whether the thread this sheet made is opened: only while this very
-    /// showing is still the one on screen.
-    func opensItsThread(whileShowing shown: NewThreadSheet?) -> Bool {
-        shown?.id == id
+    /// The new-thread page made its thread: it takes the page's place
+    /// (where the page still is), and the list shows it.
+    private func threadCreated(_ thread: Thread) {
+        navigator.handleCreatedThread(thread)
+        shellThreads.reload()
+        if let covenID = thread.covenId {
+            AnalyticsService.shared.trackThreadCreate(threadId: thread.id, covenId: covenID, hasTitle: thread.title != nil)
+            if let agentID = thread.agentId { AnalyticsService.shared.trackRoleAssign(roleId: agentID, threadId: thread.id) }
+        }
     }
 }
 #endif
