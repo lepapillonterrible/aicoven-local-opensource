@@ -1,0 +1,173 @@
+import SwiftUI
+
+/// A scope's Overview, as the cloud app's: when the person was last here,
+/// then the threads still open and the earlier ones, each only when it has
+/// something to show, with the composer at the foot; asking from it starts
+/// a thread and opens it, if the person is still here when it is made.
+///
+/// What it knows is this device's: what moves or waits comes from the
+/// turns this app is running, unsent messages and read marks from this
+/// device, and the time of the last visit from this device.
+struct ScopeOverviewView: View {
+    @ObservedObject var navigator: ShellNavigator
+    @ObservedObject var shellThreads: ShellThreads
+    @ObservedObject var threadActions: ThreadActions
+    /// What the scope's new-thread page holds unsent: the composer here
+    /// holds the same.
+    @ObservedObject var submission: DraftThreadSubmission
+    /// The coven on screen; nil for Strix.
+    let coven: Coven?
+    let onOpenProviderKeys: () -> Void
+    /// Told of a thread asked for from here once it is made.
+    let onThreadCreated: (Thread) -> Void
+
+    /// What each thread is doing, for its row and which section it is in.
+    @ObservedObject private var activities = ThreadActivities.shared
+    /// The latest ask from here: the thread it starts opens only if the
+    /// person is still here and has asked nothing since.
+    @State private var ask: UUID?
+
+    var body: some View {
+        let scope = navigator.selected
+        let listed = shellThreads.scope == scope ? shellThreads.threads : []
+        let lists = ThreadListRules.overview(listed) { activities.activity[$0.id]?.isStillOpen == true }
+        ScrollView {
+            VStack(alignment: .leading, spacing: Spacing.lg) {
+                // Strix says how to get an answer where none can be had yet.
+                if scope == .strix {
+                    AddProviderKeysCard(onOpenProviderKeys: onOpenProviderKeys)
+                }
+                if let lastVisit = navigator.previousVisit(in: scope) {
+                    Text(VisitWords.lastHere(lastVisit))
+                        .font(.aicovenBody)
+                        .foregroundColor(.aicovenTextSecondary)
+                }
+                if !lists.stillOpen.isEmpty {
+                    section("Still open") {
+                        ForEach(lists.stillOpen) { thread in row(thread) }
+                    }
+                }
+                earlier(lists.earlier, nothingListed: listed.contains { !$0.isArchived } == false)
+            }
+            .frame(maxWidth: 980, alignment: .leading)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, Spacing.xxl)
+            .padding(.vertical, Spacing.lg)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            NewThreadComposer(
+                coven: coven,
+                askedAgentID: nil,
+                submission: submission,
+                autoFocus: false,
+                onSend: { ask = navigator.askFromOverview() },
+                onThreadCreated: { thread in
+                    onThreadCreated(thread)
+                    if let ask { navigator.openThreadAskedFromOverview(thread, ask: ask) }
+                }
+            )
+            .frame(maxWidth: 800)
+            .frame(maxWidth: .infinity)
+            .padding(Spacing.md)
+            .background(Color.aicovenSurface)
+        }
+        .background(Color.aicovenSurface)
+    }
+
+    /// The earlier threads; or, with no threads at all, why: they could
+    /// not be read, they are on their way, or there are none yet.
+    @ViewBuilder
+    private func earlier(_ earlier: [Thread], nothingListed: Bool) -> some View {
+        if nothingListed, shellThreads.failed {
+            section("Earlier") {
+                HStack(spacing: Spacing.sm) {
+                    Text("Couldn't load threads.")
+                        .font(.aicovenBodySmall)
+                        .foregroundStyle(Color.aicovenError)
+                    Button("Try again") { shellThreads.reload() }
+                        .buttonStyle(.bordered)
+                }
+            }
+        } else if nothingListed, !shellThreads.hasLoaded {
+            section("Earlier") {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("Loading threads")
+            }
+        } else if nothingListed {
+            Text("No threads yet. Ask below to start one.")
+                .font(.aicovenBodySmall)
+                .foregroundColor(.aicovenTextSecondary)
+        } else if !earlier.isEmpty {
+            section("Earlier") {
+                ForEach(earlier) { thread in row(thread) }
+            }
+        }
+    }
+
+    private func row(_ thread: Thread) -> some View {
+        OverviewRow(
+            activity: activities.activity[thread.id],
+            title: ThreadListRules.title(of: thread),
+            date: ThreadListRules.lastUsed(thread)
+        ) {
+            navigator.open(thread)
+        }
+        .threadRowActions(thread, threadActions)
+    }
+
+    private func section(_ title: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.xxs) {
+            Text(title)
+                .font(.aicovenBodySmall.weight(.semibold))
+                .foregroundColor(.aicovenTextSecondary)
+                .accessibilityAddTraits(.isHeader)
+                .padding(.bottom, Spacing.xxs)
+            content()
+        }
+    }
+}
+
+/// A row on the Overview: the state mark, the title, a trailing date, and
+/// a line beneath in the turn's own words for a thread still open.
+private struct OverviewRow: View {
+    let activity: ConversationActivity?
+    let title: String
+    let date: Date
+    let action: () -> Void
+
+    /// 44 pt targets on touch; Mac rows are 28 pt at least.
+    private var minHeight: CGFloat {
+        #if os(iOS)
+        44
+        #else
+        28
+        #endif
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
+                ConversationActivityGlyph(activity: activity) { Color.clear }
+                    .frame(width: 12, height: 12)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(title)
+                            .font(.aicovenBodyMedium)
+                            .foregroundColor(.aicovenTextPrimary)
+                            .lineLimit(1)
+                        Spacer(minLength: Spacing.xs)
+                        ThreadRowDate(date: date)
+                    }
+                    ConversationActivityCaption(activity: activity)
+                }
+            }
+            .padding(.vertical, Spacing.xxs)
+            .frame(minHeight: minHeight)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .threadActivityValue(activity)
+    }
+}

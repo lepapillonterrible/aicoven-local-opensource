@@ -29,6 +29,14 @@ nonisolated enum ThreadListRules {
         return (listed.filter(isStillOpen) + listed.filter { !isStillOpen($0) }, ordered.filter(\.isArchived))
     }
 
+    /// A scope's threads as its Overview lists them, those archived left
+    /// out: the threads still open (`isStillOpen`), then the earlier ones,
+    /// each newest first.
+    static func overview(_ threads: [Thread], isStillOpen: (Thread) -> Bool) -> (stillOpen: [Thread], earlier: [Thread]) {
+        let listed = ordered(threads).filter { !$0.isArchived }
+        return (listed.filter(isStillOpen), listed.filter { !isStillOpen($0) })
+    }
+
     /// The threads a search for `query` shows: those whose title, as a row
     /// shows it, holds what was typed, whatever its case or accents. All
     /// of them while nothing is typed.
@@ -88,6 +96,26 @@ nonisolated enum VisitWords {
             return date.formatted(.dateTime.day().month(.abbreviated))
         }
         return date.formatted(.dateTime.day().month(.abbreviated).year())
+    }
+
+    /// When the person was last in a scope: "You were last here earlier
+    /// today.", "… yesterday.", "… on Friday.", "… on 12 September.", with
+    /// the year when it is not this year.
+    static func lastHere(_ lastVisit: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        "You were last here \(when(lastVisit, now: now, calendar: calendar))."
+    }
+
+    private static func when(_ date: Date, now: Date, calendar: Calendar) -> String {
+        switch daysBetween(date, now, calendar) {
+        case ..<1: return "earlier today"
+        case 1: return "yesterday"
+        case ..<7: return "on " + date.formatted(.dateTime.weekday(.wide))
+        default:
+            if calendar.isDate(date, equalTo: now, toGranularity: .year) {
+                return "on " + date.formatted(.dateTime.day().month(.wide))
+            }
+            return "on " + date.formatted(.dateTime.day().month(.wide).year())
+        }
     }
 
     /// Whole days from the day of `earlier` to the day of `later`.

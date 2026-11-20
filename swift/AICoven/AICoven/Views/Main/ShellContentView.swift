@@ -1,24 +1,22 @@
 import SwiftUI
 
 /// The shell's content pane: the place open in the scope on screen (a
-/// thread, the memory, the agents, a coven's connections), or else the
-/// scope's Overview. Until the Overview itself is built, a scope with no
-/// place open shows what the window showed there before: for Strix the
-/// welcome, for a coven the prompt to start a conversation.
+/// thread, the new-thread page, the memory, the agents, a coven's
+/// connections), or else the scope's Overview.
 struct ShellContentView: View {
     @ObservedObject var navigator: ShellNavigator
+    /// The threads of the scope on screen, for its Overview.
+    @ObservedObject var shellThreads: ShellThreads
     /// Rename, archive, delete and copy, for the open thread's menu.
     @ObservedObject var threadActions: ThreadActions
     /// What each scope's new-thread page holds unsent.
     let drafts: DraftThreads
     /// The coven on screen; nil for Strix, or while the covens are not in.
     let coven: Coven?
-    let onNewThread: () -> Void
     /// Starts a thread with one of the coven's agents.
     let onNewThreadWithAgent: (Role) -> Void
-    /// Told of a thread the new-thread page made.
+    /// Told of a thread the new-thread page, or the Overview, made.
     let onThreadCreated: (Thread) -> Void
-    let onCreateCoven: () -> Void
     let onOpenProviderKeys: () -> Void
 
     var body: some View {
@@ -83,13 +81,17 @@ struct ShellContentView: View {
         .background(NebulaBackground())
     }
 
-    @ViewBuilder
     private var overview: some View {
-        if navigator.selected == .strix {
-            WelcomeToPersonalChat(onNewChat: onNewThread, onCreateCoven: onCreateCoven, onOpenProviderKeys: onOpenProviderKeys)
-        } else {
-            StartConversationPrompt(onCreateThread: onNewThread)
-        }
+        ScopeOverviewView(
+            navigator: navigator,
+            shellThreads: shellThreads,
+            threadActions: threadActions,
+            submission: drafts.submission(for: navigator.selected),
+            coven: coven,
+            onOpenProviderKeys: onOpenProviderKeys,
+            onThreadCreated: onThreadCreated
+        )
+        .id(navigator.selected)
     }
 
     /// The open thread's actions, a menu beside the toolbar's other buttons:
@@ -186,105 +188,5 @@ enum MemoryForm: Identifiable, Equatable {
     var memoryID: String? {
         if case let .edit(memoryID, _) = self { return memoryID }
         return nil
-    }
-}
-
-/// What a coven with nothing open shows: a prompt to start a thread.
-struct StartConversationPrompt: View {
-    var onCreateThread: (() -> Void)?
-
-    var body: some View {
-        VStack(spacing: Spacing.lg) {
-            Spacer()
-            IconBadge(icon: "message", size: 60, color: .aicovenTeal)
-            VStack(spacing: Spacing.sm) {
-                Text("Start a Conversation")
-                    .font(.aicovenH2)
-                    .foregroundColor(.aicovenTextPrimary)
-                Text("Create a new thread to chat with your AI agents")
-                    .font(.aicovenBody)
-                    .foregroundColor(.aicovenTextSecondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 400)
-            }
-            // Create Thread CTA button
-            if let onCreateThread {
-                GradientButton("New Thread", icon: "plus", style: .primary) {
-                    onCreateThread()
-                }
-                .padding(.top, Spacing.md)
-            }
-            Spacer()
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-
-/// Welcome screen for personal workspace
-struct WelcomeToPersonalChat: View {
-    let onNewChat: () -> Void
-    let onCreateCoven: () -> Void
-    let onOpenProviderKeys: () -> Void
-
-    var body: some View {
-        VStack(spacing: Spacing.xl) {
-            Spacer()
-
-            // Static icon instead of animated cauldron
-            IconBadge(icon: "sparkles", size: 100, color: .aicovenTeal)
-
-            VStack(spacing: Spacing.md) {
-                Text("Welcome to AICoven")
-                    .font(.aicovenDisplayMedium)
-                    .foregroundColor(.aicovenTextPrimary)
-
-                Text("Start a new conversation or create a coven to collaborate with multiple AI roles")
-                    .font(.aicovenBody)
-                    .foregroundColor(.aicovenTextSecondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 500)
-            }
-
-            // Quick actions - now clickable
-            HStack(spacing: Spacing.md) {
-                Button(action: onNewChat) {
-                    VStack(spacing: Spacing.sm) {
-                        IconBadge(icon: "message", size: 60, color: .aicovenTeal)
-                        Text("Personal Chat")
-                            .font(.aicovenBodyMedium)
-                            .foregroundColor(.aicovenTextPrimary)
-                        Text("One-on-one with AI")
-                            .font(.aicovenCaption)
-                            .foregroundColor(.aicovenTextTertiary)
-                    }
-                    .frame(width: 200, height: 160)
-                    .glassMorphism()
-                }
-                .buttonStyle(.plain)
-
-                Button(action: onCreateCoven) {
-                    VStack(spacing: Spacing.sm) {
-                        IconBadge(icon: "person.3", size: 60, color: .aicovenPurple)
-                        Text("Create Coven")
-                            .font(.aicovenBodyMedium)
-                            .foregroundColor(.aicovenTextPrimary)
-                        Text("Multi-AI collaboration")
-                            .font(.aicovenCaption)
-                            .foregroundColor(.aicovenTextTertiary)
-                    }
-                    .frame(width: 200, height: 160)
-                    .glassMorphism()
-                }
-                .buttonStyle(.plain)
-            }
-
-            // Provider keys call-to-action when no keys are configured
-            AddProviderKeysCard(onOpenProviderKeys: onOpenProviderKeys)
-                .padding(.top, Spacing.lg)
-                .padding(.horizontal, Spacing.xl)
-
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

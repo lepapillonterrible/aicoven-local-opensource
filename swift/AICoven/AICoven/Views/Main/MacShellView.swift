@@ -8,7 +8,13 @@ struct MacShellView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var authService: AuthService
 
-    @StateObject private var navigator = ShellNavigator()
+    /// Where the shell is. It notes each arrival in a scope on this device,
+    /// for the account signed in, so the Overview can say when the person
+    /// was last there.
+    @StateObject private var navigator = ShellNavigator(arrive: { scope in
+        ScopeVisitStore().arrive(in: scope, at: Date(), for: UserScope.currentUserID)
+    })
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var shellThreads = ShellThreads()
     /// Rename, archive, delete and copy, for the sidebar's threads. Owned
     /// here, not by the sidebar: its sheet and alerts show also while the
@@ -60,13 +66,12 @@ struct MacShellView: View {
         } detail: {
             ShellContentView(
                 navigator: navigator,
+                shellThreads: shellThreads,
                 threadActions: threadActions,
                 drafts: drafts,
                 coven: selectedCoven,
-                onNewThread: newThread,
                 onNewThreadWithAgent: newThread(with:),
                 onThreadCreated: threadCreated,
-                onCreateCoven: { showCreateCoven = true },
                 onOpenProviderKeys: { _ = appState.openSettings(for: .providerKeys) }
             )
             .toolbar {
@@ -111,6 +116,10 @@ struct MacShellView: View {
             threadActions.onChanged = { [shellThreads] in shellThreads.reload() }
             // A thread deleted or archived is no longer open.
             threadActions.onLeft = { [navigator] in navigator.removeThread(id: $0.id) }
+        }
+        // Coming back to the app is coming back to the scope on screen.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { navigator.appBecameActive() } else { navigator.appWentInactive() }
         }
         // A thread was used, or made: the list follows it.
         .onReceive(NotificationCenter.default.publisher(for: ThreadService.threadUsed)) { _ in
