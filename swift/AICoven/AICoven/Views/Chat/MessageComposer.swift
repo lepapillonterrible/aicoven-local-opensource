@@ -386,7 +386,9 @@ struct MessageComposer: View {
                 field
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .layoutPriority(1)
-                micButton
+                // No mic where a voice message has nowhere to go (a
+                // thread that is not made yet), not one that does nothing.
+                if hasVoiceCallbacks { micButton }
                 // The field takes the spare width, never the slot's.
                 actionSlot
                     .fixedSize()

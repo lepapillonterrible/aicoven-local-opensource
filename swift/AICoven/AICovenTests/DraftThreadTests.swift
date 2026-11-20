@@ -71,6 +71,27 @@ final class DraftThreadTests: XCTestCase {
         XCTAssertEqual(LastUsedAgentStore(defaults: defaults).agentID(inCoven: "work", for: "grace"), "scout")
     }
 
+    func testTheComposerSaysWhoANewThreadGoesTo() {
+        XCTAssertEqual(NewThreadComposer.recipientName(inCoven: false, agentsAreIn: false, recipient: nil), "Strix")
+        XCTAssertEqual(NewThreadComposer.recipientName(inCoven: true, agentsAreIn: false, recipient: nil), "Loading agents…")
+        XCTAssertEqual(NewThreadComposer.recipientName(inCoven: true, agentsAreIn: true, recipient: role("scout")), "Scout")
+        XCTAssertEqual(NewThreadComposer.recipientName(inCoven: true, agentsAreIn: true, recipient: nil), "Strix", "A coven with no agents")
+    }
+
+    @MainActor
+    func testEachScopesNewThreadPageKeepsWhatItHoldsUnsent_whileTheWindowIsOpen() {
+        let drafts = DraftThreads()
+        drafts.submission(for: .strix).messageText = "For Strix"
+        drafts.submission(for: .coven("work")).messageText = "For work"
+        XCTAssertEqual(drafts.submission(for: .strix).messageText, "For Strix", "There again on coming back")
+        XCTAssertEqual(drafts.submission(for: .coven("work")).messageText, "For work")
+        XCTAssertEqual(drafts.submission(for: .coven("home")).messageText, "")
+        // A coven that is gone takes what was being written for it.
+        drafts.forget(.coven("work"))
+        XCTAssertEqual(drafts.submission(for: .coven("work")).messageText, "")
+        XCTAssertEqual(drafts.submission(for: .strix).messageText, "For Strix")
+    }
+
     // MARK: - Where the shell is meanwhile
 
     @MainActor

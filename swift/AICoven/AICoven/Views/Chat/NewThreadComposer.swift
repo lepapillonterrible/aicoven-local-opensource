@@ -74,7 +74,14 @@ struct NewThreadComposer: View {
     }
 
     private var recipientName: String {
-        if coven != nil, !didLoadRoles { return "Loading agents…" }
+        Self.recipientName(inCoven: coven != nil, agentsAreIn: didLoadRoles, recipient: recipient)
+    }
+
+    /// What the composer says of who the message goes to: the agent's
+    /// name; Strix in Strix and in a coven with no agents; and, while a
+    /// coven's agents are on their way, that they are.
+    static func recipientName(inCoven: Bool, agentsAreIn: Bool, recipient: Role?) -> String {
+        if inCoven, !agentsAreIn { return "Loading agents…" }
         return recipient?.name ?? "Strix"
     }
 
