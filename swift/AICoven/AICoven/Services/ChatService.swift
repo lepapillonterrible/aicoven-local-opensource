@@ -442,8 +442,11 @@ actor ChatService {
         let connections = await covenConnections(threadId)
         let toolConfig: ContextBuilder.ToolConfig = isLocalModel
             ? await .mlxTools(connections: connections)
-            : await .connected(deliversFiles: true, connections: connections)
+            : await .connected(deliversFiles: true, seesPictures: descriptor.takesImages, connections: connections)
         await ToolExecutionService.shared.setWhitelist(for: "chat", tools: toolConfig.enabledTools)
+        // The pictures this turn's tools make for its model, where the
+        // model can be sent pictures: they go with its later requests.
+        let turnPictures: TurnPictures? = descriptor.takesImages ? TurnPictures() : nil
 
         // ── Context-aware repeat detection (ported from backend) ──────────
         // Tracks tool-call signatures across loop iterations so we can
@@ -530,7 +533,7 @@ actor ChatService {
                         onStateChange(state)
 
                         AnalyticsService.shared.trackToolUsed(toolName: invocation.tool, threadId: threadId)
-                        let (_, contextBlock, files) = try await executeChatToolCall(invocation, threadID: threadId)
+                        let (_, contextBlock, files) = try await executeChatToolCall(invocation, threadID: threadId, pictures: turnPictures)
                         state.generatedFiles += files
 
                         state.toolsInProgress[toolID]?.status = "completed"
@@ -577,7 +580,7 @@ actor ChatService {
                     onStateChange(state)
 
                     AnalyticsService.shared.trackToolUsed(toolName: forcedNative.tool, threadId: threadId)
-                    let (_, contextBlock, files) = try await executeChatToolCall(forcedNative, threadID: threadId)
+                    let (_, contextBlock, files) = try await executeChatToolCall(forcedNative, threadID: threadId, pictures: turnPictures)
                     state.generatedFiles += files
 
                     state.toolsInProgress[toolID]?.status = "completed"
@@ -608,7 +611,7 @@ actor ChatService {
                     onStateChange(state)
 
                     AnalyticsService.shared.trackToolUsed(toolName: forcedMCP.tool, threadId: threadId)
-                    let (_, contextBlock, files) = try await executeChatToolCall(forcedMCP, threadID: threadId)
+                    let (_, contextBlock, files) = try await executeChatToolCall(forcedMCP, threadID: threadId, pictures: turnPictures)
                     state.generatedFiles += files
 
                     state.toolsInProgress[toolID]?.status = "completed"
@@ -683,6 +686,10 @@ actor ChatService {
                 // instruction so the model knows to incorporate them.
                 composedUserMessage += "\n\nYou have tool results below. Use them to answer the user's question. If you need more information, call another tool. Otherwise, provide your final answer in natural language.\n\n" + toolContextLog
             }
+            // What the tools' pictures are is said every time they are
+            // sent, apart from the tool results (of which the older may
+            // have been left out by now).
+            composedUserMessage = Self.withToolPictures(composedUserMessage, turnPictures)
 
             // Build LLM context using the shared ContextBuilder, which will pull
             // in runtime info, policies, memories, and recent turns for this
@@ -692,7 +699,7 @@ actor ChatService {
             let contextMessages = try await contextBuilder.buildContext(
                 threadID: threadId,
                 userMessage: composedUserMessage,
-                images: attached.pictures,
+                images: attached.pictures + (turnPictures?.images ?? []),
                 maxContextTokens: promptBudget,
                 toolConfig: toolConfig
             )
@@ -803,7 +810,7 @@ actor ChatService {
                     state.bumpVersion()
                     onStateChange(state)
 
-                    let (summary, contextBlock, files) = try await executeChatToolCall(toolCall, threadID: threadId)
+                    let (summary, contextBlock, files) = try await executeChatToolCall(toolCall, threadID: threadId, pictures: turnPictures)
                     state.generatedFiles += files
 
                     state.toolsInProgress[toolID]?.status = "completed"
@@ -862,7 +869,7 @@ actor ChatService {
                         state.bumpVersion()
                         onStateChange(state)
 
-                        let (summary, contextBlock, files) = try await executeChatToolCall(forcedCall, threadID: threadId)
+                        let (summary, contextBlock, files) = try await executeChatToolCall(forcedCall, threadID: threadId, pictures: turnPictures)
                         state.generatedFiles += files
 
                         state.toolsInProgress[toolID]?.status = "completed"
@@ -946,7 +953,7 @@ actor ChatService {
                             state.bumpVersion()
                             onStateChange(state)
 
-                            let (summary, contextBlock, files) = try await executeChatToolCall(forcedCall, threadID: threadId)
+                            let (summary, contextBlock, files) = try await executeChatToolCall(forcedCall, threadID: threadId, pictures: turnPictures)
                             state.generatedFiles += files
 
                             state.toolsInProgress[toolID]?.status = "completed"
@@ -1057,6 +1064,7 @@ actor ChatService {
                     composedUserMessage += "\n\n" + toolContextLog
                 }
             }
+            composedUserMessage = Self.withToolPictures(composedUserMessage, turnPictures)
 
             // For local models with tool results, drop tool docs from the
             // system prompt — the model just needs to summarize data, and
@@ -1068,7 +1076,7 @@ actor ChatService {
             let contextMessages = try await contextBuilder.buildContext(
                 threadID: threadId,
                 userMessage: composedUserMessage,
-                images: attached.pictures,
+                images: attached.pictures + (turnPictures?.images ?? []),
                 maxContextTokens: promptBudget,
                 toolConfig: finalToolConfig
             )
@@ -1800,10 +1808,17 @@ extension ChatService {
         return min(stored, 15)
     }
 
+    /// A message with what the turn's tool pictures are said after it,
+    /// where there are any: they are sent with it.
+    nonisolated static func withToolPictures(_ message: String, _ pictures: TurnPictures?) -> String {
+        guard let caption = pictures?.caption else { return message }
+        return message + "\n\n" + caption
+    }
+
     /// Execute a chat tool call using ToolExecutionService and return a short summary
     /// plus an optional context block that can be fed back into the context sandwich.
     /// This enhanced version routes through the central ToolExecutionService for all tools.
-    nonisolated func executeChatToolCall(_ call: ChatToolInvocation, threadID: String?) async throws -> (summary: String, contextBlock: String?, files: [FileAttachmentDetail]) {
+    nonisolated func executeChatToolCall(_ call: ChatToolInvocation, threadID: String?, pictures: TurnPictures? = nil) async throws -> (summary: String, contextBlock: String?, files: [FileAttachmentDetail]) {
         // A stopped turn starts no tool.
         try Task.checkCancellation()
         // Convert ChatToolInvocation to ParsedToolCall for ToolExecutionService
@@ -1833,7 +1848,9 @@ extension ChatService {
         let result = await ToolExecutionService.shared.execute(
             toolCall: parsedCall,
             agentType: "chat", // Chat context uses "chat" agent type
-            threadID: threadID
+            threadID: threadID,
+            // Where the turn's model sees pictures, those a tool makes for it.
+            pictures: pictures
         )
 
         // Convert ToolExecutionResult to summary/contextBlock format.

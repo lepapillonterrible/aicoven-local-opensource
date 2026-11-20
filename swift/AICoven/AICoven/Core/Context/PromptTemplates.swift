@@ -261,6 +261,16 @@ enum PromptTemplates {
             ],
             example: #"{"tool": "figma.addComment", "input": {"file": "AbCdEfGhIjKl", "message": "The header overlaps the logo at 320pt."}, "reason": "Leave the feedback on the file"}"#
         ),
+        ToolDefinition(
+            name: "figma.renderFrame",
+            description: "Render up to 3 frames or layers of a Figma file as images you can look at, at most twice in a reply. Find a frame's id with figma.readFile first.",
+            parameters: [
+                ToolParameter(name: "file", type: "string", description: "The file's key, or its link", required: true),
+                ToolParameter(name: "nodes", type: "string", description: "1 to 3 node ids to render, with commas between them, such as '3:21,3:40'", required: true),
+                ToolParameter(name: "scale", type: "number", description: "How large to render: 0.5 to 2 (default 1)", required: false)
+            ],
+            example: #"{"tool": "figma.renderFrame", "input": {"file": "AbCdEfGhIjKl", "nodes": "3:21"}, "reason": "Look at the frame as it is drawn"}"#
+        ),
 
         // Linear tools. An issue is named by its identifier, like ENG-12.
         ToolDefinition(
@@ -792,6 +802,18 @@ enum PromptTemplates {
     /// Figma tools, offered where Figma is connected.
     static let figmaTools: Set<String> = ["figma.readFile", "figma.readComments", "figma.addComment"]
 
+    /// Figma's tool that makes pictures for the model to look at, offered
+    /// where Figma is connected to a turn whose model can be sent
+    /// pictures.
+    static let figmaPictureTools: Set<String> = ["figma.renderFrame"]
+
+    /// The tools that make pictures for the model, of those to add to
+    /// what is offered: Figma's where Figma's other tools are offered and
+    /// the turn's model sees pictures.
+    static func pictureTools(among offered: Set<String>, seesPictures: Bool) -> Set<String> {
+        seesPictures && !offered.isDisjoint(with: figmaTools) ? figmaPictureTools : []
+    }
+
     /// Linear tools, offered where Linear is connected.
     static let linearTools: Set<String> = ["linear.getIssue", "linear.addComment", "linear.updateIssue"]
 
@@ -821,6 +843,7 @@ enum PromptTemplates {
         .union(githubTools)
         .union(googleDriveTools)
         .union(figmaTools)
+        .union(figmaPictureTools)
         .union(linearTools)
 
     /// Dynamically resolve the Set of actual enabled native tools according to Connected Accounts + Entitlements.
