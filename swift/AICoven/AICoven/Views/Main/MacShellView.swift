@@ -28,6 +28,9 @@ struct MacShellView: View {
     @State private var covenOrder: [String] = []
     private let orderStore = CovenOrderStore()
     @State private var columnVisibility = NavigationSplitViewVisibility.automatic
+    /// Asks the split view itself whether its sidebar shows, where that
+    /// can be read (the iPad; on the Mac the visibility says).
+    @State private var splitViewProbe = SplitViewProbe()
     /// What each scope's new-thread page holds unsent.
     @StateObject private var drafts = DraftThreads()
     @State private var showCreateCoven = false
@@ -62,6 +65,7 @@ struct MacShellView: View {
             // On the sidebar column's content, as Apple's example attaches
             // it; on the split view it does not remove the system toggle.
             .toolbar(removing: .sidebarToggle)
+            .probingSplitView(splitViewProbe)
             .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 360)
         } detail: {
             ShellContentView(
@@ -76,7 +80,7 @@ struct MacShellView: View {
                 onOpenProviderKeys: { _ = appState.openSettings(for: .providerKeys) }
             )
             .toolbar {
-                StoneSidebarToggle(visibility: $columnVisibility)
+                StoneSidebarToggle(visibility: $columnVisibility, systemShowsSidebar: splitViewProbe.sidebarIsShowing)
                 StoneToolbarItem(placement: .primaryAction) {
                     Button(action: newThread) {
                         Label("New Thread", systemImage: "square.and.pencil")
