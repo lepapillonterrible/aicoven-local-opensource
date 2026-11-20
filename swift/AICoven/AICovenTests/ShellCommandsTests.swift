@@ -75,6 +75,8 @@ final class ShellCommandsTests: XCTestCase {
         navigator.requestSearch()
         XCTAssertTrue(navigator.takeSearchRequest())
         XCTAssertFalse(navigator.takeSearchRequest())
+        // Not a wait for anything: a test that makes a main-actor object is async with a real await, so the
+        // object is released inside a task (outside one it aborts on the CI's older macOS, issue #61).
         await Task.yield()
     }
 }

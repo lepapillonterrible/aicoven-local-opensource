@@ -14,9 +14,9 @@ struct ShellSidebar: View {
     let personName: String
     let onOpenSettings: () -> Void
     let onCreateCoven: () -> Void
-    /// Opens the person's connected apps in Settings: Strix uses every
-    /// connection, so its Connections button leads there.
-    let onOpenConnectedApps: () -> Void
+    /// Opens a place of the scope on screen (Memory, Agents, Connections),
+    /// as the menu bar's Go menu does: the shell says where each leads.
+    let onOpenPlace: (ShellSidebarItem) -> Void
     /// Moves a coven to a place in the person's order.
     let onMoveCoven: (_ covenID: String, _ index: Int) -> Void
 
@@ -347,11 +347,7 @@ struct ShellSidebar: View {
             ForEach(places, id: \.item) { place in
                 let isSelected = navigator.sidebarItem == place.item
                 Button {
-                    if place.item == .connectedApps, navigator.selected == .strix {
-                        onOpenConnectedApps()
-                    } else {
-                        navigate(to: place.item)
-                    }
+                    onOpenPlace(place.item)
                 } label: {
                     Image(systemName: place.symbol)
                         .font(.system(size: placeIconSize))

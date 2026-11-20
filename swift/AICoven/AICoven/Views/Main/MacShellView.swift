@@ -56,7 +56,7 @@ struct MacShellView: View {
                 personName: ShellSidebar.personName(name: authService.currentUser?.name, email: authService.currentUser?.email),
                 onOpenSettings: { _ = appState.openSettings(for: .settings) },
                 onCreateCoven: { showCreateCoven = true },
-                onOpenConnectedApps: { _ = appState.openSettings(for: .connectedApps) },
+                onOpenPlace: openPlace,
                 onMoveCoven: moveCoven
             )
             // On the sidebar column's content, as Apple's example attaches
@@ -197,20 +197,24 @@ struct MacShellView: View {
                 columnVisibility = .all
                 navigator.requestSearch()
             },
-            openPlace: { item in
-                // Strix uses every connection: its Connections are in Settings.
-                if item == .connectedApps, navigator.selected == .strix {
-                    _ = appState.openSettings(for: .connectedApps)
-                } else {
-                    navigator.openPlace(item)
-                }
-            },
+            openPlace: openPlace,
             select: { navigator.select($0) },
             moveSelectedCoven: { up in
                 guard let target = ShellCommandRules.moveTarget(up: up, selected: navigator.selected, covens: orderedCovens) else { return }
                 moveCoven(target.covenID, to: target.index)
             }
         )
+    }
+
+    /// Opens a place of the scope on screen, for its sidebar button and the
+    /// Go menu alike. Strix uses every connection, so its Connections are
+    /// the person's connected apps, in Settings.
+    private func openPlace(_ item: ShellSidebarItem) {
+        if item == .connectedApps, navigator.selected == .strix {
+            _ = appState.openSettings(for: .connectedApps)
+        } else {
+            navigator.openPlace(item)
+        }
     }
 
     /// New Thread: the scope's new-thread page. Its thread is made when
