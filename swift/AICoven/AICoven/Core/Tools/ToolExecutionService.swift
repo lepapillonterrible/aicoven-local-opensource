@@ -17,8 +17,8 @@ actor ToolExecutionService {
     /// Whether the person has the Tools Pack.
     private let hasToolsPack: @Sendable () async -> Bool
 
-    /// The session Figma is asked through; a test gives one that answers
-    /// in Figma's place.
+    /// The session Figma and Linear are asked through; a test gives one
+    /// that answers in their place.
     private let figmaSession: URLSession
 
     /// Asks the person before a tool changes something, and waits for the
@@ -82,7 +82,7 @@ actor ToolExecutionService {
     // MARK: - Entitlement gating for paid tools
 
     /// Tool name prefixes that require the Tools Pack purchase.
-    private static let toolsPackPrefixes = ["shell.", "github.", "google_drive.", "google_docs.", "google_sheets.", "google_slides.", "figma."]
+    private static let toolsPackPrefixes = ["shell.", "github.", "google_drive.", "google_docs.", "google_sheets.", "google_slides.", "figma.", "linear."]
 
     /// Returns true when the given tool name requires the Tools Pack entitlement.
     private func requiresToolsPack(_ toolName: String) -> Bool {
@@ -524,6 +524,17 @@ actor ToolExecutionService {
 
         case "figma.addComment":
             return await executeFigmaAddComment(toolCall: toolCall, threadID: threadID)
+
+        // --- Linear Tools ---
+        case "linear.getIssue":
+            return await executeLinear(toolCall: toolCall) { [figmaSession] issue, key in
+                let found = try await LinearToolService.issue(issue, key: key, session: figmaSession)
+                return .success(
+                    tool: toolCall.name,
+                    result: ["issue": AnyJSONValue(found["identifier"] as? String ?? issue), "url": AnyJSONValue(found["url"] as? String ?? "")],
+                    contextBlock: LinearToolService.told(issue: found)
+                )
+            }
 
         // --- Google Drive Tools ---
         case "google_drive.listFiles", "google_drive.list_files":
@@ -1212,7 +1223,7 @@ actor ToolExecutionService {
             // The token that was refused is the one marked, if it is
             // still the connection's.
             if case FigmaError.tokenRefused = error, let token {
-                await connectedAccountsService.markFigmaTokenRefused(accountID: account.id, token: token)
+                await connectedAccountsService.markTokenRefused(accountID: account.id, token: token)
             }
             // A change whose answer did not come may have been made: it is
             // not asked for again without looking.
@@ -1253,6 +1264,65 @@ actor ToolExecutionService {
             let id = posted["id"] as? String
             let block = "[Figma Comment Posted: \(file)]\n" + (id.map { "Comment \($0)" } ?? "Posted") + (replyTo.map { ", in reply to \($0)" } ?? "") + "."
             return .success(tool: toolCall.name, result: ["file": AnyJSONValue(file), "comment_id": AnyJSONValue(id ?? "")], contextBlock: block)
+        }
+    }
+
+    // MARK: - Linear Tool Implementations
+
+    /// What a model is told where Linear is not connected.
+    nonisolated static var linearNotConnected: String {
+        "Linear not connected. The person can connect it in Settings > \(SettingsPane.connectedApps.listedTitle)."
+    }
+
+    /// What a model is told when Linear would not answer a call.
+    nonisolated static func linearFailure(_ error: Error) -> (message: String, code: String, retry: Bool) {
+        switch error as? LinearError {
+        case .keyRefused:
+            ("Linear refused the key. The person can give Linear a new key in Settings > \(SettingsPane.connectedApps.listedTitle).", "linear_key_refused", false)
+        case .notFound:
+            ("Linear found no such issue, or this account cannot see it. Check its identifier, like 'ENG-12'.", "linear_not_found", false)
+        case let .rateLimited(retryAfter):
+            (LinearError.rateLimited(retryAfter: retryAfter).errorDescription ?? "Linear is limiting how often this account asks.", "linear_rate_limited", true)
+        case let .refused(message):
+            ("Linear did not do it: \(message)", "linear_refused", false)
+        case let failure?:
+            (failure.errorDescription ?? "Linear did not answer.", "linear_failed", true)
+        case nil where error is URLError:
+            ("Linear could not be reached.", "linear_failed", true)
+        case nil where error is ConnectedAccountError:
+            ("Linear's key could not be read on this device. The person can give Linear a new key in Settings > \(SettingsPane.connectedApps.listedTitle).", "linear_key_unreadable", false)
+        case nil:
+            ("The call to Linear could not be made.", "linear_failed", false)
+        }
+    }
+
+    /// Runs a Linear tool on the issue its call names, with the connected
+    /// account's key. A key Linear refuses marks the connection as
+    /// needing a new one. A reading tool whose turn was stopped while its
+    /// answer was read tells that it was stopped.
+    private func executeLinear(toolCall: ParsedToolCall, _ run: @Sendable (_ issue: String, _ key: String) async throws -> ToolExecutionResult) async -> ToolExecutionResult {
+        guard let account = await connectedAccountsService.getConnectedAccount(for: .linear) else {
+            return .error(tool: toolCall.name, message: Self.linearNotConnected)
+        }
+        guard let given = toolCall.args["issue"]?.value as? String, let issue = LinearToolService.issueReference(given) else {
+            return .validationError(tool: toolCall.name, message: "Missing or unreadable 'issue'. Give a Linear issue's identifier, like 'ENG-12', or its link.", field: "issue")
+        }
+        var key: String?
+        do {
+            let kept = try await connectedAccountsService.getAccessToken(forAccountId: account.id)
+            key = kept
+            let result = try await run(issue, kept)
+            try Task.checkCancellation()
+            return result
+        } catch {
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
+                return .error(tool: toolCall.name, message: "Stopped before Linear answered.", errorType: "cancelled")
+            }
+            if case LinearError.keyRefused = error, let key {
+                await connectedAccountsService.markTokenRefused(accountID: account.id, token: key)
+            }
+            let failure = Self.linearFailure(error)
+            return .error(tool: toolCall.name, message: failure.message, errorType: failure.code, isRetryable: failure.retry)
         }
     }
 

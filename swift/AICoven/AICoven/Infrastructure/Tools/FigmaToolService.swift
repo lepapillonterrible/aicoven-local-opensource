@@ -30,9 +30,6 @@ nonisolated enum FigmaError: LocalizedError, Equatable {
 nonisolated enum FigmaToolService {
     static let host = "api.figma.com"
 
-    /// The most characters a token may have (as the cloud app takes them).
-    static let longestToken = 512
-
     /// Who a token belongs to.
     struct Identity: Equatable {
         /// Figma's id of the user.

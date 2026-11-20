@@ -22,14 +22,14 @@ This repo started as an extraction of the original multi-tenant AICoven app and 
 - A "context sandwich" builder that composes system contract, policies, time, memories, history, and the current turn — with device-aware context limits for iPhones.
 - A tools layer (`ToolEnvironment` + `ToolService`) that exposes web search, file/image analysis, and local file generation using only your provider keys, and an `image.generate` tool that makes images with your OpenAI or Google key.
 - An MCP client (`MCPClient`) that connects to remote MCP servers over Streamable HTTP (the current revision of the protocol, and the earlier ones' `initialize` handshake), discovers tools, and executes them — with semantic tool selection via embedding-based matching and a benchmark suite for evaluating local model tool-calling accuracy.
-- Shell command tools with an approval flow, and connected-app integrations (GitHub, Google Drive, Figma).
+- Shell command tools with an approval flow, and connected-app integrations (GitHub, Google Drive, Figma, Linear).
 - StoreKit 2 in-app purchase support with a community edition compile flag.
 
 Some files from the original cloud app remain in the codebase (e.g. covens, roles, remote memory services). Covens and roles are actively being reintegrated into the local client. These features are **not** required to use the basic local assistant.
 
 ### In-App Purchases
 
-Some premium features (shell tools and the GitHub, Google Drive and Figma integrations) require an in-app purchase. The StoreKit 2 purchase flow is enabled for all builds — users see the Store UI and can unlock features by making a purchase.
+Some premium features (shell tools and the GitHub, Google Drive, Figma and Linear integrations) require an in-app purchase. The StoreKit 2 purchase flow is enabled for all builds — users see the Store UI and can unlock features by making a purchase.
 
 ## High-level architecture
 
@@ -85,7 +85,7 @@ The local-first client is functional for core workflows but some features are st
 - Attachment analysis for files and images
 - Enhanced chat UI with thread management
 - Shell command tools with approval flow
-- Connected apps: GitHub, Google Drive and Figma integrations
+- Connected apps: GitHub, Google Drive, Figma and Linear integrations
 - Local LLM support via Ollama and on-device MLX with automatic model discovery
 - MLX model catalog with category/tier classification (General, Coding, Mobile), device-aware filtering, and AICoven fine-tuned MCP models
 - MLX on iPhone support (6 GB+ RAM) with automatic memory management (model eviction, GPU cache limits, tool context truncation)
@@ -119,7 +119,7 @@ The tools layer is provider-agnostic and designed to work with whatever keys you
 - **Shell commands** (`shell.execute`) – Execute local shell commands with a user-approval flow before execution.
 - **Attachment analysis** – Summarization/QA over attached files and images using the best available vision/chat model.
 - **Image generation** (`image.generate`) – A model can make an image with your OpenAI or Google key. If it names a provider or one of its models, that key is asked; otherwise OpenAI's key is asked first and Google's next, until one makes the image. The image is kept on the device, encrypted, and shown under the reply.
-- **Connected apps** – GitHub repository tools (read/write files, create branches/PRs, search code), Google Drive, Docs, Sheets and Slides tools (list, read, upload, write), and Figma tools (read a file's structure and comments, post a comment), authenticated via user-provided tokens.
+- **Connected apps** – GitHub repository tools (read/write files, create branches/PRs, search code), Google Drive, Docs, Sheets and Slides tools (list, read, upload, write), Figma tools (read a file's structure and comments, post a comment), and a Linear tool (read an issue), authenticated via user-provided tokens.
 - **MCP server tools** – Any tools exposed by connected [MCP](https://modelcontextprotocol.io) servers (e.g. email via Zapier, calendar, Slack). Tools are discovered automatically via `tools/list`, cached locally, and executed via JSON-RPC over Streamable HTTP. A tool the server marks as read-only is used directly; any other asks you first, showing what it will be sent. Semantic tool selection uses embedding-based matching when many tools are available.
 
 These tools are available both to the autonomous `AgentRunner` and to the interactive chat UI via the enhanced message composer.
