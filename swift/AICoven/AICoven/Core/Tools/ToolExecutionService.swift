@@ -234,12 +234,22 @@ actor ToolExecutionService {
         }
         do {
             let kept = try await AttachmentStore.shared.add(made.data, named: Self.generatedImageName(for: made.mimeType), mimeType: made.mimeType, toThread: threadID)
+            // Stopped while it was being kept: it goes with no reply, so
+            // it is not left behind.
+            if Task.isCancelled {
+                await AttachmentStore.shared.removeUnsent([kept.id])
+                return .error(tool: toolCall.name, message: "Stopped before the image was made.", errorType: "cancelled")
+            }
             return .success(
                 tool: toolCall.name,
                 result: [Self.generatedFilesKey: .array([kept.messageMetadata]), "provider": .string(provider.rawValue), "model": .string(made.model), "size": .string(made.size)],
                 contextBlock: Self.imageContextBlock(for: made)
             )
         } catch {
+            // Stopped while it was being kept.
+            if Task.isCancelled || error is CancellationError {
+                return .error(tool: toolCall.name, message: "Stopped before the image was made.", errorType: "cancelled")
+            }
             // Made, but not kept on this device, whatever stopped it (the
             // data locked, the account changed, the disk): there is
             // nothing to show.

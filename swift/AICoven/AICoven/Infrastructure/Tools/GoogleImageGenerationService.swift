@@ -29,9 +29,12 @@ nonisolated struct GoogleImageGenerationService {
         } else {
             do {
                 candidates = try await Self.candidates(among: listedImageModels())
-            } catch let error as URLError where error.code == .cancelled {
-                throw CancellationError()
+            } catch {
+                // Stopped while the models were listed, however that showed.
+                if Task.isCancelled || (error as? URLError)?.code == .cancelled { throw CancellationError() }
+                throw error
             }
+            try Task.checkCancellation()
             guard !candidates.isEmpty else { throw Failure.noImageModel }
         }
         var last: Error = Failure.noPicture
@@ -42,13 +45,12 @@ nonisolated struct GoogleImageGenerationService {
                 // Stopped while the answer was being read: it is not given.
                 try Task.checkCancellation()
                 return made
-            } catch Failure.keyRefused {
-                throw Failure.keyRefused
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch let error as URLError where error.code == .cancelled {
-                throw CancellationError()
             } catch {
+                // Stopped, however that showed (the request cancelled, or
+                // an answer read after the stop): that is what is said,
+                // whatever the answer was.
+                if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { throw CancellationError() }
+                if case Failure.keyRefused = error { throw error }
                 last = error
             }
         }

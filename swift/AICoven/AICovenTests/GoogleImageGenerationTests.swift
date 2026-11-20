@@ -179,22 +179,26 @@ final class GoogleImageGenerationTests: XCTestCase {
         }
     }
 
-    func testAPictureThatArrivesAfterTheTurnWasStopped_isNotGiven() async {
-        let answer = picture
-        let making = Making()
-        // The turn is stopped as Google answers: the answer is on its way
-        // back, or already here, when the stop lands.
-        let service = service(keeping: Asked()) { _ in
-            making.stop()
-            return (200, answer)
-        }
-        let task = Task { try await service.generate(prompt: "A lighthouse", model: "gemini-3.1-flash-image") }
-        making.set(task)
-        do {
-            _ = try await task.value
-            XCTFail("It was stopped")
-        } catch {
-            XCTAssertTrue(error is CancellationError, "\(error)")
+    func testATurnStoppedWhileGoogleIsAsked_isSaidToBeStopped_whateverGoogleAnswers() async {
+        // The stop lands as Google answers, before the answer is handed
+        // over. (Where exactly it lands after that cannot be placed from a
+        // test; the service looks again after each wait.)
+        for answer in [picture, #"{"candidates": [{"content": {"parts": [{"text": "Here."}]}, "finishReason": "STOP"}]}"#, #"{"error": {"message": "Overloaded"}}"#, #"{"models": []}"#] {
+            for model in ["gemini-3.1-flash-image", nil] {
+                let making = Making()
+                let service = service(keeping: Asked()) { _ in
+                    making.stop()
+                    return (answer.contains("error") ? 500 : 200, answer)
+                }
+                let task = Task { try await service.generate(prompt: "A lighthouse", model: model) }
+                making.set(task)
+                do {
+                    _ = try await task.value
+                    XCTFail("It was stopped")
+                } catch {
+                    XCTAssertTrue(error is CancellationError, "\(error) for \(answer.prefix(30)) with \(model ?? "no model")")
+                }
+            }
         }
     }
 
