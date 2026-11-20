@@ -233,11 +233,13 @@ struct ShellRootView: View {
                     SettingsPaneView(pane: pane, request: request)
                 } else {
                     SettingsList()
+                        .stoneBackButton()
                 }
             }
             // Made anew for each ask, so it shows the pane now asked for.
             .id(navigator.personPlaceRequest)
-            .stoneBackButton()
+            // Settings was opened: said as it is wherever Settings opens.
+            .onAppear { AnalyticsService.shared.trackSettingsOpened() }
         }
     }
 

@@ -103,6 +103,9 @@ struct SettingsPaneView: View {
         #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
         #endif
+            // Wherever a pane is pushed (from the Settings list, or at a
+            // request that names it), its back button is the stone one.
+            .stoneBackButton()
             .onAppear { trackOpened() }
     }
 
