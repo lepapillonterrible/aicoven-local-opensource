@@ -46,18 +46,26 @@ actor ConnectedAccountsService {
     private let tokenIdentity: @Sendable (_ provider: ConnectedAppProvider, _ token: String) async throws -> TokenIdentity
 
     /// Asks the app itself.
-    static let askTheApp: @Sendable (ConnectedAppProvider, String) async throws -> TokenIdentity = { provider, token in
+    static let askTheApp = askTheApp(through: .shared)
+
+    /// Asks the app itself, through `session` (a test's answers in the
+    /// app's place).
+    static func askTheApp(through session: URLSession) -> @Sendable (ConnectedAppProvider, String) async throws -> TokenIdentity {
+        { provider, token in try await identity(ofTokenOf: provider, token, session: session) }
+    }
+
+    private static func identity(ofTokenOf provider: ConnectedAppProvider, _ token: String, session: URLSession) async throws -> TokenIdentity {
         switch provider {
         case .figma:
             do {
-                let who = try await FigmaToolService.identity(token: token)
+                let who = try await FigmaToolService.identity(token: token, session: session)
                 return TokenIdentity(id: who.id, label: who.label)
             } catch FigmaError.tokenRefused {
                 throw TokenRefusal.refused
             }
         case .linear:
             do {
-                let who = try await LinearToolService.identity(key: token)
+                let who = try await LinearToolService.identity(key: token, session: session)
                 return TokenIdentity(id: who.id, label: who.label)
             } catch LinearError.keyRefused {
                 throw TokenRefusal.refused

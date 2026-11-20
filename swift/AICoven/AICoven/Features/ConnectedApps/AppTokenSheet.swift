@@ -73,8 +73,13 @@ struct AppTokenSheet: View {
             reach: "The key acts as you in Linear: agents can see the issues you can see. They ask before they comment on an issue or change one."
         )
 
+        /// An app's texts. (Only apps that connect with a token have a
+        /// sheet; the others are never asked for.)
         static func of(_ provider: ConnectedAppProvider) -> Texts {
-            provider == .linear ? .linear : .figma
+            switch provider {
+            case .linear: .linear
+            case .figma, .github, .googleDrive: .figma
+            }
         }
     }
 

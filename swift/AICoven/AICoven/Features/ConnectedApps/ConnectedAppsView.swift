@@ -425,6 +425,11 @@ struct ConnectedAppRow: View {
         account != nil
     }
 
+    /// What the app calls what it is connected with: a token, or a key.
+    private var tokenNoun: String {
+        AppTokenSheet.Texts.of(provider).noun
+    }
+
     var body: some View {
         GlassCard {
             HStack(spacing: 16) {
@@ -450,7 +455,7 @@ struct ConnectedAppRow: View {
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextSecondary)
                         if provider.connectsWithToken {
-                            Text("Disconnecting deletes this app's copy of the \(provider == .linear ? "key" : "token"). Revoke the \(provider == .linear ? "key" : "token") in \(provider.displayName) too.")
+                            Text("Disconnecting deletes this app's copy of the \(tokenNoun). Revoke the \(tokenNoun) in \(provider.displayName) too.")
                                 .font(.aicovenCaption)
                                 .foregroundColor(.aicovenTextTertiary)
                         }
@@ -458,7 +463,7 @@ struct ConnectedAppRow: View {
                         Text(needsToken.displayName)
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextSecondary)
-                        Text(provider == .linear ? "Key refused. Needs a new key." : "Token refused. Needs a new token.")
+                        Text("\(tokenNoun.capitalized) refused. Needs a new \(tokenNoun).")
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenError)
                     } else {
@@ -489,7 +494,7 @@ struct ConnectedAppRow: View {
                         }
                         .buttonStyle(DisconnectButtonStyle())
                     } else if let needsToken {
-                        Button(provider == .linear ? "Replace Key" : "Replace Token") {
+                        Button("Replace \(tokenNoun.capitalized)") {
                             onReplaceToken(needsToken)
                         }
                         .buttonStyle(ConnectButtonStyle())

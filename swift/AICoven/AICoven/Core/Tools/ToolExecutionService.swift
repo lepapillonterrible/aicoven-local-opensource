@@ -19,7 +19,7 @@ actor ToolExecutionService {
 
     /// The session Figma and Linear are asked through; a test gives one
     /// that answers in their place.
-    private let figmaSession: URLSession
+    private let appSession: URLSession
 
     /// Asks the person before a tool changes something, and waits for the
     /// answer.
@@ -37,7 +37,7 @@ actor ToolExecutionService {
         googleDriveService = .shared
         connectedAccountsService = .shared
         hasToolsPack = Self.hasBoughtTheToolsPack
-        figmaSession = .shared
+        appSession = .shared
     }
 
     /// Test-friendly initializer that accepts a mock tool service, an
@@ -54,7 +54,7 @@ actor ToolExecutionService {
         githubService: GitHubToolService = .shared,
         googleDriveService: GoogleDriveToolService = .shared,
         hasToolsPack: @escaping @Sendable () async -> Bool = ToolExecutionService.hasBoughtTheToolsPack,
-        figmaSession: URLSession = .shared
+        appSession: URLSession = .shared
     ) {
         self.toolService = toolService
         self.ask = ask
@@ -63,7 +63,7 @@ actor ToolExecutionService {
         self.githubService = githubService
         self.googleDriveService = googleDriveService
         self.hasToolsPack = hasToolsPack
-        self.figmaSession = figmaSession
+        self.appSession = appSession
     }
 
     // Configuration
@@ -508,13 +508,13 @@ actor ToolExecutionService {
 
         // --- Figma Tools ---
         case "figma.readFile":
-            return await executeFigma(toolCall: toolCall) { [figmaSession] file, token in
-                try await Self.figmaFile(file, args: toolCall.args, token: token, session: figmaSession)
+            return await executeFigma(toolCall: toolCall) { [appSession] file, token in
+                try await Self.figmaFile(file, args: toolCall.args, token: token, session: appSession)
             }
 
         case "figma.readComments":
-            return await executeFigma(toolCall: toolCall) { [figmaSession] file, token in
-                let comments = try await FigmaToolService.comments(key: file, token: token, session: figmaSession)
+            return await executeFigma(toolCall: toolCall) { [appSession] file, token in
+                let comments = try await FigmaToolService.comments(key: file, token: token, session: appSession)
                 let told = FigmaToolService.told(comments: comments, includingResolved: Self.isYes(toolCall.args["include_resolved"]))
                 let block = "[Figma Comments: \(file)]\n"
                     + (told.lines.isEmpty ? "(No comments)" : told.lines.joined(separator: "\n"))
@@ -1256,8 +1256,8 @@ actor ToolExecutionService {
         if let refusal = await refusal(ofAppChange: toolCall, in: threadID, { .figmaComment(file: named, replyTo: replyTo, message: message, threadID: $0) }) {
             return refusal
         }
-        return await executeFigma(toolCall: toolCall, changes: true) { [figmaSession] file, token in
-            let posted = try await FigmaToolService.postComment(key: file, message: message, replyTo: replyTo, token: token, session: figmaSession)
+        return await executeFigma(toolCall: toolCall, changes: true) { [appSession] file, token in
+            let posted = try await FigmaToolService.postComment(key: file, message: message, replyTo: replyTo, token: token, session: appSession)
             let id = posted["id"] as? String
             let block = "[Figma Comment Posted: \(file)]\n" + (id.map { "Comment \($0)" } ?? "Posted") + (replyTo.map { ", in reply to \($0)" } ?? "") + "."
             return .success(tool: toolCall.name, result: ["file": AnyJSONValue(file), "comment_id": AnyJSONValue(id ?? "")], contextBlock: block)
@@ -1313,7 +1313,7 @@ actor ToolExecutionService {
         do {
             let kept = try await connectedAccountsService.getAccessToken(forAccountId: account.id)
             key = kept
-            let found = try await LinearToolService.issue(issue, key: kept, session: figmaSession)
+            let found = try await LinearToolService.issue(issue, key: kept, session: appSession)
             try Task.checkCancellation()
             return .success(
                 tool: toolCall.name,
@@ -1323,7 +1323,20 @@ actor ToolExecutionService {
         } catch {
             if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return stopped }
             if case LinearError.keyRefused = error, let key {
-                await connectedAccountsService.markTokenRefused(accountID: account.id, token: key)
+                // Is it the key, or this issue? Linear is asked whose the
+                // key is: only a key it refuses there too is marked.
+                do {
+                    _ = try await LinearToolService.identity(key: key, session: appSession)
+                    if Task.isCancelled { return stopped }
+                    return .error(tool: toolCall.name, message: "Linear does not let this account see that issue.", errorType: "linear_forbidden")
+                } catch LinearError.keyRefused {
+                    await connectedAccountsService.markTokenRefused(accountID: account.id, token: key)
+                } catch {
+                    // Linear could not say: the connection is left as it is.
+                    if Task.isCancelled { return stopped }
+                    let failure = Self.linearFailure(error)
+                    return .error(tool: toolCall.name, message: failure.message, errorType: failure.code, isRetryable: failure.retry)
+                }
                 // Stopped while that was written down.
                 if Task.isCancelled { return stopped }
             }

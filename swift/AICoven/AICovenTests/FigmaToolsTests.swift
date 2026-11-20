@@ -215,7 +215,7 @@ final class FigmaToolsTests: XCTestCase {
             covenConnections: { _ in connections },
             connectedAccounts: accounts,
             hasToolsPack: { true },
-            figmaSession: URLSession(configuration: config)
+            appSession: URLSession(configuration: config)
         )
         await executor.setWhitelist(for: "chat", tools: PromptTemplates.figmaTools)
         return World(executor: executor, accounts: accounts, asked: asked, seen: seen, defaults: defaults, suite: suite)

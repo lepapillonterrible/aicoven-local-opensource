@@ -106,6 +106,32 @@ final class LinearTests: XCTestCase {
         XCTAssertEqual(why, .invalidResponse)
     }
 
+    func testAnAppThatRefusesATokenWhenAskedWhoseItIs_isARefusedToken() async {
+        func refusal(_ provider: ConnectedAppProvider, status: Int, body: String = "{}") async -> Error? {
+            let ask = ConnectedAccountsService.askTheApp(through: session(keeping: Asked()) { _ in (status, body, [:]) })
+            do {
+                _ = try await ask(provider, "t")
+                return nil
+            } catch {
+                return error
+            }
+        }
+        typealias Refusal = ConnectedAccountsService.TokenRefusal
+        var why = await refusal(.linear, status: 401)
+        XCTAssertEqual(why as? Refusal, .refused)
+        why = await refusal(.figma, status: 403)
+        XCTAssertEqual(why as? Refusal, .refused)
+        why = await refusal(.linear, status: 500)
+        XCTAssertEqual(why as? LinearError, .notAnswered(status: 500), "An app that does not answer has not refused the token")
+        why = await refusal(.figma, status: 500)
+        XCTAssertEqual(why as? FigmaError, .notAnswered(status: 500))
+        why = await refusal(.github, status: 200)
+        XCTAssertEqual(why as? Refusal, .notAToken, "GitHub signs in")
+        let ask = ConnectedAccountsService.askTheApp(through: session(keeping: Asked()) { _ in (200, #"{"data": {"viewer": {"id": "u1", "email": "ada@example.com"}}}"#, [:]) })
+        let who = try? await ask(.linear, "t")
+        XCTAssertEqual(who, .init(id: "u1", label: "ada@example.com"))
+    }
+
     // MARK: - What a call names, and what a model is told
 
     func testAnIssueIsNamedByItsIdentifierItsIdOrItsLink() {
@@ -141,6 +167,10 @@ final class LinearTests: XCTestCase {
         """)
         XCTAssertEqual(LinearToolService.told(issue: ["identifier": "ENG-1"]), "[Linear Issue: ENG-1] (untitled)\nState: (none) · Assignee: (no one)\n\nDescription:\n(none)")
         XCTAssertEqual([0, 1, 2, 3, 4, 9].map(LinearToolService.priorityName), ["None", "Urgent", "High", "Medium", "Low", "None"])
+
+        // A long description is cut where a file's text is.
+        let longIssue = LinearToolService.told(issue: ["identifier": "ENG-1", "description": String(repeating: "d", count: GoogleToolArguments.longestText + 5)])
+        XCTAssertTrue(longIssue.hasSuffix(String(repeating: "d", count: 10) + AttachmentContext.cutMark))
 
         // A long comment is told to its limit, the mark that it was cut included.
         let long = LinearToolService.told(issue: ["identifier": "ENG-1", "comments": ["nodes": [["body": String(repeating: "a", count: 2001), "createdAt": "t"]]]])
@@ -193,10 +223,24 @@ final class LinearTests: XCTestCase {
             covenConnections: { _ in connections },
             connectedAccounts: accounts,
             hasToolsPack: { hasToolsPack },
-            figmaSession: session(keeping: asked, answer: answer)
+            appSession: session(keeping: asked, answer: answer)
         )
         await executor.setWhitelist(for: "chat", tools: PromptTemplates.linearTools)
         return World(executor: executor, accounts: accounts, tokens: tokens, asked: asked, checking: checking, defaults: defaults, suite: suite)
+    }
+
+    /// Linear's answers, in the order they are given.
+    private final class Answers: @unchecked Sendable {
+        private let lock = NSLock()
+        private var left: [(Int, String)]
+
+        init(_ answers: [(Int, String)]) {
+            left = answers
+        }
+
+        func next() -> (Int, String) {
+            lock.withLock { left.isEmpty ? (500, "{}") : left.removeFirst() }
+        }
     }
 
     /// What happens while an app is asked whose a token is, where a test
@@ -302,7 +346,9 @@ final class LinearTests: XCTestCase {
         XCTAssertEqual(result.errorType, "linear_rate_limited")
         XCTAssertEqual(result.error, "Linear is limiting how often this account asks. Try again in 12 seconds.")
 
-        // A key Linear no longer takes: the connection waits for a new one, and is not asked with again.
+        // A key Linear no longer takes (it refuses the issue, and then
+        // to say whose the key is): the connection waits for a new one,
+        // and is not asked with again.
         let refused = try await world { _ in (401, "{}", [:]) }
         defer { refused.forget() }
         result = await refused.call("linear.getIssue", ["issue": AnyJSONValue("ENG-12")])
@@ -311,7 +357,20 @@ final class LinearTests: XCTestCase {
         XCTAssertNotNil(waiting)
         result = await refused.call("linear.getIssue", ["issue": AnyJSONValue("ENG-12")])
         XCTAssertEqual(result.error, ToolExecutionService.linearNotConnected)
-        XCTAssertEqual(refused.asked.requests.count, 1)
+        XCTAssertEqual(refused.asked.requests.count, 2, "The issue, then whose the key is; nothing after that")
+
+        // Linear refuses the issue but takes the key: it is the issue
+        // that is not this account's, and the connection stands.
+        let answers = Answers([(403, "{}"), (200, #"{"data": {"viewer": {"id": "u1", "email": "ada@example.com"}}}"#)])
+        let partly = try await world { _ in
+            let (status, body) = answers.next()
+            return (status, body, [:])
+        }
+        defer { partly.forget() }
+        result = await partly.call("linear.getIssue", ["issue": AnyJSONValue("ENG-12")])
+        XCTAssertEqual(result.errorType, "linear_forbidden")
+        let still = await partly.accounts.getConnectedAccount(for: .linear)
+        XCTAssertNotNil(still, "The key is good: the connection is left as it is")
 
         // A call whose turn was stopped says so, also where it would
         // otherwise say that Linear is not connected.
@@ -361,6 +420,8 @@ final class LinearTests: XCTestCase {
         XCTAssertEqual(AppTokenSheet.message(for: Refusal.changed, in: .linear), "This Linear connection changed while the key was checked. Close this and try again.")
         XCTAssertEqual(AppTokenSheet.message(for: URLError(.timedOut), in: .linear), "Linear didn't answer. Try again.")
         XCTAssertTrue(AppTokenSheet.Texts.linear.scopes.isEmpty)
+        XCTAssertEqual(AppTokenSheet.Texts.of(.linear).noun, "key")
+        XCTAssertEqual(AppTokenSheet.Texts.of(.figma).noun, "token")
         XCTAssertNotNil(AppTokenSheet.Texts.linear.reach)
     }
 }
