@@ -191,7 +191,11 @@ actor MemoryService {
         tags: [String]?,
         isPinned: Bool = false
     ) async throws -> Memory {
+        // Whose memory it is, read before the embedding is waited for: if
+        // another account is signed in by then, it is not stored as theirs.
+        let account = await MainActor.run { UserScope.currentUserID }
         let embedding = try await EmbeddingService.shared.embedText(content)
+        guard await MainActor.run(body: { UserScope.currentUserID }) == account else { throw RepositoryError.accountChanged }
         let chunk = try await memoryStore.storeMemory(
             scope: scope,
             text: content,

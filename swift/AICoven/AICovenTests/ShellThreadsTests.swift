@@ -249,15 +249,38 @@ final class ShellThreadsTests: XCTestCase {
         XCTAssertEqual(CovenAgentsView.instructionsLine(nil), "")
     }
 
-    func testAMemoryFormOpensForTheTabTheMemoryListAsksFor() {
-        XCTAssertEqual(MemoryForm(tab: .addMemory(covenId: "work")), .add)
-        XCTAssertEqual(MemoryForm(tab: .addMemory(covenId: nil)), .add)
-        XCTAssertEqual(MemoryForm(tab: .editMemory(memoryId: "m1", memoryTitle: "A note", covenId: nil)), .edit(memoryID: "m1"))
+    func testAMemoryFormOpensForTheTabTheMemoryListAsksFor_eachShowingItsOwn() throws {
+        let add = try XCTUnwrap(MemoryForm(tab: .addMemory(covenId: "work")))
+        XCTAssertNil(add.memoryID, "A new memory")
+        let edit = try XCTUnwrap(MemoryForm(tab: .editMemory(memoryId: "m1", memoryTitle: "A note", covenId: nil)))
+        XCTAssertEqual(edit.memoryID, "m1")
         XCTAssertNil(MemoryForm(tab: .memoryList(covenId: "work")), "No form")
         XCTAssertNil(MemoryForm(tab: .memoryProposals(covenId: nil)))
-        // Each memory's form is its own sheet.
-        XCTAssertNotEqual(MemoryForm.edit(memoryID: "m1").id, MemoryForm.edit(memoryID: "m2").id)
-        XCTAssertNotEqual(MemoryForm.add.id, MemoryForm.edit(memoryID: "add").id)
+
+        // Each showing is its own: a form that saves after its sheet was cancelled and the same
+        // memory's form opened again is not the one on screen, and closes nothing.
+        let again = try XCTUnwrap(MemoryForm(tab: .editMemory(memoryId: "m1", memoryTitle: "A note", covenId: nil)))
+        XCTAssertEqual(again.memoryID, "m1")
+        XCTAssertNotEqual(edit, again)
+        XCTAssertNotEqual(edit.id, again.id)
+        XCTAssertNotEqual(add, try XCTUnwrap(MemoryForm(tab: .addMemory(covenId: "work"))))
+        XCTAssertEqual(edit, edit)
+    }
+
+    func testEachShowingOfAnAgentsFormIsItsOwn() {
+        let scout = Role(
+            id: "r1", covenId: "work", name: "Scout", emoji: nil, description: nil, systemPrompt: nil, model: nil, provider: nil,
+            providerAccountId: nil, temperature: nil, maxTokens: nil, settings: nil,
+            createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
+        )
+        let first = AgentForm.edit(scout, showing: UUID())
+        let second = AgentForm.edit(scout, showing: UUID())
+        XCTAssertEqual(first.role?.id, "r1")
+        XCTAssertNotEqual(first, second, "The same agent's form, opened again")
+        XCTAssertEqual(first, first)
+        let adding = AgentForm.add(showing: UUID())
+        XCTAssertNil(adding.role)
+        XCTAssertNotEqual(adding, AgentForm.add(showing: UUID()))
     }
 
     func testACovensThreadIsNotMadeBeforeItsAgentsAreIn_norWithNoneChosenWhereThereAreSome() {
@@ -272,6 +295,60 @@ final class ShellThreadsTests: XCTestCase {
         // A personal thread asks for none.
         XCTAssertTrue(can(coven: false, rolesIn: false, roles: false, chosen: false))
         XCTAssertFalse(can(creating: true, coven: false))
+    }
+
+    func testAnAgentIsDeleted_andAThreadMade_onlyForTheAccountThatAsked() async throws {
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        await MainActor.run { DatabaseManager.shared.configureIfNeeded() }
+        await ThreadService.shared.reloadForCurrentUser()
+        let account = await MainActor.run { UserScope.currentUserID }
+        let coven = try await CovenService.shared.createCoven(name: "Owners \(UUID().uuidString)")
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await CovenService.shared.deleteCoven(id: coven.id)
+            await ThreadService.shared.reloadForCurrentUser()
+            await DataEncryptionService.shared.lock()
+        }
+        let scout = try await RoleService.shared.createRole(covenId: coven.id, name: "Scout")
+
+        // Asked as an account that is no longer the one signed in: nothing is deleted.
+        do {
+            try await RoleService.shared.deleteRole(roleId: scout.id, as: "someone-who-signed-out")
+            XCTFail("Deleted for an account that is not signed in")
+        } catch {
+            guard case RepositoryError.accountChanged = error else { return XCTFail("\(type(of: error))") }
+        }
+        var roles = try await RoleService.shared.loadRoles(covenId: coven.id)
+        XCTAssertEqual(roles.map(\.id), [scout.id])
+
+        // And no thread is made for it, with the first account's coven and agent in it.
+        do {
+            _ = try await ThreadService.shared.createThread(
+                title: "Chat with Scout", covenId: coven.id, agentId: scout.id, agentName: "Scout", as: "someone-who-signed-out"
+            )
+            XCTFail("Made a thread for an account that is not signed in")
+        } catch {
+            guard case RepositoryError.accountChanged = error else { return XCTFail("\(type(of: error))") }
+        }
+        let threads = try await ThreadService.shared.loadThreads(covenId: coven.id, includeArchived: true)
+        XCTAssertEqual(threads.map(\.id), [])
+
+        // As the account that owns them, both are done.
+        let thread = try await ThreadService.shared.createThread(
+            title: "Chat with Scout", covenId: coven.id, agentId: scout.id, agentName: "Scout", as: account
+        )
+        addTeardownBlock { try? await ThreadService.shared.deleteThread(threadId: thread.id) }
+        XCTAssertEqual(thread.covenId, coven.id)
+        try await RoleService.shared.deleteRole(roleId: scout.id, as: account)
+        roles = try await RoleService.shared.loadRoles(covenId: coven.id)
+        XCTAssertEqual(roles.map(\.id), [])
+        // An agent that is not there (or not this account's) is not found.
+        do {
+            try await RoleService.shared.deleteRole(roleId: scout.id)
+            XCTFail("Deleted an agent that is gone")
+        } catch {
+            guard case CovenRepositoryError.roleNotFound = error else { return XCTFail("\(type(of: error))") }
+        }
     }
 
     #if os(macOS)

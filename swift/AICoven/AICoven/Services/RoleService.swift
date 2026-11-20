@@ -139,8 +139,8 @@ actor RoleService {
 
     /// Delete a role
     /// - Parameter roleId: The role ID to delete
-    func deleteRole(roleId: String) async throws {
-        try await CovenRepository.shared.deleteRole(roleId: roleId)
+    func deleteRole(roleId: String, as account: String? = nil) async throws {
+        try await CovenRepository.shared.deleteRole(roleId: roleId, as: account)
     }
 
     /// Get a specific role by ID

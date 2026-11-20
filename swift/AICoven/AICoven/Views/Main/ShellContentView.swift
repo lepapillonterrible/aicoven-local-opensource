@@ -30,13 +30,19 @@ struct ShellContentView: View {
                 ShellMemoryPlace(covenID: covenID)
                     .id(covenID)
             case let .covenAgents(covenID):
+                // Only for the coven on screen; while it is not in, or it is
+                // another's, the Overview.
                 if let coven, coven.id == covenID {
                     CovenAgentsView(coven: coven, onNewThread: onNewThreadWithAgent)
                         .id(covenID)
+                } else {
+                    overview
                 }
             case .personalStrixSettings:
-                // Strix's agent is Strix itself: its own settings.
-                StrixSettingsView(onClose: { navigator.showOverview() })
+                // Strix's agent is Strix itself: its own settings. Closing
+                // them leaves this place only if it is still the one on
+                // screen: a save can end after the person has gone elsewhere.
+                StrixSettingsView(onClose: { navigator.close(.personalStrix) })
                     .environmentObject(StoreService.shared)
             case let .covenConnections(covenID):
                 if let coven, coven.id == covenID {
@@ -45,6 +51,8 @@ struct ShellContentView: View {
                         CovenConnectionsView(coven: coven)
                     }
                     .id(covenID)
+                } else {
+                    overview
                 }
             default:
                 overview
@@ -104,18 +112,20 @@ private struct ShellMemoryPlace: View {
             .onAppear { AnalyticsService.shared.trackMemoryListOpened(covenId: covenID) }
             .sheet(item: $form) { form in
                 ShellFormSheet(onCancel: { self.form = nil }) {
-                    switch form {
-                    case .add:
-                        AddMemoryView(covenId: covenID) { saved() }
-                    case let .edit(memoryID):
-                        EditMemoryView(memoryId: memoryID, covenId: covenID) { saved() }
+                    if let memoryID = form.memoryID {
+                        EditMemoryView(memoryId: memoryID, covenId: covenID) { saved(form) }
+                    } else {
+                        AddMemoryView(covenId: covenID) { saved(form) }
                     }
                 }
             }
     }
 
-    private func saved() {
-        form = nil
+    /// A form has saved: its sheet closes, if it is still the one on screen
+    /// (a save can end after its sheet was cancelled and another opened),
+    /// and the list is read again either way.
+    private func saved(_ saved: MemoryForm) {
+        if form == saved { form = nil }
         saves += 1
     }
 
@@ -131,25 +141,31 @@ private struct ShellMemoryPlace: View {
     }
 }
 
-/// A memory's form: a new memory, or one being edited.
+/// One showing of a memory's form: a new memory, or one being edited. Each
+/// showing is its own, so a form that saves late closes only its own sheet.
 enum MemoryForm: Identifiable, Equatable {
-    case add
-    case edit(memoryID: String)
+    case add(showing: UUID)
+    case edit(memoryID: String, showing: UUID)
 
     /// The form a tab stands for; nil for a tab that is no memory form.
     init?(tab: WorkspaceTab) {
         switch tab.type {
-        case .addMemory: self = .add
-        case let .editMemory(memoryID, _): self = .edit(memoryID: memoryID)
+        case .addMemory: self = .add(showing: UUID())
+        case let .editMemory(memoryID, _): self = .edit(memoryID: memoryID, showing: UUID())
         default: return nil
         }
     }
 
-    var id: String {
+    var id: UUID {
         switch self {
-        case .add: "add"
-        case let .edit(memoryID): "edit-\(memoryID)"
+        case let .add(showing), let .edit(_, showing): showing
         }
+    }
+
+    /// The memory being edited; nil for a new one.
+    var memoryID: String? {
+        if case let .edit(memoryID, _) = self { return memoryID }
+        return nil
     }
 }
 
