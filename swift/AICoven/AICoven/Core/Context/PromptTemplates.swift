@@ -262,6 +262,16 @@ enum PromptTemplates {
             example: #"{"tool": "figma.addComment", "input": {"file": "AbCdEfGhIjKl", "message": "The header overlaps the logo at 320pt."}, "reason": "Leave the feedback on the file"}"#
         ),
 
+        // Linear tools. An issue is named by its identifier, like ENG-12.
+        ToolDefinition(
+            name: "linear.getIssue",
+            description: "Read a Linear issue: its title, state, assignee, team, priority, due date, description and latest comments.",
+            parameters: [
+                ToolParameter(name: "issue", type: "string", description: "The issue's identifier, like 'ENG-12', or its link", required: true)
+            ],
+            example: #"{"tool": "linear.getIssue", "input": {"issue": "ENG-12"}, "reason": "Read the issue before answering"}"#
+        ),
+
         // Google Drive tools
         ToolDefinition(
             name: "google_drive.listFiles",
@@ -759,6 +769,9 @@ enum PromptTemplates {
     /// Figma tools, offered where Figma is connected.
     static let figmaTools: Set<String> = ["figma.readFile", "figma.readComments", "figma.addComment"]
 
+    /// Linear tools, offered where Linear is connected.
+    static let linearTools: Set<String> = ["linear.getIssue"]
+
     /// Image generation, offered where the person has a key that can
     /// make images, to a turn that gives what is made to its reply.
     static let imageTools: Set<String> = ["image.generate"]
@@ -785,6 +798,7 @@ enum PromptTemplates {
         .union(githubTools)
         .union(googleDriveTools)
         .union(figmaTools)
+        .union(linearTools)
 
     /// Dynamically resolve the Set of actual enabled native tools according to Connected Accounts + Entitlements.
     static func connectedToolSet() async -> Set<String> {
@@ -808,6 +822,10 @@ enum PromptTemplates {
 
         if await accountsService.getConnectedAccount(for: .figma) != nil {
             tools.formUnion(figmaTools)
+        }
+
+        if await accountsService.getConnectedAccount(for: .linear) != nil {
+            tools.formUnion(linearTools)
         }
 
         return tools

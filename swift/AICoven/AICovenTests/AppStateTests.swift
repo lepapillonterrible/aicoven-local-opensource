@@ -34,10 +34,12 @@ final class AppStateTests: XCTestCase {
 
         state.createNewThread()
 
-        // Give the async Task launched inside createNewThread a brief window to
-        // complete. In practice this is very fast since it only touches the
-        // local ThreadService.
-        try await Task.sleep(nanoseconds: 300_000_000) // 0.3s
+        // createNewThread does its work in a task of its own: wait for the
+        // thread to be there, for as long as a slow machine may take, and
+        // not for a fixed moment.
+        for _ in 0 ..< 200 where state.threads.count <= initialCount || state.selectedThread == nil {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
 
         XCTAssertGreaterThan(state.threads.count, initialCount)
         XCTAssertNotNil(state.selectedThread)

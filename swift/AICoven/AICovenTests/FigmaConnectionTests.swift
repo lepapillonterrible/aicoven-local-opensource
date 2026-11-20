@@ -118,7 +118,7 @@ final class FigmaConnectionTests: XCTestCase {
             await happens?()
             return try lock.withLock {
                 if let failure { throw failure }
-                guard let owner = owners[token] else { throw FigmaError.tokenRefused }
+                guard let owner = owners[token] else { throw ConnectedAccountsService.TokenRefusal.refused }
                 return owner
             }
         }
@@ -175,7 +175,10 @@ final class FigmaConnectionTests: XCTestCase {
         let figma = Figma()
         let tokens = InMemoryTokens()
         let who = Who()
-        let service = ConnectedAccountsService(currentUser: { who.id }, defaults: defaults, tokens: tokens.store, figmaIdentity: { try await figma.identity($0) })
+        let service = ConnectedAccountsService(currentUser: { who.id }, defaults: defaults, tokens: tokens.store, tokenIdentity: { _, token in
+            let who = try await figma.identity(token)
+            return .init(id: who.id, label: who.label)
+        })
         return World(service: service, figma: figma, tokens: tokens, who: who, defaults: defaults, suite: suite)
     }
 
@@ -184,12 +187,14 @@ final class FigmaConnectionTests: XCTestCase {
         defer { world.forget() }
         world.figma.takes("figd_one", of: "42", "ada@example.com")
 
-        let account = try await world.service.connectFigma(token: "  figd_one\n")
+        let account = try await world.service.connect(.figma, token: "  figd_one\n")
 
         XCTAssertEqual(account.provider, .figma)
         XCTAssertEqual(account.status, .connected)
         XCTAssertEqual(account.displayName, "ada@example.com")
-        XCTAssertEqual(account.metadata, ["figma_user_id": "42", "source": "personal_access_token"])
+        XCTAssertEqual(account.metadata, ["figma_user_id": "42", "source": "pasted_token"])
+        let bundle = try await world.service.getTokenBundle(forAccountId: account.id)
+        XCTAssertEqual(bundle.tokenType, "X-Figma-Token", "As it was kept before Linear shared the connection")
         XCTAssertEqual(world.figma.tokensAskedAbout, ["figd_one"], "Asked about the token without the space around it")
         let connected = await world.service.getConnectedAccount(for: .figma)
         XCTAssertEqual(connected?.id, account.id)
@@ -205,17 +210,17 @@ final class FigmaConnectionTests: XCTestCase {
         let world = try world()
         defer { world.forget() }
 
-        func refusal(_ token: String) async -> ConnectedAccountsService.FigmaTokenRefusal? {
+        func refusal(_ token: String) async -> ConnectedAccountsService.TokenRefusal? {
             do {
-                _ = try await world.service.connectFigma(token: token)
+                _ = try await world.service.connect(.figma, token: token)
                 return nil
             } catch {
-                return error as? ConnectedAccountsService.FigmaTokenRefusal
+                return error as? ConnectedAccountsService.TokenRefusal
             }
         }
         var why = await refusal("   ")
         XCTAssertEqual(why, .notAToken)
-        why = await refusal(String(repeating: "a", count: FigmaToolService.longestToken + 1))
+        why = await refusal(String(repeating: "a", count: ConnectedAccountsService.longestToken + 1))
         XCTAssertEqual(why, .notAToken)
         XCTAssertEqual(world.figma.tokensAskedAbout, [], "Figma is not sent what is no token")
 
@@ -224,7 +229,7 @@ final class FigmaConnectionTests: XCTestCase {
         // Figma does not answer: the error is Figma's, and nothing is kept.
         world.figma.fails(.notAnswered(status: 503))
         do {
-            _ = try await world.service.connectFigma(token: "figd_one")
+            _ = try await world.service.connect(.figma, token: "figd_one")
             XCTFail("Figma did not answer")
         } catch {
             XCTAssertEqual(error as? FigmaError, .notAnswered(status: 503))
@@ -241,8 +246,8 @@ final class FigmaConnectionTests: XCTestCase {
         world.figma.takes("figd_one", of: "42", "ada@example.com")
         world.figma.takes("figd_two", of: "77", "grace@example.com")
 
-        let first = try await world.service.connectFigma(token: "figd_one")
-        let second = try await world.service.connectFigma(token: "figd_two")
+        let first = try await world.service.connect(.figma, token: "figd_one")
+        let second = try await world.service.connect(.figma, token: "figd_two")
 
         let accounts = await world.service.getAllAccounts()
         XCTAssertEqual(accounts.map(\.id), [second.id], "One Figma connection")
@@ -256,38 +261,38 @@ final class FigmaConnectionTests: XCTestCase {
         world.figma.takes("figd_one", of: "42", "ada@example.com")
         world.figma.takes("figd_new", of: "42", "ada@new.example.com")
         world.figma.takes("figd_other", of: "77", "grace@example.com")
-        var account = try await world.service.connectFigma(token: "figd_one")
+        var account = try await world.service.connect(.figma, token: "figd_one")
         // Figma has refused its token: it waits for a new one.
         account.status = .error
         await world.service.updateAccount(account)
-        let waiting = await world.service.figmaAccountNeedingAToken()
+        let waiting = await world.service.accountWaitingForAToken(for: .figma)
         XCTAssertEqual(waiting?.id, account.id)
         let none = await world.service.getConnectedAccount(for: .figma)
         XCTAssertNil(none, "A connection that waits for a token is not used")
 
         do {
-            _ = try await world.service.connectFigma(token: "figd_other", replacing: account.id)
+            _ = try await world.service.connect(.figma, token: "figd_other", replacing: account.id)
             XCTFail("Another Figma account's token")
         } catch {
-            XCTAssertEqual(error as? ConnectedAccountsService.FigmaTokenRefusal, .otherAccount)
+            XCTAssertEqual(error as? ConnectedAccountsService.TokenRefusal, .otherAccount)
         }
         var kept = try await world.service.getTokenBundle(forAccountId: account.id)
         XCTAssertEqual(kept.accessToken, "figd_one", "The token it had is still the one kept")
 
-        let renewed = try await world.service.connectFigma(token: "figd_new", replacing: account.id)
+        let renewed = try await world.service.connect(.figma, token: "figd_new", replacing: account.id)
         XCTAssertEqual(renewed.id, account.id)
         XCTAssertEqual(renewed.status, .connected)
         XCTAssertEqual(renewed.displayName, "ada@new.example.com")
         kept = try await world.service.getTokenBundle(forAccountId: account.id)
         XCTAssertEqual(kept.accessToken, "figd_new")
-        let stillWaiting = await world.service.figmaAccountNeedingAToken()
+        let stillWaiting = await world.service.accountWaitingForAToken(for: .figma)
         XCTAssertNil(stillWaiting)
 
         do {
-            _ = try await world.service.connectFigma(token: "figd_new", replacing: "gone")
+            _ = try await world.service.connect(.figma, token: "figd_new", replacing: "gone")
             XCTFail("No such connection")
         } catch {
-            XCTAssertEqual(error as? ConnectedAccountsService.FigmaTokenRefusal, .changed)
+            XCTAssertEqual(error as? ConnectedAccountsService.TokenRefusal, .changed)
         }
     }
 
@@ -298,10 +303,10 @@ final class FigmaConnectionTests: XCTestCase {
         world.figma.duringTheNextQuestion { world.who.signIn("b") }
 
         do {
-            _ = try await world.service.connectFigma(token: "figd_one")
+            _ = try await world.service.connect(.figma, token: "figd_one")
             XCTFail("The account changed while Figma was asked")
         } catch {
-            XCTAssertEqual(error as? ConnectedAccountsService.FigmaTokenRefusal, .changed)
+            XCTAssertEqual(error as? ConnectedAccountsService.TokenRefusal, .changed)
         }
 
         XCTAssertEqual(world.tokens.all.values.flatMap(\.keys), [], "No token is kept, under either account")
@@ -322,13 +327,13 @@ final class FigmaConnectionTests: XCTestCase {
         // second, which is taken.
         let newer = Newer()
         world.figma.duringTheNextQuestion {
-            await newer.note(try? world.service.connectFigma(token: "figd_two"))
+            await newer.note(try? world.service.connect(.figma, token: "figd_two"))
         }
         do {
-            _ = try await world.service.connectFigma(token: "figd_one")
+            _ = try await world.service.connect(.figma, token: "figd_one")
             XCTFail("A newer token was given meanwhile")
         } catch {
-            XCTAssertEqual(error as? ConnectedAccountsService.FigmaTokenRefusal, .changed)
+            XCTAssertEqual(error as? ConnectedAccountsService.TokenRefusal, .changed)
         }
         let taken = await newer.account
         let second = try XCTUnwrap(taken)
@@ -347,20 +352,20 @@ final class FigmaConnectionTests: XCTestCase {
             await world.service.disconnectAccount(id: second.id)
         }
         do {
-            _ = try await world.service.connectFigma(token: "figd_three", replacing: second.id)
+            _ = try await world.service.connect(.figma, token: "figd_three", replacing: second.id)
             XCTFail("It was disconnected meanwhile")
         } catch {
-            XCTAssertEqual(error as? ConnectedAccountsService.FigmaTokenRefusal, .changed)
+            XCTAssertEqual(error as? ConnectedAccountsService.TokenRefusal, .changed)
         }
         let after = await world.service.getAllAccounts()
         XCTAssertEqual(after.map(\.status), [.disconnected])
         XCTAssertEqual(world.kept(), [:], "No token is kept for a connection that was disconnected")
         // Nor is a disconnected connection given a token afterwards.
         do {
-            _ = try await world.service.connectFigma(token: "figd_three", replacing: second.id)
+            _ = try await world.service.connect(.figma, token: "figd_three", replacing: second.id)
             XCTFail("A disconnected connection takes no new token")
         } catch {
-            XCTAssertEqual(error as? ConnectedAccountsService.FigmaTokenRefusal, .changed)
+            XCTAssertEqual(error as? ConnectedAccountsService.TokenRefusal, .changed)
         }
         XCTAssertEqual(world.kept(), [:])
     }
@@ -382,7 +387,7 @@ final class FigmaConnectionTests: XCTestCase {
         // The check is called off while Figma is asked (the question is
         // asked within the check's own task).
         world.figma.duringTheNextQuestion { withUnsafeCurrentTask { $0?.cancel() } }
-        let checking = Task { try await world.service.connectFigma(token: "figd_one") }
+        let checking = Task { try await world.service.connect(.figma, token: "figd_one") }
         do {
             _ = try await checking.value
             XCTFail("The check was called off")
@@ -398,7 +403,7 @@ final class FigmaConnectionTests: XCTestCase {
         // asks once more who is signed in (its second ask), which is the
         // last thing it waits for.
         world.who.callOffTheTaskThatAsks(nth: 2)
-        let late = Task { try await world.service.connectFigma(token: "figd_one") }
+        let late = Task { try await world.service.connect(.figma, token: "figd_one") }
         do {
             _ = try await late.value
             XCTFail("The check was called off")
@@ -414,7 +419,7 @@ final class FigmaConnectionTests: XCTestCase {
         let world = try world()
         defer { world.forget() }
         world.figma.takes("figd_one", of: "42", "ada@example.com")
-        let account = try await world.service.connectFigma(token: "figd_one")
+        let account = try await world.service.connect(.figma, token: "figd_one")
         let bundle = try await world.service.getTokenBundle(forAccountId: account.id)
 
         do {
@@ -431,18 +436,18 @@ final class FigmaConnectionTests: XCTestCase {
     // MARK: - What the person is told, and who may use it
 
     func testWhatTheSheetSaysOfATokenThatWasNotTaken() {
-        typealias Refusal = ConnectedAccountsService.FigmaTokenRefusal
-        XCTAssertEqual(FigmaTokenSheet.message(for: Refusal.refused), "Figma didn't accept this token. Check that it's copied whole and hasn't expired.")
-        XCTAssertEqual(FigmaTokenSheet.message(for: Refusal.notAToken), FigmaTokenSheet.message(for: Refusal.refused))
-        XCTAssertEqual(FigmaTokenSheet.message(for: Refusal.otherAccount), "This token belongs to a different Figma account. Create one from the account being replaced.")
-        XCTAssertEqual(FigmaTokenSheet.message(for: Refusal.changed), "This Figma connection changed while the token was checked. Close this and try again.")
-        XCTAssertEqual(FigmaTokenSheet.message(for: FigmaError.notAnswered(status: 500)), "Figma didn't answer. Try again.")
-        XCTAssertEqual(FigmaTokenSheet.message(for: URLError(.notConnectedToInternet)), "Figma didn't answer. Try again.")
-        XCTAssertEqual(FigmaTokenSheet.scopes.map(\.0), ["current_user:read", "file_content:read", "file_comments:read", "file_comments:write"])
+        typealias Refusal = ConnectedAccountsService.TokenRefusal
+        XCTAssertEqual(AppTokenSheet.message(for: Refusal.refused, in: .figma), "Figma didn't accept this token. Check that it's copied whole and hasn't expired.")
+        XCTAssertEqual(AppTokenSheet.message(for: Refusal.notAToken, in: .figma), AppTokenSheet.message(for: Refusal.refused, in: .figma))
+        XCTAssertEqual(AppTokenSheet.message(for: Refusal.otherAccount, in: .figma), "This token belongs to a different Figma account. Create one from the account being replaced.")
+        XCTAssertEqual(AppTokenSheet.message(for: Refusal.changed, in: .figma), "This Figma connection changed while the token was checked. Close this and try again.")
+        XCTAssertEqual(AppTokenSheet.message(for: FigmaError.notAnswered(status: 500), in: .figma), "Figma didn't answer. Try again.")
+        XCTAssertEqual(AppTokenSheet.message(for: URLError(.notConnectedToInternet), in: .figma), "Figma didn't answer. Try again.")
+        XCTAssertEqual(AppTokenSheet.Texts.figma.scopes.map(\.0), ["current_user:read", "file_content:read", "file_comments:read", "file_comments:write"])
     }
 
     func testFigmaIsAConnectedApp_underACovensChoiceAndTheToolsPack() async {
-        XCTAssertEqual(ConnectedAppProvider.allCases, [.github, .googleDrive, .figma])
+        XCTAssertEqual(ConnectedAppProvider.allCases, [.github, .googleDrive, .figma, .linear])
         XCTAssertTrue(ConnectedAppProvider.figma.connectsWithToken)
         XCTAssertFalse(ConnectedAppProvider.github.connectsWithToken)
         XCTAssertFalse(ConnectedAppProvider.googleDrive.connectsWithToken)

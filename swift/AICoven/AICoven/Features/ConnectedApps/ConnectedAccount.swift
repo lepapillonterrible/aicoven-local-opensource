@@ -52,6 +52,7 @@ enum ConnectedAppProvider: String, Codable, CaseIterable {
     case github
     case googleDrive = "google_drive"
     case figma
+    case linear
 
     /// Human-readable display name
     var displayName: String {
@@ -59,6 +60,7 @@ enum ConnectedAppProvider: String, Codable, CaseIterable {
         case .github: "GitHub"
         case .googleDrive: "Google Drive"
         case .figma: "Figma"
+        case .linear: "Linear"
         }
     }
 
@@ -68,14 +70,16 @@ enum ConnectedAppProvider: String, Codable, CaseIterable {
         case .github: "link.circle.fill"
         case .googleDrive: "folder.fill"
         case .figma: "paintbrush.pointed.fill"
+        case .linear: "checklist"
         }
     }
 
     /// Whether the app is connected with a token the person makes in the
     /// app itself and pastes here, not by signing in. (Signing in with
-    /// Figma needs a secret a server holds; this app has no server.)
+    /// Figma or Linear needs a secret a server holds; this app has no
+    /// server.)
     var connectsWithToken: Bool {
-        self == .figma
+        self == .figma || self == .linear
     }
 
     /// Of `accounts`, this app's connection whose token was refused and
@@ -96,8 +100,8 @@ enum ConnectedAppProvider: String, Codable, CaseIterable {
                 "https://www.googleapis.com/auth/documents",
                 "https://www.googleapis.com/auth/spreadsheets"
             ]
-        case .figma:
-            // A token's scopes are chosen in Figma when it is made.
+        case .figma, .linear:
+            // A token's reach is set where it is made.
             []
         }
     }

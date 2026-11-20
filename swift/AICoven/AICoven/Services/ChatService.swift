@@ -1932,6 +1932,7 @@ extension ChatService {
         case _ where tool.hasPrefix("google_sheets"): "Google Sheets"
         case _ where tool.hasPrefix("google_slides"): "Google Slides"
         case _ where tool.hasPrefix("figma."): "Figma"
+        case _ where tool.hasPrefix("linear."): "Linear"
         default: tool
         }
     }
@@ -1953,6 +1954,7 @@ extension ChatService {
         case _ where tool.hasPrefix("google_sheets"): "📊 Working with Sheets…"
         case _ where tool.hasPrefix("google_slides"): "🖼️ Working with Slides…"
         case _ where tool.hasPrefix("figma."): "🎨 Working with Figma…"
+        case _ where tool.hasPrefix("linear."): "📋 Working with Linear…"
         default: "⚙️ Using \(tool)…"
         }
     }

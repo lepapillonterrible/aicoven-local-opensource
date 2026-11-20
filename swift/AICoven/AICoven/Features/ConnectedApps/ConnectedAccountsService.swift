@@ -34,8 +34,47 @@ actor ConnectedAccountsService {
 
     private let tokens: TokenStore
 
-    /// Asks Figma who a token belongs to; a test answers in Figma's place.
-    private let figmaIdentity: @Sendable (_ token: String) async throws -> FigmaToolService.Identity
+    /// Who a pasted token belongs to: the app's id of the person, and
+    /// what the connection is shown as.
+    struct TokenIdentity: Equatable {
+        let id: String
+        let label: String
+    }
+
+    /// Asks an app who a token belongs to; a test answers in its place.
+    /// Throws `TokenRefusal.refused` where the app does not take the token.
+    private let tokenIdentity: @Sendable (_ provider: ConnectedAppProvider, _ token: String) async throws -> TokenIdentity
+
+    /// Asks the app itself.
+    static let askTheApp = askTheApp(through: .shared)
+
+    /// Asks the app itself, through `session` (a test's answers in the
+    /// app's place).
+    static func askTheApp(through session: URLSession) -> @Sendable (ConnectedAppProvider, String) async throws -> TokenIdentity {
+        { provider, token in try await identity(ofTokenOf: provider, token, session: session) }
+    }
+
+    private static func identity(ofTokenOf provider: ConnectedAppProvider, _ token: String, session: URLSession) async throws -> TokenIdentity {
+        switch provider {
+        case .figma:
+            do {
+                let who = try await FigmaToolService.identity(token: token, session: session)
+                return TokenIdentity(id: who.id, label: who.label)
+            } catch FigmaError.tokenRefused {
+                throw TokenRefusal.refused
+            }
+        case .linear:
+            do {
+                let who = try await LinearToolService.identity(key: token, session: session)
+                return TokenIdentity(id: who.id, label: who.label)
+            } catch LinearError.keyRefused {
+                throw TokenRefusal.refused
+            }
+        case .github, .googleDrive:
+            // These sign in; they take no pasted token.
+            throw TokenRefusal.notAToken
+        }
+    }
 
     /// The account whose connections are in memory, or nil before any are.
     private var loadedFor: String?
@@ -50,12 +89,12 @@ actor ConnectedAccountsService {
         currentUser: @escaping @Sendable () async -> String = { await MainActor.run { UserScope.currentUserID } },
         defaults: UserDefaults = .standard,
         tokens: TokenStore = .keychain,
-        figmaIdentity: @escaping @Sendable (_ token: String) async throws -> FigmaToolService.Identity = { try await FigmaToolService.identity(token: $0) }
+        tokenIdentity: @escaping @Sendable (_ provider: ConnectedAppProvider, _ token: String) async throws -> TokenIdentity = ConnectedAccountsService.askTheApp
     ) {
         self.currentUser = currentUser
         self.defaults = defaults
         self.tokens = tokens
-        self.figmaIdentity = figmaIdentity
+        self.tokenIdentity = tokenIdentity
     }
 
     /// Makes what is in memory the signed-in account's, and says whose it
@@ -66,8 +105,8 @@ actor ConnectedAccountsService {
     /// A method that changes something waits for nothing after this: the
     /// lists and tokens it reads and writes are all this one account's,
     /// under names spelled from it, whoever signs in meanwhile. The two
-    /// that must wait (`refreshAccessToken` and `connectFigma`, each for
-    /// its provider) ask again afterwards and keep nothing if the account
+    /// that must wait (`refreshAccessToken` and `connect(_:token:)`, each
+    /// for its provider) ask again afterwards and keep nothing if the account
     /// is another by then.
     @discardableResult
     private func ensureAccountsLoaded() async -> String {
@@ -168,7 +207,7 @@ actor ConnectedAccountsService {
     /// Delete a connected account and its tokens
     func deleteAccount(id: String) async throws {
         let owner = await ensureAccountsLoaded()
-        if accountsCache?.contains(where: { $0.id == id && $0.provider == .figma }) == true { figmaChanges += 1 }
+        if let provider = accountsCache?.first(where: { $0.id == id })?.provider { tokenChanges[provider, default: 0] += 1 }
         deleteTokenBundle(forAccountId: id, of: owner)
         accountsCache?.removeAll { $0.id == id }
         saveAccountsToStorage()
@@ -178,7 +217,7 @@ actor ConnectedAccountsService {
     func disconnectAccount(id: String) async {
         let owner = await ensureAccountsLoaded()
         if let index = accountsCache?.firstIndex(where: { $0.id == id }) {
-            if accountsCache?[index].provider == .figma { figmaChanges += 1 }
+            if let provider = accountsCache?[index].provider { tokenChanges[provider, default: 0] += 1 }
             accountsCache?[index].status = .disconnected
             accountsCache?[index].updatedAt = Date()
             saveAccountsToStorage()
@@ -188,68 +227,72 @@ actor ConnectedAccountsService {
         }
     }
 
-    // MARK: - Figma, connected with a token
+    // MARK: - Apps connected with a token
 
-    /// Why a Figma token was not taken.
-    enum FigmaTokenRefusal: Error, Equatable {
+    /// Why a pasted token was not taken.
+    enum TokenRefusal: Error, Equatable {
         /// It says nothing, or is longer than a token is.
         case notAToken
-        /// Figma did not accept it.
+        /// The app did not accept it.
         case refused
-        /// It is of another Figma account than the one whose token is
-        /// being replaced.
+        /// It is of another account of the app than the one whose token
+        /// is being replaced.
         case otherAccount
         /// The connection being given a new token is no longer there, or
-        /// another account signed in to the app while Figma was asked.
+        /// something else was done to it, or another account signed in to
+        /// this app, while the token was checked.
         case changed
     }
 
-    /// The Figma metadata key that holds Figma's id of the user.
-    static let figmaUserKey = "figma_user_id"
+    /// The most characters a pasted token may have.
+    static let longestToken = 512
 
-    /// Counts what is done to the Figma connection (a token given, the
-    /// connection disconnected or deleted). A token whose check with
-    /// Figma was overtaken by any of these is not kept.
-    private var figmaChanges = 0
+    /// The metadata key that holds the app's id of the person.
+    static func userKey(for provider: ConnectedAppProvider) -> String {
+        "\(provider.rawValue)_user_id"
+    }
 
-    /// Connects Figma with a personal access token, or gives the
-    /// connection `replacing` a new one. The token is checked with Figma
-    /// first (who it belongs to); nothing is kept of a token Figma does
-    /// not accept. A new token for a connection must be of the same Figma
-    /// account. The token is kept in the Keychain and is never returned.
-    func connectFigma(token given: String, replacing accountID: String? = nil) async throws -> ConnectedAccount {
+    /// Counts, for each app, what is done to its connection (a token
+    /// given, the connection disconnected or deleted). A token whose check
+    /// was overtaken by any of these is not kept.
+    private var tokenChanges: [ConnectedAppProvider: Int] = [:]
+
+    /// Connects an app with a token the person pasted (a Figma personal
+    /// access token, a Linear personal API key), or gives the connection
+    /// `replacing` a new one. The token is checked with the app first
+    /// (who it belongs to); nothing is kept of a token it does not
+    /// accept. A new token for a connection must be of the same account
+    /// of the app. The token is kept in the Keychain and is never
+    /// returned.
+    func connect(_ provider: ConnectedAppProvider, token given: String, replacing accountID: String? = nil) async throws -> ConnectedAccount {
         let token = given.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !token.isEmpty, token.count <= FigmaToolService.longestToken else { throw FigmaTokenRefusal.notAToken }
+        guard provider.connectsWithToken, !token.isEmpty, token.count <= Self.longestToken else { throw TokenRefusal.notAToken }
 
         let owner = await ensureAccountsLoaded()
-        figmaChanges += 1
-        let attempt = figmaChanges
-        let who: FigmaToolService.Identity
-        do {
-            who = try await figmaIdentity(token)
-        } catch FigmaError.tokenRefused {
-            throw FigmaTokenRefusal.refused
-        }
-        // Figma was waited for. What follows is for the account that
+        tokenChanges[provider, default: 0] += 1
+        let attempt = tokenChanges[provider]
+        let who = try await tokenIdentity(provider, token)
+        // The app was waited for. What follows is for the account that
         // asked, with nothing more waited for; and only if the person has
         // not called it off (the sheet was closed), given another token,
-        // or disconnected Figma meanwhile.
+        // or disconnected the app meanwhile.
         let sameOwner = await ensureAccountsLoaded() == owner
         // Nothing waits from here to the end.
         try Task.checkCancellation()
-        guard sameOwner, attempt == figmaChanges else { throw FigmaTokenRefusal.changed }
+        guard sameOwner, attempt == tokenChanges[provider] else { throw TokenRefusal.changed }
 
-        let bundle = OAuthTokenBundle(accessToken: token, refreshToken: nil, tokenType: "X-Figma-Token", expiresAt: nil, scopes: [])
+        // The kind of token is the header it is sent in.
+        let bundle = OAuthTokenBundle(accessToken: token, refreshToken: nil, tokenType: provider == .figma ? "X-Figma-Token" : "Authorization", expiresAt: nil, scopes: [])
         let now = Date()
 
         if let accountID {
             // A connection that was disconnected is not brought back by
             // a token given before that.
-            guard let index = accountsCache?.firstIndex(where: { $0.id == accountID && $0.provider == .figma }), var account = accountsCache?[index],
+            guard let index = accountsCache?.firstIndex(where: { $0.id == accountID && $0.provider == provider }), var account = accountsCache?[index],
                   account.status == .connected || account.status == .error else {
-                throw FigmaTokenRefusal.changed
+                throw TokenRefusal.changed
             }
-            guard account.metadata[Self.figmaUserKey] == who.id else { throw FigmaTokenRefusal.otherAccount }
+            guard account.metadata[Self.userKey(for: provider)] == who.id else { throw TokenRefusal.otherAccount }
             try storeTokenBundle(bundle, forAccountId: accountID, of: owner)
             account.displayName = who.label
             account.status = .connected
@@ -262,45 +305,45 @@ actor ConnectedAccountsService {
 
         let account = ConnectedAccount(
             id: UUID().uuidString,
-            provider: .figma,
+            provider: provider,
             displayName: who.label,
             status: .connected,
             scopes: [],
-            metadata: [Self.figmaUserKey: who.id, "source": "personal_access_token"],
+            metadata: [Self.userKey(for: provider): who.id, "source": "pasted_token"],
             createdAt: now,
             updatedAt: now,
             lastRefreshAt: now
         )
         try storeTokenBundle(bundle, forAccountId: account.id, of: owner)
-        // One Figma connection is used: an earlier one is put down, with
-        // its token.
-        for earlier in accountsCache ?? [] where earlier.provider == .figma {
+        // One connection of the app is used: an earlier one is put down,
+        // with its token.
+        for earlier in accountsCache ?? [] where earlier.provider == provider {
             deleteTokenBundle(forAccountId: earlier.id, of: owner)
         }
-        accountsCache?.removeAll { $0.provider == .figma }
+        accountsCache?.removeAll { $0.provider == provider }
         accountsCache = (accountsCache ?? []) + [account]
         saveAccountsToStorage()
         return account
     }
 
-    /// Marks a Figma connection as one whose token Figma has refused: it
-    /// is not used again until the person gives it a new token. Only if
-    /// `token` is still the one it keeps: a refusal of a token that has
-    /// since been replaced says nothing of the new one.
-    func markFigmaTokenRefused(accountID: String, token: String) async {
+    /// Marks a connection made with a pasted token as one whose token the
+    /// app has refused: it is not used again until the person gives it a
+    /// new token. Only if `token` is still the one it keeps: a refusal of
+    /// a token that has since been replaced says nothing of the new one.
+    func markTokenRefused(accountID: String, token: String) async {
         let owner = await ensureAccountsLoaded()
-        guard let index = accountsCache?.firstIndex(where: { $0.id == accountID && $0.provider == .figma && $0.status == .connected }),
+        guard let index = accountsCache?.firstIndex(where: { $0.id == accountID && $0.provider.connectsWithToken && $0.status == .connected }),
               (try? tokenBundle(forAccountId: accountID, of: owner))?.accessToken == token else { return }
         accountsCache?[index].status = .error
         accountsCache?[index].updatedAt = Date()
         saveAccountsToStorage()
     }
 
-    /// The Figma connection whose token Figma has refused, which waits
-    /// for a new one; nil if there is none.
-    func figmaAccountNeedingAToken() async -> ConnectedAccount? {
+    /// An app's connection whose token it has refused, which waits for a
+    /// new one; nil if there is none.
+    func accountWaitingForAToken(for provider: ConnectedAppProvider) async -> ConnectedAccount? {
         await ensureAccountsLoaded()
-        return ConnectedAppProvider.figma.accountWaitingForAToken(in: accountsCache ?? [])
+        return provider.accountWaitingForAToken(in: accountsCache ?? [])
     }
 
     // MARK: - MCP Server Management
@@ -532,7 +575,7 @@ actor ConnectedAccountsService {
                 currentScopes: currentBundle.scopes
             )
 
-        case .figma:
+        case .figma, .linear:
             // Not reached: a pasted token is turned away above.
             throw ConnectedAccountError.refreshNotSupported(provider: account.provider)
         }

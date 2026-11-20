@@ -194,8 +194,8 @@ final class FigmaToolsTests: XCTestCase {
     ) async throws -> World {
         let suite = "FigmaToolsTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        let accounts = ConnectedAccountsService(currentUser: { "figma-tests" }, defaults: defaults, tokens: InMemoryTokens().store, figmaIdentity: { _ in .init(id: "42", label: "ada@example.com") })
-        if connected { _ = try await accounts.connectFigma(token: "figd_TEST") }
+        let accounts = ConnectedAccountsService(currentUser: { "figma-tests" }, defaults: defaults, tokens: InMemoryTokens().store, tokenIdentity: { _, _ in .init(id: "42", label: "ada@example.com") })
+        if connected { _ = try await accounts.connect(.figma, token: "figd_TEST") }
 
         let asked = Asked()
         let config = URLSessionConfiguration.ephemeral
@@ -215,7 +215,7 @@ final class FigmaToolsTests: XCTestCase {
             covenConnections: { _ in connections },
             connectedAccounts: accounts,
             hasToolsPack: { true },
-            figmaSession: URLSession(configuration: config)
+            appSession: URLSession(configuration: config)
         )
         await executor.setWhitelist(for: "chat", tools: PromptTemplates.figmaTools)
         return World(executor: executor, accounts: accounts, asked: asked, seen: seen, defaults: defaults, suite: suite)
@@ -364,7 +364,7 @@ final class FigmaToolsTests: XCTestCase {
         XCTAssertEqual(result.error, "Figma refused the token. The person can give Figma a new token in Settings > \(SettingsPane.connectedApps.listedTitle).")
         connection = await refused.accounts.getConnectedAccount(for: .figma)
         XCTAssertNil(connection)
-        let waiting = await refused.accounts.figmaAccountNeedingAToken()
+        let waiting = await refused.accounts.accountWaitingForAToken(for: .figma)
         XCTAssertNotNil(waiting)
         let before = refused.asked.requests.count
         result = await refused.call("figma.readFile", ["file": AnyJSONValue("AbCdEfGhIjKl")])
@@ -374,11 +374,11 @@ final class FigmaToolsTests: XCTestCase {
         // A refusal of a token that has since been replaced says nothing
         // of the new one.
         let replaced = try XCTUnwrap(waiting)
-        _ = try await refused.accounts.connectFigma(token: "figd_NEW", replacing: replaced.id)
-        await refused.accounts.markFigmaTokenRefused(accountID: replaced.id, token: "figd_TEST")
+        _ = try await refused.accounts.connect(.figma, token: "figd_NEW", replacing: replaced.id)
+        await refused.accounts.markTokenRefused(accountID: replaced.id, token: "figd_TEST")
         connection = await refused.accounts.getConnectedAccount(for: .figma)
         XCTAssertNotNil(connection, "The new token's connection stands")
-        await refused.accounts.markFigmaTokenRefused(accountID: replaced.id, token: "figd_NEW")
+        await refused.accounts.markTokenRefused(accountID: replaced.id, token: "figd_NEW")
         connection = await refused.accounts.getConnectedAccount(for: .figma)
         XCTAssertNil(connection)
 
