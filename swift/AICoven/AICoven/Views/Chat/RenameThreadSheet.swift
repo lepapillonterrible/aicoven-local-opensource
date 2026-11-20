@@ -11,6 +11,7 @@ struct RenameThreadSheet: View {
     @FocusState private var nameFocused: Bool
     /// The title was selected when editing first began (iOS).
     @State private var selectedOnOpen = false
+    @State private var didRename = false
 
     let onRename: (String) -> Void
 
@@ -134,7 +135,9 @@ struct RenameThreadSheet: View {
     }
 
     private func rename() {
-        guard let name = ThreadListRules.name(from: draft) else { return }
+        // Once: Return in the field can reach both the field and the button.
+        guard !didRename, let name = ThreadListRules.name(from: draft) else { return }
+        didRename = true
         onRename(name)
         dismiss()
     }

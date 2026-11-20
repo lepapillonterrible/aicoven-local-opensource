@@ -251,6 +251,14 @@ struct PersonalWorkspaceView: View {
                 await onRefreshThreads()
             }
         }
+        // A thread renamed in the sidebar goes by its new name where it is
+        // open too: on its tab and over its messages.
+        .onChange(of: personalThreads) { _, threads in
+            if openTabs.showsAnOldName(among: threads) { openTabs = openTabs.showing(threads) }
+            if let open = selectedThread, let now = threads.first(where: { $0.id == open.id }), now.title != open.title {
+                selectedThread = now
+            }
+        }
     }
 
     private func handleNewThread() {

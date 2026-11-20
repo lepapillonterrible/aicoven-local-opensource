@@ -121,6 +121,7 @@ final class ThreadActions: ObservableObject {
             } catch is CancellationError {
                 said = nil
             } catch {
+                if !(error is ThreadMarkdownExportError) { AppErrorReporter.log(error: error, context: "ThreadActions.copy") }
                 guard dependencies.currentAccount() == account else {
                     self?.finishExport(request, saying: nil)
                     return
@@ -138,8 +139,9 @@ final class ThreadActions: ObservableObject {
         return copying
     }
 
-    /// Calls off a copy under way and what it would have said: the list
-    /// went to another place or another account.
+    /// The list went to another place or another account: a copy under
+    /// way is called off with what it would have said, and a rename sheet
+    /// or a delete question still open is closed.
     func invalidate() {
         cancelExport()
         renaming = nil
@@ -175,6 +177,7 @@ final class ThreadActions: ObservableObject {
                 if let left { onLeft?(left) }
                 onChanged?()
             } catch {
+                AppErrorReporter.log(error: error, context: "ThreadActions: \(failureTitle)")
                 guard let self, dependencies.currentAccount() == account else { return }
                 failure = Failure(title: failureTitle)
                 // The list shows what is stored, whatever was tried.

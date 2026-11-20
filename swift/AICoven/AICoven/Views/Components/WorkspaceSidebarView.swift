@@ -162,6 +162,11 @@ struct WorkspaceSidebarView: View {
         .task {
             await loadCovens()
         }
+        // A thread renamed in the list goes by its new name on its tab and
+        // over its messages too.
+        .onChange(of: threads) { _, threads in
+            if openTabs.showsAnOldName(among: threads) { openTabs = openTabs.showing(threads) }
+        }
         // Load threads for whatever coven is selected — including the first
         // paint when ``WorkspaceView`` was constructed with
         // ``initialCoven``/``initialThread`` from the home "Recent" list.

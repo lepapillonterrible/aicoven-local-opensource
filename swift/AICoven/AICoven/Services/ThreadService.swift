@@ -17,6 +17,10 @@ actor ThreadService {
     /// Counts resets of the list, so a load that began before one is not
     /// kept after it.
     private var resets = 0
+    /// How many loads of the threads are under way, and the messages
+    /// stored meanwhile, by thread id: the threads read may not have them.
+    private var loadsUnderWay = 0
+    private var notedWhileLoading: [String: Date] = [:]
 
     private init() {}
 
@@ -30,8 +34,12 @@ actor ThreadService {
         if let index = personalThreads.firstIndex(where: { $0.id == threadID }) {
             personalThreads[index] = personalThreads[index].lastUsed(at: date)
         }
-        // Told whether or not the thread is among those held: the threads
-        // can be on their way from the database, read before this message.
+        // The threads can be on their way from the database, read before
+        // this message was stored: it is kept, and counted when they are in.
+        if loadsUnderWay > 0 {
+            notedWhileLoading[threadID] = max(date, notedWhileLoading[threadID] ?? date)
+        }
+        // Told whether or not the thread is among those held.
         // Posted on the main actor: the lists that hear it are views.
         Task { @MainActor in
             NotificationCenter.default.post(name: Self.threadUsed, object: nil)
@@ -62,13 +70,18 @@ actor ThreadService {
         // used before it is done.
         await AttachmentStore.shared.clearLeftovers(for: userID)
         let resetsAtStart = resets
+        loadsUnderWay += 1
+        defer {
+            loadsUnderWay -= 1
+            if loadsUnderWay == 0 { notedWhileLoading = [:] }
+        }
         let threads = try await ThreadRepository.shared.loadChatThreads()
         // The data can be locked, the list reset, or the account changed
         // while the database answers; what was read is then not kept.
         guard await DataEncryptionService.shared.isUnlocked(for: userID) else { throw RepositoryError.dataLocked }
         guard UserScope.currentUserID == userID, resets == resetsAtStart else { throw RepositoryError.accountChanged }
         guard loadedUserID != userID else { return }
-        personalThreads = threads.sorted { $0.createdAt < $1.createdAt }
+        personalThreads = threads.sorted { $0.createdAt < $1.createdAt }.map { $0.lastUsed(at: notedWhileLoading[$0.id]) }
         loadedUserID = userID
         await cleanupTestThreads()
     }

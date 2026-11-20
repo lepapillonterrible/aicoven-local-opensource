@@ -174,3 +174,28 @@ struct WorkspaceTab: Identifiable, Equatable {
     }
 
 }
+
+extension [WorkspaceTab] {
+    /// These tabs, each tab of a thread showing the thread by the name it
+    /// has among `threads` now (it can have been renamed in a list). A tab
+    /// keeps its place; one whose thread is not among them is left as it
+    /// is.
+    func showing(_ threads: [Thread]) -> [WorkspaceTab] {
+        map { tab in
+            guard case let .thread(open) = tab.type,
+                  let now = threads.first(where: { $0.id == open.id }),
+                  now.title != open.title
+            else { return tab }
+            return .thread(now)
+        }
+    }
+
+    /// Whether any tab of a thread shows a name the thread no longer has
+    /// among `threads`.
+    func showsAnOldName(among threads: [Thread]) -> Bool {
+        contains { tab in
+            guard case let .thread(open) = tab.type, let now = threads.first(where: { $0.id == open.id }) else { return false }
+            return now.title != open.title
+        }
+    }
+}
