@@ -24,6 +24,9 @@ struct MacShellView: View {
     /// The New Thread sheet on screen, if one is: each showing is its own.
     @State private var newThreadSheet: NewThreadSheet?
     @State private var showCreateCoven = false
+    /// A thread is being made for New Thread in Strix: a second click makes
+    /// no second one.
+    @State private var isMakingThread = false
 
     /// The covens in the person's order.
     private var orderedCovens: [Coven] {
@@ -157,9 +160,12 @@ struct MacShellView: View {
             newThreadSheet = NewThreadSheet(covenID: navigator.selected.covenID)
             return
         }
+        guard !isMakingThread else { return }
+        isMakingThread = true
         let account = UserScope.currentUserID
         let asked = navigator.placeGeneration
         Task {
+            defer { isMakingThread = false }
             do {
                 let thread = try await ThreadService.shared.createThread(title: "New Chat", covenId: nil, agentId: nil)
                 // Opened only for the account that asked, and only if the
