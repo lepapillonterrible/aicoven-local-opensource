@@ -1211,7 +1211,7 @@ actor ToolExecutionService {
         } catch {
             // Stopped, however that showed (the request cancelled too).
             if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
-                return .error(tool: toolCall.name, message: "Stopped before Figma answered.", errorType: "cancelled")
+                return .error(tool: toolCall.name, message: "Stopped before Figma's answer was used.", errorType: "cancelled")
             }
             // The token that was refused is the one marked, if it is
             // still the connection's.
@@ -1219,7 +1219,7 @@ actor ToolExecutionService {
                 await connectedAccountsService.markTokenRefused(accountID: account.id, token: token)
                 // Stopped while that was written down.
                 if Task.isCancelled {
-                    return .error(tool: toolCall.name, message: "Stopped before Figma answered.", errorType: "cancelled")
+                    return .error(tool: toolCall.name, message: "Stopped before Figma's answer was used.", errorType: "cancelled")
                 }
             }
             // A change whose answer did not come may have been made: it is
@@ -1298,13 +1298,17 @@ actor ToolExecutionService {
     /// as needing a new one. A call whose turn was stopped tells that it
     /// was stopped, wherever the stop landed.
     private func executeLinearGetIssue(toolCall: ParsedToolCall) async -> ToolExecutionResult {
-        guard let account = await connectedAccountsService.getConnectedAccount(for: .linear) else {
-            return .error(tool: toolCall.name, message: Self.linearNotConnected)
-        }
+        // What names no issue is told so before anything is waited for.
         guard let given = toolCall.args["issue"]?.value as? String, let issue = LinearToolService.issueReference(given) else {
             return .validationError(tool: toolCall.name, message: "Missing or unreadable 'issue'. Give a Linear issue's identifier, like 'ENG-12', or its link.", field: "issue")
         }
         let stopped = ToolExecutionResult.error(tool: toolCall.name, message: "Stopped before the issue was read.", errorType: "cancelled")
+        let account = await connectedAccountsService.getConnectedAccount(for: .linear)
+        // Stopped while the connection was looked up.
+        if Task.isCancelled { return stopped }
+        guard let account else {
+            return .error(tool: toolCall.name, message: Self.linearNotConnected)
+        }
         var key: String?
         do {
             let kept = try await connectedAccountsService.getAccessToken(forAccountId: account.id)

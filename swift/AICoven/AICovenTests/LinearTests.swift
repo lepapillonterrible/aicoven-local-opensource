@@ -313,6 +313,16 @@ final class LinearTests: XCTestCase {
         XCTAssertEqual(result.error, ToolExecutionService.linearNotConnected)
         XCTAssertEqual(refused.asked.requests.count, 1)
 
+        // A call whose turn was stopped says so, also where it would
+        // otherwise say that Linear is not connected.
+        let stoppedWorld = try await world(connected: false)
+        defer { stoppedWorld.forget() }
+        let stopping = Task { await stoppedWorld.call("linear.getIssue", ["issue": AnyJSONValue("ENG-12")]) }
+        stopping.cancel()
+        let stopped = await stopping.value
+        XCTAssertEqual(stopped.errorType, "cancelled")
+        XCTAssertEqual(stopped.error, "Stopped before the issue was read.")
+
         // What names no issue is told so, and Linear is not asked.
         let unasked = try await world()
         defer { unasked.forget() }
