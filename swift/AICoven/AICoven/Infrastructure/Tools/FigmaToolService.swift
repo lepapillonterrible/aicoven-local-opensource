@@ -243,7 +243,8 @@ nonisolated extension FigmaToolService {
         ], token: token, session: session)
         if let failure = found["err"], !(failure is NSNull) { throw FigmaError.couldNotRender }
         guard let images = found["images"] as? [String: Any] else { throw FigmaError.invalidResponse }
-        return images.compactMapValues { $0 as? String }
+        // A link that is nothing is no link.
+        return images.compactMapValues { link in (link as? String).flatMap { $0.isEmpty ? nil : $0 } }
     }
 
     /// Whether a rendered picture is fetched from this address: one Figma

@@ -1808,9 +1808,6 @@ extension ChatService {
         return min(stored, 15)
     }
 
-    /// Execute a chat tool call using ToolExecutionService and return a short summary
-    /// plus an optional context block that can be fed back into the context sandwich.
-    /// This enhanced version routes through the central ToolExecutionService for all tools.
     /// A message with what the turn's tool pictures are said after it,
     /// where there are any: they are sent with it.
     nonisolated static func withToolPictures(_ message: String, _ pictures: TurnPictures?) -> String {
@@ -1818,6 +1815,9 @@ extension ChatService {
         return message + "\n\n" + caption
     }
 
+    /// Execute a chat tool call using ToolExecutionService and return a short summary
+    /// plus an optional context block that can be fed back into the context sandwich.
+    /// This enhanced version routes through the central ToolExecutionService for all tools.
     nonisolated func executeChatToolCall(_ call: ChatToolInvocation, threadID: String?, pictures: TurnPictures? = nil) async throws -> (summary: String, contextBlock: String?, files: [FileAttachmentDetail]) {
         // A stopped turn starts no tool.
         try Task.checkCancellation()
