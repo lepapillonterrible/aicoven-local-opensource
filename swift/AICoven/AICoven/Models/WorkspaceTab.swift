@@ -3,6 +3,9 @@ import Foundation
 /// Type of workspace tab
 enum WorkspaceTabType: Equatable {
     case thread(Thread)
+    /// A thread not made yet: it is made when its first message is sent.
+    /// In a coven, or in Strix (no coven).
+    case draftThread(covenId: String?)
     case profile
     case settings
     case providerKeys
@@ -33,6 +36,8 @@ enum WorkspaceTabType: Equatable {
         switch (lhs, rhs) {
         case let (.thread(t1), .thread(t2)):
             t1.id == t2.id
+        case let (.draftThread(c1), .draftThread(c2)):
+            c1 == c2
         case let (.addRole(c1), .addRole(c2)):
             c1 == c2
         case let (.editRole(r1), .editRole(r2)):
@@ -69,6 +74,7 @@ enum WorkspaceTabType: Equatable {
     var analyticsName: String {
         switch self {
         case .thread: "thread"
+        case .draftThread: "draft_thread"
         case .profile: "profile"
         case .settings: "settings"
         case .providerKeys: "provider_keys"
@@ -136,6 +142,11 @@ struct WorkspaceTab: Identifiable, Equatable {
             type: .editRole(roleId: roleId),
             title: "Edit \(roleName)"
         )
+    }
+
+    /// A thread not made yet, in a coven or in Strix.
+    static func draftThread(covenId: String?) -> WorkspaceTab {
+        WorkspaceTab(id: "draft-thread-\(covenId ?? "strix")", type: .draftThread(covenId: covenId), title: "New Thread")
     }
 
     /// A coven's agents.
