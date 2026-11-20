@@ -215,6 +215,87 @@ extension View {
     }
 }
 
+// MARK: - The iPhone's back button
+
+extension View {
+    /// The system's back button as a chevron in water, with no title. The
+    /// button is the system's, so the edge swipe back, and the pop's
+    /// transition, are the system's too.
+    @ViewBuilder
+    func stoneBackButton() -> some View {
+        #if os(iOS)
+        if #available(iOS 26, *) {
+            background { StoneBackButtonStyler().frame(width: 0, height: 0) }
+        } else {
+            self
+        }
+        #else
+        self
+        #endif
+    }
+}
+
+#if os(iOS)
+/// The back button belongs to the screen underneath: UIKit draws the
+/// previous screen's `backBarButtonItem`. This gives that screen an
+/// empty-titled item in water while this screen is on the stack, and takes
+/// it away when this screen is popped, so a screen that does not ask for
+/// the stone back button keeps the system's.
+@available(iOS 26, *)
+private struct StoneBackButtonStyler: UIViewControllerRepresentable {
+    func makeUIViewController(context _: Context) -> Styler {
+        Styler()
+    }
+
+    func updateUIViewController(_: Styler, context _: Context) {}
+
+    final class Styler: UIViewController {
+        private let item: UIBarButtonItem = {
+            let item = UIBarButtonItem(title: "", style: .plain, target: nil, action: nil)
+            item.tintColor = UIColor(Color.aicovenWater)
+            item.accessibilityLabel = "Back"
+            return item
+        }()
+
+        private weak var host: UIViewController?
+        private weak var previous: UIViewController?
+
+        override func viewWillAppear(_ animated: Bool) {
+            super.viewWillAppear(animated)
+            install()
+        }
+
+        /// SwiftUI may add this controller after the screen began to appear.
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            install()
+        }
+
+        override func viewDidDisappear(_ animated: Bool) {
+            super.viewDidDisappear(animated)
+            guard host?.isMovingFromParent == true,
+                  previous?.navigationItem.backBarButtonItem === item else { return }
+            previous?.navigationItem.backBarButtonItem = nil
+        }
+
+        /// The screen this one is pushed over, found through the stack's
+        /// own view controller that contains this one.
+        private func install() {
+            guard let navigation = navigationController else { return }
+            var screen: UIViewController = self
+            while let parent = screen.parent, parent !== navigation {
+                screen = parent
+            }
+            let stack = navigation.viewControllers
+            guard let index = stack.firstIndex(of: screen), index > 0 else { return }
+            host = screen
+            previous = stack[index - 1]
+            previous?.navigationItem.backBarButtonItem = item
+        }
+    }
+}
+#endif
+
 // MARK: - App-wide appearance
 
 enum StoneChrome {

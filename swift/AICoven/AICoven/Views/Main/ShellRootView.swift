@@ -148,10 +148,15 @@ struct ShellRootView: View {
         }
     }
 
-    /// The phone's layout: the scope's Overview as a list, with a search
-    /// over its threads.
+    /// The phone's layout: one stack, its root the scope's Overview as a
+    /// list with a search over its threads; the scope's place, and the
+    /// person's own (Settings), are pushed on it. The stack is the
+    /// navigator's: going back leaves what was popped.
     private var phone: some View {
-        NavigationStack {
+        NavigationStack(path: Binding(
+            get: { navigator.phonePath },
+            set: { navigator.leavePhoneRoutes(notIn: $0) }
+        )) {
             ScopeOverviewView(
                 navigator: navigator,
                 shellThreads: shellThreads,
@@ -186,8 +191,54 @@ struct ShellRootView: View {
                         .accessibilityIdentifier("new-thread")
                     }
                 }
+                .navigationDestination(for: ShellNavigator.PhoneRoute.self) { route in
+                    switch route {
+                    case .place: phonePlace
+                    case .personPlace: phoneSettings
+                    }
+                }
         }
         .sheet(isPresented: $showSwitcher, onDismiss: runSwitcherFollowUp) { switcherSheet }
+    }
+
+    /// The scope's place, pushed: the same view the split layout shows in
+    /// its content pane, with the phone's bar over a thread.
+    private var phonePlace: some View {
+        ShellContentView(
+            navigator: navigator,
+            shellThreads: shellThreads,
+            threadActions: threadActions,
+            drafts: drafts,
+            coven: selectedCoven,
+            onNewThreadWithAgent: newThread(with:),
+            onThreadCreated: threadCreated,
+            onThreadAsked: threadMade,
+            onOpenProviderKeys: { openSettings(.providerKeys) },
+            onOpenSwitcher: { showSwitcher = true }
+        )
+        .navigationTitle(navigator.phonePlaceTitle)
+        #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+        #endif
+            .stoneBackButton()
+    }
+
+    /// Settings, pushed: the list, or the pane a request named. The list's
+    /// rows push their panes on this same stack.
+    @ViewBuilder
+    private var phoneSettings: some View {
+        if case let .settings(request) = navigator.personPlace {
+            Group {
+                if let request, let pane = SettingsPane(request) {
+                    SettingsPaneView(pane: pane, request: request)
+                } else {
+                    SettingsList()
+                }
+            }
+            // Made anew for each ask, so it shows the pane now asked for.
+            .id(navigator.personPlaceRequest)
+            .stoneBackButton()
+        }
     }
 
     private var switcherSheet: some View {

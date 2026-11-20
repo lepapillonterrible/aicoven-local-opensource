@@ -284,6 +284,78 @@ final class ShellNavigatorTests: XCTestCase {
         XCTAssertEqual(navigator.place?.id, "made")
     }
 
+    @MainActor
+    func testThePhonesStackIsTheScopesPlace_andOverItThePersonsOwn() {
+        let navigator = ShellNavigator()
+        XCTAssertEqual(navigator.phonePath, [], "The Overview is the root")
+
+        // A new-thread page, then the thread it becomes: one entry throughout, so nothing is popped and pushed.
+        navigator.requestNewThread()
+        XCTAssertEqual(navigator.phonePath, [.place])
+        navigator.handleCreatedThread(thread("made", covenID: nil))
+        XCTAssertEqual(navigator.phonePath, [.place])
+        XCTAssertEqual(navigator.place?.id, "made")
+
+        // Settings over the thread; back from it shows the thread again.
+        navigator.openPersonPlace(.settings(pane: nil))
+        XCTAssertEqual(navigator.phonePath, [.place, .personPlace])
+        navigator.leavePhoneRoutes(notIn: [.place])
+        XCTAssertNil(navigator.personPlace)
+        XCTAssertEqual(navigator.place?.id, "made", "The thread was underneath")
+        XCTAssertEqual(navigator.phonePath, [.place])
+
+        // Back from the thread: the Overview.
+        navigator.leavePhoneRoutes(notIn: [])
+        XCTAssertNil(navigator.place)
+        XCTAssertEqual(navigator.phonePath, [])
+
+        // Settings over the Overview, and back.
+        navigator.openPersonPlace(.settings(pane: .providerKeys))
+        XCTAssertEqual(navigator.phonePath, [.personPlace])
+        navigator.leavePhoneRoutes(notIn: [])
+        XCTAssertEqual(navigator.phonePath, [])
+
+        // Everything popped at once (the stack's root is asked for).
+        navigator.open(thread("t", covenID: nil))
+        navigator.openPersonPlace(.settings(pane: nil))
+        navigator.leavePhoneRoutes(notIn: [])
+        XCTAssertNil(navigator.personPlace)
+        XCTAssertNil(navigator.place)
+
+        // Going back opens nothing, and leaves nothing that is still on the stack.
+        navigator.open(thread("t", covenID: nil))
+        let generation = navigator.placeGeneration
+        navigator.leavePhoneRoutes(notIn: [.place, .personPlace])
+        XCTAssertEqual(navigator.place?.id, "t")
+        XCTAssertNil(navigator.personPlace)
+        XCTAssertEqual(navigator.placeGeneration, generation, "Nothing moved")
+
+        // Choosing another scope shows its Overview: nothing pushed.
+        navigator.select(.coven("work"))
+        XCTAssertEqual(navigator.phonePath, [])
+        XCTAssertEqual(navigator.phonePlaceTitle, "")
+
+        // What the bar calls the place pushed: a thread by its title, the new-thread page, a place by its button's name.
+        navigator.open(thread("t", covenID: "work", title: "Plans for May"))
+        XCTAssertEqual(navigator.phonePlaceTitle, "Plans for May")
+        navigator.open(thread("u", covenID: "work", title: nil))
+        XCTAssertEqual(navigator.phonePlaceTitle, "Untitled")
+        navigator.requestNewThread()
+        XCTAssertEqual(navigator.phonePlaceTitle, "New Thread")
+        navigator.openPlace(.memory)
+        XCTAssertEqual(navigator.phonePlaceTitle, "Memory")
+        navigator.openPlace(.agents)
+        XCTAssertEqual(navigator.phonePlaceTitle, "Agents")
+        navigator.openPlace(.connectedApps)
+        XCTAssertEqual(navigator.phonePlaceTitle, "Connections")
+        // Covered by Settings, the place underneath keeps its name.
+        navigator.openPersonPlace(.settings(pane: nil))
+        XCTAssertEqual(navigator.phonePlaceTitle, "Connections")
+        navigator.select(.strix)
+        navigator.openPlace(.agents)
+        XCTAssertEqual(navigator.phonePlaceTitle, "Agents", "Strix's agent is Strix itself")
+    }
+
     func testAScopeIsStrixOrACoven() {
         XCTAssertEqual(ShellScope(covenID: nil), .strix)
         XCTAssertEqual(ShellScope(covenID: "work"), .coven("work"))

@@ -290,6 +290,46 @@ final class ShellNavigator: ObservableObject {
         return true
     }
 
+    // MARK: - The phone's stack
+
+    /// What a phone's one stack shows over a scope's Overview: the scope's
+    /// place, and over that, or over the Overview, the person's own place.
+    nonisolated enum PhoneRoute: Hashable {
+        case place
+        case personPlace
+    }
+
+    /// The phone's stack as this navigator has it. The scope's place is
+    /// one entry whatever it is, so a new-thread page that becomes its
+    /// thread changes what the entry shows, and is not popped and pushed.
+    var phonePath: [PhoneRoute] {
+        (place == nil ? [] : [.place]) + (personPlace == nil ? [] : [.personPlace])
+    }
+
+    /// What the phone's bar calls the scope's place while it is pushed: a
+    /// thread's title, "New Thread", or the place's name as its button
+    /// names it (Memory, Agents, Connections), which the page's own header
+    /// then does not repeat word for word.
+    var phonePlaceTitle: String {
+        guard let place = places[selected] else { return "" }
+        if let thread = place.threadValue { return ThreadListRules.title(of: thread) }
+        // The row the place belongs to, whatever person's place covers it.
+        let item: ShellSidebarItem? = switch place.type {
+        case .memoryList, .memoryProposals, .addMemory, .editMemory: .memory
+        case .covenAgents, .addRole, .editRole, .personalStrixSettings: .agents
+        case .covenConnections: .connectedApps
+        default: nil
+        }
+        return ShellSidebarItem.scopePlaces.first { $0.item == item }?.name ?? place.title
+    }
+
+    /// The person went back on the phone (the back button, or the swipe):
+    /// what is no longer on the stack is left. Nothing is opened by this.
+    func leavePhoneRoutes(notIn path: [PhoneRoute]) {
+        if !path.contains(.personPlace), personPlace != nil { personPlace = nil }
+        if !path.contains(.place), places[selected] != nil { places[selected] = nil }
+    }
+
     /// Leaves a finished place (a saved form, a deleted item) for the place
     /// it was reached from. Does nothing if the person has moved on from it.
     func close(_ tab: WorkspaceTab) {

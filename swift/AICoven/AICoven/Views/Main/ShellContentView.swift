@@ -21,10 +21,15 @@ struct ShellContentView: View {
     let onThreadCreated: (Thread) -> Void
     let onThreadAsked: (Thread) -> Void
     let onOpenProviderKeys: () -> Void
+    /// Opens the switcher from a thread's bar. Given on a phone, where this
+    /// is the scope's place pushed on the stack: a thread and a new-thread
+    /// page then have the phone's bar, the person's place is pushed apart
+    /// from it, and nothing here is in a stack of its own.
+    var onOpenSwitcher: (() -> Void)?
 
     var body: some View {
         Group {
-            if case let .settings(pane) = navigator.personPlace {
+            if onOpenSwitcher == nil, case let .settings(pane) = navigator.personPlace {
                 // The person's own place covers the scope's. Made anew for
                 // each ask, so it opens at the pane now asked for.
                 SettingsWorkspaceView(initialPane: pane)
@@ -42,22 +47,7 @@ struct ShellContentView: View {
         Group {
             switch navigator.place?.type {
             case let .thread(thread):
-                // Its name is the window's title, so it shows none of its own.
-                // Tied to the thread, so each thread has its own state.
-                PersonalChatView(thread: thread, onEditAgent: nil, onBack: nil, showsHeader: false)
-                    .id(thread.id)
-                #if os(iOS)
-                    // The bar names the thread (the Mac's window title does
-                    // there), and its title is the menu of what can be done
-                    // with it. Solid chrome that is always there, so the
-                    // thread scrolls below the bar, not under its buttons.
-                    .navigationTitle(ThreadListRules.title(of: thread))
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbarTitleMenu { threadMenu(thread) }
-                    .toolbarBackground(Color.aicovenChrome, for: .navigationBar)
-                    .toolbarBackground(.visible, for: .navigationBar)
-                #endif
-                    .toolbar { threadActionsMenu(thread) }
+                threadPlace(thread)
                     // The same actions, for the menu bar's Thread menu.
                     .focusedSceneValue(\.threadCommands, ThreadCommandActions(
                         isArchived: thread.isArchived,
@@ -78,6 +68,7 @@ struct ShellContentView: View {
                         onThreadCreated: onThreadCreated
                     )
                     .id(navigator.selected)
+                    .phoneConversationBar(title: "New Thread", onOpenSwitcher: onOpenSwitcher)
                 } else {
                     overview
                 }
@@ -104,11 +95,17 @@ struct ShellContentView: View {
                     .environmentObject(StoreService.shared)
             case let .covenConnections(covenID):
                 if let coven, coven.id == covenID {
-                    // In a stack of its own: its title is its own, not the window's.
-                    NavigationStack {
+                    if onOpenSwitcher == nil {
+                        // In a stack of its own: its title is its own, not the window's.
+                        NavigationStack {
+                            CovenConnectionsView(coven: coven)
+                        }
+                        .id(covenID)
+                    } else {
+                        // On a phone it is already in the stack it was pushed on.
                         CovenConnectionsView(coven: coven)
+                            .id(covenID)
                     }
-                    .id(covenID)
                 } else {
                     overview
                 }
@@ -129,6 +126,38 @@ struct ShellContentView: View {
             onThreadAsked: onThreadAsked
         )
         .id(navigator.selected)
+    }
+
+    /// The open thread. Tied to the thread, so each thread has its own
+    /// state. It shows no header of its own: the Mac's window title names
+    /// it; the iPad's bar does, with what can be done with it as the
+    /// title's menu; the phone's bar does, its title opening the switcher.
+    @ViewBuilder
+    private func threadPlace(_ thread: Thread) -> some View {
+        let chat = PersonalChatView(thread: thread, onEditAgent: nil, onBack: nil, showsHeader: false)
+            .id(thread.id)
+        #if os(iOS)
+        if let onOpenSwitcher {
+            chat.phoneConversationBar(
+                title: ThreadListRules.title(of: thread),
+                onOpenSwitcher: onOpenSwitcher,
+                onCopy: { threadActions.copy(thread) },
+                canCopy: threadActions.canCopy
+            )
+        } else {
+            chat
+                // Solid chrome that is always there, so the thread scrolls
+                // below the bar, not under its buttons.
+                .navigationTitle(ThreadListRules.title(of: thread))
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbarTitleMenu { threadMenu(thread) }
+                .toolbarBackground(Color.aicovenChrome, for: .navigationBar)
+                .toolbarBackground(.visible, for: .navigationBar)
+                .toolbar { threadActionsMenu(thread) }
+        }
+        #else
+        chat.toolbar { threadActionsMenu(thread) }
+        #endif
     }
 
     /// What can be done with the open thread itself: the Mac lists these
@@ -256,5 +285,77 @@ enum MemoryForm: Identifiable, Equatable {
     var memoryID: String? {
         if case let .edit(memoryID, _) = self { return memoryID }
         return nil
+    }
+}
+
+// MARK: - The phone's bar over a thread
+
+/// The phone's one-line bar over a thread or a new-thread page, as the
+/// cloud app's: the title, which opens the switcher, and for a thread its
+/// actions. The scope's name is not repeated.
+private struct PhoneConversationBar: ViewModifier {
+    let title: String
+    let onOpenSwitcher: () -> Void
+    /// Copies the thread as Markdown; nil where there is nothing to copy
+    /// (a new-thread page).
+    let onCopy: (() -> Void)?
+    let canCopy: Bool
+
+    func body(content: Content) -> some View {
+        content
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .toolbarRole(.editor)
+        .toolbar {
+            StoneToolbarItem(placement: .principal) {
+                Button(action: onOpenSwitcher) {
+                    HStack(spacing: Spacing.xxs) {
+                        Text(title)
+                            .font(.aicovenH2)
+                            .foregroundColor(.aicovenTextPrimary)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.aicovenCaption.weight(.semibold))
+                            .foregroundColor(.aicovenTextSecondary)
+                    }
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(title)
+                .accessibilityHint("Switch coven")
+                .accessibilityIdentifier("conversation-title")
+            }
+            if let onCopy {
+                StoneToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        Button(action: onCopy) {
+                            Label("Copy Thread as Markdown", systemImage: "doc.on.doc")
+                        }
+                        .disabled(!canCopy)
+                    } label: {
+                        Label("Thread Actions", systemImage: "ellipsis.circle")
+                    }
+                    .stoneToolbarMenu()
+                    .accessibilityIdentifier("thread-actions")
+                }
+            }
+        }
+    }
+}
+
+private extension View {
+    /// The phone's bar where a switcher is given to open; elsewhere the
+    /// view as it is.
+    @ViewBuilder
+    func phoneConversationBar(
+        title: String, onOpenSwitcher: (() -> Void)?, onCopy: (() -> Void)? = nil, canCopy: Bool = false
+    ) -> some View {
+        if let onOpenSwitcher {
+            modifier(PhoneConversationBar(title: title, onOpenSwitcher: onOpenSwitcher, onCopy: onCopy, canCopy: canCopy))
+        } else {
+            self
+        }
     }
 }
