@@ -123,6 +123,59 @@ actor AttachmentStore {
         return detail
     }
 
+    // MARK: - For a thread that is not made yet
+
+    /// The id of the row an account's files are kept under while the
+    /// thread they are for is not made yet: one for each account, named
+    /// by a digest of the account's id.
+    nonisolated static func holdingThreadID(for userID: String) -> String {
+        "unsent-files-" + SHA256.hash(data: Data(userID.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The thread the current account's files are kept under until the
+    /// thread they are for is made: a row of `threads` that is the
+    /// account's and holds no payload, so it is no thread to list, open or
+    /// count. Made here if it is not there yet, after what earlier runs
+    /// left attached has been cleared (a file attached before would go
+    /// with that). Throws while the data is locked, and if the account
+    /// changes meanwhile.
+    func holdingThread() async throws -> String {
+        guard let queue = await dbQueue() else { throw RepositoryError.databaseUnavailable }
+        let session = try await ThreadRepository.shared.beginWrite()
+        await clearLeftovers(for: session.userID)
+        let id = Self.holdingThreadID(for: session.userID)
+        let now = Date()
+        try await queue.write { db in
+            try db.execute(
+                sql: "INSERT OR IGNORE INTO threads (id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                arguments: [id, session.userID, now, now]
+            )
+        }
+        try await ThreadRepository.shared.confirm(session)
+        return id
+    }
+
+    /// Moves attachments kept for a thread that was not made yet to the
+    /// thread made for them. All of them or none: one that is not this
+    /// account's, not under its holding row, or sent already, throws
+    /// `Failure.missing` and nothing is moved. A thread that is not the
+    /// account's is refused by the store. The files stay where they are:
+    /// they are named by the attachment, not its thread.
+    func moveUnsent(_ ids: [String], toThread threadID: String, for userID: String) async throws {
+        guard !ids.isEmpty else { return }
+        guard let queue = await dbQueue() else { throw RepositoryError.databaseUnavailable }
+        let holding = Self.holdingThreadID(for: userID)
+        try await queue.write { db in
+            for id in ids {
+                try db.execute(
+                    sql: "UPDATE attachments SET thread_id = ? WHERE id = ? AND user_id = ? AND thread_id = ? AND message_id IS NULL",
+                    arguments: [threadID, id, userID, holding]
+                )
+                guard db.changesCount == 1 else { throw Failure.missing }
+            }
+        }
+    }
+
     // MARK: - Reading
 
     /// The attachment's bytes. Throws `Failure.missing` unless it is the

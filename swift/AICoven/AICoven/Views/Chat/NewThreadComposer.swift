@@ -28,6 +28,13 @@ struct DraftThreadView: View {
                             .foregroundStyle(Color.aicovenTextPrimary)
                             .padding(Spacing.sm)
                             .background(Color.aicovenSurfaceElevated, in: RoundedRectangle(cornerRadius: BorderRadius.md))
+                        if !submission.submittedAttachments.isEmpty {
+                            // The files going with it, by name.
+                            Text(Self.names(of: submission.submittedAttachments))
+                                .font(.aicovenCaption)
+                                .foregroundStyle(Color.aicovenTextSecondary)
+                                .multilineTextAlignment(.trailing)
+                        }
                         Text("Sending…")
                             .font(.aicovenCaption)
                             .foregroundStyle(Color.aicovenTextSecondary)
@@ -45,12 +52,19 @@ struct DraftThreadView: View {
             .padding(Spacing.md)
         }
     }
+
+    /// The names of the files going with a message, in a line.
+    static func names(of files: [FileAttachmentDetail]) -> String {
+        files.map(\.name).joined(separator: ", ")
+    }
 }
 
 /// The composer of a thread that is not made yet. It says who the message
 /// goes to (in a coven, one of its agents, to choose from; Strix in Strix
 /// and in a coven with no agents), and sending makes the thread, called by
-/// the message's first line, and sends the message into it.
+/// the message's first line, and sends the message into it. Files attached
+/// here are kept under the account's holding row until then, and go into
+/// the thread with the message.
 struct NewThreadComposer: View {
     let coven: Coven?
     let askedAgentID: String?
@@ -106,7 +120,7 @@ struct NewThreadComposer: View {
             }
             MessageComposer(
                 messageText: $submission.messageText,
-                attachments: .constant([]),
+                attachments: $submission.attachments,
                 onSend: { _ in send() },
                 // Not while the coven's agents are on their way (it would go
                 // to none of them), nor while a thread is being made.
@@ -119,7 +133,8 @@ struct NewThreadComposer: View {
                 recipientChoices: submission.isCreatingThread ? [] : roles,
                 recipientID: recipient?.id,
                 onChooseRecipient: { chosenAgentID = $0.id },
-                allowsAttachments: false,
+                // There is no thread yet to keep files under.
+                fileThread: { try await AttachmentStore.shared.holdingThread() },
                 notice: submission.errorMessage
             )
         }
@@ -174,21 +189,23 @@ struct NewThreadComposer: View {
                     title: title, covenId: covenID, agentId: agent?.id, agentName: agent?.name, as: account
                 )
             },
-            sendFirstMessage: { thread, text in
+            sendFirstMessage: { thread, text, files in
                 if let covenID, let agent { LastUsedAgentStore().set(agent.id, inCoven: covenID, for: thread.userId) }
                 try await TurnEngine.shared.start(
-                    with: TurnProgress.userMessage(in: thread.id, text: text, attachments: []),
+                    with: TurnProgress.userMessage(in: thread.id, text: text, attachments: files),
                     context: text,
                     roleID: thread.agentId,
                     agentName: thread.agentName,
-                    attachments: nil
+                    attachments: files.isEmpty ? nil : files
                 )
             },
-            keepUnsent: { thread, text, error in
+            keepUnsent: { thread, text, files, error in
                 // The kind of failure only.
                 AppErrorReporter.log(message: "Could not send a new thread's first message (\(type(of: error)))", context: "NewThreadComposer.send")
-                // The thread's own composer gives it back, with why.
+                // The thread's own composer gives it back, with why; its
+                // files, the thread's by now, are in that composer too.
                 TurnEngine.shared.keepUnsent(text, for: thread.id, because: error.localizedDescription)
+                if !files.isEmpty { ComposerDrafts.shared.set(ComposerDraft(attachments: files), for: thread.id) }
             },
             onThreadCreated: onThreadCreated
         )
@@ -211,8 +228,11 @@ final class DraftThreads: ObservableObject {
         return made
     }
 
-    /// A coven is gone: so is what was being written for it.
+    /// A coven is gone: so is what was being written for it, and the
+    /// files attached to it.
     func forget(_ scope: ShellScope) {
+        let files = submissions[scope]?.attachments.map(\.id) ?? []
         submissions[scope] = nil
+        if !files.isEmpty { Task { await AttachmentStore.shared.removeUnsent(files) } }
     }
 }
