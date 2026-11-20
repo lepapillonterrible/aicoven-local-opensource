@@ -35,7 +35,7 @@ struct AICovenApp: App {
         _authService = ObservedObject(wrappedValue: AuthService.shared)
 
         // Local-only version: no remote auth beyond what Firebase Auth provides if used.
-        Self.configureAppearance()
+        StoneChrome.configure()
         // Initialize local SQLite database and run migrations.
         DatabaseManager.shared.configureIfNeeded()
 
@@ -141,18 +141,6 @@ struct AICovenApp: App {
             .preferredColorScheme(themeManager.appearance.colorScheme)
             .id("\(typographyManager.variant.rawValue)|\(typographyManager.customFontFamily ?? "")|\(typographyManager.sizeScale.rawValue)")
         }
-        #endif
-    }
-
-    /// Configure global app appearance
-    private static func configureAppearance() {
-        #if os(iOS)
-        UINavigationBar.appearance().largeTitleTextAttributes = [
-            .foregroundColor: UIColor.label
-        ]
-        UINavigationBar.appearance().titleTextAttributes = [
-            .foregroundColor: UIColor.label
-        ]
         #endif
     }
 
