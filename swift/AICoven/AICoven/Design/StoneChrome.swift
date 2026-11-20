@@ -159,7 +159,7 @@ private struct StoneToolbarButton: View {
     private let radius: CGFloat = 7
     #else
     private var side: CGFloat {
-        StoneChrome.toolbarButtonSide(isPadLayout: isPadLayout)
+        isPadLayout ? 40 : 44
     }
 
     private let radius: CGFloat = 9
@@ -217,12 +217,6 @@ extension View {
 // MARK: - App-wide appearance
 
 enum StoneChrome {
-    /// A toolbar button's side on iOS: 40 pt in the iPad's layout, 44 pt
-    /// on the iPhone.
-    nonisolated static func toolbarButtonSide(isPadLayout: Bool) -> CGFloat {
-        isPadLayout ? 40 : 44
-    }
-
     /// Called once at launch.
     static func configure() {
         #if os(iOS)

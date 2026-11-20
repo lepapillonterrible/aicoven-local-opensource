@@ -74,9 +74,4 @@ final class PlatformCapabilitiesTests: XCTestCase {
         #endif
         await Task.yield()
     }
-
-    func testToolbarButtonsAreSmallerInTheIPadsLayout() {
-        XCTAssertEqual(StoneChrome.toolbarButtonSide(isPadLayout: true), 40)
-        XCTAssertEqual(StoneChrome.toolbarButtonSide(isPadLayout: false), 44)
-    }
 }
