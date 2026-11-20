@@ -199,6 +199,13 @@ final class ThreadListTests: XCTestCase {
         XCTAssertEqual(ThreadListRules.ordered([thread("new", made: 300), used]).map(\.id), ["t", "new"], "An old thread used now comes first")
     }
 
+    func testAShownListStaysWhenReadingItAgainFails_unlessItIsNoLongerThisReadersToSee() {
+        XCTAssertTrue(ThreadListRules.keepsShownList(after: URLError(.cannotOpenFile)))
+        XCTAssertTrue(ThreadListRules.keepsShownList(after: RepositoryError.databaseUnavailable))
+        XCTAssertFalse(ThreadListRules.keepsShownList(after: RepositoryError.dataLocked))
+        XCTAssertFalse(ThreadListRules.keepsShownList(after: RepositoryError.accountChanged))
+    }
+
     // MARK: - What a list lets the person do
 
     /// What the actions did, and what they are answered.
