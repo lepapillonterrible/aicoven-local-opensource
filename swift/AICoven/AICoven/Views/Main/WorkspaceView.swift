@@ -258,29 +258,7 @@ struct WorkspaceContentView: View {
                 renderTabContent(tab)
             } else if selectedCoven != nil {
                 // Coven selected but no tab open - show CTA to create new thread
-                VStack(spacing: Spacing.lg) {
-                    Spacer()
-                    IconBadge(icon: "message", size: 60, color: .aicovenTeal)
-                    VStack(spacing: Spacing.sm) {
-                        Text("Start a Conversation")
-                            .font(.aicovenH2)
-                            .foregroundColor(.aicovenTextPrimary)
-                        Text("Create a new thread to chat with your AI agents")
-                            .font(.aicovenBody)
-                            .foregroundColor(.aicovenTextSecondary)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: 400)
-                    }
-                    // Create Thread CTA button
-                    if let onCreateThread {
-                        GradientButton("New Thread", icon: "plus", style: .primary) {
-                            onCreateThread()
-                        }
-                        .padding(.top, Spacing.md)
-                    }
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity)
+                StartConversationPrompt(onCreateThread: onCreateThread)
             } else {
                 // No coven selected
                 VStack(spacing: Spacing.lg) {

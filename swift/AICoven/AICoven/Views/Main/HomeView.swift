@@ -30,9 +30,20 @@ struct HomeView: View {
     /// Workspace state - always start in home
     @State private var currentWorkspace: WorkspaceType = .home
 
+    /// Whether the window is the new shell (one split view, as the cloud
+    /// app's) instead of the two workspaces. Off until the shell has its
+    /// switcher and places; set by hand meanwhile to try it.
+    @AppStorage("shell.newMacWindow") private var usesNewShell = false
+
     var body: some View {
         Group {
-            if isLoadingCovens {
+            if usesNewShell {
+                #if os(macOS)
+                // Its state is one account's: another account starts afresh.
+                MacShellView()
+                    .id(authService.currentUser?.id ?? UserScope.localUserID)
+                #endif
+            } else if isLoadingCovens {
                 // Loading state
                 CauldronLoadingView(message: "Loading workspace...", size: 80)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

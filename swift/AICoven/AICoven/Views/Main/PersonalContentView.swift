@@ -255,6 +255,9 @@ struct PersonalChatView: View {
     /// Optional back handler used on iOS mobile to navigate back to the
     /// threads list without relying on a NavigationStack.
     let onBack: (() -> Void)?
+    /// Whether the thread's name and agent are shown over its messages: not
+    /// in a window whose own title says them.
+    var showsHeader = true
 
     @State private var messages: [ChatMessage] = []
     @State private var messageText = ""
@@ -307,21 +310,23 @@ struct PersonalChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Chat header
-            PersonalChatHeader(
-                thread: thread,
-                canEditAgent: canEditAgent,
-                onEditAgent: onEditAgent,
-                onBack: onBack
-            )
-            #if os(iOS)
-            .padding(.horizontal, Spacing.md)
-            .padding(.vertical, Spacing.sm)
-            #else
-            .padding(Spacing.md)
-            #endif
+            if showsHeader {
+                // Chat header
+                PersonalChatHeader(
+                    thread: thread,
+                    canEditAgent: canEditAgent,
+                    onEditAgent: onEditAgent,
+                    onBack: onBack
+                )
+                #if os(iOS)
+                .padding(.horizontal, Spacing.md)
+                .padding(.vertical, Spacing.sm)
+                #else
+                .padding(Spacing.md)
+                #endif
 
-            GradientDivider()
+                GradientDivider()
+            }
 
             // Messages area
             ScrollViewReader { proxy in

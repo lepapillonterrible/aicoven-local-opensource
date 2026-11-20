@@ -77,17 +77,26 @@ struct TurnStatusLineView: View {
 struct StatusRing: View {
     let isTurning: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// `.increased` on a selected row's system highlight: the ring is then
+    /// drawn, and turns, in the highlight's own ink.
+    @Environment(\.backgroundProminence) private var prominence
 
     var body: some View {
         TimelineView(.animation(paused: !isTurning || reduceMotion)) { context in
             let turn = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1)
             ZStack {
                 Circle()
-                    .stroke(Color.aicovenBorder, lineWidth: 2)
+                    .stroke(
+                        prominence == .increased ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.aicovenBorder),
+                        lineWidth: 2
+                    )
                 if isTurning {
                     Circle()
                         .trim(from: 0, to: 0.25)
-                        .stroke(Color.aicovenTeal, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .stroke(
+                            prominence == .increased ? AnyShapeStyle(.primary) : AnyShapeStyle(Color.aicovenTeal),
+                            style: StrokeStyle(lineWidth: 2, lineCap: .round)
+                        )
                         .rotationEffect(.degrees(reduceMotion ? 0 : turn * 360))
                 }
             }
