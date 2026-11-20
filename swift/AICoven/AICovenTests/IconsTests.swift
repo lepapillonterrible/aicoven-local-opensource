@@ -40,6 +40,11 @@ final class IconsTests: XCTestCase {
             XCTAssertNotNil(AgentFace.symbol(forEmoji: emoji), emoji)
         }
         XCTAssertEqual(AgentFace.symbol(forEmoji: "🌟"), "star")
+        // The symbols they stand for are the cloud app's suggested ones, in the order the emoji were offered.
+        XCTAssertEqual(
+            ["🤖", "🧠", "💡", "🎨", "📝", "🔍", "⚙️", "📊", "🚀", "💬", "🎯", "🔬", "📚", "✨", "🌟", "🎭"].map { AgentFace.symbol(forEmoji: $0) },
+            AgentFace.suggestedSymbols
+        )
         XCTAssertNil(AgentFace.symbol(forEmoji: "🦄"))
         XCTAssertNil(AgentFace.symbol(forEmoji: nil))
         // Every symbol an emoji stands for, and every suggested one, can be a stored symbol.

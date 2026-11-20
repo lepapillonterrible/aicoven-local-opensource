@@ -35,7 +35,7 @@ struct AgentFace: View {
 
     private nonisolated static let symbolsForEmoji: [String: String] = [
         "🤖": "cpu", "🧠": "brain", "💡": "lightbulb", "🎨": "paintpalette", "📝": "pencil", "🔍": "magnifyingglass",
-        "⚙": "gearshape", "📊": "chart.bar.xaxis", "🚀": "paperplane", "💬": "bubble.left", "🎯": "scope",
+        "⚙": "gearshape", "📊": "chart.bar.xaxis", "🚀": "paperplane", "💬": "bubble.left", "🎯": "map",
         "🔬": "flask", "📚": "books.vertical", "✨": "sparkles", "⭐": "star", "🌟": "star", "🎭": "theatermasks",
         "💻": "laptopcomputer", "✍": "pencil", "🎓": "graduationcap", "🧾": "doc.text", "👩‍💻": "laptopcomputer",
     ]

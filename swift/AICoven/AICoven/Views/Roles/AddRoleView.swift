@@ -171,8 +171,7 @@ struct AddRoleView: View {
                                             selectedTemplateId = nil
                                         } label: {
                                             VStack {
-                                                Text("✨")
-                                                    .font(.system(size: 32))
+                                                SymbolDisc(symbol: "sparkles", tint: .warm, size: 32)
                                                 Text("From Scratch")
                                                     .font(.aicovenCaption)
                                                     .foregroundColor(.aicovenTextSecondary)

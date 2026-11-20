@@ -200,12 +200,14 @@ actor CovenRepository {
     /// first suggested symbol and tint that none of the person's covens
     /// shows (`CovenIcon.startingIcon`).
     func createCoven(name: String, description: String? = nil, avatar: String? = nil, icon: (symbol: String, tint: IconTint)? = nil) async throws -> Coven {
+        if let icon, !IconRules.isSymbolName(icon.symbol) { throw CovenRepositoryError.notASymbol }
+        // Whose it is, read once, before anything is waited for: the
+        // coven is made for the account that asked.
+        let uid = await MainActor.run { UserScope.currentUserID }
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
         let now = Date()
         let id = UUID().uuidString
-        let uid = await UserScope.currentUserID
-        if let icon, !IconRules.isSymbolName(icon.symbol) { throw CovenRepositoryError.notASymbol }
         // A new coven starts with none of the person's connections on:
         // its agents use only what is turned on in its Connections. (A
         // coven made before there was a choice has none stored, and keeps

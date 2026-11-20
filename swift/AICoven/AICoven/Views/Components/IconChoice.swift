@@ -62,6 +62,8 @@ struct NewCovenIcon: View {
     /// The person chose in the picker, whatever they chose (also the
     /// symbol or the tint that was already shown).
     @State private var didChoose = false
+    /// The person's covens could not be read: the icon is theirs to choose.
+    @State private var mustChoose = false
 
     var body: some View {
         IconChoice(
@@ -79,10 +81,25 @@ struct NewCovenIcon: View {
         ) {
             SymbolDisc(symbol: symbol, tint: tint, size: 64, fallback: CovenIcon.defaultSymbol)
         }
+        .overlay(alignment: .bottom) {
+            // Why the coven cannot be made yet, where that is so.
+            if mustChoose, !didChoose {
+                Text("Choose an icon to continue.")
+                    .font(.aicovenCaption)
+                    .foregroundStyle(Color.aicovenTextSecondary)
+                    .fixedSize()
+                    .offset(y: 20)
+                    .accessibilityIdentifier("icon-must-choose")
+            }
+        }
+        .padding(.bottom, mustChoose && !didChoose ? 20 : 0)
         .task {
             // If the other covens cannot be read, what none of them shows
             // is not known: the icon is then the person's to choose.
-            guard let covens = try? await CovenService.shared.loadCovens() else { return }
+            guard let covens = try? await CovenService.shared.loadCovens() else {
+                mustChoose = true
+                return
+            }
             if !didChoose {
                 let start = CovenIcon.startingIcon(among: covens)
                 symbol = start.symbol
