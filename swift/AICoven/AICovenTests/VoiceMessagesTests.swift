@@ -399,6 +399,7 @@ final class SpaceHoldToTalkTests: XCTestCase {
     private func field(_ calls: Calls) -> GrowingTextEditor.ChatTextView {
         let field = GrowingTextEditor.ChatTextView()
         field.isRichText = false
+        field.spaceHoldDelay = .milliseconds(20)
         field.onVoiceHoldStart = { calls.started += 1 }
         field.onVoiceHoldStop = { calls.stopped += 1 }
         field.onVoiceHoldCancel = { calls.cancelled += 1 }
@@ -406,7 +407,7 @@ final class SpaceHoldToTalkTests: XCTestCase {
     }
 
     private func held() async {
-        try? await Task.sleep(for: VoiceHoldToTalkPolicy.spaceHoldDelay + .milliseconds(250))
+        try? await Task.sleep(for: .milliseconds(150))
     }
 
     func testSpaceHeldTalks_andLetGoSends_andATapTypesASpace() async throws {
@@ -448,14 +449,15 @@ final class SpaceHoldToTalkTests: XCTestCase {
         try field.keyUp(with: key(49, " ", down: false))
         XCTAssertEqual(calls.stopped, 1)
 
-        // Esc calls it off, too.
+        // Esc calls it off, too: pressed as a key, as it comes.
         calls = Calls()
         field = self.field(calls)
         try field.keyDown(with: key(49, " "))
         await held()
         field.onVoiceHoldStart = nil
-        field.cancelOperation(nil)
+        try field.keyDown(with: key(53, "\u{1B}"))
         XCTAssertEqual(calls.cancelled, 1)
+        XCTAssertEqual(field.string, "")
         try field.keyUp(with: key(49, " ", down: false))
         XCTAssertEqual(calls.stopped, 0, "Called off: its release sends nothing")
 
@@ -463,11 +465,36 @@ final class SpaceHoldToTalkTests: XCTestCase {
         calls = Calls()
         field = self.field(calls)
         try field.keyDown(with: key(49, " "))
-        field.cancelOperation(nil)
+        try field.keyDown(with: key(53, "\u{1B}"))
         await held()
         XCTAssertEqual(calls.started, 0)
         XCTAssertEqual(calls.cancelled, 0)
         XCTAssertEqual(field.string, "")
+    }
+
+    func testAHoldWhoseLettingGoNeverCame_isOverWhenTheRecordingIs() async throws {
+        // Space is held, talking starts, and a system prompt takes the
+        // key's release. The recording then ends some other way.
+        let calls = Calls()
+        let field = field(calls)
+        try field.keyDown(with: key(49, " "))
+        await held()
+        XCTAssertEqual(calls.started, 1)
+        // Still counted as talking: a key is not typed.
+        try field.keyDown(with: key(49, " "))
+        await held()
+        XCTAssertEqual(calls.started, 1)
+
+        field.talkingEnded()
+
+        XCTAssertEqual(calls.stopped, 0)
+        XCTAssertEqual(calls.cancelled, 0, "There is nothing left to end")
+        // The field takes keys again: Space held talks anew.
+        try field.keyDown(with: key(49, " "))
+        await held()
+        XCTAssertEqual(calls.started, 2)
+        try field.keyUp(with: key(49, " ", down: false))
+        XCTAssertEqual(calls.stopped, 1)
     }
 
     func testSpaceTypesAsEver_whereItDoesNotTalk() async throws {

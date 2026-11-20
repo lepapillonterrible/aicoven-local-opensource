@@ -183,6 +183,10 @@ struct MessageComposer: View {
     #if os(iOS)
     /// A finger is on the mic now: its press ends when it is lifted.
     @State private var isFingerOnMic = false
+    /// The touch on the mic, as the system has it: it goes false when the
+    /// finger is lifted and also when the touch is taken away (a system
+    /// prompt comes up over it), which ends no gesture.
+    @GestureState private var isTouchingMic = false
     #endif
     #if os(macOS)
     /// The recording was started by holding Space, not by clicking the mic.
@@ -517,7 +521,8 @@ struct MessageComposer: View {
                 onVoiceHoldStart: spaceHoldEligible ? { beginVoicePress(bySpace: true) } : nil,
                 onVoiceHoldStop: hasVoiceCallbacks ? { endVoicePress() } : nil,
                 onVoiceHoldCancel: hasVoiceCallbacks ? { cancelVoicePress() } : nil,
-                onEscape: isRecordingVoice || isVoicePressActive ? { cancelVoicePress() } : nil
+                onEscape: isRecordingVoice || isVoicePressActive ? { cancelVoicePress() } : nil,
+                isTalking: isRecordingVoice || isVoicePressActive
             )
             .frame(height: macInputHeight)
             if messageText.isEmpty {
@@ -765,6 +770,7 @@ struct MessageComposer: View {
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
+                    .updating($isTouchingMic) { _, touching, _ in touching = true }
                     .onChanged { value in
                         isFingerOnMic = true
                         if !isVoicePressActive { beginVoicePress(bySpace: false) }
@@ -778,10 +784,22 @@ struct MessageComposer: View {
                         endVoicePress()
                     }
             )
+            // The touch was taken away without the gesture ending (the
+            // microphone prompt came up over it): the press is called off,
+            // once whatever ended it has had its say.
+            .onChange(of: isTouchingMic) { _, touching in
+                guard !touching else { return }
+                Task { @MainActor in
+                    guard isFingerOnMic else { return }
+                    isFingerOnMic = false
+                    cancelVoicePress()
+                }
+            }
             .allowsHitTesting(!micIsDisabled)
             .opacity(micIsDisabled ? 0.4 : 1)
             .accessibilityElement(children: .ignore)
             .accessibilityAddTraits(.isButton)
+            .accessibilityRespondsToUserInteraction(!micIsDisabled)
             .accessibilityLabel(isRecordingVoice ? "Send voice message" : "Record voice message")
             .accessibilityHint("Press and hold to record. Release to send. Drag away to cancel.")
             .accessibilityAction { toggleVoiceRecording() }

@@ -93,6 +93,10 @@ struct GrowingTextEditor: NSViewRepresentable {
     var onVoiceHoldCancel: (() -> Void)?
     /// Esc, while there is something for it to call off.
     var onEscape: (() -> Void)?
+    /// A voice message is being recorded, or its recording started. When
+    /// it is not, the field is told: a held Space whose letting go went
+    /// elsewhere (a system prompt came up over it) is then over, too.
+    var isTalking = false
 
     /// The editor's font, and the height of the empty editor: one line of
     /// it between the insets.
@@ -178,6 +182,7 @@ struct GrowingTextEditor: NSViewRepresentable {
         textView.onVoiceHoldStop = onVoiceHoldStop
         textView.onVoiceHoldCancel = onVoiceHoldCancel
         textView.onEscape = onEscape
+        if !isTalking { textView.talkingEnded() }
 
         context.coordinator.parent = self
         context.coordinator.updateHeight(in: scrollView, publishHeightSynchronously: false)
@@ -281,6 +286,9 @@ struct GrowingTextEditor: NSViewRepresentable {
         /// Space was held long enough: talking started with it.
         private var isSpaceHoldRecording = false
         private static let spaceKeyCode: UInt16 = 49
+        private static let escapeKeyCode: UInt16 = 53
+        /// How long Space is held before it means talking.
+        var spaceHoldDelay = VoiceHoldToTalkPolicy.spaceHoldDelay
 
         private var holdsToTalk: Bool {
             onVoiceHoldStart != nil && onVoiceHoldStop != nil && onVoiceHoldCancel != nil
@@ -370,9 +378,12 @@ struct GrowingTextEditor: NSViewRepresentable {
         }
 
         override func keyDown(with event: NSEvent) {
-            // Return, or Enter on the keypad. While an input method is
-            // composing (Japanese, Chinese), Return is its own: it confirms
-            // what is being composed, and sends nothing.
+            // Esc while Space is held, to talk or not yet: calls it off
+            // (and types nothing).
+            if event.keyCode == Self.escapeKeyCode, voiceHoldTask != nil || isSpaceHoldRecording {
+                cancelOperation(nil)
+                return
+            }
             // Talking by a held Space: what else is pressed meanwhile is
             // not typed into the field behind it.
             if isSpaceHoldRecording { return }
@@ -383,6 +394,9 @@ struct GrowingTextEditor: NSViewRepresentable {
                 voiceHoldTask = nil
                 insertText(" ", replacementRange: selectedRange())
             }
+            // Return, or Enter on the keypad. While an input method is
+            // composing (Japanese, Chinese), Return is its own: it confirms
+            // what is being composed, and sends nothing.
             let isEnter = (event.keyCode == 36 || event.keyCode == 76) && !hasMarkedText()
             // Space alone in the empty field, not while an input method
             // composes: held, it talks; let go at once, it types a space.
@@ -402,7 +416,8 @@ struct GrowingTextEditor: NSViewRepresentable {
 
         private func waitForSpaceToBeHeld() {
             voiceHoldTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: VoiceHoldToTalkPolicy.spaceHoldDelay)
+                guard let delay = self?.spaceHoldDelay else { return }
+                try? await Task.sleep(for: delay)
                 guard let self, !Task.isCancelled else { return }
                 voiceHoldTask = nil
                 isSpaceHoldRecording = true
@@ -443,6 +458,14 @@ struct GrowingTextEditor: NSViewRepresentable {
                 return
             }
             super.cancelOperation(sender)
+        }
+
+        /// The recording has ended, or never started: a Space-hold the
+        /// field still counts as talking is over, though its letting go
+        /// never came here (a system prompt took it). Nothing is called:
+        /// there is nothing left to end.
+        func talkingEnded() {
+            isSpaceHoldRecording = false
         }
 
         /// The field stopped being where keys go while Space was down:
