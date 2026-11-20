@@ -242,10 +242,12 @@ actor ThreadService {
             lastMessageAt: thread.lastMessageAt
         )
         try await ThreadRepository.shared.saveThread(updated)
-        if isShowing(userID), let index = personalThreads.firstIndex(where: { $0.id == threadId }) {
-            personalThreads[index] = updated
-        }
-        return updated
+        guard isShowing(userID), let index = personalThreads.firstIndex(where: { $0.id == threadId }) else { return updated }
+        // A message can have been stored in it while it was saved: it is
+        // as lately used as the service holds it to be by now.
+        let kept = updated.lastUsed(at: personalThreads[index].lastMessageAt)
+        personalThreads[index] = kept
+        return kept
     }
 
     /// Delete a thread, and with it its messages.

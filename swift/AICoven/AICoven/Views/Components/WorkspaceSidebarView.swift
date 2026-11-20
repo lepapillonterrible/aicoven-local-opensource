@@ -21,6 +21,8 @@ struct WorkspaceSidebarView: View {
     @State private var connectionsCoven: Coven?
     @State private var isExpanded = true // Expanded by default so users can select covens
     @State private var threadsSectionExpanded = true
+    /// Counts the loads of the coven's threads, so that only the latest is shown.
+    @State private var threadsLoad = 0
     @State private var rolesSectionExpanded = true
 
     var body: some View {
@@ -123,7 +125,10 @@ struct WorkspaceSidebarView: View {
                             threads: $threads,
                             searchText: $searchText,
                             showNewThreadSheet: $showNewThreadSheet,
-                            isSectionExpanded: $threadsSectionExpanded
+                            isSectionExpanded: $threadsSectionExpanded,
+                            onReload: {
+                                if let covenID = selectedCoven?.id { await loadThreads(covenId: covenID) }
+                            }
                         )
 
                         if selectedCoven != nil {
@@ -249,11 +254,15 @@ struct WorkspaceSidebarView: View {
 
     /// Load threads for a coven
     private func loadThreads(covenId: String) async {
+        // Only the latest request is shown: one asked for before the
+        // sidebar left this coven and came back is not.
+        threadsLoad += 1
+        let request = threadsLoad
         do {
             // With those archived: the list shows them in a section of their own.
             let stored = try await ThreadService.shared.loadThreads(covenId: covenId, includeArchived: true)
             // The sidebar can be showing another coven by now: these are not its threads.
-            guard selectedCoven?.id == covenId else { return }
+            guard request == threadsLoad, selectedCoven?.id == covenId else { return }
             threads = stored
         } catch {
             print("❌ Failed to load threads: \(error.localizedDescription)")
@@ -552,6 +561,8 @@ struct ThreadManagementView: View {
     @Binding var searchText: String
     @Binding var showNewThreadSheet: Bool
     @Binding var isSectionExpanded: Bool
+    /// Reads the coven's threads again, as they are stored now.
+    let onReload: () async -> Void
     /// Rename, archive, delete and copy, for this list's threads.
     @StateObject private var threadActions = ThreadActions()
     @State private var showArchived = false
@@ -651,7 +662,7 @@ struct ThreadManagementView: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .threadActionsHost(threadActions)
         .onAppear {
-            threadActions.onChanged = { Task { await reload() } }
+            threadActions.onChanged = { Task { await onReload() } }
             threadActions.onLeft = { close($0) }
         }
         // The list is left: a copy under way is called off, and nothing
@@ -663,7 +674,7 @@ struct ThreadManagementView: View {
         }
         // A thread was used: the order follows it.
         .onReceive(NotificationCenter.default.publisher(for: ThreadService.threadUsed)) { _ in
-            Task { await reload() }
+            Task { await onReload() }
         }
         // Another coven's threads are another list.
         .onChange(of: selectedCoven?.id) { _, _ in threadActions.invalidate() }
@@ -682,15 +693,6 @@ struct ThreadManagementView: View {
             activeTabId = thread.id
         }
         .threadRowActions(thread, threadActions)
-    }
-
-    /// Reads the coven's threads again, as they are stored now.
-    private func reload() async {
-        guard let covenID = selectedCoven?.id else { return }
-        guard let stored = try? await ThreadService.shared.loadThreads(covenId: covenID, includeArchived: true) else { return }
-        // The sidebar can be showing another coven by now.
-        guard selectedCoven?.id == covenID else { return }
-        threads = stored
     }
 
     /// A thread was deleted or archived: it is no longer open here.

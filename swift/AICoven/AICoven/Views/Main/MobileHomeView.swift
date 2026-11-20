@@ -81,6 +81,8 @@ struct MobileChatsRootView: View {
     /// Rename, archive, delete and copy, for this list's threads.
     @StateObject private var threadActions = ThreadActions()
     @State private var showArchived = false
+    /// Counts the list's loads, so that only the latest one is shown.
+    @State private var threadsLoad = 0
 
     private var selectedCoven: Coven? {
         guard let selectedCovenId else { return nil }
@@ -324,15 +326,19 @@ struct MobileChatsRootView: View {
         // Whose threads these are: the list can have moved to another
         // scope by the time they are read, and they are then not shown, nor
         // is anything of that other scope's touched.
+        // And only the latest request for a scope is shown: one asked for
+        // before the list left and came back is not.
         let scope = selectedCovenId
+        threadsLoad += 1
+        let request = threadsLoad
         isLoading = true
         do {
             // With those archived: the list shows them in a section of their own.
             let stored = try await ThreadService.shared.loadThreads(covenId: scope, includeArchived: true)
-            guard selectedCovenId == scope else { return }
+            guard request == threadsLoad, selectedCovenId == scope else { return }
             threads = stored
         } catch {
-            guard selectedCovenId == scope else { return }
+            guard request == threadsLoad, selectedCovenId == scope else { return }
             AppErrorReporter.log(error: error, context: "MobileChatsRootView.loadThreads")
             threads = []
             selectedThread = nil

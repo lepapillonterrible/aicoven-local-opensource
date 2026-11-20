@@ -9,6 +9,8 @@ nonisolated enum ThreadMarkdownExportError: Error, Equatable {
     /// The thread holds no sent message or completed reply.
     case empty
     case clipboardWriteFailed
+    /// The thread was deleted while it was read: what was read is not it.
+    case threadGone
 }
 
 /// What copying a thread reads and writes. Tests give their own.
@@ -19,6 +21,8 @@ struct ThreadMarkdownExportDependencies {
     /// `ThreadRepository.messagesOfTurnsNotCompleted`).
     let loadUnfinished: (_ threadID: String) async throws -> Set<String>
     let loadRoles: (_ covenID: String) async throws -> [Role]
+    /// Whether the thread is still there (it can be deleted while it is read).
+    let isStillThere: (_ threadID: String) async -> Bool
     let writeClipboard: @MainActor (String) -> Bool
 
     static let live = ThreadMarkdownExportDependencies(
@@ -29,6 +33,7 @@ struct ThreadMarkdownExportDependencies {
         },
         loadUnfinished: { try await ThreadRepository.shared.messagesOfTurnsNotCompleted(threadID: $0) },
         loadRoles: { try await RoleService.shared.loadRoles(covenId: $0) },
+        isStillThere: { await (try? ThreadService.shared.getThread(threadId: $0)) != nil },
         writeClipboard: ThreadMarkdownExport.writeClipboard
     )
 }
@@ -69,14 +74,16 @@ nonisolated enum ThreadMarkdownExport {
     /// whole thread, however long: a copy that says it is the full thread
     /// is.
     static func allMessages(page: (_ before: String?) async throws -> [ChatMessage]) async throws -> [ChatMessage] {
-        var all: [ChatMessage] = []
+        var pages: [[ChatMessage]] = []
         var before: String?
         while true {
             try Task.checkCancellation()
             let older = try await page(before)
-            all.insert(contentsOf: older, at: 0)
+            pages.append(older)
             // A page that is not full, or that goes no further back, is the last.
-            guard older.count >= pageSize, let oldest = older.first?.id, oldest != before else { return all }
+            guard older.count >= pageSize, let oldest = older.first?.id, oldest != before else {
+                return pages.reversed().flatMap(\.self)
+            }
             before = oldest
         }
     }
@@ -148,6 +155,9 @@ nonisolated enum ThreadMarkdownExport {
         let unfinished = try await dependencies.loadUnfinished(thread.id)
         var roles: [Role] = []
         if let covenID = thread.covenId { roles = try await dependencies.loadRoles(covenID) }
+        // Deleted while it was read: the pages that were read may not be
+        // all of it, and are not copied as if they were.
+        guard await dependencies.isStillThere(thread.id) else { throw ThreadMarkdownExportError.threadGone }
         try Task.checkCancellation()
         let names = Dictionary(roles.map { ($0.id.lowercased(), $0.name) }, uniquingKeysWith: { first, _ in first })
         let entries = messages.filter { isIncluded($0, unfinished: unfinished) }.map { message in

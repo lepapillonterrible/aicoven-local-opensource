@@ -79,6 +79,8 @@ final class ThreadActions: ObservableObject {
 
     /// Deletes a thread: called once the person has said so.
     func delete(_ thread: Thread) {
+        // A copy of it under way is called off: it is no longer there to copy.
+        if exportingThreadID == thread.id { cancelExport() }
         dependencies.stopTurn(thread.id)
         run("Couldn't delete the thread", leaving: thread) { [dependencies] in
             try await dependencies.delete(thread.id)
@@ -120,7 +122,7 @@ final class ThreadActions: ObservableObject {
                 let message = switch error as? ThreadMarkdownExportError {
                 case .empty: ThreadMarkdownExport.nothingToCopy
                 case .clipboardWriteFailed: ThreadMarkdownExport.clipboardFailed
-                case nil: ThreadMarkdownExport.failed
+                case .threadGone, nil: ThreadMarkdownExport.failed
                 }
                 said = ThreadMarkdownExportNotice(kind: .failure, message: message)
             }
@@ -131,13 +133,17 @@ final class ThreadActions: ObservableObject {
     /// Calls off a copy under way and what it would have said: the list
     /// went to another place or another account.
     func invalidate() {
+        cancelExport()
+        renaming = nil
+        deleting = nil
+    }
+
+    private func cancelExport() {
         exportGeneration &+= 1
         export?.cancel()
         export = nil
         exportingThreadID = nil
         notice = nil
-        renaming = nil
-        deleting = nil
     }
 
     private func finishExport(_ request: Int, saying notice: ThreadMarkdownExportNotice?) {

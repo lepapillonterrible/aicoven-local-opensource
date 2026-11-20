@@ -138,6 +138,7 @@ final class ThreadListTests: XCTestCase {
                 askedRolesOf.append(covenID)
                 return [Role(id: "r1", covenId: covenID, name: "Coder", emoji: nil, description: nil, systemPrompt: nil, model: nil, provider: nil, providerAccountId: nil, temperature: nil, maxTokens: nil, settings: nil, createdAt: Date(), updatedAt: Date())]
             },
+            isStillThere: { $0 != "gone" },
             writeClipboard: { _ in true }
         )
 
@@ -149,6 +150,13 @@ final class ThreadListTests: XCTestCase {
         askedRolesOf = []
         _ = try await ThreadMarkdownExport.makeDocument(thread: thread("p", title: "Mine"), dependencies: dependencies)
         XCTAssertEqual(askedRolesOf, [])
+        // A thread deleted while it was read is not copied as if what was read were all of it.
+        do {
+            _ = try await ThreadMarkdownExport.makeDocument(thread: thread("gone", title: "Gone"), dependencies: dependencies)
+            XCTFail("Copied a thread that is gone")
+        } catch {
+            XCTAssertEqual(error as? ThreadMarkdownExportError, .threadGone)
+        }
     }
 
     func testEveryMessageIsRead_aPageAtATime_fromTheNewestBack() async throws {
@@ -204,6 +212,10 @@ final class ThreadListTests: XCTestCase {
         var messages: [ChatMessage] = []
         var changed = 0
         var left: [String] = []
+        /// The thread was deleted while it was read.
+        var gone = false
+        /// Held until the test lets the messages be read.
+        var beforeReading: (() async -> Void)?
 
         func actions() -> ThreadActions {
             let actions = ThreadActions(dependencies: .init(
@@ -223,11 +235,13 @@ final class ThreadListTests: XCTestCase {
                 currentAccount: { self.account },
                 export: .init(
                     loadMessages: { _ in
+                        await self.beforeReading?()
                         if self.failing { throw URLError(.cannotOpenFile) }
                         return self.messages
                     },
                     loadUnfinished: { _ in [] },
                     loadRoles: { _ in [] },
+                    isStillThere: { _ in !self.gone },
                     writeClipboard: { text in
                         guard self.clipboardTakes else { return false }
                         self.clipboard = text
@@ -355,6 +369,28 @@ final class ThreadListTests: XCTestCase {
         actions.copy(plans)
         store.account = "grace"
         await wait("done") { actions.exportingThreadID == nil }
+        XCTAssertNil(store.clipboard)
+        XCTAssertNil(actions.notice)
+
+        // The thread went while it was read: nothing is copied, and that is said.
+        store.account = "ada"
+        store.gone = true
+        actions.copy(plans)
+        await wait("said") { actions.notice?.message == ThreadMarkdownExport.failed }
+        XCTAssertNil(store.clipboard)
+        store.gone = false
+
+        // Deleting a thread calls off a copy of it under way: nothing is copied or said of it.
+        var reading: CheckedContinuation<Void, Never>?
+        store.beforeReading = { await withCheckedContinuation { reading = $0 } }
+        actions.notice = nil
+        actions.copy(plans)
+        await wait("reading") { reading != nil }
+        actions.delete(plans)
+        XCTAssertNil(actions.exportingThreadID)
+        reading?.resume()
+        store.beforeReading = nil
+        try? await Task.sleep(for: .milliseconds(30))
         XCTAssertNil(store.clipboard)
         XCTAssertNil(actions.notice)
 
