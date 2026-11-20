@@ -178,6 +178,20 @@ struct NewThreadComposer: View {
         didLoadRoles = true
     }
 
+    /// A first message that could not be sent into the thread made for it
+    /// is handed to that thread's own composer, with why: the text and its
+    /// files, the thread's by now. Through the engine, so it goes in front
+    /// of anything typed or attached there meanwhile, never over it, and
+    /// reaches a composer already showing the thread.
+    static func handBack(
+        _ text: String, _ files: [FileAttachmentDetail], toThread threadID: String, because error: Error,
+        engine: TurnEngine = .shared
+    ) {
+        // The kind of failure only.
+        AppErrorReporter.log(message: "Could not send a new thread's first message (\(type(of: error)))", context: "NewThreadComposer.send")
+        engine.handBack(ComposerDraft(text: text, attachments: files), to: threadID, because: error)
+    }
+
     /// Sends what the field holds: makes the thread, then sends the
     /// message into it. The agent is the one shown when Send was pressed.
     private func send() -> Bool {
@@ -200,12 +214,7 @@ struct NewThreadComposer: View {
                 )
             },
             keepUnsent: { thread, text, files, error in
-                // The kind of failure only.
-                AppErrorReporter.log(message: "Could not send a new thread's first message (\(type(of: error)))", context: "NewThreadComposer.send")
-                // Handed to the thread's own composer, with why: the text
-                // and its files, the thread's by now. In front of anything
-                // typed or attached there meanwhile, never over it.
-                TurnEngine.shared.handBack(ComposerDraft(text: text, attachments: files), to: thread.id, because: error)
+                Self.handBack(text, files, toThread: thread.id, because: error)
             },
             onThreadCreated: onThreadCreated
         )
