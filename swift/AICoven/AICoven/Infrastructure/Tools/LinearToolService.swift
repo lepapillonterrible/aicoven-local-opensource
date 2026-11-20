@@ -67,15 +67,17 @@ nonisolated enum LinearToolService {
             let extensions = error["extensions"] as? [String: Any]
             return [extensions?["code"], extensions?["type"]].compactMap { ($0 as? String)?.lowercased() }
         }
+        // An answer that says the server failed (5xx) is no refusal and no
+        // limit, whatever its body says: what was asked may or may not
+        // have been done.
+        guard http.statusCode < 500 else { throw LinearError.notAnswered(status: http.statusCode) }
         if http.statusCode == 401 || http.statusCode == 403 || kinds.contains(where: { $0.contains("authentication") }) {
             throw LinearError.keyRefused
         }
         if http.statusCode == 429 || kinds.contains(where: { $0.contains("ratelimit") }) {
             throw LinearError.rateLimited(retryAfter: http.value(forHTTPHeaderField: "Retry-After").flatMap(Int.init))
         }
-        // An error in an answer that says the server failed (5xx) is no
-        // refusal: what was asked may or may not have been done.
-        if let first = errors.first, http.statusCode < 500 {
+        if let first = errors.first {
             let said = (first["message"] as? String).map { String($0.prefix(mostOfAMessage)) } ?? "no reason given"
             throw LinearError.refused(message: said)
         }
@@ -197,6 +199,13 @@ nonisolated extension LinearToolService {
     /// page).
     static let mostPages = 20
 
+    /// What an answer gives as true or false, and nothing else: a number
+    /// (which would pass for one) is not.
+    static func flag(_ value: Any?) -> Bool? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+        return number.boolValue
+    }
+
     /// A team's workflow states or its members, all pages of them.
     private static func all(_ field: String, wanting: String, ofTeam teamID: String, key: String, session: URLSession) async throws -> [[String: Any]] {
         let query = """
@@ -221,7 +230,7 @@ nonisolated extension LinearToolService {
                   let nodes = page["nodes"] as? [[String: Any]],
                   nodes.allSatisfy({ $0["id"] is String && $0["name"] is String }),
                   let info = page["pageInfo"] as? [String: Any],
-                  let more = info["hasNextPage"] as? Bool else { throw LinearError.invalidResponse }
+                  let more = flag(info["hasNextPage"]) else { throw LinearError.invalidResponse }
             found += nodes
             guard more else { return found }
             guard let next = info["endCursor"] as? String, !next.isEmpty else { throw LinearError.invalidResponse }
@@ -253,7 +262,7 @@ nonisolated extension LinearToolService {
         """, variables: ["issueId": issueID, "body": body], key: key, session: session)
         // Only Linear saying it did not is a refusal; an answer that
         // does not say leaves the comment unknown.
-        guard let made = data["commentCreate"] as? [String: Any], let success = made["success"] as? Bool else { throw LinearError.invalidResponse }
+        guard let made = data["commentCreate"] as? [String: Any], let success = flag(made["success"]) else { throw LinearError.invalidResponse }
         guard success else { throw LinearError.refused(message: "Linear did not add the comment") }
         return (made["comment"] as? [String: Any])?["url"] as? String
     }
@@ -274,7 +283,7 @@ nonisolated extension LinearToolService {
           }
         }
         """, variables: ["id": issueID, "input": changes], key: key, session: session)
-        guard let made = data["issueUpdate"] as? [String: Any], let success = made["success"] as? Bool else { throw LinearError.invalidResponse }
+        guard let made = data["issueUpdate"] as? [String: Any], let success = flag(made["success"]) else { throw LinearError.invalidResponse }
         guard success else { throw LinearError.refused(message: "Linear did not update the issue") }
         return made["issue"] as? [String: Any] ?? [:]
     }

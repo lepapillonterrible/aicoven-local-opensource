@@ -345,7 +345,7 @@ final class LinearWriteTests: XCTestCase {
 
         // An answer that does not say whether it was done, and one that
         // says the server failed, leave the change unknown too.
-        for (kind, answer) in [("commentCreate", (200, #"{"data": {}}"#)), ("commentCreate", (200, #"{"data": {"commentCreate": {"comment": null}}}"#)), ("commentCreate", (502, "Bad Gateway")), ("commentCreate", (500, #"{"errors": [{"message": "Internal server error"}]}"#))] as [(String, (Int, String))] {
+        for (kind, answer) in [("commentCreate", (200, #"{"data": {}}"#)), ("commentCreate", (200, #"{"data": {"commentCreate": {"comment": null}}}"#)), ("commentCreate", (502, "Bad Gateway")), ("commentCreate", (500, #"{"errors": [{"message": "Internal server error"}]}"#)), ("commentCreate", (500, #"{"errors": [{"message": "Slow down", "extensions": {"code": "RATELIMITED"}}]}"#)), ("commentCreate", (503, #"{"errors": [{"message": "No", "extensions": {"type": "authentication error"}}]}"#)), ("commentCreate", (200, #"{"data": {"commentCreate": {"success": 0}}}"#)), ("commentCreate", (200, #"{"data": {"commentCreate": {"success": 1}}}"#))] as [(String, (Int, String))] {
             let unsure = try await world(overriding: [kind: answer])
             defer { unsure.forget() }
             result = await unsure.call("linear.addComment", ["issue": AnyJSONValue("ENG-12"), "body": AnyJSONValue("Hi")])
@@ -367,6 +367,15 @@ final class LinearWriteTests: XCTestCase {
         result = await offline.call("linear.updateIssue", ["issue": AnyJSONValue("ENG-12"), "title": AnyJSONValue("New")])
         XCTAssertEqual(result.errorType, "linear_failed")
         XCTAssertTrue(result.isRetryable)
+    }
+
+    func testTrueAndFalseAreReadOnlyFromTrueAndFalse() throws {
+        let answer = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(#"{"yes": true, "no": false, "one": 1, "zero": 0, "text": "true"}"#.utf8)) as? [String: Any])
+        XCTAssertEqual(LinearToolService.flag(answer["yes"]), true)
+        XCTAssertEqual(LinearToolService.flag(answer["no"]), false)
+        for key in ["one", "zero", "text", "absent"] {
+            XCTAssertNil(LinearToolService.flag(answer[key]), key)
+        }
     }
 
     func testWhatAModelIsToldOfAResult() {
@@ -425,6 +434,7 @@ final class LinearWriteTests: XCTestCase {
         for page in [
             #"{"nodes": [{"id": "s1", "name": "Todo"}]}"#,
             #"{"nodes": [{"id": "s1", "name": "Todo"}], "pageInfo": {}}"#,
+            #"{"nodes": [{"id": "s1", "name": "Todo"}], "pageInfo": {"hasNextPage": 0}}"#,
             #"{"pageInfo": {"hasNextPage": false}}"#,
             #"{"nodes": [{"id": "s1"}], "pageInfo": {"hasNextPage": false}}"#,
             #"{"nodes": ["Todo"], "pageInfo": {"hasNextPage": false}}"#,
