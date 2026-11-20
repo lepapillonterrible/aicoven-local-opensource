@@ -242,6 +242,8 @@ final class ShellThreadsTests: XCTestCase {
         // Each memory's form is its own sheet.
         XCTAssertNotEqual(MemoryForm.edit(memoryID: "m1").id, MemoryForm.edit(memoryID: "m2").id)
         XCTAssertNotEqual(MemoryForm.add.id, MemoryForm.edit(memoryID: "add").id)
+    }
+
     func testACovensThreadIsNotMadeBeforeItsAgentsAreIn_norWithNoneChosenWhereThereAreSome() {
         func can(creating: Bool = false, coven: Bool = true, rolesIn: Bool = true, roles: Bool = true, chosen: Bool = true) -> Bool {
             NewThreadView.canCreate(isCreating: creating, inCoven: coven, rolesAreIn: rolesIn, hasRoles: roles, hasChosenRole: chosen)
