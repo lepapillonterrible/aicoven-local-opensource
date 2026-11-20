@@ -98,6 +98,30 @@ nonisolated enum AttachmentImage {
     /// until it is). nil if the bytes are not a picture that can be drawn,
     /// or it cannot be made small enough.
     static func forModel(_ data: Data, largest: Int = largestForModel) -> Data? {
+        forModel(data, largest: largest, tries: triesForModel)
+    }
+
+    /// The sizes and qualities a picture a tool made for a model (a frame
+    /// of a design, rendered) is tried at: 1568 pixels on its longest
+    /// edge at most, as the cloud app sends them, and no larger than
+    /// `largestToolPicture` bytes.
+    static let triesForToolPictures: [(edge: Int, quality: Double)] = [(1568, 0.85), (1568, 0.7), (1280, 0.7), (1024, 0.6)]
+    static let largestToolPicture = 1024 * 1024
+
+    /// The width and height, in pixels, of a picture as it is drawn
+    /// (upright); nil if the bytes are not a picture.
+    static func pixelSize(of data: Data) -> (width: Int, height: Int)? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int else { return nil }
+        // Orientations 5 to 8 are drawn turned a quarter.
+        let turned = (properties[kCGImagePropertyOrientation] as? Int).map { (5 ... 8).contains($0) } ?? false
+        return turned ? (height, width) : (width, height)
+    }
+
+    /// As `forModel(_:largest:)`, tried at these sizes and qualities.
+    static func forModel(_ data: Data, largest: Int, tries: [(edge: Int, quality: Double)]) -> Data? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let type = (CGImageSourceGetType(source) as String?).flatMap(UTType.init),
               type.conforms(to: .image), CGImageSourceGetCount(source) > 0 else {
@@ -105,7 +129,7 @@ nonisolated enum AttachmentImage {
         }
         let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
         let sourceEdge = max(properties?[kCGImagePropertyPixelWidth] as? Int ?? longestEdge, properties?[kCGImagePropertyPixelHeight] as? Int ?? longestEdge)
-        for attempt in triesForModel {
+        for attempt in tries {
             // A turn that was stopped is not worked for.
             guard !Task.isCancelled else { return nil }
             // Never drawn larger than it is.

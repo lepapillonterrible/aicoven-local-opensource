@@ -10,6 +10,8 @@ nonisolated enum FigmaError: LocalizedError, Equatable {
     /// Figma answered with something other than what was asked for.
     case notAnswered(status: Int)
     case invalidResponse
+    /// Figma said it could not render what was asked.
+    case couldNotRender
 
     var errorDescription: String? {
         switch self {
@@ -21,6 +23,8 @@ nonisolated enum FigmaError: LocalizedError, Equatable {
             "Figma answered HTTP \(status)."
         case .invalidResponse:
             "Figma's answer could not be read."
+        case .couldNotRender:
+            "Figma could not render those nodes."
         }
     }
 }
@@ -172,6 +176,161 @@ nonisolated extension FigmaToolService {
         var body: [String: Any] = ["message": message]
         if let replyTo { body["comment_id"] = replyTo }
         return try await ask("POST", ["v1", "files", key, "comments"], body: body, token: token, session: session)
+    }
+
+    // MARK: Rendering frames
+
+    /// The most nodes rendered by one call, the scales Figma is asked
+    /// for, and the most bytes of one rendered picture that are fetched
+    /// (as the cloud app has them).
+    static let mostFramesAtOnce = 3
+    static let scales: ClosedRange<Double> = 0.5 ... 2
+    static let largestRenderFetched = 10 * 1024 * 1024
+
+    /// The nodes a call asks to have rendered (`nodes`): 1 to 3 node ids,
+    /// given as a list, as a list written as JSON in text, or as text
+    /// with commas between them. Nil for anything else. A node named
+    /// twice is rendered once.
+    static func nodes(in args: [String: AnyJSONValue]) -> [String]? {
+        var given: [String]
+        switch args["nodes"] {
+        case let .array(list)?:
+            given = []
+            for entry in list {
+                guard case let .string(id) = entry else { return nil }
+                given.append(id)
+            }
+        case let .string(text)?:
+            if text.trimmingCharacters(in: .whitespaces).hasPrefix("["),
+               let list = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [Any] {
+                guard let ids = list as? [String] else { return nil }
+                given = ids
+            } else {
+                given = text.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+            }
+        default:
+            return nil
+        }
+        var nodes: [String] = []
+        for id in given.map({ $0.trimmingCharacters(in: .whitespaces) }) where !nodes.contains(id) {
+            guard isNodeID(id) else { return nil }
+            nodes.append(id)
+        }
+        return (1 ... mostFramesAtOnce).contains(nodes.count) ? nodes : nil
+    }
+
+    /// The scale a call asks for (`scale`): 1 when left out or unreadable,
+    /// and kept between a half and two.
+    static func scale(in args: [String: AnyJSONValue]) -> Double {
+        let asked: Double? = switch args["scale"] {
+        case let .double(number)?: number
+        case let .int(number)?: Double(number)
+        case let .string(text)?: Double(text.trimmingCharacters(in: .whitespaces))
+        default: nil
+        }
+        guard let asked, asked.isFinite, asked > 0 else { return 1 }
+        return min(scales.upperBound, max(scales.lowerBound, asked))
+    }
+
+    /// Where Figma has put a PNG of each node, for a while: the node's
+    /// id and the link. A node Figma rendered nothing for is left out.
+    static func renderLinks(key: String, nodes: [String], scale: Double, token: String, session: URLSession = .shared) async throws -> [String: String] {
+        let found = try await ask("GET", ["v1", "images", key], query: [
+            URLQueryItem(name: "ids", value: nodes.joined(separator: ",")),
+            URLQueryItem(name: "format", value: "png"),
+            URLQueryItem(name: "scale", value: String(format: "%g", scale)),
+        ], token: token, session: session)
+        if let failure = found["err"], !(failure is NSNull) { throw FigmaError.couldNotRender }
+        guard let images = found["images"] as? [String: Any] else { throw FigmaError.invalidResponse }
+        return images.compactMapValues { $0 as? String }
+    }
+
+    /// Whether a rendered picture is fetched from this address: one Figma
+    /// gave for its storage, which must be an https address of a named
+    /// host on the internet: no user in it, no port of its own, not this
+    /// machine or this network by name, and not an address in numbers.
+    static func isFetchable(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https", url.user == nil, url.password == nil, url.port == nil || url.port == 443,
+              let host = url.host(percentEncoded: false)?.lowercased(), !host.isEmpty else { return false }
+        guard host.contains("."), !host.hasSuffix("."), !host.contains(":") else { return false }
+        if host == "localhost" || host.hasSuffix(".localhost") || host.hasSuffix(".local") || host.hasSuffix(".internal") { return false }
+        // An address written in numbers, however (10.0.0.1, 2130706433.1,
+        // 0x7f.0x0.0x0.0x1), names no host.
+        let isANumber: (Substring) -> Bool = { part in
+            if part.hasPrefix("0x") { return part.dropFirst(2).allSatisfy(\.isHexDigit) }
+            return part.allSatisfy { $0.isASCII && $0.isNumber }
+        }
+        if host.split(separator: ".").allSatisfy(isANumber) { return false }
+        return true
+    }
+
+    /// Why a rendered picture was not fetched.
+    enum FetchFailure: Error, Equatable {
+        case notFetchable
+        case unavailable
+        case tooLarge
+    }
+
+    /// Fetches a rendered picture from where Figma put it. The token is
+    /// not sent (the link is signed), a redirect is not followed, and no
+    /// more than `largestRenderFetched` bytes are taken.
+    @concurrent
+    static func fetchRender(_ link: String, session: URLSession = .shared) async throws -> Data {
+        guard let url = URL(string: link), isFetchable(url) else { throw FetchFailure.notFetchable }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 30
+        request.httpShouldHandleCookies = false
+        let (bytes, response) = try await session.bytes(for: request, delegate: NoRedirects())
+        guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else { throw FetchFailure.unavailable }
+        guard response.expectedContentLength <= Int64(largestRenderFetched) else { throw FetchFailure.tooLarge }
+        var data = Data()
+        if response.expectedContentLength > 0 { data.reserveCapacity(Int(response.expectedContentLength)) }
+        for try await byte in bytes {
+            data.append(byte)
+            if data.count > largestRenderFetched { throw FetchFailure.tooLarge }
+        }
+        guard !data.isEmpty else { throw FetchFailure.unavailable }
+        return data
+    }
+
+    /// Follows no redirect: the picture is at the address Figma gave, or
+    /// it is not fetched.
+    private final class NoRedirects: NSObject, URLSessionTaskDelegate {
+        func urlSession(
+            _ session: URLSession,
+            task: URLSessionTask,
+            willPerformHTTPRedirection response: HTTPURLResponse,
+            newRequest request: URLRequest,
+            completionHandler: @escaping (URLRequest?) -> Void
+        ) {
+            completionHandler(nil)
+        }
+    }
+
+    /// A frame as a model is sent it, or why it is not.
+    enum Rendered: Equatable {
+        case picture(LLMImage, width: Int, height: Int)
+        case notRendered(reason: String)
+    }
+
+    /// Fetches the picture Figma made of one node and makes it what a
+    /// model is sent: a JPEG, 1568 pixels on its longest edge at most.
+    static func rendered(from link: String?, session: URLSession = .shared) async -> Rendered {
+        guard let link else { return .notRendered(reason: "Figma returned no image") }
+        let fetched: Data
+        do {
+            fetched = try await fetchRender(link, session: session)
+        } catch FetchFailure.tooLarge {
+            return .notRendered(reason: "the image is too large")
+        } catch {
+            return .notRendered(reason: "the image could not be fetched")
+        }
+        guard AttachmentImage.pixelSize(of: fetched) != nil else { return .notRendered(reason: "the image could not be read") }
+        guard let jpeg = AttachmentImage.forModel(fetched, largest: AttachmentImage.largestToolPicture, tries: AttachmentImage.triesForToolPictures),
+              let size = AttachmentImage.pixelSize(of: jpeg) else {
+            return .notRendered(reason: "the image is too large")
+        }
+        return .picture(LLMImage(data: jpeg, mimeType: "image/jpeg"), width: size.width, height: size.height)
     }
 
     // MARK: What a model is told

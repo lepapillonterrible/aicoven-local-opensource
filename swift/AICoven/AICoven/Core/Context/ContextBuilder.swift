@@ -86,14 +86,20 @@ struct ContextBuilder {
         /// its reply (a chat turn does; an agent run does not): only then
         /// are the tools that make files for the person offered.
         ///
+        /// `seesPictures` says the caller's model can be sent pictures and
+        /// the caller sends it those a tool makes (a chat turn of such a
+        /// model does; an agent run does not): only then are the tools
+        /// that make pictures for the model offered.
+        ///
         /// `connections` is the choice of the thread's coven
         /// (`CovenService.connections(forThread:)`): the connected apps'
         /// tools and the MCP servers offered are those it allows.
-        static func connected(deliversFiles: Bool = false, connections: CovenConnections? = nil) async -> ToolConfig {
+        static func connected(deliversFiles: Bool = false, seesPictures: Bool = false, connections: CovenConnections? = nil) async -> ToolConfig {
             var connectedTools = await PromptTemplates.connectedToolSet()
             if deliversFiles {
                 connectedTools.formUnion(PromptTemplates.offeredImageTools())
             }
+            connectedTools.formUnion(PromptTemplates.pictureTools(among: connectedTools, seesPictures: seesPictures))
             let (tools, mcpServers) = await CovenConnectionRules.offered(
                 tools: connectedTools,
                 servers: ConnectedAccountsService.shared.getAllMCPServers(),
