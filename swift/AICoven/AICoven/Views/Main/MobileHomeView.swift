@@ -78,6 +78,9 @@ struct MobileChatsRootView: View {
     @State private var showMemory = false
     @State private var showConnections = false
     @State private var errorMessage: String?
+    /// Rename, archive, delete and copy, for this list's threads.
+    @StateObject private var threadActions = ThreadActions()
+    @State private var showArchived = false
 
     private var selectedCoven: Coven? {
         guard let selectedCovenId else { return nil }
@@ -171,18 +174,17 @@ struct MobileChatsRootView: View {
                                 .padding(.vertical, Spacing.sm)
                                 .listRowBackground(Color.clear)
                             } else {
-                                ForEach(threads) { thread in
-                                    Button {
-                                        selectedThread = thread
-                                    } label: {
-                                        ThreadRowView(thread: thread)
-                                    }
-                                    .listRowBackground(Color.aicovenGlass)
-                                    .swipeActions(edge: .trailing) {
-                                        Button(role: .destructive) {
-                                            deleteThread(thread)
-                                        } label: {
-                                            Label("Delete", systemImage: "trash")
+                                // Newest first, then those archived, under a header of their own.
+                                let sections = ThreadListRules.sections(threads)
+                                ForEach(sections.open) { thread in
+                                    threadRow(thread)
+                                }
+                                if !sections.archived.isEmpty {
+                                    ArchivedThreadsHeader(isExpanded: $showArchived)
+                                        .listRowBackground(Color.clear)
+                                    if showArchived {
+                                        ForEach(sections.archived) { thread in
+                                            threadRow(thread)
                                         }
                                     }
                                 }
@@ -230,7 +232,18 @@ struct MobileChatsRootView: View {
                     }
                 }
                 .task { await loadCovens() }
-                .task(id: selectedCovenId) { await loadThreads() }
+                .task(id: selectedCovenId) {
+                    // Another scope's threads are another list.
+                    threadActions.invalidate()
+                    await loadThreads()
+                }
+                .threadActionsHost(threadActions)
+                .onAppear {
+                    threadActions.onChanged = { Task { await loadThreads() } }
+                    threadActions.onLeft = { left in
+                        if selectedThread?.id == left.id { selectedThread = nil }
+                    }
+                }
                 .sheet(isPresented: $showCreateCoven) {
                     CreateCovenSheet(onCreated: { coven in
                         Task {
@@ -307,7 +320,8 @@ struct MobileChatsRootView: View {
         isLoading = true
         defer { isLoading = false }
         do {
-            threads = try await ThreadService.shared.loadThreads(covenId: selectedCovenId)
+            // With those archived: the list shows them in a section of their own.
+            threads = try await ThreadService.shared.loadThreads(covenId: selectedCovenId, includeArchived: true)
         } catch {
             AppErrorReporter.log(error: error, context: "MobileChatsRootView.loadThreads")
             threads = []
@@ -316,18 +330,14 @@ struct MobileChatsRootView: View {
         }
     }
 
-    private func deleteThread(_ thread: Thread) {
-        Task {
-            do {
-                try await ThreadService.shared.deleteThread(threadId: thread.id)
-                if let index = threads.firstIndex(where: { $0.id == thread.id }) {
-                    threads.remove(at: index)
-                }
-            } catch {
-                AppErrorReporter.log(error: error, context: "MobileChatsRootView.deleteThread")
-                errorMessage = "Couldn’t delete that chat."
-            }
+    private func threadRow(_ thread: Thread) -> some View {
+        Button {
+            selectedThread = thread
+        } label: {
+            ThreadRowView(thread: thread)
         }
+        .listRowBackground(Color.aicovenGlass)
+        .threadRowActions(thread, threadActions)
     }
 
     @ViewBuilder
@@ -354,7 +364,7 @@ struct ThreadRowView: View {
             IconBadge(icon: "message", size: 28, color: .aicovenTeal)
             VStack(alignment: .leading, spacing: Spacing.xxs) {
                 HStack(spacing: 4) {
-                    Text(thread.title ?? "Untitled Chat")
+                    Text(ThreadListRules.title(of: thread))
                         .font(.aicovenBody)
                         .foregroundColor(.aicovenTextPrimary)
                     if let agentName = thread.agentName {
@@ -369,16 +379,14 @@ struct ThreadRowView: View {
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTeal)
                     }
-                    if let updatedAt = thread.updatedAt {
-                        if thread.agentModel != nil {
-                            Text("•")
-                                .font(.aicovenCaption)
-                                .foregroundColor(.aicovenTextTertiary)
-                        }
-                        Text(relativeTime(from: updatedAt))
+                    if thread.agentModel != nil {
+                        Text("•")
                             .font(.aicovenCaption)
-                            .foregroundColor(.aicovenTextSecondary)
+                            .foregroundColor(.aicovenTextTertiary)
                     }
+                    Text(VisitWords.rowDate(ThreadListRules.lastUsed(thread)))
+                        .font(.aicovenCaption)
+                        .foregroundColor(.aicovenTextSecondary)
                 }
             }
             Spacer()
@@ -387,14 +395,6 @@ struct ThreadRowView: View {
                 .foregroundColor(.aicovenTextTertiary)
         }
         .padding(.vertical, Spacing.xs)
-    }
-
-    private func relativeTime(from date: Date) -> String {
-        let calendar = Calendar.current
-        let now = Date()
-        let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date, to: now)
-
-        if let years = components.year, years > 0 { return "\(years)y" } else if let months = components.month, months > 0 { return "\(months)mo" } else if let days = components.day, days > 0 { return "\(days)d" } else if let hours = components.hour, hours > 0 { return "\(hours)h" } else if let minutes = components.minute, minutes > 0 { return "\(minutes)m" } else { return "now" }
     }
 }
 

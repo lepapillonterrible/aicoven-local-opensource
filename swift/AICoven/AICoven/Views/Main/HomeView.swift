@@ -118,7 +118,8 @@ struct HomeView: View {
 
     private func loadPersonalThreads() async {
         do {
-            personalThreads = try await ThreadService.shared.loadThreads(covenId: nil)
+            // With those archived: the sidebar shows them in a section of their own.
+            personalThreads = try await ThreadService.shared.loadThreads(covenId: nil, includeArchived: true)
             AppErrorReporter.log(message: "Loaded \(personalThreads.count) personal threads", context: "HomeView.loadPersonalThreads")
         } catch {
             AppErrorReporter.log(error: error, context: "HomeView.loadPersonalThreads")
@@ -194,7 +195,7 @@ struct PersonalWorkspaceView: View {
                     onNewThread: handleNewThread,
                     onCreateCoven: onCreateCoven,
                     onSelectThread: handleOpenThread,
-                    onDeleteThread: handleDeleteThread,
+                    onThreadLeft: handleThreadLeft,
                     onRefresh: onRefreshThreads,
                     onSwitchToCovens: onSwitchToCovens,
                     onSelectCoven: { coven in
@@ -299,35 +300,20 @@ struct PersonalWorkspaceView: View {
         activeTabId = tab.id
     }
 
-    private func handleDeleteThread(_ thread: Thread) {
-        Task {
-            do {
-                try await ThreadService.shared.deleteThread(threadId: thread.id)
-
-                // Remove from local list
-                if let index = personalThreads.firstIndex(where: { $0.id == thread.id }) {
-                    personalThreads.remove(at: index)
-                }
-
-                // Clear selected thread if needed
-                if selectedThread?.id == thread.id {
-                    selectedThread = nil
-                }
-
-                // Close any open tab for this thread
-                openTabs.removeAll { tab in
-                    if case let .thread(tabThread) = tab.type {
-                        return tabThread.id == thread.id
-                    }
-                    return false
-                }
-
-                if activeTabId == thread.id {
-                    activeTabId = openTabs.last?.id
-                }
-            } catch {
-                AppErrorReporter.log(error: error, context: "HomeView.handleDeleteThread")
+    /// A thread was deleted or archived from the sidebar: it is no longer
+    /// open here.
+    private func handleThreadLeft(_ thread: Thread) {
+        if selectedThread?.id == thread.id {
+            selectedThread = nil
+        }
+        openTabs.removeAll { tab in
+            if case let .thread(tabThread) = tab.type {
+                return tabThread.id == thread.id
             }
+            return false
+        }
+        if activeTabId == thread.id {
+            activeTabId = openTabs.last?.id
         }
     }
 }

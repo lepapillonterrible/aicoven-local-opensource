@@ -15,14 +15,41 @@ struct PersonalThreadsSidebar: View {
     let onNewThread: () -> Void
     let onCreateCoven: () -> Void
     let onSelectThread: (Thread) -> Void
-    let onDeleteThread: (Thread) -> Void
+    /// A thread was deleted or archived here.
+    let onThreadLeft: (Thread) -> Void
     let onRefresh: () async -> Void
     let onSwitchToCovens: () -> Void
     let onSelectCoven: (Coven) -> Void
     let onOpenWorkspaceTab: (WorkspaceTabType) -> Void
     @State private var showCovenMenu = false
+    /// Rename, archive, delete and copy, for this list's threads.
+    @StateObject private var threadActions = ThreadActions()
+    @State private var showArchived = false
 
     var body: some View {
+        content
+            .threadActionsHost(threadActions)
+            .onAppear {
+                // The list shows what was changed; a thread that is gone
+                // or put away is no longer open.
+                threadActions.onChanged = { Task { await onRefresh() } }
+                threadActions.onLeft = onThreadLeft
+            }
+    }
+
+    private func threadRow(_ thread: Thread) -> some View {
+        PersonalThreadRow(
+            thread: thread,
+            isSelected: selectedThread?.id == thread.id,
+            preferredModel: strixSettings?.model,
+            onTap: {
+                onSelectThread(thread)
+            }
+        )
+        .threadRowActions(thread, threadActions)
+    }
+
+    private var content: some View {
         VStack(spacing: 0) {
             #if !os(macOS)
             // Workspace switcher
@@ -176,19 +203,21 @@ struct PersonalThreadsSidebar: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, Spacing.xl)
                         } else {
+                            // Newest first, then those archived, under a header of their own.
+                            let sections = ThreadListRules.sections(threads)
                             LazyVStack(spacing: Spacing.xs) {
-                                ForEach(threads) { thread in
-                                    PersonalThreadRow(
-                                        thread: thread,
-                                        isSelected: selectedThread?.id == thread.id,
-                                        preferredModel: strixSettings?.model,
-                                        onTap: {
-                                            onSelectThread(thread)
-                                        },
-                                        onDelete: {
-                                            onDeleteThread(thread)
+                                ForEach(sections.open) { thread in
+                                    threadRow(thread)
+                                }
+                                if !sections.archived.isEmpty {
+                                    ArchivedThreadsHeader(isExpanded: $showArchived)
+                                        .padding(.horizontal, Spacing.sm)
+                                        .padding(.top, Spacing.sm)
+                                    if showArchived {
+                                        ForEach(sections.archived) { thread in
+                                            threadRow(thread)
                                         }
-                                    )
+                                    }
                                 }
                             }
                             .padding(Spacing.sm)
@@ -396,7 +425,6 @@ struct PersonalThreadRow: View {
     /// The preferred model from Strix settings, used as fallback when thread has no model
     let preferredModel: String?
     let onTap: () -> Void
-    let onDelete: () -> Void
 
     /// Determines the model name to display:
     /// 1. Thread's agentModel (if available - represents the last model used)
@@ -416,7 +444,7 @@ struct PersonalThreadRow: View {
 
                 // Title
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(thread.title ?? "Untitled Chat")
+                    Text(ThreadListRules.title(of: thread))
                         .font(.aicovenBody)
                         .foregroundColor(isSelected ? .aicovenTextPrimary : .aicovenTextSecondary)
                         .lineLimit(1)
@@ -433,11 +461,9 @@ struct PersonalThreadRow: View {
                             .foregroundColor(.aicovenTextSecondary)
                     }
 
-                    if let updatedAt = thread.updatedAt {
-                        Text(relativeTime(from: updatedAt))
-                            .font(.aicovenCaption)
-                            .foregroundColor(.aicovenTextTertiary)
-                    }
+                    Text(VisitWords.rowDate(ThreadListRules.lastUsed(thread)))
+                        .font(.aicovenCaption)
+                        .foregroundColor(.aicovenTextTertiary)
                 }
 
                 Spacer()
@@ -463,31 +489,5 @@ struct PersonalThreadRow: View {
             )
         }
         .buttonStyle(.plain)
-        .contextMenu {
-            Button("Delete", role: .destructive) {
-                onDelete()
-            }
-        }
-    }
-
-    /// Format relative time without seconds
-    private func relativeTime(from date: Date) -> String {
-        let calendar = Calendar.current
-        let now = Date()
-        let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date, to: now)
-
-        if let years = components.year, years > 0 {
-            return "\(years)y"
-        } else if let months = components.month, months > 0 {
-            return "\(months)mo"
-        } else if let days = components.day, days > 0 {
-            return "\(days)d"
-        } else if let hours = components.hour, hours > 0 {
-            return "\(hours)h"
-        } else if let minutes = components.minute, minutes > 0 {
-            return "\(minutes)m"
-        } else {
-            return "now"
-        }
     }
 }

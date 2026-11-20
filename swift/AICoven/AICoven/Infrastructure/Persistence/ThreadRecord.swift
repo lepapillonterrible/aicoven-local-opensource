@@ -577,6 +577,22 @@ extension ThreadRepository {
         return traces
     }
 
+    /// The messages, in a thread of the current account, that are the end
+    /// of a turn that did not complete: one that failed, was stopped, or
+    /// was cut off. (Such a message says what happened; it is no reply.)
+    func messagesOfTurnsNotCompleted(threadID: String) async throws -> Set<String> {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let currentUserId = await MainActor.run { UserScope.currentUserID }
+        let ids: [String] = try await dbQueue.read { db in
+            try String.fetchAll(
+                db,
+                sql: "SELECT message_id FROM turns WHERE user_id = ? AND thread_id = ? AND message_id IS NOT NULL AND status != ?",
+                arguments: [currentUserId, threadID, TurnOutcome.completed.rawValue]
+            )
+        }
+        return Set(ids)
+    }
+
     /// The current account's turns in a thread that are still marked as
     /// running, oldest first, each with the agent's run making it, if one
     /// is. A run that cannot be read is given as none.

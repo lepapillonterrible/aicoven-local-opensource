@@ -1,0 +1,357 @@
+@testable import AICoven
+import XCTest
+
+/// A list of threads is ordered, dated and acted on as the cloud app's:
+/// newest first, archived apart, renamed, archived, deleted after asking,
+/// and copied as Markdown.
+final class ThreadListTests: XCTestCase {
+    private func thread(
+        _ id: String,
+        title: String? = "A thread",
+        covenID: String? = nil,
+        agentName: String? = nil,
+        archived: Bool = false,
+        made: TimeInterval = 0,
+        lastMessage: TimeInterval? = nil
+    ) -> AICoven.Thread {
+        Thread(
+            id: id, userId: "ada", covenId: covenID, title: title, agentName: agentName, isArchived: archived,
+            createdAt: Date(timeIntervalSince1970: made), updatedAt: Date(timeIntervalSince1970: 9_999_999),
+            lastMessageAt: lastMessage.map(Date.init(timeIntervalSince1970:))
+        )
+    }
+
+    // MARK: - Order, sections, words
+
+    func testThreadsAreNewestFirstByWhenTheyWereLastUsed_andArchivedOnesApart() {
+        let old = thread("old", made: 10, lastMessage: 500)
+        let new = thread("new", made: 300)
+        let quiet = thread("quiet", made: 100)
+        let put = thread("put", archived: true, made: 50, lastMessage: 900)
+        let away = thread("away", archived: true, made: 400)
+
+        XCTAssertEqual(ThreadListRules.lastUsed(old), Date(timeIntervalSince1970: 500), "Its last message")
+        XCTAssertEqual(ThreadListRules.lastUsed(new), Date(timeIntervalSince1970: 300), "When it was made, with no message")
+        XCTAssertEqual(ThreadListRules.ordered([quiet, new, old]).map(\.id), ["old", "new", "quiet"])
+        // Renaming or archiving one (which changes when it was updated) does not move it.
+        XCTAssertEqual(ThreadListRules.ordered([new, quiet]).map(\.id), ["new", "quiet"])
+        // Used at the same moment: a fixed order.
+        let twins = [thread("b", made: 5), thread("a", made: 5)]
+        XCTAssertEqual(ThreadListRules.ordered(twins).map(\.id), ["a", "b"])
+        XCTAssertEqual(ThreadListRules.ordered(twins.reversed()).map(\.id), ["a", "b"])
+
+        let sections = ThreadListRules.sections([away, quiet, put, new, old])
+        XCTAssertEqual(sections.open.map(\.id), ["old", "new", "quiet"])
+        XCTAssertEqual(sections.archived.map(\.id), ["put", "away"])
+        XCTAssertEqual(ThreadListRules.sections([]).open.count, 0)
+    }
+
+    func testAThreadsTitle_theNameItIsGiven_andTheQuestionBeforeItIsDeleted() {
+        XCTAssertEqual(ThreadListRules.title(of: thread("a", title: "Plans")), "Plans")
+        XCTAssertEqual(ThreadListRules.title(of: thread("a", title: nil)), "Untitled")
+        XCTAssertEqual(ThreadListRules.title(of: thread("a", title: "  \n")), "Untitled")
+
+        XCTAssertEqual(ThreadListRules.name(from: "  Plans for May \n"), "Plans for May")
+        XCTAssertEqual(ThreadListRules.name(from: "Two\nlines"), "Two lines")
+        XCTAssertNil(ThreadListRules.name(from: ""))
+        XCTAssertNil(ThreadListRules.name(from: " \n\t"))
+
+        XCTAssertEqual(ThreadListRules.deleteQuestion(for: thread("a", title: "Plans")), "Delete “Plans”?")
+        XCTAssertEqual(ThreadListRules.deleteQuestion(for: thread("a", title: nil)), "Delete “Untitled”?")
+        XCTAssertEqual(ThreadListRules.deleteConsequence, "The thread and its messages are removed.")
+    }
+
+    func testARowsDate() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 20, hour: 15)))
+        func ago(days: Int = 0, hours: Int = 0) throws -> Date {
+            try XCTUnwrap(calendar.date(byAdding: DateComponents(day: -days, hour: -hours), to: now))
+        }
+        let earlier = try ago(hours: 5)
+        XCTAssertEqual(VisitWords.rowDate(earlier, now: now, calendar: calendar), earlier.formatted(date: .omitted, time: .shortened), "Today: the time")
+        let yesterday = try ago(days: 1)
+        XCTAssertEqual(VisitWords.rowDate(yesterday, now: now, calendar: calendar), yesterday.formatted(.dateTime.weekday(.abbreviated)), "Within the week: the weekday")
+        let sixDays = try ago(days: 6)
+        XCTAssertEqual(VisitWords.rowDate(sixDays, now: now, calendar: calendar), sixDays.formatted(.dateTime.weekday(.abbreviated)))
+        let week = try ago(days: 7)
+        XCTAssertEqual(VisitWords.rowDate(week, now: now, calendar: calendar), week.formatted(.dateTime.day().month(.abbreviated)), "This year: the day and month")
+        let lastYear = try ago(days: 400)
+        XCTAssertEqual(VisitWords.rowDate(lastYear, now: now, calendar: calendar), lastYear.formatted(.dateTime.day().month(.abbreviated).year()), "Another year: with the year")
+        // The day counts, not the hours: late last night is yesterday's weekday.
+        let lateLastNight = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 19, hour: 23, minute: 50)))
+        XCTAssertEqual(VisitWords.rowDate(lateLastNight, now: now, calendar: calendar), lateLastNight.formatted(.dateTime.weekday(.abbreviated)))
+        XCTAssertEqual(VisitWords.daysBetween(lateLastNight, now, calendar), 1)
+    }
+
+    // MARK: - As Markdown
+
+    private func message(_ id: String, _ role: String, _ content: String, metadata: [String: AnyJSONValue]? = nil) -> ChatMessage {
+        ChatMessage(id: id, threadId: "t", role: role, content: content, metadata: metadata, tokenUsage: nil, createdAt: nil, isEncrypted: nil, keyFingerprint: nil)
+    }
+
+    func testAThreadAsMarkdown() throws {
+        let document = try ThreadMarkdownExport.document(title: "Plans #1 [draft]", entries: [("You", "What next?"), ("Strix", "  "), ("Strix", "Ship it.\n\n- one\n- two")])
+        XCTAssertEqual(document, "# Plans \\#1 \\[draft\\]\n\n## You\n\nWhat next?\n\n## Strix\n\nShip it.\n\n- one\n- two")
+        XCTAssertThrowsError(try ThreadMarkdownExport.document(title: "Empty", entries: [("You", " \n")])) {
+            XCTAssertEqual($0 as? ThreadMarkdownExportError, .empty)
+        }
+        XCTAssertEqual(ThreadMarkdownExport.escapedHeading("a\n b <i>&</i> c*d_e"), "a b &lt;i&gt;&amp;&lt;/i&gt; c\\*d\\_e")
+        XCTAssertEqual(ThreadMarkdownExport.escapedHeading(" \n "), "Untitled")
+
+        // What the person sent and replies are copied; what ends a turn that did not complete is not.
+        let unfinished: Set = ["failed"]
+        XCTAssertTrue(ThreadMarkdownExport.isIncluded(message("u", "user", "Hi"), unfinished: unfinished))
+        XCTAssertTrue(ThreadMarkdownExport.isIncluded(message("a", "assistant", "Hello"), unfinished: unfinished))
+        XCTAssertFalse(ThreadMarkdownExport.isIncluded(message("failed", "assistant", "I ran into an error"), unfinished: unfinished))
+        XCTAssertFalse(ThreadMarkdownExport.isIncluded(message("s", "system", "Rules"), unfinished: unfinished))
+        XCTAssertFalse(ThreadMarkdownExport.isIncluded(message("t", "tool", "{}"), unfinished: unfinished))
+
+        // Who said it.
+        let roles = ["r1": "Coder"]
+        XCTAssertEqual(ThreadMarkdownExport.speaker(of: message("u", "user", "Hi"), roles: roles, threadAgent: "Strix"), "You")
+        XCTAssertEqual(ThreadMarkdownExport.speaker(of: message("a", "assistant", "x", metadata: ["role_name": AnyJSONValue(" Writer ")]), roles: roles, threadAgent: "Strix"), "Writer")
+        XCTAssertEqual(ThreadMarkdownExport.speaker(of: message("a", "assistant", "x", metadata: ["role_id": AnyJSONValue("R1")]), roles: roles, threadAgent: "Strix"), "Coder")
+        XCTAssertEqual(ThreadMarkdownExport.speaker(of: message("a", "assistant", "x"), roles: roles, threadAgent: "Strix"), "Strix")
+        XCTAssertEqual(ThreadMarkdownExport.speaker(of: message("a", "assistant", "x"), roles: roles, threadAgent: " "), "Agent")
+    }
+
+    @MainActor
+    func testTheDocumentIsMadeOfWhatTheThreadHolds() async throws {
+        let coven = thread("t", title: "Plans", covenID: "c1", agentName: "Strix")
+        var askedRolesOf: [String] = []
+        let dependencies = ThreadMarkdownExportDependencies(
+            loadMessages: { _ in
+                [
+                    self.message("1", "user", "What next?"),
+                    self.message("2", "assistant", "I ran into an error while contacting your provider: offline"),
+                    self.message("3", "user", "Again?"),
+                    self.message("4", "assistant", "Ship it.", metadata: ["role_id": AnyJSONValue("r1")]),
+                ]
+            },
+            loadUnfinished: { _ in ["2"] },
+            loadRoles: { covenID in
+                askedRolesOf.append(covenID)
+                return [Role(id: "r1", covenId: covenID, name: "Coder", emoji: nil, description: nil, systemPrompt: nil, model: nil, provider: nil, providerAccountId: nil, temperature: nil, maxTokens: nil, settings: nil, createdAt: Date(), updatedAt: Date())]
+            },
+            currentAccount: { "ada" },
+            writeClipboard: { _ in true }
+        )
+
+        let document = try await ThreadMarkdownExport.makeDocument(thread: coven, dependencies: dependencies)
+
+        XCTAssertEqual(document, "# Plans\n\n## You\n\nWhat next?\n\n## You\n\nAgain?\n\n## Coder\n\nShip it.")
+        XCTAssertEqual(askedRolesOf, ["c1"])
+        // A thread in no coven asks for no roles.
+        askedRolesOf = []
+        _ = try await ThreadMarkdownExport.makeDocument(thread: thread("p", title: "Mine"), dependencies: dependencies)
+        XCTAssertEqual(askedRolesOf, [])
+    }
+
+    // MARK: - What a list lets the person do
+
+    /// What the actions did, and what they are answered.
+    @MainActor
+    private final class Store {
+        var did: [String] = []
+        var failing = false
+        var account = "ada"
+        var clipboard: String?
+        var clipboardTakes = true
+        var messages: [ChatMessage] = []
+        var changed = 0
+        var left: [String] = []
+
+        func actions() -> ThreadActions {
+            let actions = ThreadActions(dependencies: .init(
+                rename: { id, title in
+                    if self.failing { throw URLError(.cannotOpenFile) }
+                    self.did.append("rename \(id) \(title)")
+                },
+                setArchived: { id, archived in
+                    if self.failing { throw URLError(.cannotOpenFile) }
+                    self.did.append("\(archived ? "archive" : "unarchive") \(id)")
+                },
+                delete: { id in
+                    if self.failing { throw URLError(.cannotOpenFile) }
+                    self.did.append("delete \(id)")
+                },
+                stopTurn: { self.did.append("stop \($0)") },
+                currentAccount: { self.account },
+                export: .init(
+                    loadMessages: { _ in
+                        if self.failing { throw URLError(.cannotOpenFile) }
+                        return self.messages
+                    },
+                    loadUnfinished: { _ in [] },
+                    loadRoles: { _ in [] },
+                    currentAccount: { self.account },
+                    writeClipboard: { text in
+                        guard self.clipboardTakes else { return false }
+                        self.clipboard = text
+                        return true
+                    }
+                )
+            ))
+            actions.onChanged = { self.changed += 1 }
+            actions.onLeft = { self.left.append($0.id) }
+            return actions
+        }
+    }
+
+    @MainActor
+    private func wait(_ what: String, until done: @MainActor () -> Bool) async {
+        for _ in 0 ..< 2000 where !done() {
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertTrue(done(), what)
+    }
+
+    @MainActor
+    func testRenameArchiveAndDelete() async {
+        let store = Store()
+        let actions = store.actions()
+        let plans = thread("t1", title: "Plans")
+
+        actions.rename(plans, to: "  Plans for May\n")
+        await wait("renamed") { store.changed == 1 }
+        XCTAssertEqual(store.did, ["rename t1 Plans for May"])
+        XCTAssertEqual(store.left, [], "A renamed thread stays open")
+        // Nothing to call it, or the name it has: nothing is done.
+        actions.rename(plans, to: "  ")
+        actions.rename(plans, to: "Plans")
+        try? await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(store.did.count, 1)
+
+        // Archiving stops the turn running in it, then puts it away.
+        actions.setArchived(plans, true)
+        await wait("archived") { store.changed == 2 }
+        XCTAssertEqual(Array(store.did.suffix(2)), ["stop t1", "archive t1"])
+        XCTAssertEqual(store.left, ["t1"], "What showed it closes")
+        actions.setArchived(thread("t1", archived: true), false)
+        await wait("unarchived") { store.changed == 3 }
+        XCTAssertEqual(store.did.last, "unarchive t1")
+        XCTAssertEqual(store.left, ["t1"], "Bringing one back opens or closes nothing")
+
+        actions.delete(plans)
+        await wait("deleted") { store.changed == 4 }
+        XCTAssertEqual(Array(store.did.suffix(2)), ["stop t1", "delete t1"])
+        XCTAssertEqual(store.left, ["t1", "t1"])
+        XCTAssertNil(actions.failure)
+    }
+
+    @MainActor
+    func testWhatCouldNotBeDoneIsSaid_andNothingIsSaidToAnotherAccount() async {
+        let store = Store()
+        store.failing = true
+        let actions = store.actions()
+        let plans = thread("t1", title: "Plans")
+
+        for (run, title) in [
+            ({ actions.rename(plans, to: "New") }, "Couldn't rename the thread"),
+            ({ actions.setArchived(plans, true) }, "Couldn't archive the thread"),
+            ({ actions.setArchived(plans, false) }, "Couldn't unarchive the thread"),
+            ({ actions.delete(plans) }, "Couldn't delete the thread"),
+        ] as [(() -> Void, String)] {
+            actions.failure = nil
+            run()
+            await wait(title) { actions.failure != nil }
+            XCTAssertEqual(actions.failure?.title, title)
+        }
+        XCTAssertEqual(ThreadActions.Failure.message, "Try again.")
+        XCTAssertEqual(store.left, [], "A thread that was not archived or deleted stays open")
+
+        // Another account signs in while it is tried: nothing is said or shown to it.
+        actions.failure = nil
+        let changedBefore = store.changed
+        actions.rename(plans, to: "Newer")
+        store.account = "grace"
+        try? await Task.sleep(for: .milliseconds(30))
+        XCTAssertNil(actions.failure)
+        XCTAssertEqual(store.changed, changedBefore)
+    }
+
+    @MainActor
+    func testCopyingAThreadAsMarkdown() async {
+        let store = Store()
+        let actions = store.actions()
+        let plans = thread("t1", title: "Plans", agentName: "Strix")
+        store.messages = [message("1", "user", "What next?"), message("2", "assistant", "Ship it.")]
+
+        XCTAssertTrue(actions.canCopy)
+        actions.copy(plans)
+        XCTAssertEqual(actions.exportingThreadID, "t1")
+        XCTAssertFalse(actions.canCopy, "Not while one is being read")
+        await wait("copied") { actions.notice != nil }
+        XCTAssertEqual(store.clipboard, "# Plans\n\n## You\n\nWhat next?\n\n## Strix\n\nShip it.")
+        XCTAssertEqual(actions.notice?.title, "Thread Copied")
+        XCTAssertEqual(actions.notice?.message, "The full thread was copied as Markdown.")
+        XCTAssertNil(actions.exportingThreadID)
+
+        // Nothing to copy: the clipboard is left as it was.
+        store.messages = []
+        actions.copy(plans)
+        await wait("said") { actions.notice?.kind == .failure }
+        XCTAssertEqual(actions.notice?.title, "Couldn’t Copy Thread")
+        XCTAssertEqual(actions.notice?.message, ThreadMarkdownExport.nothingToCopy)
+        XCTAssertEqual(store.clipboard?.hasPrefix("# Plans"), true)
+
+        // The clipboard would not take it; then the thread could not be read.
+        store.messages = [message("1", "user", "Hi")]
+        store.clipboardTakes = false
+        actions.copy(plans)
+        await wait("said") { actions.notice?.message == ThreadMarkdownExport.clipboardFailed }
+        store.failing = true
+        actions.copy(plans)
+        await wait("said") { actions.notice?.message == ThreadMarkdownExport.failed }
+
+        // Another account signs in while it is read: nothing is copied or said.
+        store.failing = false
+        store.clipboardTakes = true
+        store.clipboard = nil
+        actions.copy(plans)
+        store.account = "grace"
+        await wait("done") { actions.exportingThreadID == nil }
+        XCTAssertNil(store.clipboard)
+        XCTAssertNil(actions.notice)
+
+        // The list went elsewhere: a copy under way says nothing.
+        store.account = "ada"
+        actions.copy(plans)
+        actions.invalidate()
+        try? await Task.sleep(for: .milliseconds(30))
+        XCTAssertNil(actions.notice)
+        XCTAssertNil(actions.exportingThreadID)
+        XCTAssertTrue(actions.canCopy)
+    }
+
+    // MARK: - From what is stored
+
+    func testAStoredThreadIsCopied_withoutWhatEndedATurnThatDidNotComplete() async throws {
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        await MainActor.run { DatabaseManager.shared.configureIfNeeded() }
+        await ThreadService.shared.reloadForCurrentUser()
+        let made = try await ThreadService.shared.createThread(title: "Copy \(UUID().uuidString)")
+        let threadID = made.id
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await ThreadService.shared.deleteThread(threadId: threadID)
+            await ThreadService.shared.reloadForCurrentUser()
+            await DataEncryptionService.shared.lock()
+        }
+        let store = ThreadRepository.shared
+        try await store.beginTurn(id: "failed-\(threadID)", userMessage: TurnProgress.message(in: threadID, role: "user", content: "First try"))
+        let failure = TurnProgress.message(in: threadID, role: "assistant", content: "I ran into an error while contacting your provider: offline")
+        _ = try await store.endTurn(id: "failed-\(threadID)", outcome: .failed, message: failure)
+        try await store.beginTurn(id: "done-\(threadID)", userMessage: TurnProgress.message(in: threadID, role: "user", content: "Second try"))
+        let reply = TurnProgress.message(in: threadID, role: "assistant", content: "Here it is.", metadata: ["role_name": AnyJSONValue("Strix")])
+        _ = try await store.endTurn(id: "done-\(threadID)", outcome: .completed, message: reply)
+
+        let unfinished = try await store.messagesOfTurnsNotCompleted(threadID: threadID)
+        XCTAssertEqual(unfinished, [failure.id])
+
+        let document = try await ThreadMarkdownExport.makeDocument(thread: made, dependencies: .live)
+        XCTAssertEqual(document, "# \(ThreadMarkdownExport.escapedHeading(made.title ?? ""))\n\n## You\n\nFirst try\n\n## You\n\nSecond try\n\n## Strix\n\nHere it is.")
+    }
+}
