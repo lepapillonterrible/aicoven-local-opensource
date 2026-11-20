@@ -1,10 +1,11 @@
 import SwiftUI
 
-/// The app's main view once signed in. On the Mac: the shell (one split
-/// view, as the cloud app's), with the Settings window opened on request
-/// and deep links, which all lead into Settings. On the iPad and iPhone:
-/// the shell where the layout is the split one (an iPad unless its width
-/// is compact), and the phone's root otherwise.
+/// The app's main view once signed in: the shell, as the cloud app's. On
+/// the Mac it is one split view, with the Settings window opened on request
+/// and deep links, which all lead into Settings. On the iPad and iPhone it
+/// is the split layout where there is room for it (an iPad unless its
+/// width is compact) and the phone's layout otherwise: one view either way,
+/// so a device that changes between them keeps where it is.
 struct HomeView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var authService: AuthService
@@ -58,33 +59,14 @@ struct HomeView: View {
         #if os(macOS)
         ShellRootView()
         #else
-        if usesSplitLayout || Self.showsThePhoneLayout {
-            // One view for both layouts, so a device that changes between
-            // them keeps where it is. The phone's layout always sees
-            // compact width, as on any iPhone: a large one in landscape is
-            // regular wide, and its views would otherwise draw their wide
-            // shapes.
-            ShellRootView(isSplit: usesSplitLayout)
-                .environment(\.horizontalSizeClass, usesSplitLayout ? horizontalSizeClass : .compact)
-        } else {
-            MobileRootView()
-                .environment(\.horizontalSizeClass, .compact)
-        }
+        // One view for both layouts, so a device that changes between them
+        // keeps where it is. The phone's layout always sees compact width,
+        // as on any iPhone: a large one in landscape is regular wide, and
+        // its views would otherwise draw their wide shapes.
+        ShellRootView(isSplit: usesSplitLayout)
+            .environment(\.horizontalSizeClass, usesSplitLayout ? horizontalSizeClass : .compact)
         #endif
     }
-
-    #if !os(macOS)
-    /// Whether the shell's phone layout stands in for the old root. Not
-    /// yet: it is being built, and is shown only to a debug build started
-    /// with `-phoneRoot YES`.
-    static var showsThePhoneLayout: Bool {
-        #if DEBUG
-        UserDefaults.standard.bool(forKey: "phoneRoot")
-        #else
-        false
-        #endif
-    }
-    #endif
 
     /// The place in Settings a deep link leads to.
     static func settingsPlace(for target: DeepLinkTarget) -> WorkspaceTabType {
