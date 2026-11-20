@@ -193,9 +193,7 @@ extension [WorkspaceTab] {
     /// Whether any tab of a thread shows a name the thread no longer has
     /// among `threads`.
     func showsAnOldName(among threads: [Thread]) -> Bool {
-        contains { tab in
-            guard case let .thread(open) = tab.type, let now = threads.first(where: { $0.id == open.id }) else { return false }
-            return now.title != open.title
-        }
+        // By their names: two tabs of one thread are equal whatever they show.
+        showing(threads).map(\.title) != map(\.title)
     }
 }

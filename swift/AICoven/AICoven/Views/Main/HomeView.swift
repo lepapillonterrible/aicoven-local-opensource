@@ -129,7 +129,6 @@ struct HomeView: View {
             let stored = try await ThreadService.shared.loadThreads(covenId: nil, includeArchived: true)
             guard request == personalThreadsLoad else { return }
             personalThreads = stored
-            AppErrorReporter.log(message: "Loaded \(personalThreads.count) personal threads", context: "HomeView.loadPersonalThreads")
         } catch {
             guard request == personalThreadsLoad else { return }
             AppErrorReporter.log(error: error, context: "HomeView.loadPersonalThreads")
