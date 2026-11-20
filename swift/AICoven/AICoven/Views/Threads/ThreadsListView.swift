@@ -283,6 +283,12 @@ struct NewThreadView: View {
     }
 
     private func createThread() async {
+        // Asked again here, before anything waits: a second click can come
+        // before the button is seen to be off.
+        guard Self.canCreate(
+            isCreating: isCreating, inCoven: covenId != nil, rolesAreIn: didLoadRoles,
+            hasRoles: !roles.isEmpty, hasChosenRole: selectedRoleId != nil
+        ) else { return }
         isCreating = true
         errorMessage = nil
         defer { isCreating = false }
