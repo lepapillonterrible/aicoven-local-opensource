@@ -44,8 +44,8 @@ There is no mandatory backend: users bring their own LLM provider API keys or lo
   - `searchMemory(...)` uses `EmbeddingService.searchRelevantMemories` for hybrid vector/lexical search when a query is provided, and falls back to the most recent chunks per scope otherwise.
   - `createMemory(...)`, `updateMemory(...)`, and `deleteMemory(...)` manage encrypted chunks and always recompute embeddings when text changes.
 - Suggested memory writes from chat/agents are stored in the `memory_proposals` table via `MemoryProposalRecord` / `MemoryProposalRepository`.
-  - `listProposals(...)` powers the **Memory Proposals** UI for reviewing pending writes.
-  - When a proposal is approved via `reviewProposal(...)`, the content is indexed into `memory_chunks` using `EmbeddingService.indexMemory`, so "Approve" behaves as "save this as memory" in the local-only client.
+  - `listProposals(...)` powers the **Memory Proposals** UI for reviewing pending writes, one scope at a time (a coven's, or those made in no coven).
+  - When a proposal is approved via `reviewProposal(...)`, its content is embedded (`EmbeddingService.embedText`) and stored in `memory_chunks` through the memory store, so "Approve" behaves as "save this as memory" in the local-only client; `saveProposalAsMemory(...)` does the same with the text as the person edited it. A proposal is settled once, as the account that reviewed it.
 
 ### LLM Integration
 

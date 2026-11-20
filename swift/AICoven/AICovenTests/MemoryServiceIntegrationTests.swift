@@ -78,7 +78,7 @@ final class MemoryServiceIntegrationTests: XCTestCase {
     func testReviewProposalApprove_createsMemoryAndUpdatesStatus() async throws {
         // Arrange: insert a proposal directly via the repository so we exercise
         // the full reviewProposal flow, including MemoryProposalRepository and
-        // EmbeddingService.indexMemory.
+        // the memory store.
         let uniqueScope = "proposal_scope_" + UUID().uuidString
         let proposedContent = "Proposed memory content for approve flow"
         let proposedTags = ["tag1", "tag2"]
