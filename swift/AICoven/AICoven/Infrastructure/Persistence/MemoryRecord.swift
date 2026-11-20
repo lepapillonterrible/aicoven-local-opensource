@@ -476,8 +476,8 @@ actor MemoryProposalRepository {
 
     private init() {}
 
-    /// List proposals belonging to the current user, optionally filtering by coven and status.
-    /// Results are ordered from newest to oldest.
+    /// The current user's proposals in one scope: a coven's, or with no
+    /// coven the person's own. Optionally of one status. Newest first.
     func listProposals(covenId: String?, status: String?) async throws -> [MemoryProposalRecord] {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
@@ -490,9 +490,9 @@ actor MemoryProposalRepository {
                 .filter(MemoryProposalRecord.Columns.userId == currentUserId)
                 .order(MemoryProposalRecord.Columns.createdAt.desc)
 
-            if let covenId {
-                request = request.filter(MemoryProposalRecord.Columns.covenId == covenId)
-            }
+            // One scope's proposals: a coven's, or, for none, the person's
+            // own (those made in no coven), never every coven's together.
+            request = request.filter(MemoryProposalRecord.Columns.covenId == covenId)
             if let status {
                 request = request.filter(MemoryProposalRecord.Columns.status == status)
             }
@@ -501,18 +501,13 @@ actor MemoryProposalRepository {
         }
     }
 
-    /// Load a single proposal by ID. Only returns if it belongs to the current user.
-    func loadProposal(id: String) async throws -> MemoryProposalRecord? {
+    /// A proposal of `userID`'s; nil if there is none with that id.
+    func loadProposal(id: String, for userID: String) async throws -> MemoryProposalRecord? {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-
-        // Get current user ID for data isolation
-        let currentUserId = await MainActor.run { UserScope.currentUserID }
-
         return try await dbQueue.read { db in
-            // Filter by both ID and user_id to ensure user can only see their own proposals
             try MemoryProposalRecord
                 .filter(MemoryProposalRecord.Columns.id == id)
-                .filter(MemoryProposalRecord.Columns.userId == currentUserId)
+                .filter(MemoryProposalRecord.Columns.userId == userID)
                 .fetchOne(db)
         }
     }
@@ -571,37 +566,51 @@ actor MemoryProposalRepository {
         return record
     }
 
-    /// Update the status and review metadata for a proposal, returning the
-    /// updated record. Only updates if it belongs to the current user.
-    func updateStatus(
+    /// Settles a proposal of `userID`'s that is still pending, as
+    /// `status`, in one write: nil if it is not theirs, or is no longer
+    /// pending (it was settled already, here or in another window), and
+    /// then nothing is changed. Throws `accountChanged` unless `userID` is
+    /// the account signed in: a review is one account's, and is dropped if
+    /// another is signed in by the time it lands.
+    func settlePending(
         id: String,
-        status: String,
+        as status: String,
         reviewedBy: String?,
-        reviewFeedback: String?
-    ) async throws -> MemoryProposalRecord {
+        reviewFeedback: String?,
+        for userID: String
+    ) async throws -> MemoryProposalRecord? {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-
-        // Get current user ID for data isolation
-        let currentUserId = await MainActor.run { UserScope.currentUserID }
-
+        guard await MainActor.run(body: { UserScope.currentUserID }) == userID else { throw RepositoryError.accountChanged }
         let now = Date()
-
         return try await dbQueue.write { db in
-            // Only update if it belongs to the current user
             guard var record = try MemoryProposalRecord
                 .filter(MemoryProposalRecord.Columns.id == id)
-                .filter(MemoryProposalRecord.Columns.userId == currentUserId)
+                .filter(MemoryProposalRecord.Columns.userId == userID)
+                .filter(MemoryProposalRecord.Columns.status == "pending")
                 .fetchOne(db) else {
-                throw RepositoryError.databaseUnavailable
+                return nil
             }
-
             record.status = status
             record.reviewedBy = reviewedBy
             record.reviewedAt = now
             record.reviewFeedback = reviewFeedback
-
             try record.update(db)
             return record
+        }
+    }
+
+    /// Makes a proposal of `userID`'s pending again: it was settled a
+    /// moment ago for a memory that could then not be stored.
+    func reopen(id: String, for userID: String) async throws {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        try await dbQueue.write { db in
+            try db.execute(
+                sql: """
+                UPDATE memory_proposals SET status = 'pending', reviewed_by = NULL, reviewed_at = NULL, review_feedback = NULL
+                WHERE id = ? AND user_id = ?
+                """,
+                arguments: [id, userID]
+            )
         }
     }
 }

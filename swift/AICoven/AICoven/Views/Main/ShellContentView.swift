@@ -167,27 +167,48 @@ struct ShellContentView: View {
     }
 }
 
-/// The memory of the scope on screen. The list asks for its forms as tabs
-/// (it was made for the window's tabs); here a form opens in a sheet over
-/// it, and the list is read again when one has saved.
+/// The memory of the scope on screen: what is saved, or what the agents
+/// have proposed to save, which the person reviews here. The list asks for
+/// its forms as tabs (it was made for the window's tabs); here a form opens
+/// in a sheet over it, and the list is read again when one has saved.
 private struct ShellMemoryPlace: View {
     let covenID: String?
     @State private var form: MemoryForm?
     /// Counts the saves, so the list is made anew, and reads again, after each.
     @State private var saves = 0
+    /// The proposals are on screen, not what is saved.
+    @State private var showsProposals = false
 
     var body: some View {
-        MemoryListView(covenId: covenID, openTabs: tabs, activeTabId: .constant(nil))
-            .id(saves)
-            .sheet(item: $form) { form in
-                ShellFormSheet(onCancel: { self.form = nil }) {
-                    if let memoryID = form.memoryID {
-                        EditMemoryView(memoryId: memoryID, covenId: covenID) { saved(form) }
-                    } else {
-                        AddMemoryView(covenId: covenID) { saved(form) }
-                    }
+        VStack(spacing: 0) {
+            Picker("Memory View", selection: $showsProposals) {
+                Text("Saved").tag(false)
+                Text("Proposals").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 320)
+            .padding(.horizontal, Spacing.lg)
+            .padding(.top, Spacing.md)
+            if showsProposals {
+                // It acts on the proposals themselves and opens no form.
+                // What is saved from one is in the list when that is shown
+                // again: the list is made anew each time.
+                MemoryProposalsView(covenId: covenID, openTabs: .constant([]), activeTabId: .constant(nil))
+            } else {
+                MemoryListView(covenId: covenID, openTabs: tabs, activeTabId: .constant(nil))
+                    .id(saves)
+            }
+        }
+        .sheet(item: $form) { form in
+            ShellFormSheet(onCancel: { self.form = nil }) {
+                if let memoryID = form.memoryID {
+                    EditMemoryView(memoryId: memoryID, covenId: covenID) { saved(form) }
+                } else {
+                    AddMemoryView(covenId: covenID) { saved(form) }
                 }
             }
+        }
     }
 
     /// A form has saved: its sheet closes, if it is still the one on screen
