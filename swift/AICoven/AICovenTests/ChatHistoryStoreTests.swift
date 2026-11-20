@@ -290,7 +290,11 @@ final class ChatHistoryStoreTests: XCTestCase {
         let imported = try await ChatService.shared.loadMessages(threadId: mine.id)
         let others = try await ChatService.shared.loadMessages(threadId: someoneElses.id)
 
-        XCTAssertEqual(threads.first { $0.id == mine.id }, mine)
+        // As it was in the file, and as lately used as its last message.
+        let read = try XCTUnwrap(threads.first { $0.id == mine.id })
+        XCTAssertNotNil(read.lastMessageAt)
+        XCTAssertEqual(read, mine.lastUsed(at: read.lastMessageAt))
+        XCTAssertEqual(read.lastMessageAt, imported.compactMap(\.createdAt).max())
         XCTAssertFalse(threads.contains { $0.id == someoneElses.id })
         XCTAssertEqual(imported.map(\.content), ["First", "Second"])
         XCTAssertTrue(others.isEmpty)

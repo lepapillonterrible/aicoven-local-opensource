@@ -83,7 +83,7 @@ The local-first client is functional for core workflows but some features are st
 - Autonomous agent runner with bounded multi-step execution
 - Web search via DuckDuckGo (no API key required)
 - Attachment analysis for files and images
-- Enhanced chat UI with thread management
+- Enhanced chat UI with thread management: rename, archive, delete, and copy a thread as Markdown
 - Voice messages: hold the mic to talk on iPhone and iPad, click it (or hold Space in an empty field) on the Mac; the recording is transcribed with your own OpenAI or Google key, or on the device, and sent as text
 - Shell command tools with approval flow
 - Connected apps: GitHub, Google Drive, Figma and Linear integrations

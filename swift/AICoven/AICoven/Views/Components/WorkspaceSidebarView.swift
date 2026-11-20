@@ -21,6 +21,8 @@ struct WorkspaceSidebarView: View {
     @State private var connectionsCoven: Coven?
     @State private var isExpanded = true // Expanded by default so users can select covens
     @State private var threadsSectionExpanded = true
+    /// Counts the loads of the coven's threads, so that only the latest is shown.
+    @State private var threadsLoad = 0
     @State private var rolesSectionExpanded = true
 
     var body: some View {
@@ -123,7 +125,10 @@ struct WorkspaceSidebarView: View {
                             threads: $threads,
                             searchText: $searchText,
                             showNewThreadSheet: $showNewThreadSheet,
-                            isSectionExpanded: $threadsSectionExpanded
+                            isSectionExpanded: $threadsSectionExpanded,
+                            onReload: {
+                                if let covenID = selectedCoven?.id { await loadThreads(covenId: covenID) }
+                            }
                         )
 
                         if selectedCoven != nil {
@@ -156,6 +161,18 @@ struct WorkspaceSidebarView: View {
         .animation(.easeInOut(duration: 0.2), value: isExpanded)
         .task {
             await loadCovens()
+        }
+        // A thread was used: the order follows it. Heard here, where the
+        // threads are held, so they are current when the sidebar is opened
+        // out again after being folded away.
+        .onReceive(NotificationCenter.default.publisher(for: ThreadService.threadUsed)) { _ in
+            guard let covenID = selectedCoven?.id else { return }
+            Task { await loadThreads(covenId: covenID) }
+        }
+        // A thread renamed in the list goes by its new name on its tab and
+        // over its messages too.
+        .onChange(of: threads) { _, threads in
+            if openTabs.showsAnOldName(among: threads) { openTabs = openTabs.showing(threads) }
         }
         // Load threads for whatever coven is selected — including the first
         // paint when ``WorkspaceView`` was constructed with
@@ -249,10 +266,22 @@ struct WorkspaceSidebarView: View {
 
     /// Load threads for a coven
     private func loadThreads(covenId: String) async {
+        // Only the latest request is shown: one asked for before the
+        // sidebar left this coven and came back is not.
+        threadsLoad += 1
+        let request = threadsLoad
         do {
-            threads = try await ThreadService.shared.loadThreads(covenId: covenId)
+            // With those archived: the list shows them in a section of their own.
+            let stored = try await ThreadService.shared.loadThreads(covenId: covenId, includeArchived: true)
+            // The sidebar can be showing another coven by now: these are not its threads.
+            guard request == threadsLoad, selectedCoven?.id == covenId else { return }
+            threads = stored
         } catch {
-            print("❌ Failed to load threads: \(error.localizedDescription)")
+            AppErrorReporter.log(error: error, context: "WorkspaceSidebarView.loadThreads")
+            // The list stays as it is, unless the data is locked or the
+            // account another's by now.
+            guard request == threadsLoad, selectedCoven?.id == covenId, !ThreadListRules.keepsShownList(after: error) else { return }
+            threads = []
         }
     }
 
@@ -548,6 +577,11 @@ struct ThreadManagementView: View {
     @Binding var searchText: String
     @Binding var showNewThreadSheet: Bool
     @Binding var isSectionExpanded: Bool
+    /// Reads the coven's threads again, as they are stored now.
+    let onReload: () async -> Void
+    /// Rename, archive, delete and copy, for this list's threads.
+    @StateObject private var threadActions = ThreadActions()
+    @State private var showArchived = false
 
     var filteredThreads: [Thread] {
         if searchText.isEmpty {
@@ -562,7 +596,7 @@ struct ThreadManagementView: View {
                 Text("Threads")
                     .font(.aicovenH3)
                     .foregroundColor(.aicovenTextPrimary)
-                Text("\(filteredThreads.count)")
+                Text("\(filteredThreads.count(where: { !$0.isArchived }))")
                     .font(.aicovenCaption)
                     .foregroundColor(.aicovenTextTertiary)
 
@@ -617,20 +651,22 @@ struct ThreadManagementView: View {
                         } else if filteredThreads.isEmpty {
                             EmptyThreadsView(message: "No threads yet, create one to begin")
                         } else {
-                            ForEach(filteredThreads) { thread in
-                                ThreadListItem(
-                                    thread: thread,
-                                    isSelected: activeTabId == thread.id,
-                                    onDelete: {
-                                        deleteThread(thread)
+                            // Newest first, then those archived, under a header of their own.
+                            let sections = ThreadListRules.sections(filteredThreads)
+                            ForEach(sections.open) { thread in
+                                threadRow(thread)
+                            }
+                            if !sections.archived.isEmpty {
+                                // A search shows what it found among them: the
+                                // section is then open, says so, and stays open
+                                // (not disabled, which VoiceOver would call dimmed).
+                                ArchivedThreadsHeader(isExpanded: searchText.isEmpty ? $showArchived : .constant(true))
+                                    .padding(.horizontal, Spacing.sm)
+                                    .padding(.top, Spacing.sm)
+                                if showArchived || !searchText.isEmpty {
+                                    ForEach(sections.archived) { thread in
+                                        threadRow(thread)
                                     }
-                                )
-                                .onTapGesture {
-                                    let tab = WorkspaceTab.thread(thread)
-                                    if !openTabs.contains(where: { $0.id == thread.id }) {
-                                        openTabs.append(tab)
-                                    }
-                                    activeTabId = thread.id
                                 }
                             }
                         }
@@ -640,30 +676,47 @@ struct ThreadManagementView: View {
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
+        .threadActionsHost(threadActions)
+        .onAppear {
+            threadActions.onChanged = { Task { await onReload() } }
+            threadActions.onLeft = { close($0) }
+        }
+        // The list is left: a copy under way is called off, and nothing
+        // more is told to a list that is not there.
+        .onDisappear {
+            threadActions.invalidate()
+            threadActions.onChanged = nil
+            threadActions.onLeft = nil
+        }
+        // Another coven's threads are another list.
+        .onChange(of: selectedCoven?.id) { _, _ in threadActions.invalidate() }
     }
 
-    private func deleteThread(_ thread: Thread) {
-        Task {
-            do {
-                try await ThreadService.shared.deleteThread(threadId: thread.id)
-
-                if let index = threads.firstIndex(where: { $0.id == thread.id }) {
-                    threads.remove(at: index)
-                }
-
-                openTabs.removeAll { tab in
-                    if case let .thread(t) = tab.type {
-                        return t.id == thread.id
-                    }
-                    return false
-                }
-
-                if activeTabId == thread.id {
-                    activeTabId = openTabs.last?.id
-                }
-            } catch {
-                print("❌ Failed to delete thread: \(error.localizedDescription)")
+    private func threadRow(_ thread: Thread) -> some View {
+        ThreadListItem(
+            thread: thread,
+            isSelected: activeTabId == thread.id
+        )
+        .onTapGesture {
+            let tab = WorkspaceTab.thread(thread)
+            if !openTabs.contains(where: { $0.id == thread.id }) {
+                openTabs.append(tab)
             }
+            activeTabId = thread.id
+        }
+        .threadRowActions(thread, threadActions)
+    }
+
+    /// A thread was deleted or archived: it is no longer open here.
+    private func close(_ thread: Thread) {
+        openTabs.removeAll { tab in
+            if case let .thread(open) = tab.type {
+                return open.id == thread.id
+            }
+            return false
+        }
+        if activeTabId == thread.id {
+            activeTabId = openTabs.last?.id
         }
     }
 }
@@ -672,7 +725,6 @@ struct ThreadManagementView: View {
 struct ThreadListItem: View {
     let thread: Thread
     let isSelected: Bool
-    let onDelete: () -> Void
     @State private var isHovering = false
 
     var body: some View {
@@ -683,7 +735,7 @@ struct ThreadListItem: View {
                 .frame(width: 16, alignment: .center)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(thread.title ?? "Untitled")
+                Text(ThreadListRules.title(of: thread))
                     .font(.aicovenBodySmall)
                     .fontWeight(isSelected ? .semibold : .regular)
                     .foregroundColor(isSelected ? .aicovenTextPrimary : .aicovenTextSecondary)
@@ -710,11 +762,9 @@ struct ThreadListItem: View {
                             .foregroundColor(isSelected ? .aicovenTextSecondary : .aicovenTextTertiary)
                     }
 
-                    if let updatedAt = thread.updatedAt {
-                        Text(relativeTime(from: updatedAt))
-                            .font(.aicovenCaption)
-                            .foregroundColor(.aicovenTextTertiary)
-                    }
+                    Text(VisitWords.rowDate(ThreadListRules.lastUsed(thread)))
+                        .font(.aicovenCaption)
+                        .foregroundColor(.aicovenTextTertiary)
                 }
                 .lineLimit(1)
             }
@@ -736,38 +786,10 @@ struct ThreadListItem: View {
                 .stroke(isSelected ? Color.aicovenBorder : Color.clear, lineWidth: 1)
         )
         .contentShape(Rectangle())
-        .contextMenu {
-            Button(role: .destructive) {
-                onDelete()
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
-        }
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) {
                 isHovering = hovering
             }
-        }
-    }
-
-    /// Format relative time without seconds
-    private func relativeTime(from date: Date) -> String {
-        let calendar = Calendar.current
-        let now = Date()
-        let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date, to: now)
-
-        if let years = components.year, years > 0 {
-            return "\(years)y"
-        } else if let months = components.month, months > 0 {
-            return "\(months)mo"
-        } else if let days = components.day, days > 0 {
-            return "\(days)d"
-        } else if let hours = components.hour, hours > 0 {
-            return "\(hours)h"
-        } else if let minutes = components.minute, minutes > 0 {
-            return "\(minutes)m"
-        } else {
-            return "now"
         }
     }
 }

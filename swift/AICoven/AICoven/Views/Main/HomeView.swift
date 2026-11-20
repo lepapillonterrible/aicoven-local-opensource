@@ -12,6 +12,10 @@ struct HomeView: View {
 
     @State private var covens: [Coven] = []
     @State private var personalThreads: [Thread] = []
+    /// Counts the loads of the personal threads, so that only the latest is shown.
+    @State private var personalThreadsLoad = 0
+    /// Whether the personal threads have been shown since the app started.
+    @State private var hasLoadedPersonalThreads = false
     @State private var isLoadingCovens = true
     @State private var showCreateCoven = false
 
@@ -117,11 +121,24 @@ struct HomeView: View {
     }
 
     private func loadPersonalThreads() async {
+        // Only the latest request is shown: the list is read again on every
+        // message stored and after every change, and an earlier reading can
+        // come back after a later one.
+        personalThreadsLoad += 1
+        let request = personalThreadsLoad
         do {
-            personalThreads = try await ThreadService.shared.loadThreads(covenId: nil)
-            AppErrorReporter.log(message: "Loaded \(personalThreads.count) personal threads", context: "HomeView.loadPersonalThreads")
+            // With those archived: the sidebar shows them in a section of their own.
+            let stored = try await ThreadService.shared.loadThreads(covenId: nil, includeArchived: true)
+            guard request == personalThreadsLoad else { return }
+            personalThreads = stored
+            hasLoadedPersonalThreads = true
         } catch {
+            guard request == personalThreadsLoad else { return }
             AppErrorReporter.log(error: error, context: "HomeView.loadPersonalThreads")
+            // A list already shown stays as it is: it was only being read
+            // again. Unless the data is locked or the account another's.
+            guard !(hasLoadedPersonalThreads && ThreadListRules.keepsShownList(after: error)) else { return }
+            hasLoadedPersonalThreads = false
             personalThreads = []
         }
     }
@@ -194,7 +211,7 @@ struct PersonalWorkspaceView: View {
                     onNewThread: handleNewThread,
                     onCreateCoven: onCreateCoven,
                     onSelectThread: handleOpenThread,
-                    onDeleteThread: handleDeleteThread,
+                    onThreadLeft: handleThreadLeft,
                     onRefresh: onRefreshThreads,
                     onSwitchToCovens: onSwitchToCovens,
                     onSelectCoven: { coven in
@@ -238,6 +255,14 @@ struct PersonalWorkspaceView: View {
         .onReceive(NotificationCenter.default.publisher(for: .didCreateThread)) { _ in
             Task {
                 await onRefreshThreads()
+            }
+        }
+        // A thread renamed in the sidebar goes by its new name where it is
+        // open too: on its tab and over its messages.
+        .onChange(of: personalThreads) { _, threads in
+            if openTabs.showsAnOldName(among: threads) { openTabs = openTabs.showing(threads) }
+            if let open = selectedThread, let now = threads.first(where: { $0.id == open.id }), now.title != open.title {
+                selectedThread = now
             }
         }
     }
@@ -299,35 +324,20 @@ struct PersonalWorkspaceView: View {
         activeTabId = tab.id
     }
 
-    private func handleDeleteThread(_ thread: Thread) {
-        Task {
-            do {
-                try await ThreadService.shared.deleteThread(threadId: thread.id)
-
-                // Remove from local list
-                if let index = personalThreads.firstIndex(where: { $0.id == thread.id }) {
-                    personalThreads.remove(at: index)
-                }
-
-                // Clear selected thread if needed
-                if selectedThread?.id == thread.id {
-                    selectedThread = nil
-                }
-
-                // Close any open tab for this thread
-                openTabs.removeAll { tab in
-                    if case let .thread(tabThread) = tab.type {
-                        return tabThread.id == thread.id
-                    }
-                    return false
-                }
-
-                if activeTabId == thread.id {
-                    activeTabId = openTabs.last?.id
-                }
-            } catch {
-                AppErrorReporter.log(error: error, context: "HomeView.handleDeleteThread")
+    /// A thread was deleted or archived from the sidebar: it is no longer
+    /// open here.
+    private func handleThreadLeft(_ thread: Thread) {
+        if selectedThread?.id == thread.id {
+            selectedThread = nil
+        }
+        openTabs.removeAll { tab in
+            if case let .thread(tabThread) = tab.type {
+                return tabThread.id == thread.id
             }
+            return false
+        }
+        if activeTabId == thread.id {
+            activeTabId = openTabs.last?.id
         }
     }
 }

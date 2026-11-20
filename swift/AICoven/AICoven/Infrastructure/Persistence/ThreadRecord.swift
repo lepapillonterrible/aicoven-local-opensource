@@ -336,6 +336,8 @@ actor ThreadRepository {
         try await dbQueue.write { db in
             try record.insert(db)
         }
+        // The thread is as lately used as this.
+        await ThreadService.shared.noteMessage(in: threadID, at: now)
 
         return LocalMessage(id: id, threadID: threadID, role: role, content: content, createdAt: now)
     }
@@ -482,12 +484,24 @@ extension ThreadRepository {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         let currentUserId = await MainActor.run { UserScope.currentUserID }
 
-        let payloads: [Data] = try await dbQueue.read { db in
-            try ThreadRecord
+        // With each thread, when its last message was stored: that is when
+        // it was last used (the thread as it is kept does not say).
+        let (payloads, lastMessages): ([Data], [String: Date]) = try await dbQueue.read { db in
+            let payloads = try ThreadRecord
                 .filter(ThreadRecord.Columns.userId == currentUserId)
                 .filter(ThreadRecord.Columns.payloadCiphertext != nil)
                 .fetchAll(db)
                 .compactMap(\.payloadCiphertext)
+            var last: [String: Date] = [:]
+            let rows = try Row.fetchAll(
+                db,
+                sql: "SELECT m.thread_id AS thread_id, MAX(m.created_at) AS last FROM messages m JOIN threads t ON t.id = m.thread_id WHERE t.user_id = ? GROUP BY m.thread_id",
+                arguments: [currentUserId]
+            )
+            for row in rows {
+                if let id: String = row["thread_id"], let date: Date = row["last"] { last[id] = date }
+            }
+            return (payloads, last)
         }
 
         try await requireKey(of: currentUserId)
@@ -497,7 +511,7 @@ extension ThreadRepository {
         threads.reserveCapacity(payloads.count)
         for payload in payloads {
             if let thread = try await open(Thread.self, payload, purpose: "chat_thread", with: decoder) {
-                threads.append(thread)
+                threads.append(thread.lastUsed(at: lastMessages[thread.id]))
             }
         }
         // If the key changed hands while these were read, the ones read
@@ -575,6 +589,22 @@ extension ThreadRepository {
         }
         try await requireKey(of: currentUserId)
         return traces
+    }
+
+    /// The messages, in a thread of the current account, that are the end
+    /// of a turn that did not complete: one that failed, was stopped, or
+    /// was cut off. (Such a message says what happened; it is no reply.)
+    func messagesOfTurnsNotCompleted(threadID: String) async throws -> Set<String> {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let currentUserId = await MainActor.run { UserScope.currentUserID }
+        let ids: [String] = try await dbQueue.read { db in
+            try String.fetchAll(
+                db,
+                sql: "SELECT message_id FROM turns WHERE user_id = ? AND thread_id = ? AND message_id IS NOT NULL AND status != ?",
+                arguments: [currentUserId, threadID, TurnOutcome.completed.rawValue]
+            )
+        }
+        return Set(ids)
     }
 
     /// The current account's turns in a thread that are still marked as
@@ -675,7 +705,10 @@ extension ThreadRepository {
             return try await store(message, turn: turn)
         }
         lastAppend = Task { _ = await task.result }
-        return try await task.value
+        let stored = try await task.value
+        // The thread was used now: the lists of threads are told.
+        if stored { await ThreadService.shared.noteMessage(in: message.threadId, at: message.createdAt ?? Date()) }
+        return stored
     }
 
     private func store(_ message: ChatMessage, turn: TurnChange?) async throws -> Bool {

@@ -67,6 +67,9 @@ extension Color {
     static let aicovenChrome = room(light: Color(hex: "#DCD5C7"), dark: Color(hex: "#24211E"))
     static let aicovenRule = room(light: Color(hex: "#D2C9B9"), dark: Color(hex: "#3E3933"))
     static let aicovenSelected = room(light: Color(hex: "#F0EBE2"), dark: Color(hex: "#3A3530"))
+    /// The fill of a swipe action that does no harm (Archive): its label is
+    /// white in both appearances.
+    static let aicovenSwipeNeutral = room(light: Color(hex: "#5A5248"), dark: Color(hex: "#5A5248"))
 
     /// Water as the cloud app names it, for a mark or text on a surface
     /// (what is moving: a recording under way): its lighter dusk value.
