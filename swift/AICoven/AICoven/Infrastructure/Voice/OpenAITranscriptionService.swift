@@ -116,7 +116,7 @@ nonisolated struct OpenAITranscriptionService {
     /// recording as a file, as OpenAI takes it.
     static func form(audio: Data, fileName: String, model: String, boundary: String) -> Data {
         // A name that could end its own header is not sent as it is.
-        let safeName = String(fileName.unicodeScalars.filter { $0.isASCII && $0.value >= 0x20 && $0 != "\"" && $0 != "\\" })
+        let safeName = String(fileName.unicodeScalars.filter { $0.value >= 0x20 && $0.value < 0x7F && $0 != "\"" && $0 != "\\" })
         let name = safeName.isEmpty ? "voice-note.m4a" : safeName
         var body = Data()
         body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n\(model)\r\n".utf8))

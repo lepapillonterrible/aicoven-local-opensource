@@ -48,23 +48,25 @@ nonisolated struct DeviceTranscriptionService {
         request.addsPunctuation = true
 
         // The recogniser is kept for as long as it listens.
-        let running = Running(recognizer)
+        defer { withExtendedLifetime(recognizer) {} }
+        let awaited = AwaitedOnce<String>()
         let heard: String
         do {
             heard = try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { continuation in
-                    running.waiting(continuation)
+                    // Stopped already: it is answered so, and nothing is started.
+                    guard awaited.waiting(continuation) else { return }
                     let task = recognizer.recognitionTask(with: request) { result, error in
                         if let error {
-                            running.finish(.failure(error))
+                            awaited.finish(.failure(error))
                         } else if let result, result.isFinal {
-                            running.finish(.success(result.bestTranscription.formattedString))
+                            awaited.finish(.success(result.bestTranscription.formattedString))
                         }
                     }
-                    running.started(task)
+                    awaited.whenStopped { task.cancel() }
                 }
             } onCancel: {
-                running.cancel()
+                awaited.stop()
             }
         } catch {
             // Stopped, however the system told it.
@@ -86,49 +88,55 @@ nonisolated struct DeviceTranscriptionService {
         if system.domain == "kAFAssistantErrorDomain", [1110, 203].contains(system.code) { return Failure.noWords }
         return Failure.deviceFailed(message: String(system.localizedDescription.prefix(300)))
     }
+}
 
-    /// One recognition under way: it answers once, and can be called off
-    /// (which answers it, whether or not the system then does). Sendable
-    /// by hand, under `lock`.
-    private final class Running: @unchecked Sendable {
-        private let lock = NSLock()
-        private let recognizer: SFSpeechRecognizer
-        private var task: SFSpeechRecognitionTask?
-        private var continuation: CheckedContinuation<String, Error>?
-        private var cancelled = false
+/// One answer that is waited for once, and that a stop answers if it comes
+/// first: before anyone waits, while they wait, or as the answer arrives.
+/// Whoever waits is answered exactly once. Sendable by hand, under `lock`.
+final nonisolated class AwaitedOnce<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value, Error>?
+    private var callOff: (() -> Void)?
+    private var stopped = false
 
-        init(_ recognizer: SFSpeechRecognizer) {
-            self.recognizer = recognizer
+    /// Takes the one who waits. False if it was stopped already: they
+    /// have been answered so, and there is nothing to start.
+    func waiting(_ continuation: CheckedContinuation<Value, Error>) -> Bool {
+        let stoppedAlready = lock.withLock {
+            if !stopped { self.continuation = continuation }
+            return stopped
         }
+        if stoppedAlready { continuation.resume(throwing: CancellationError()) }
+        return !stoppedAlready
+    }
 
-        func waiting(_ continuation: CheckedContinuation<String, Error>) {
-            lock.withLock { self.continuation = continuation }
+    /// What calls the work off on a stop; run at once if it has been
+    /// stopped meanwhile.
+    func whenStopped(_ callOff: @escaping () -> Void) {
+        let now = lock.withLock {
+            if !stopped { self.callOff = callOff }
+            return stopped
         }
+        if now { callOff() }
+    }
 
-        func started(_ task: SFSpeechRecognitionTask) {
-            let callOff = lock.withLock {
-                self.task = task
-                return cancelled
-            }
-            if callOff { task.cancel() }
+    /// Answers the one waiting, the first time only.
+    func finish(_ answer: Result<Value, Error>) {
+        let waiting = lock.withLock {
+            defer { continuation = nil }
+            return continuation
         }
+        waiting?.resume(with: answer)
+    }
 
-        /// Answers the one waiting, the first time only.
-        func finish(_ answer: Result<String, Error>) {
-            let waiting = lock.withLock {
-                defer { continuation = nil }
-                return continuation
-            }
-            waiting?.resume(with: answer)
+    /// Calls the work off and answers the one waiting that it was stopped.
+    func stop() {
+        let callOff = lock.withLock {
+            stopped = true
+            defer { self.callOff = nil }
+            return self.callOff
         }
-
-        func cancel() {
-            let task = lock.withLock {
-                cancelled = true
-                return self.task
-            }
-            task?.cancel()
-            finish(.failure(CancellationError()))
-        }
+        callOff?()
+        finish(.failure(CancellationError()))
     }
 }

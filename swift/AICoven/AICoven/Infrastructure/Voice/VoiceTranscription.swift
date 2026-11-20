@@ -28,8 +28,10 @@ nonisolated enum TranscriptionSource: String, CaseIterable, Equatable {
     }
 }
 
-/// Why a recording was not put into words.
-nonisolated enum TranscriptionFailure: LocalizedError, Equatable {
+/// Why a recording was not put into words. It is told to the person by
+/// `said(of:)`, which names what was asked (so it is no `LocalizedError`:
+/// a description of its own could not say whose key or which device).
+nonisolated enum TranscriptionFailure: Error, Equatable {
     /// The key was refused: no other model is tried with it.
     case keyRefused
     /// The key's models include none that transcribes.
@@ -48,10 +50,6 @@ nonisolated enum TranscriptionFailure: LocalizedError, Equatable {
     case notOnThisDevice(language: String)
     /// The device's recognition failed, with what it said of it.
     case deviceFailed(message: String)
-
-    var errorDescription: String? {
-        said(of: .device)
-    }
 
     /// What went wrong, naming what was asked.
     func said(of source: TranscriptionSource) -> String {
@@ -92,7 +90,7 @@ nonisolated enum VoiceAudio {
     /// app records is AAC in an MPEG-4 file (`.m4a`).
     static func mimeType(ofFileNamed name: String) -> String {
         switch (name as NSString).pathExtension.lowercased() {
-        case "m4a", "mp4": "audio/mp4"
+        case "m4a": "audio/mp4"
         case "aac": "audio/aac"
         case "mp3": "audio/mpeg"
         case "wav": "audio/wav"
@@ -208,12 +206,15 @@ nonisolated enum VoiceTranscription {
                 let unheard = Unheard(source: transcriber.source, message: said(error, of: transcriber.source))
                 // A recording with nothing in it, or one that was listened
                 // to and held no words, is so whoever is asked next.
+                // (What is told is still what the first one asked said.)
                 switch error as? TranscriptionFailure {
-                case .nothingRecorded, .noWords: throw unheard
+                case .nothingRecorded, .noWords: throw first ?? unheard
                 default: first = first ?? unheard
                 }
             }
         }
+        // Stopped with no one to ask is still stopped.
+        try Task.checkCancellation()
         throw first ?? Unheard(source: .device, message: "There is nothing to transcribe with.")
     }
 

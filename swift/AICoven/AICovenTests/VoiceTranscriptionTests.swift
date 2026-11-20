@@ -118,6 +118,8 @@ final class VoiceTranscriptionTests: XCTestCase {
     func testOpenAI_aFileNameCannotEndItsOwnHeader() {
         let form = String(decoding: OpenAITranscriptionService.form(audio: Data("a".utf8), fileName: "x\".m4a\r\nX-Other: 1", model: "m", boundary: "b"), as: UTF8.self)
         XCTAssertTrue(form.contains("filename=\"x.m4aX-Other: 1\"\r\nContent-Type: application/octet-stream\r\n\r\na\r\n"), form)
+        let controls = String(decoding: OpenAITranscriptionService.form(audio: Data("a".utf8), fileName: "v\u{7F}\u{1}é.m4a", model: "m", boundary: "b"), as: UTF8.self)
+        XCTAssertTrue(controls.contains("filename=\"v.m4a\"\r\n"), controls)
         let unnamed = String(decoding: OpenAITranscriptionService.form(audio: Data("a".utf8), fileName: "\n", model: "m", boundary: "b"), as: UTF8.self)
         XCTAssertTrue(unnamed.contains("filename=\"voice-note.m4a\"\r\nContent-Type: audio/mp4"))
     }
@@ -377,6 +379,19 @@ final class VoiceTranscriptionTests: XCTestCase {
         XCTAssertEqual(error as? VoiceTranscription.Unheard, .init(source: .google, message: "No words were heard in the recording."))
         XCTAssertEqual(script.asked, [.google])
 
+        // A key failed, and the next heard no words: the asking ends, and
+        // what the first said is still what is told.
+        script = Script()
+        error = await thrown {
+            try await VoiceTranscription.transcribe(self.anywhere, with: [
+                script.transcriber(.openai, .failure(TranscriptionFailure.keyRefused)),
+                script.transcriber(.google, .success(" ")),
+                script.transcriber(.device, .success("Hullo")),
+            ])
+        }
+        XCTAssertEqual(error as? VoiceTranscription.Unheard, .init(source: .openai, message: "OpenAI refused the key. Check the OpenAI connection in Settings."))
+        XCTAssertEqual(script.asked, [.openai, .google])
+
         // Nothing recorded: no one else is asked.
         script = Script()
         error = await thrown {
@@ -405,6 +420,80 @@ final class VoiceTranscriptionTests: XCTestCase {
         XCTAssertEqual(script.asked, [.openai])
     }
 
+    func testAStopWithNoOneToAsk_isStillAStop() async {
+        let none = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await self.thrown { try await VoiceTranscription.transcribe(self.anywhere, with: []) }
+        }
+        let error = await none.value
+        XCTAssertTrue(error is CancellationError, "\(String(describing: error))")
+
+        let script = Script()
+        let keyOnly = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await self.thrown { try await VoiceTranscription.transcribe(self.anywhere, with: [script.transcriber(.openai, .success("Hello"))], onDeviceOnly: true) }
+        }
+        let other = await keyOnly.value
+        XCTAssertTrue(other is CancellationError)
+        XCTAssertEqual(script.asked, [])
+    }
+
+    func testAnAnswerAwaitedOnce_isGivenOnce_andAStopAnswersItWheneverItComes() async {
+        // Stopped before anyone waits: they are answered so, and nothing starts.
+        var awaited = AwaitedOnce<String>()
+        awaited.stop()
+        var started = false
+        var error = await thrown {
+            try await withCheckedThrowingContinuation { continuation in
+                started = awaited.waiting(continuation)
+            }
+        }
+        XCTAssertTrue(error is CancellationError)
+        XCTAssertFalse(started)
+        let calledOffAtOnce = Counter()
+        awaited.whenStopped { calledOffAtOnce.add() }
+        XCTAssertEqual(calledOffAtOnce.count, 1, "What is given to call the work off, after the stop, is run at once")
+
+        // Stopped while they wait: the work is called off, and they are answered.
+        awaited = AwaitedOnce<String>()
+        let calledOff = Counter()
+        error = await thrown { [awaited] in
+            try await withCheckedThrowingContinuation { continuation in
+                XCTAssertTrue(awaited.waiting(continuation))
+                awaited.whenStopped { calledOff.add() }
+                awaited.stop()
+                // The work's own answer, arriving after, is not given.
+                awaited.finish(.success("late"))
+                awaited.stop()
+            }
+        }
+        XCTAssertTrue(error is CancellationError)
+        XCTAssertEqual(calledOff.count, 1)
+
+        // Answered: the first answer is the one given.
+        awaited = AwaitedOnce<String>()
+        let heard = try? await withCheckedThrowingContinuation { [awaited] continuation in
+            XCTAssertTrue(awaited.waiting(continuation))
+            awaited.finish(.success("first"))
+            awaited.finish(.failure(TranscriptionFailure.noWords))
+        }
+        XCTAssertEqual(heard, "first")
+    }
+
+    /// A count kept under a lock. Sendable by hand.
+    private final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var kept = 0
+
+        var count: Int {
+            lock.withLock { kept }
+        }
+
+        func add() {
+            lock.withLock { kept += 1 }
+        }
+    }
+
     func testWhatAFailureIsToldAs() {
         XCTAssertEqual(VoiceTranscription.said(URLError(.timedOut), of: .google), "Google could not be reached.")
         XCTAssertEqual(VoiceTranscription.said(NSError(domain: "x", code: 1), of: .openai), "OpenAI could not transcribe the recording.")
@@ -421,6 +510,7 @@ final class VoiceTranscriptionTests: XCTestCase {
         XCTAssertEqual(VoiceAudio.mimeType(ofFileNamed: "voice-note-1.M4A"), "audio/mp4")
         XCTAssertEqual(VoiceAudio.mimeType(ofFileNamed: "a.wav"), "audio/wav")
         XCTAssertEqual(VoiceAudio.mimeType(ofFileNamed: "a"), "application/octet-stream")
+        XCTAssertEqual(VoiceAudio.mimeType(ofFileNamed: "clip.mp4"), "application/octet-stream")
 
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("VoiceTranscriptionTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
