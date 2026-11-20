@@ -63,15 +63,18 @@ nonisolated enum ComposerRules {
     }
 
     /// One trailing place: Stop while a turn runs and the field is empty,
-    /// Send otherwise, so the button under the pointer never moves.
-    static func slot(text: String, isAgentRunning: Bool, canStop: Bool) -> Slot {
-        isAgentRunning && canStop && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .stop : .send
+    /// Send otherwise, so the button under the pointer never moves. While
+    /// a voice message is recorded it is Send (off): the mic sends it,
+    /// and Stop would stop the turn, not the recording.
+    static func slot(text: String, isAgentRunning: Bool, canStop: Bool, isRecordingVoice: Bool = false) -> Slot {
+        isAgentRunning && canStop && !isRecordingVoice && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .stop : .send
     }
 
     /// Whether Send sends: there is text, and nothing is in its way. While
-    /// a turn runs it sends too; the message then waits for the turn.
-    static func canSend(text: String, isDisabled: Bool, isBusy: Bool) -> Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isDisabled && !isBusy
+    /// a turn runs it sends too; the message then waits for the turn. Not
+    /// while a voice message is recorded.
+    static func canSend(text: String, isDisabled: Bool, isBusy: Bool, isRecordingVoice: Bool = false) -> Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isDisabled && !isBusy && !isRecordingVoice
     }
 
     /// What the composer says of a message sent now, while a turn runs: it
@@ -105,7 +108,7 @@ nonisolated enum ComposerRules {
 }
 
 /// The one composer on the Mac, the iPad, and the iPhone: `(+) field
-/// (Send | Stop)` in a raised stone box with rounded corners, who the
+/// (mic) (Send | Stop)` in a raised stone box with rounded corners, who the
 /// message goes to at its bottom left, no formatting controls.
 ///
 /// While a turn runs the slot is Stop with an empty field and Send once
@@ -154,6 +157,15 @@ struct MessageComposer: View {
     /// was handed back), so the parent does not take it for typing; nil
     /// sets it through the binding.
     var putInTheField: ((String) -> Void)?
+    /// A voice message: starts recording one, ends it to be sent, or
+    /// calls it off. With any of them nil the mic is off.
+    var onVoiceRecordStart: (() -> Void)?
+    var onVoiceRecordStop: (() -> Void)?
+    var onVoiceRecordCancel: (() -> Void)?
+    /// A voice message is being recorded.
+    var isRecordingVoice: Bool = false
+    /// One is being started, or put into words.
+    var isVoiceBusy: Bool = false
 
     /// The attaching under way, if one is. Cleared when the composer moves
     /// to another thread, so files chosen for one thread are never taken
@@ -164,6 +176,14 @@ struct MessageComposer: View {
     @State private var attachFailure: String?
     @State private var showMentionSuggestions = false
     @State private var mentionQuery = ""
+    /// The mic is held down (or was clicked on), and whether the finger
+    /// has moved far enough away to call the recording off.
+    @State private var isVoicePressActive = false
+    @State private var isVoicePressCancelled = false
+    #if os(macOS)
+    /// The recording was started by holding Space, not by clicking the mic.
+    @State private var isSpaceHoldRecording = false
+    #endif
     #if os(iOS)
     @State private var showFileImporter = false
     @FocusState private var isTextFieldFocused: Bool
@@ -240,6 +260,10 @@ struct MessageComposer: View {
             #endif
         }
         .onChange(of: threadId) { _, _ in
+            // A recording does not follow the composer to another thread
+            // (its owner calls it off); nor does a press of the mic.
+            isVoicePressActive = false
+            isVoicePressCancelled = false
             attachingTask = nil
             attachFailure = nil
             choosingFiles = nil
@@ -322,6 +346,7 @@ struct MessageComposer: View {
                 field
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .layoutPriority(1)
+                micButton
                 // The field takes the spare width, never the slot's.
                 actionSlot
                     .fixedSize()
@@ -375,8 +400,8 @@ struct MessageComposer: View {
         controlSide - (isPad ? 6 : 8)
     }
 
-    /// The + button's width stays put, so larger text leaves the field its
-    /// room.
+    /// The + and mic buttons' width stays put, so larger text leaves the
+    /// field its room.
     private var iconControlWidth: CGFloat {
         isPad ? 40 : 44
     }
@@ -409,8 +434,50 @@ struct MessageComposer: View {
 
     // MARK: - Field
 
-    @ViewBuilder
     private var field: some View {
+        ZStack(alignment: .leading) {
+            textInput
+                // Kept in place while recording, so that a held Space
+                // still reaches the editor when it is let go.
+                .opacity(isRecordingVoice ? 0 : 1)
+                .accessibilityHidden(isRecordingVoice)
+            if isRecordingVoice {
+                listening
+            }
+        }
+    }
+
+    /// No running time: the dot and the words say it is listening.
+    private var listening: some View {
+        HStack(spacing: Spacing.xs) {
+            Circle()
+                .fill(Color.aicovenWater)
+                .frame(width: 8, height: 8)
+                .accessibilityHidden(true)
+            Text("Listening")
+                .font(.aicovenBody)
+                .foregroundStyle(Color.aicovenTextSecondary)
+            Text(listeningHint)
+                .font(.aicovenBodySmall)
+                .foregroundStyle(Color.aicovenTextTertiary)
+                .lineLimit(2)
+        }
+        .padding(.horizontal, 4)
+        .frame(minHeight: controlSide)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("composer-listening")
+    }
+
+    private var listeningHint: String {
+        #if os(macOS)
+        isSpaceHoldRecording ? "Release Space to send · Esc to cancel" : "Click the mic to send · Esc to cancel"
+        #else
+        "Let go to send, slide away to cancel"
+        #endif
+    }
+
+    @ViewBuilder
+    private var textInput: some View {
         #if os(macOS)
         ZStack(alignment: .leading) {
             GrowingTextEditor(
@@ -420,7 +487,11 @@ struct MessageComposer: View {
                 autoFocus: autoFocus,
                 onSend: send,
                 onFocusChange: onFocusChange,
-                onAttach: attachPastedOrDropped
+                onAttach: attachPastedOrDropped,
+                onVoiceHoldStart: spaceHoldEligible ? { beginVoicePress(bySpace: true) } : nil,
+                onVoiceHoldStop: spaceHoldEligible ? { endVoicePress() } : nil,
+                onVoiceHoldCancel: spaceHoldEligible ? { cancelVoicePress() } : nil,
+                onEscape: isRecordingVoice ? { cancelVoicePress() } : nil
             )
             .frame(height: macInputHeight)
             if messageText.isEmpty {
@@ -517,7 +588,7 @@ struct MessageComposer: View {
         .menuIndicator(.hidden)
         .buttonStyle(.plain)
         .frame(width: iconControlWidth, height: controlSide)
-        .disabled(isBusy || isDisabled || isChoosingOnTheMac)
+        .disabled(isBusy || isDisabled || isChoosingOnTheMac || isRecordingVoice)
         .accessibilityLabel("Attach")
         .accessibilityIdentifier("composer-attach")
         #if os(macOS)
@@ -656,11 +727,137 @@ struct MessageComposer: View {
     }
     #endif
 
+    // MARK: - Mic
+
+    /// Hold to talk on the iPhone and iPad (let go to send, slide away to
+    /// cancel); a click to start and a click to send on the Mac, and for
+    /// VoiceOver everywhere.
+    private var micButton: some View {
+        #if os(iOS)
+        micLabel
+            .frame(width: iconControlWidth, height: controlSide)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        if !isVoicePressActive { beginVoicePress(bySpace: false) }
+                        let distance = hypot(value.translation.width, value.translation.height)
+                        isVoicePressCancelled = isVoicePressCancelled || distance > VoiceHoldToTalkPolicy.cancelDistance
+                    }
+                    .onEnded { value in
+                        let distance = hypot(value.translation.width, value.translation.height)
+                        isVoicePressCancelled = isVoicePressCancelled || distance > VoiceHoldToTalkPolicy.cancelDistance
+                        endVoicePress()
+                    }
+            )
+            .allowsHitTesting(!micIsDisabled)
+            .opacity(micIsDisabled ? 0.4 : 1)
+            .accessibilityElement(children: .ignore)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel(isRecordingVoice ? "Send voice message" : "Record voice message")
+            .accessibilityHint("Press and hold to record. Release to send. Drag away to cancel.")
+            .accessibilityAction { toggleVoiceRecording() }
+            .accessibilityIdentifier("composer-mic")
+        #else
+        Button(action: toggleVoiceRecording) {
+            micLabel
+                .frame(width: iconControlWidth, height: controlSide)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(micIsDisabled)
+        .opacity(micIsDisabled ? 0.4 : 1)
+        .help(isRecordingVoice ? "Click to send, or press Esc to cancel" : "Click, or hold Space in an empty field, to talk")
+        .accessibilityLabel(isRecordingVoice ? "Send voice message" : "Record voice message")
+        .accessibilityIdentifier("composer-mic")
+        #endif
+    }
+
+    @ViewBuilder
+    private var micLabel: some View {
+        if isVoiceBusy, !isRecordingVoice {
+            ProgressView().controlSize(.small)
+        } else {
+            Image(systemName: isRecordingVoice ? "mic.fill" : "mic")
+                .font(.aicovenBody)
+                .foregroundStyle(isRecordingVoice ? Color.aicovenWater : Color.aicovenTextTertiary)
+        }
+    }
+
+    private var hasVoiceCallbacks: Bool {
+        onVoiceRecordStart != nil && onVoiceRecordStop != nil && onVoiceRecordCancel != nil
+    }
+
+    private var micIsDisabled: Bool {
+        VoiceHoldToTalkPolicy.isMicDisabled(
+            isRecordingVoice: isRecordingVoice,
+            isVoiceBusy: isVoiceBusy,
+            isDisabled: isDisabled,
+            isSubmittingSend: isSubmittingSend,
+            isAttaching: isAttaching,
+            hasVoiceCallbacks: hasVoiceCallbacks
+        )
+    }
+
+    #if os(macOS)
+    private var spaceHoldEligible: Bool {
+        VoiceHoldToTalkPolicy.isMacSpaceHoldEligible(
+            messageText: messageText,
+            isDisabled: isDisabled,
+            isVoiceBusy: isVoiceBusy,
+            isRecordingVoice: isRecordingVoice,
+            isAttaching: isAttaching,
+            hasVoiceCallbacks: hasVoiceCallbacks
+        )
+    }
+    #endif
+
+    private func beginVoicePress(bySpace: Bool) {
+        guard !micIsDisabled, !isRecordingVoice else { return }
+        isVoicePressActive = true
+        isVoicePressCancelled = false
+        #if os(macOS)
+        isSpaceHoldRecording = bySpace
+        #endif
+        onVoiceRecordStart?()
+    }
+
+    private func endVoicePress() {
+        let action = VoiceHoldToTalkPolicy.releaseAction(
+            isRecordingVoice: isRecordingVoice,
+            wasPressActive: isVoicePressActive,
+            wasCancelled: isVoicePressCancelled
+        )
+        isVoicePressActive = false
+        isVoicePressCancelled = false
+        switch action {
+        case .send: onVoiceRecordStop?()
+        case .cancel: onVoiceRecordCancel?()
+        case .none: break
+        }
+    }
+
+    private func cancelVoicePress() {
+        let shouldCancel = isRecordingVoice || isVoicePressActive
+        isVoicePressActive = false
+        isVoicePressCancelled = false
+        if shouldCancel { onVoiceRecordCancel?() }
+    }
+
+    /// A click on the Mac, and VoiceOver everywhere: start, then send.
+    private func toggleVoiceRecording() {
+        if isRecordingVoice {
+            endVoicePress()
+        } else {
+            beginVoicePress(bySpace: false)
+        }
+    }
+
     // MARK: - Send | Stop
 
     @ViewBuilder
     private var actionSlot: some View {
-        switch ComposerRules.slot(text: messageText, isAgentRunning: isAgentRunning, canStop: onStop != nil) {
+        switch ComposerRules.slot(text: messageText, isAgentRunning: isAgentRunning, canStop: onStop != nil, isRecordingVoice: isRecordingVoice) {
         case .stop:
             Button(action: { onStop?() }, label: {
                 Image(systemName: "stop.fill")
@@ -695,7 +892,7 @@ struct MessageComposer: View {
     }
 
     private var canSend: Bool {
-        ComposerRules.canSend(text: messageText, isDisabled: isDisabled, isBusy: isBusy)
+        ComposerRules.canSend(text: messageText, isDisabled: isDisabled, isBusy: isBusy, isRecordingVoice: isRecordingVoice)
     }
 
     private func send() {

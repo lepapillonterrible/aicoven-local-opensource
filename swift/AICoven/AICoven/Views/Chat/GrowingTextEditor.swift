@@ -84,6 +84,14 @@ struct GrowingTextEditor: NSViewRepresentable {
     /// Files, and pictures as PNG bytes, pasted or dropped into the field,
     /// to be attached. Nil pastes and drops as text.
     var onAttach: ((_ files: [URL], _ pictures: [Data]) -> Void)?
+    /// Space held in the empty field: talking starts, is sent when Space
+    /// is let go, or called off with Esc. Nil (any of them) types a space
+    /// as ever.
+    var onVoiceHoldStart: (() -> Void)?
+    var onVoiceHoldStop: (() -> Void)?
+    var onVoiceHoldCancel: (() -> Void)?
+    /// Esc, while there is something for it to call off.
+    var onEscape: (() -> Void)?
 
     /// The editor's font, and the height of the empty editor: one line of
     /// it between the insets.
@@ -136,6 +144,10 @@ struct GrowingTextEditor: NSViewRepresentable {
         textView.onSend = sendKeepingFocus(in: textView)
         textView.onFocusChange = onFocusChange
         textView.onAttach = isDisabled ? nil : onAttach
+        textView.onVoiceHoldStart = onVoiceHoldStart
+        textView.onVoiceHoldStop = onVoiceHoldStop
+        textView.onVoiceHoldCancel = onVoiceHoldCancel
+        textView.onEscape = onEscape
 
         scrollView.documentView = textView
         context.coordinator.updateHeight(in: scrollView)
@@ -161,6 +173,10 @@ struct GrowingTextEditor: NSViewRepresentable {
         textView.onSend = sendKeepingFocus(in: textView)
         textView.onFocusChange = onFocusChange
         textView.onAttach = isDisabled ? nil : onAttach
+        textView.onVoiceHoldStart = onVoiceHoldStart
+        textView.onVoiceHoldStop = onVoiceHoldStop
+        textView.onVoiceHoldCancel = onVoiceHoldCancel
+        textView.onEscape = onEscape
 
         context.coordinator.parent = self
         context.coordinator.updateHeight(in: scrollView, publishHeightSynchronously: false)
@@ -254,6 +270,21 @@ struct GrowingTextEditor: NSViewRepresentable {
     final class ChatTextView: NSTextView {
         var onSend: (() -> Void)?
         var onFocusChange: ((Bool) -> Void)?
+        var onVoiceHoldStart: (() -> Void)?
+        var onVoiceHoldStop: (() -> Void)?
+        var onVoiceHoldCancel: (() -> Void)?
+        var onEscape: (() -> Void)?
+        /// Space is down in the empty field and has not been held long
+        /// enough yet to mean talking.
+        private var voiceHoldTask: Task<Void, Never>?
+        /// Space was held long enough: talking started with it.
+        private var isSpaceHoldRecording = false
+        private static let spaceKeyCode: UInt16 = 49
+
+        private var holdsToTalk: Bool {
+            onVoiceHoldStart != nil && onVoiceHoldStop != nil && onVoiceHoldCancel != nil
+        }
+
         /// What can be dropped on the field depends on whether this is
         /// set, and a text view lists that only when told to: it is told
         /// whenever this is set where it was not, or the other way round.
@@ -330,7 +361,10 @@ struct GrowingTextEditor: NSViewRepresentable {
 
         override func resignFirstResponder() -> Bool {
             let resigned = super.resignFirstResponder()
-            if resigned { onFocusChange?(false) }
+            if resigned {
+                onFocusChange?(false)
+                callOffSpaceHold()
+            }
             return resigned
         }
 
@@ -339,12 +373,75 @@ struct GrowingTextEditor: NSViewRepresentable {
             // composing (Japanese, Chinese), Return is its own: it confirms
             // what is being composed, and sends nothing.
             let isEnter = (event.keyCode == 36 || event.keyCode == 76) && !hasMarkedText()
-            if isEnter, event.modifierFlags.contains(.shift) {
+            // Space alone in the empty field, not while an input method
+            // composes: held, it talks; let go at once, it types a space.
+            let modifiers = event.modifierFlags.intersection([.command, .control, .option])
+            let isSpace = event.keyCode == Self.spaceKeyCode && modifiers.isEmpty && !hasMarkedText()
+            if isSpace, holdsToTalk, string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // The key repeats while it is held: the first press counts.
+                if !event.isARepeat, voiceHoldTask == nil, !isSpaceHoldRecording { waitForSpaceToBeHeld() }
+            } else if isEnter, event.modifierFlags.contains(.shift) {
                 insertNewline(nil)
             } else if isEnter, let onSend {
                 onSend()
             } else {
                 super.keyDown(with: event)
+            }
+        }
+
+        private func waitForSpaceToBeHeld() {
+            voiceHoldTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: VoiceHoldToTalkPolicy.spaceHoldDelay)
+                guard let self, !Task.isCancelled else { return }
+                voiceHoldTask = nil
+                isSpaceHoldRecording = true
+                onVoiceHoldStart?()
+            }
+        }
+
+        override func keyUp(with event: NSEvent) {
+            guard event.keyCode == Self.spaceKeyCode, voiceHoldTask != nil || isSpaceHoldRecording else {
+                super.keyUp(with: event)
+                return
+            }
+            let wasWaiting = voiceHoldTask != nil
+            voiceHoldTask?.cancel()
+            voiceHoldTask = nil
+            if isSpaceHoldRecording {
+                isSpaceHoldRecording = false
+                onVoiceHoldStop?()
+            } else if wasWaiting {
+                // Let go before it meant talking: the space it was.
+                insertText(" ", replacementRange: selectedRange())
+            }
+        }
+
+        /// Esc: calls off talking by Space, or whatever else there is.
+        override func cancelOperation(_ sender: Any?) {
+            if voiceHoldTask != nil || isSpaceHoldRecording {
+                voiceHoldTask?.cancel()
+                voiceHoldTask = nil
+                if isSpaceHoldRecording {
+                    isSpaceHoldRecording = false
+                    onVoiceHoldCancel?()
+                }
+                return
+            }
+            if let onEscape {
+                onEscape()
+                return
+            }
+            super.cancelOperation(sender)
+        }
+
+        /// The field stopped being where keys go while Space was down:
+        /// its release will not come here, so talking by it is called off.
+        private func callOffSpaceHold() {
+            voiceHoldTask?.cancel()
+            voiceHoldTask = nil
+            if isSpaceHoldRecording {
+                isSpaceHoldRecording = false
+                onVoiceHoldCancel?()
             }
         }
     }

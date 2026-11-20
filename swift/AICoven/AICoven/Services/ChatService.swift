@@ -1473,6 +1473,15 @@ actor ChatService {
             .map { HermesAgentClient.Message(role: $0.role, content: $0.content) }
     }
 
+    /// How a voice message for the model chosen now is put into words:
+    /// the key of that model's provider is asked first, and where the
+    /// model runs on this device or this network only the device is
+    /// asked, so that what is said to a local model goes to no provider.
+    func voiceRoute() -> VoiceMessages.Route {
+        let (provider, _) = resolveProviderAndModel()
+        return VoiceMessages.Route(preferring: TranscriptionSource(providerID: provider), onDeviceOnly: isLocalDeployment(providerID: provider))
+    }
+
     /// Returns `true` when the given provider is running locally \u2014 either
     /// because it\u2019s inherently local (MLX, Ollama) or because the user has
     /// configured a localhost/private-network base URL for a hybrid provider
