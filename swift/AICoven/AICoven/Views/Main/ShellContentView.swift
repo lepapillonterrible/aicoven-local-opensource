@@ -46,6 +46,17 @@ struct ShellContentView: View {
                 // Tied to the thread, so each thread has its own state.
                 PersonalChatView(thread: thread, onEditAgent: nil, onBack: nil, showsHeader: false)
                     .id(thread.id)
+                #if os(iOS)
+                    // The bar names the thread (the Mac's window title does
+                    // there), and its title is the menu of what can be done
+                    // with it. Solid chrome that is always there, so the
+                    // thread scrolls below the bar, not under its buttons.
+                    .navigationTitle(ThreadListRules.title(of: thread))
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbarTitleMenu { threadMenu(thread) }
+                    .toolbarBackground(Color.aicovenChrome, for: .navigationBar)
+                    .toolbarBackground(.visible, for: .navigationBar)
+                #endif
                     .toolbar { threadActionsMenu(thread) }
                     // The same actions, for the menu bar's Thread menu.
                     .focusedSceneValue(\.threadCommands, ThreadCommandActions(
@@ -120,8 +131,18 @@ struct ShellContentView: View {
         .id(navigator.selected)
     }
 
-    /// The open thread's actions, a menu beside the toolbar's other buttons:
-    /// the window's title names the thread.
+    /// What can be done with the open thread itself: the Mac lists these
+    /// in its Thread Actions menu, the iPad under the thread's title.
+    @ViewBuilder
+    private func threadMenu(_ thread: Thread) -> some View {
+        Button("Rename…") { threadActions.renaming = thread }
+        Button(thread.isArchived ? "Unarchive" : "Archive") { threadActions.setArchived(thread, !thread.isArchived) }
+        Button("Delete…", role: .destructive) { threadActions.deleting = thread }
+    }
+
+    /// The open thread's actions, a menu beside the toolbar's other buttons.
+    /// On the Mac, where the window's title names the thread, it holds all
+    /// of them; on the iPad, Copy, the rest being under the title.
     @ToolbarContentBuilder
     private func threadActionsMenu(_ thread: Thread) -> some ToolbarContent {
         StoneToolbarItem(placement: .primaryAction) {
@@ -132,10 +153,10 @@ struct ShellContentView: View {
                     Label("Copy Thread as Markdown", systemImage: "doc.on.doc")
                 }
                 .disabled(!threadActions.canCopy)
+                #if os(macOS)
                 Divider()
-                Button("Rename…") { threadActions.renaming = thread }
-                Button(thread.isArchived ? "Unarchive" : "Archive") { threadActions.setArchived(thread, !thread.isArchived) }
-                Button("Delete…", role: .destructive) { threadActions.deleting = thread }
+                threadMenu(thread)
+                #endif
             } label: {
                 Label("Thread Actions", systemImage: "ellipsis.circle")
             }

@@ -33,11 +33,36 @@ struct ShellSidebar: View {
     @State private var showSwitcher = false
     /// The switcher row's width, margins included, for its popover.
     @State private var switcherRowWidth: CGFloat = 0
-    /// A pinned row's height, growing with the text size.
-    @ScaledMetric(relativeTo: .body) private var pinnedRowHeight: CGFloat = 34
-    /// A place button and its icon, growing with the text size like the row above them.
-    @ScaledMetric(relativeTo: .body) private var placeButtonHeight: CGFloat = 32
-    @ScaledMetric(relativeTo: .body) private var placeIconSize: CGFloat = 17
+    /// Whether rows and buttons take the iPad's sizes, for a finger.
+    @Environment(\.isPadLayout) private var isPadLayout
+    /// A pinned row's height, growing with the text size: 34 pt for a
+    /// pointer, 44 pt for a finger.
+    @ScaledMetric(relativeTo: .body) private var pointerRowHeight: CGFloat = 34
+    @ScaledMetric(relativeTo: .body) private var touchRowHeight: CGFloat = 44
+    /// A place button and its icon, growing with the text size like the
+    /// row above them: 32 pt and 17 pt for a pointer, 40 pt and 20 pt for
+    /// a finger.
+    @ScaledMetric(relativeTo: .body) private var pointerPlaceButtonHeight: CGFloat = 32
+    @ScaledMetric(relativeTo: .body) private var touchPlaceButtonHeight: CGFloat = 40
+    @ScaledMetric(relativeTo: .body) private var pointerPlaceIconSize: CGFloat = 17
+    @ScaledMetric(relativeTo: .body) private var touchPlaceIconSize: CGFloat = 20
+
+    private var pinnedRowHeight: CGFloat {
+        isPadLayout ? touchRowHeight : pointerRowHeight
+    }
+
+    private var placeButtonHeight: CGFloat {
+        isPadLayout ? touchPlaceButtonHeight : pointerPlaceButtonHeight
+    }
+
+    private var placeIconSize: CGFloat {
+        isPadLayout ? touchPlaceIconSize : pointerPlaceIconSize
+    }
+
+    /// A thread row's least height, and a switcher row's.
+    private var rowMinHeight: CGFloat {
+        isPadLayout ? 44 : 34
+    }
 
     /// The pinned zones' text sizes: past xxxLarge they would leave the
     /// threads no room. The threads keep every size.
@@ -138,7 +163,7 @@ struct ShellSidebar: View {
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
-        .environment(\.defaultMinListRowHeight, 34)
+        .environment(\.defaultMinListRowHeight, rowMinHeight)
         .safeAreaInset(edge: .top, spacing: 0) {
             scopeZone
                 .dynamicTypeSize(Self.pinnedZoneTypeSizes)
@@ -416,7 +441,7 @@ struct ShellSidebar: View {
         .popover(isPresented: $showSwitcher, arrowEdge: .bottom) {
             CovenSwitcherList(
                 covens: covens,
-                rowMinHeight: 34,
+                rowMinHeight: rowMinHeight,
                 popoverWidth: max(switcherRowWidth - Spacing.xs * 2, 220),
                 selected: navigator.selected,
                 current: { activities.current[$0] },
@@ -475,14 +500,21 @@ struct ShellSidebar: View {
 /// How a selected place button, drawn by hand, looks: what the list draws
 /// for a selected row. On the Mac it is the accent colour with white ink
 /// while the window is key, and the grey unemphasized selection with the
-/// usual ink otherwise.
+/// usual ink otherwise. On iOS the fill is the sidebar cell's selected
+/// background, read from UIKit in the current appearance.
 enum SidebarSelection {
     static func fill(_ isSelected: Bool, isKey: Bool) -> Color {
         guard isSelected else { return .clear }
         #if os(macOS)
         return isKey ? .accentColor : Color(nsColor: .unemphasizedSelectedContentBackgroundColor)
         #else
-        return Color.aicovenSelected
+        return Color(uiColor: UIColor { traits in
+            var state = UICellConfigurationState(traitCollection: traits)
+            state.isSelected = true
+            return UIBackgroundConfiguration.listSidebarCell()
+                .updated(for: state)
+                .resolvedBackgroundColor(for: .tintColor)
+        })
         #endif
     }
 

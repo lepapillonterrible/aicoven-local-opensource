@@ -2,9 +2,8 @@ import SwiftUI
 
 /// The cloud app's shell: one split view, with the sidebar on the left and
 /// the place open in the scope on screen beside it, under a toolbar and the
-/// window's title. The Mac's window. It compiles for every platform, to
-/// become the iPad's layout too, where Settings is a place in it and not a
-/// window; until it is shown there, only the Mac shows it.
+/// window's title. The Mac's window, and the iPad's layout at regular
+/// width, where Settings is a place in it and not a window.
 struct ShellRootView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var authService: AuthService
@@ -235,7 +234,12 @@ struct ShellRootView: View {
     /// New Thread: the scope's new-thread page. Its thread is made when
     /// its first message is sent.
     private func newThread() {
+        // Where the shell is: the Mac's window, or the iPad's layout.
+        #if os(macOS)
         AnalyticsService.shared.trackNewChatTapped(source: "mac_shell")
+        #else
+        AnalyticsService.shared.trackNewChatTapped(source: "ipad_shell")
+        #endif
         navigator.requestNewThread()
     }
 
