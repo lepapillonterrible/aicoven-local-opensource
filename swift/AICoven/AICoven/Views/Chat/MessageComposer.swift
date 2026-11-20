@@ -511,9 +511,12 @@ struct MessageComposer: View {
                 onSend: send,
                 onFocusChange: onFocusChange,
                 onAttach: attachPastedOrDropped,
+                // Whether Space may start talking changes as the composer
+                // does; letting go of it, and calling it off, are always
+                // heard, or a hold under way could not be ended.
                 onVoiceHoldStart: spaceHoldEligible ? { beginVoicePress(bySpace: true) } : nil,
-                onVoiceHoldStop: spaceHoldEligible ? { endVoicePress() } : nil,
-                onVoiceHoldCancel: spaceHoldEligible ? { cancelVoicePress() } : nil,
+                onVoiceHoldStop: hasVoiceCallbacks ? { endVoicePress() } : nil,
+                onVoiceHoldCancel: hasVoiceCallbacks ? { cancelVoicePress() } : nil,
                 onEscape: isRecordingVoice || isVoicePressActive ? { cancelVoicePress() } : nil
             )
             .frame(height: macInputHeight)

@@ -85,8 +85,9 @@ struct GrowingTextEditor: NSViewRepresentable {
     /// to be attached. Nil pastes and drops as text.
     var onAttach: ((_ files: [URL], _ pictures: [Data]) -> Void)?
     /// Space held in the empty field: talking starts, is sent when Space
-    /// is let go, or called off with Esc. Nil (any of them) types a space
-    /// as ever.
+    /// is let go, or called off with Esc. Without the first, Space types
+    /// a space as ever; the other two are kept for as long as there is a
+    /// mic, so that a hold under way can always be ended.
     var onVoiceHoldStart: (() -> Void)?
     var onVoiceHoldStop: (() -> Void)?
     var onVoiceHoldCancel: (() -> Void)?
@@ -372,6 +373,16 @@ struct GrowingTextEditor: NSViewRepresentable {
             // Return, or Enter on the keypad. While an input method is
             // composing (Japanese, Chinese), Return is its own: it confirms
             // what is being composed, and sends nothing.
+            // Talking by a held Space: what else is pressed meanwhile is
+            // not typed into the field behind it.
+            if isSpaceHoldRecording { return }
+            // Another key before Space had been held long enough: Space
+            // was typing after all.
+            if voiceHoldTask != nil, event.keyCode != Self.spaceKeyCode {
+                voiceHoldTask?.cancel()
+                voiceHoldTask = nil
+                insertText(" ", replacementRange: selectedRange())
+            }
             let isEnter = (event.keyCode == 36 || event.keyCode == 76) && !hasMarkedText()
             // Space alone in the empty field, not while an input method
             // composes: held, it talks; let go at once, it types a space.

@@ -367,3 +367,140 @@ final class VoiceMessagesTests: XCTestCase {
         XCTAssertGreaterThan(VoiceAudio.largest, Int(VoiceCaptureService.longest) * 128_000 / 8, "The longest recording is under what is sent")
     }
 }
+
+#if os(macOS)
+import AppKit
+
+/// Space held in the Mac's empty message field talks; let go at once, it
+/// types a space. A hold under way can always be ended.
+@MainActor
+final class SpaceHoldToTalkTests: XCTestCase {
+    private final class Calls {
+        var started = 0
+        var stopped = 0
+        var cancelled = 0
+    }
+
+    private func key(_ code: UInt16, _ characters: String, down: Bool = true, isRepeat: Bool = false, modifiers: NSEvent.ModifierFlags = []) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(
+            with: down ? .keyDown : .keyUp,
+            location: .zero,
+            modifierFlags: modifiers,
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: characters,
+            charactersIgnoringModifiers: characters,
+            isARepeat: isRepeat,
+            keyCode: code
+        ))
+    }
+
+    private func field(_ calls: Calls) -> GrowingTextEditor.ChatTextView {
+        let field = GrowingTextEditor.ChatTextView()
+        field.isRichText = false
+        field.onVoiceHoldStart = { calls.started += 1 }
+        field.onVoiceHoldStop = { calls.stopped += 1 }
+        field.onVoiceHoldCancel = { calls.cancelled += 1 }
+        return field
+    }
+
+    private func held() async {
+        try? await Task.sleep(for: VoiceHoldToTalkPolicy.spaceHoldDelay + .milliseconds(250))
+    }
+
+    func testSpaceHeldTalks_andLetGoSends_andATapTypesASpace() async throws {
+        let calls = Calls()
+        let field = field(calls)
+
+        // A tap: a space, and no talking.
+        try field.keyDown(with: key(49, " "))
+        try field.keyUp(with: key(49, " ", down: false))
+        XCTAssertEqual(field.string, " ")
+        XCTAssertEqual(calls.started, 0)
+        await held()
+        XCTAssertEqual(calls.started, 0, "The wait ended with the tap")
+
+        // Held (the key repeating meanwhile): talking starts once; let go, it is sent.
+        try field.keyDown(with: key(49, " "))
+        try field.keyDown(with: key(49, " ", isRepeat: true))
+        await held()
+        try field.keyDown(with: key(49, " ", isRepeat: true))
+        XCTAssertEqual(calls.started, 1)
+        XCTAssertEqual(field.string, " ", "Nothing is typed while it is held")
+        try field.keyUp(with: key(49, " ", down: false))
+        XCTAssertEqual(calls.stopped, 1)
+        XCTAssertEqual(calls.cancelled, 0)
+    }
+
+    func testAHoldUnderWayIsEnded_evenWhenSpaceMayNoLongerStartOne() async throws {
+        // Talking has started; the composer then stops offering to start
+        // (it became busy, or took an attachment): letting go still sends.
+        var calls = Calls()
+        var field = field(calls)
+        try field.keyDown(with: key(49, " "))
+        await held()
+        XCTAssertEqual(calls.started, 1)
+        field.onVoiceHoldStart = nil
+        // What is pressed while talking is not typed behind it.
+        try field.keyDown(with: key(0, "a"))
+        XCTAssertEqual(field.string, "")
+        try field.keyUp(with: key(49, " ", down: false))
+        XCTAssertEqual(calls.stopped, 1)
+
+        // Esc calls it off, too.
+        calls = Calls()
+        field = self.field(calls)
+        try field.keyDown(with: key(49, " "))
+        await held()
+        field.onVoiceHoldStart = nil
+        field.cancelOperation(nil)
+        XCTAssertEqual(calls.cancelled, 1)
+        try field.keyUp(with: key(49, " ", down: false))
+        XCTAssertEqual(calls.stopped, 0, "Called off: its release sends nothing")
+
+        // Esc while Space has not been held long enough: nothing started, nothing typed.
+        calls = Calls()
+        field = self.field(calls)
+        try field.keyDown(with: key(49, " "))
+        field.cancelOperation(nil)
+        await held()
+        XCTAssertEqual(calls.started, 0)
+        XCTAssertEqual(calls.cancelled, 0)
+        XCTAssertEqual(field.string, "")
+    }
+
+    func testSpaceTypesAsEver_whereItDoesNotTalk() async throws {
+        // Another key before Space was held long enough: Space was typing.
+        var calls = Calls()
+        var field = field(calls)
+        try field.keyDown(with: key(49, " "))
+        try field.keyDown(with: key(0, "a"))
+        XCTAssertTrue(field.string.hasPrefix(" "), "The space it was is typed")
+        await held()
+        XCTAssertEqual(calls.started, 0)
+
+        // With a modifier, or with no way to start talking, Space is not waited on.
+        calls = Calls()
+        field = self.field(calls)
+        try field.keyDown(with: key(49, " ", modifiers: .option))
+        await held()
+        XCTAssertEqual(calls.started, 0)
+
+        calls = Calls()
+        field = self.field(calls)
+        field.onVoiceHoldStart = nil
+        try field.keyDown(with: key(49, " "))
+        await held()
+        XCTAssertEqual(calls.started, 0)
+
+        // In a field that holds text, Space is a space at once.
+        calls = Calls()
+        field = self.field(calls)
+        field.string = "Hello"
+        try field.keyDown(with: key(49, " "))
+        await held()
+        XCTAssertEqual(calls.started, 0)
+    }
+}
+#endif

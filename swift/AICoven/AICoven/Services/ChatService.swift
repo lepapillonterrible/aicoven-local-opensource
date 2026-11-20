@@ -1462,7 +1462,7 @@ actor ChatService {
            let roleProvider = role.provider, !roleProvider.isEmpty,
            let roleModel = role.model, !roleModel.isEmpty {
             #if DEBUG
-            AppErrorReporter.log(message: "Role '\(role.name)' resolved provider=\(roleProvider.lowercased()) model=\(roleModel)", context: "ChatService.streamMessage.roleResolution")
+            AppErrorReporter.log(message: "Role resolved provider=\(roleProvider.lowercased()) model=\(roleModel)", context: "ChatService.streamMessage.roleResolution")
             #endif
             return (roleProvider.lowercased(), roleModel)
         }
