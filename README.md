@@ -20,7 +20,7 @@ This repo started as an extraction of the original multi-tenant AICoven app and 
 - A provider-agnostic `LLMClient` + `ModelRouter` used for all LLM calls, supporting OpenAI, Anthropic, Google Gemini, OpenRouter, Ollama, and on-device MLX models.
 - Encrypted local context storage (threads, memories, settings) backed by SQLite/GRDB.
 - A "context sandwich" builder that composes system contract, policies, time, memories, history, and the current turn — with device-aware context limits for iPhones.
-- A tools layer (`ToolEnvironment` + `ToolService`) that exposes web search, file/image analysis, and local file generation using only your provider keys, and an `image.generate` tool that makes images with your OpenAI key.
+- A tools layer (`ToolEnvironment` + `ToolService`) that exposes web search, file/image analysis, and local file generation using only your provider keys, and an `image.generate` tool that makes images with your OpenAI or Google key.
 - An MCP client (`MCPClient`) that connects to remote MCP servers over Streamable HTTP (the current revision of the protocol, and the earlier ones' `initialize` handshake), discovers tools, and executes them — with semantic tool selection via embedding-based matching and a benchmark suite for evaluating local model tool-calling accuracy.
 - Shell command tools with an approval flow, and connected-app integrations (GitHub, Google Drive).
 - StoreKit 2 in-app purchase support with a community edition compile flag.
@@ -60,7 +60,7 @@ The Swift sources live under `swift/` and are organized as:
   - `Infrastructure/Keychain` – `SecretsStore` and Keychain-backed implementation.
   - `Infrastructure/Design` – Design system and shared styles.
   - `Infrastructure/Security` – `DataEncryptionService` for encrypted storage.
-  - `Infrastructure/Tools` – `ToolService` (time, web search, attachment analysis, file generation) and `ImageGenerationService` (images, for the `image.generate` tool).
+  - `Infrastructure/Tools` – `ToolService` (time, web search, attachment analysis, file generation) and `ImageGenerationService` and `GoogleImageGenerationService` (images with an OpenAI or a Google key, for the `image.generate` tool).
 - `swift/AICoven/AICoven/Models` – Domain model types (threads, messages, memories, provider configs, agent runs/steps).
 - `swift/AICoven/AICoven/Networking` – Environment configuration.
 - `swift/AICoven/AICoven/Features` – Feature-oriented SwiftUI modules (chat, settings, etc.).
@@ -118,7 +118,7 @@ The tools layer is provider-agnostic and designed to work with whatever keys you
 - **File read/write/list** (`file.read`, `file.write`, `file.list`) – Read, write, and list local files and directories.
 - **Shell commands** (`shell.execute`) – Execute local shell commands with a user-approval flow before execution.
 - **Attachment analysis** – Summarization/QA over attached files and images using the best available vision/chat model.
-- **Image generation** (`image.generate`) – A model can make an image with your OpenAI key; it is kept on the device, encrypted, and shown under the reply.
+- **Image generation** (`image.generate`) – A model can make an image with your OpenAI or Google key. If it names a provider or one of its models, that key is asked; otherwise OpenAI's key is asked first and Google's next, until one makes the image. The image is kept on the device, encrypted, and shown under the reply.
 - **Connected apps** – GitHub repository tools (read/write files, create branches/PRs, search code) and Google Drive file tools (list, read, upload, Sheets read/write), authenticated via user-provided tokens.
 - **MCP server tools** – Any tools exposed by connected [MCP](https://modelcontextprotocol.io) servers (e.g. email via Zapier, calendar, Slack). Tools are discovered automatically via `tools/list`, cached locally, and executed via JSON-RPC over Streamable HTTP. A tool the server marks as read-only is used directly; any other asks you first, showing what it will be sent. Semantic tool selection uses embedding-based matching when many tools are available.
 

@@ -1,11 +1,74 @@
 import Foundation
 
+/// A provider whose key can make pictures. The app supplies no key of its
+/// own: a picture is made with whichever of the person's keys can make
+/// one.
+nonisolated enum ImageProvider: String, CaseIterable {
+    case openai
+    case google
+
+    var displayName: String {
+        switch self {
+        case .openai: "OpenAI"
+        case .google: "Google"
+        }
+    }
+
+    /// A connection to it, as a sentence names one.
+    var aConnection: String {
+        switch self {
+        case .openai: "an OpenAI connection"
+        case .google: "a Google connection"
+        }
+    }
+
+    /// The provider a call names (`openai`, `google` or `gemini`, in any
+    /// case), or nil for a name that is neither.
+    init?(named name: String) {
+        switch name.lowercased() {
+        case "openai": self = .openai
+        case "google", "gemini": self = .google
+        default: return nil
+        }
+    }
+
+    /// The provider whose model this reads as, by its name, or nil where
+    /// the name does not say.
+    static func ofModel(_ model: String) -> ImageProvider? {
+        let name = model.lowercased()
+        if name.hasPrefix("models/gemini") || name.hasPrefix("gemini") || name.hasPrefix("imagen") { return .google }
+        if name.hasPrefix("gpt-image") || name.hasPrefix("dall-e") || name.hasPrefix("chatgpt-image") { return .openai }
+        return nil
+    }
+}
+
+/// One of the person's keys that can make pictures, and how a picture is
+/// asked of it.
+nonisolated struct ImageMaker {
+    let provider: ImageProvider
+    let make: @Sendable (_ prompt: String, _ model: String?, _ size: String, _ quality: String?) async throws -> ImageGenerationService.Generated
+
+    init(provider: ImageProvider, make: @escaping @Sendable (_ prompt: String, _ model: String?, _ size: String, _ quality: String?) async throws -> ImageGenerationService.Generated) {
+        self.provider = provider
+        self.make = make
+    }
+
+    init(_ openAI: ImageGenerationService) {
+        self.init(provider: .openai) { try await openAI.generate(prompt: $0, model: $1, size: $2, quality: $3) }
+    }
+
+    /// Google takes no quality.
+    init(_ google: GoogleImageGenerationService) {
+        self.init(provider: .google) { prompt, model, size, _ in try await google.generate(prompt: prompt, model: model, size: size) }
+    }
+}
+
 /// Makes a picture from a description, with the person's own OpenAI key
 /// and OpenAI's image endpoint. The key and the description go to OpenAI
 /// only; where an older model answers with a link to the picture, the
 /// picture is fetched from that link, without the key.
 nonisolated struct ImageGenerationService {
-    /// A picture as OpenAI made it.
+    /// A picture as a provider made it.
     struct Generated: Equatable {
         let data: Data
         let mimeType: String
@@ -22,7 +85,7 @@ nonisolated struct ImageGenerationService {
         case keyRefused
         /// The key's models include none that makes pictures.
         case noImageModel
-        /// OpenAI refused or failed the request, with what it said of it.
+        /// The provider refused or failed the request, with what it said of it.
         case refused(status: Int, message: String?)
         /// It answered without a picture.
         case noPicture
@@ -30,17 +93,22 @@ nonisolated struct ImageGenerationService {
         case tooLarge
 
         var errorDescription: String? {
+            said(of: .openai)
+        }
+
+        /// What went wrong, naming the provider that was asked.
+        func said(of provider: ImageProvider) -> String {
+            let name = provider.displayName
             switch self {
-            case .keyRefused: "OpenAI refused the key. Check the OpenAI connection in Settings."
-            case .noImageModel: "OpenAI lists no image model for this key."
+            case .keyRefused: return "\(name) refused the key. Check the \(name) connection in Settings."
+            case .noImageModel: return "\(name) lists no image model for this key."
             case let .refused(status, message):
                 if let message, !message.isEmpty {
-                    "OpenAI did not make the image (\(status)): \(message)"
-                } else {
-                    "OpenAI did not make the image (\(status))."
+                    return "\(name) did not make the image (\(status)): \(message)"
                 }
-            case .noPicture: "OpenAI answered without an image."
-            case .tooLarge: "OpenAI's image is larger than 10 MB and was not kept."
+                return "\(name) did not make the image (\(status))."
+            case .noPicture: return "\(name) answered without an image."
+            case .tooLarge: return "\(name)'s image is larger than 10 MB and was not kept."
             }
         }
     }

@@ -57,9 +57,10 @@ enum PromptTemplates {
             description: "Generate an image from a text prompt using AI. The image is shown to the user in the app with your reply; do not write a link to it.",
             parameters: [
                 ToolParameter(name: "prompt", type: "string", description: "What the image should show", required: true),
-                ToolParameter(name: "model", type: "string", description: "Optional: an OpenAI image model, e.g. 'gpt-image-2.6-sunburst'. Leave out to use the best one available.", required: false),
+                ToolParameter(name: "provider", type: "string", description: "Optional: 'openai' or 'google'. Leave out to use whichever the user has connected.", required: false),
+                ToolParameter(name: "model", type: "string", description: "Optional: an image model of that provider, e.g. 'gpt-image-2.6-sunburst' or 'gemini-3.1-flash-image'. Leave out to use the best one available.", required: false),
                 ToolParameter(name: "size", type: "string", description: "Optional: width x height in pixels, like '1024x1024', '1536x1024' or '1024x1536'", required: false),
-                ToolParameter(name: "quality", type: "string", description: "Optional: 'low', 'medium', 'high' or 'auto'", required: false),
+                ToolParameter(name: "quality", type: "string", description: "Optional: 'low', 'medium', 'high' or 'auto' (OpenAI only)", required: false),
             ],
             example: #"{"tool": "image.generate", "input": {"prompt": "A watercolour of a lighthouse at dawn"}, "reason": "The user asked for a picture"}"#,
             inputExamples: [
@@ -724,16 +725,23 @@ enum PromptTemplates {
         "google_sheets.read", "google_sheets.readValues", "google_sheets.updateValues", "google_sheets.batchUpdate"
     ]
 
-    /// Image generation, offered where there is an OpenAI key to make
-    /// images with, to a turn that gives what is made to its reply.
+    /// Image generation, offered where the person has a key that can
+    /// make images, to a turn that gives what is made to its reply.
     static let imageTools: Set<String> = ["image.generate"]
 
+    /// The keys of the person's that can make images: one for each
+    /// provider that makes them, nil where there is none.
+    static func storedImageKeys() -> [String?] {
+        ImageProvider.allCases.map { ProviderAccountService.apiKeyFromKeychain(forProvider: $0.rawValue) }
+    }
+
     /// The image tools a chat turn is offered now: all of them where a
-    /// non-empty OpenAI key is stored, whichever model answers the turn;
-    /// none otherwise.
-    static func offeredImageTools(storedKey: String? = ProviderAccountService.apiKeyFromKeychain(forProvider: "openai")) -> Set<String> {
-        guard let storedKey, !storedKey.isEmpty else { return [] }
-        return imageTools
+    /// non-empty key that can make images is stored (OpenAI's or
+    /// Google's), whichever cloud model answers the turn; none otherwise.
+    /// (A model on this device, and a Hermes or OpenClaw run, are not
+    /// offered it.)
+    static func offeredImageTools(storedKeys: [String?] = storedImageKeys()) -> Set<String> {
+        storedKeys.contains { $0?.isEmpty == false } ? imageTools : []
     }
 
     /// All tools combined.

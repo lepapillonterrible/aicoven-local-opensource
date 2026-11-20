@@ -143,7 +143,7 @@ On top of the LLM and routing layer, the client exposes a small set of **provide
   - Timezone-aware `currentTime()` used by the context sandwich.
   - `webSearch(query:maxResults:)` implemented via DuckDuckGo's public JSON API (no extra keys).
   - `analyzeAttachment(...)` and `analyzeFile(...)` that use the best available chat/vision model to summarize or answer questions about images and files.
-  - `generateFile(...)` which creates a local file artifact and returns a URL that can be attached to messages. (Images are made by the `image.generate` tool through `ImageGenerationService`, and kept in the attachment store.)
+  - `generateFile(...)` which creates a local file artifact and returns a URL that can be attached to messages. (Images are made by the `image.generate` tool through `ImageGenerationService` or `GoogleImageGenerationService`, whichever of your keys can make one, and kept in the attachment store.)
 
 The tools layer is intentionally thin: it never talks to a custom backend and only uses the provider keys the user has configured in the app.
 

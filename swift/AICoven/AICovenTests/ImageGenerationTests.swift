@@ -49,7 +49,7 @@ private final class Asked: @unchecked Sendable {
 final class ImageGenerationTests: XCTestCase {
     override func tearDown() async throws {
         MockURLProtocol.handler = nil
-        await ToolExecutionService.shared.setImageService(ToolExecutionService.imageServiceWithTheStoredKey)
+        await ToolExecutionService.shared.setImageMakers(ToolExecutionService.imageMakersWithTheStoredKeys)
         // As it is before any turn: nothing allowed until a turn says what is.
         await ToolExecutionService.shared.setWhitelist(for: "chat", tools: [])
         try await super.tearDown()
@@ -286,14 +286,39 @@ final class ImageGenerationTests: XCTestCase {
         )
         XCTAssertEqual(
             ToolExecutionService.imageRequest(from: ["prompt": .string("A lighthouse"), "provider": .string("OpenAI"), "model": .string("gpt-image-9"), "size": .string("1536x1024"), "quality": .string("high")]),
-            .success(.init(prompt: "A lighthouse", model: "gpt-image-9", size: "1536x1024", quality: "high"))
+            .success(.init(prompt: "A lighthouse", provider: .openai, model: "gpt-image-9", size: "1536x1024", quality: "high"))
+        )
+        // A provider that makes images is taken by name; where none is
+        // named, a model says whose it is.
+        XCTAssertEqual(
+            ToolExecutionService.imageRequest(from: ["prompt": .string("A"), "provider": .string("Gemini")]),
+            .success(.init(prompt: "A", provider: .google, model: nil, size: "1024x1024", quality: nil))
+        )
+        XCTAssertEqual(
+            ToolExecutionService.imageRequest(from: ["prompt": .string("A"), "model": .string("gemini-3.1-flash-image")]),
+            .success(.init(prompt: "A", provider: .google, model: "gemini-3.1-flash-image", size: "1024x1024", quality: nil))
+        )
+        XCTAssertEqual(
+            ToolExecutionService.imageRequest(from: ["prompt": .string("A"), "model": .string("dall-e-3")]),
+            .success(.init(prompt: "A", provider: .openai, model: "dall-e-3", size: "1024x1024", quality: nil))
+        )
+        XCTAssertEqual(
+            ToolExecutionService.imageRequest(from: ["prompt": .string("A"), "provider": .string("openai"), "model": .string("gemini-3.1-flash-image")]),
+            .success(.init(prompt: "A", provider: .openai, model: "gemini-3.1-flash-image", size: "1024x1024", quality: nil)),
+            "The provider the call names is the one asked"
+        )
+        XCTAssertEqual(
+            ToolExecutionService.imageRequest(from: ["prompt": .string("A"), "model": .string("some-new-model")]),
+            .success(.init(prompt: "A", provider: nil, model: "some-new-model", size: "1024x1024", quality: nil)),
+            "A model that does not say whose it is leaves it open"
         )
         XCTAssertEqual(ToolExecutionService.imageRequest(from: [:]), .failure(.init(message: "Missing required argument: 'prompt'", field: "prompt")))
         XCTAssertEqual(ToolExecutionService.imageRequest(from: ["prompt": .string("  ")]), .failure(.init(message: "Missing required argument: 'prompt'", field: "prompt")))
-        guard case let .failure(provider) = ToolExecutionService.imageRequest(from: ["prompt": .string("A"), "provider": .string("google")]) else {
-            return XCTFail("Only OpenAI makes images here")
+        guard case let .failure(provider) = ToolExecutionService.imageRequest(from: ["prompt": .string("A"), "provider": .string("anthropic")]) else {
+            return XCTFail("Anthropic makes no images")
         }
         XCTAssertEqual(provider.field, "provider")
+        XCTAssertEqual(provider.message, "Images are made with OpenAI or Google in this app; 'anthropic' is not available. Leave 'provider' out to use whichever is connected.")
         guard case let .failure(size) = ToolExecutionService.imageRequest(from: ["prompt": .string("A"), "size": .string("large")]) else {
             return XCTFail("Not a size")
         }
@@ -321,16 +346,18 @@ final class ImageGenerationTests: XCTestCase {
         // exactly where there is a key.
         let forAnAgentRun = await ContextBuilder.ToolConfig.connected()
         XCTAssertFalse(forAnAgentRun.enabledTools.contains("image.generate"))
-        XCTAssertEqual(PromptTemplates.offeredImageTools(storedKey: "KEY"), ["image.generate"])
-        XCTAssertEqual(PromptTemplates.offeredImageTools(storedKey: ""), [])
-        XCTAssertEqual(PromptTemplates.offeredImageTools(storedKey: nil), [])
+        XCTAssertEqual(PromptTemplates.offeredImageTools(storedKeys: ["KEY", nil]), ["image.generate"])
+        XCTAssertEqual(PromptTemplates.offeredImageTools(storedKeys: [nil, "KEY"]), ["image.generate"], "A Google key alone is enough")
+        XCTAssertEqual(PromptTemplates.offeredImageTools(storedKeys: ["", nil]), [])
+        XCTAssertEqual(PromptTemplates.offeredImageTools(storedKeys: [nil, nil]), [])
+        XCTAssertEqual(PromptTemplates.offeredImageTools(storedKeys: []), [])
         let forAChatTurn = await ContextBuilder.ToolConfig.connected(deliversFiles: true)
         XCTAssertEqual(forAChatTurn.enabledTools.contains("image.generate"), !PromptTemplates.offeredImageTools().isEmpty)
         XCTAssertEqual(forAChatTurn.enabledTools.subtracting(PromptTemplates.imageTools), forAnAgentRun.enabledTools)
         let offered = await PromptTemplates.llmToolDefinitions(for: PromptTemplates.imageTools)
         XCTAssertEqual(offered.map(\.name), ["image.generate"])
         XCTAssertEqual(offered.first?.parameters.filter(\.required).map(\.name), ["prompt"])
-        XCTAssertEqual(offered.first?.parameters.map(\.name), ["prompt", "model", "size", "quality"])
+        XCTAssertEqual(offered.first?.parameters.map(\.name), ["prompt", "provider", "model", "size", "quality"])
 
         let made = ImageGenerationService.Generated(data: Data([1]), mimeType: "image/png", model: "gpt-image-9", size: "1024x1024", quality: nil, revisedPrompt: "A lighthouse at dawn")
         XCTAssertEqual(
