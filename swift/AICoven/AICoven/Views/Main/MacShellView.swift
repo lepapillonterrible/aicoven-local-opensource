@@ -155,6 +155,7 @@ struct MacShellView: View {
             for covenID in CovenOrder.gone(known: covens, selected: navigator.selected, among: loaded) {
                 navigator.handleCovenGone(covenID: covenID)
                 drafts.forget(.coven(covenID))
+                ScopeVisitStore().forget(.coven(covenID), for: account)
             }
             covens = loaded
             covenOrder = orderStore.ids(for: account)

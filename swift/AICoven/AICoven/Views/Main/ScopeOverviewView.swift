@@ -31,10 +31,16 @@ struct ScopeOverviewView: View {
 
     var body: some View {
         let scope = navigator.selected
-        let listed = shellThreads.scope == scope ? shellThreads.threads : []
+        // What the loader says is of the scope it read, which for a moment
+        // after switching is not yet the one on screen.
+        let isRead = shellThreads.scope == scope
+        let listed = isRead ? shellThreads.threads : []
+        let canAsk = Self.canAsk(in: scope, coven: coven)
         let lists = ThreadListRules.overview(listed) { activities.activity[$0.id]?.isStillOpen == true }
         let away = ThreadListRules.away(listed, unreadReplyAt: activities.unreadReplyAt, since: navigator.previousVisit(in: scope))
         let nothingListed = listed.contains { !$0.isArchived } == false
+        let state = (failed: isRead && shellThreads.failed, hasLoaded: isRead && shellThreads.hasLoaded)
+        let emptyLine = Self.emptyLine(hasArchived: !listed.isEmpty, canAsk: canAsk)
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.lg) {
                 // Strix says how to get an answer where none can be had yet.
@@ -49,12 +55,12 @@ struct ScopeOverviewView: View {
                 if away.isEmpty {
                     // Nothing for a second column: one column, no blank half.
                     stillOpen(lists.stillOpen)
-                    earlier(lists.earlier, nothingListed: nothingListed)
+                    earlier(lists.earlier, nothingListed: nothingListed, state: state, emptyLine: emptyLine)
                 } else {
                     HStack(alignment: .top, spacing: Spacing.xxl) {
                         VStack(alignment: .leading, spacing: Spacing.lg) {
                             stillOpen(lists.stillOpen)
-                            earlier(lists.earlier, nothingListed: nothingListed)
+                            earlier(lists.earlier, nothingListed: nothingListed, state: state, emptyLine: emptyLine)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         awaySection(away)
@@ -70,7 +76,7 @@ struct ScopeOverviewView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             // No asking in a coven that is not in yet: there is no saying
             // whose agents it would go to, and it must not go to Strix.
-            if scope == .strix || coven != nil {
+            if canAsk {
                 composer
             }
         }
@@ -79,6 +85,32 @@ struct ScopeOverviewView: View {
         // shows it, as well as shown.
         .onChange(of: shellThreads.failed, initial: true) { _, failed in
             if failed, shellThreads.scope == navigator.selected {
+                AccessibilityNotification.Announcement("Couldn't load threads.").post()
+            }
+        }
+    }
+
+    /// Whether a thread can be asked for here: on Strix, and in a coven
+    /// that is in.
+    static func canAsk(in scope: ShellScope, coven: Coven?) -> Bool {
+        scope == .strix || coven != nil
+    }
+
+    /// What is said where no thread is listed: there are none, or none
+    /// that is not archived; and to ask below only where that can be done.
+    static func emptyLine(hasArchived: Bool, canAsk: Bool) -> String {
+        let none = hasArchived ? "No open threads." : "No threads yet."
+        return canAsk ? none + " Ask below to start one." : none
+    }
+
+    /// Reads the threads again, and says so if they still cannot be read
+    /// (nothing on screen changes then).
+    private func tryAgain() {
+        let scope = navigator.selected
+        guard let reading = shellThreads.reload() else { return }
+        Task {
+            await reading.value
+            if shellThreads.failed, shellThreads.scope == scope, navigator.selected == scope {
                 AccessibilityNotification.Announcement("Couldn't load threads.").post()
             }
         }
@@ -131,25 +163,27 @@ struct ScopeOverviewView: View {
     /// The earlier threads; or, with no threads at all, why: they could
     /// not be read, they are on their way, or there are none yet.
     @ViewBuilder
-    private func earlier(_ earlier: [Thread], nothingListed: Bool) -> some View {
-        if nothingListed, shellThreads.failed {
+    private func earlier(
+        _ earlier: [Thread], nothingListed: Bool, state: (failed: Bool, hasLoaded: Bool), emptyLine: String
+    ) -> some View {
+        if nothingListed, state.failed {
             section("Earlier") {
                 HStack(spacing: Spacing.sm) {
                     Text("Couldn't load threads.")
                         .font(.aicovenBodySmall)
                         .foregroundStyle(Color.aicovenError)
-                    Button("Try again") { shellThreads.reload() }
+                    Button("Try again") { tryAgain() }
                         .buttonStyle(.bordered)
                 }
             }
-        } else if nothingListed, !shellThreads.hasLoaded {
+        } else if nothingListed, !state.hasLoaded {
             section("Earlier") {
                 ProgressView()
                     .controlSize(.small)
                     .accessibilityLabel("Loading threads")
             }
         } else if nothingListed {
-            Text("No threads yet. Ask below to start one.")
+            Text(emptyLine)
                 .font(.aicovenBodySmall)
                 .foregroundColor(.aicovenTextSecondary)
         } else if !earlier.isEmpty {

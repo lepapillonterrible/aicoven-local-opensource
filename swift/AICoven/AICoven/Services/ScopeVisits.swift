@@ -38,6 +38,13 @@ struct ScopeVisitStore {
         return before
     }
 
+    /// Forgets `account`'s visits to `scope`: a coven that is gone.
+    func forget(_ scope: ShellScope, for account: String) {
+        var visits = visits(for: account)
+        guard visits.removeValue(forKey: Self.name(of: scope)) != nil else { return }
+        defaults.set(visits, forKey: UserScope.scopedKey(Self.key, for: account))
+    }
+
     /// Forgets `account`'s visits: the account is gone.
     func remove(for account: String) {
         defaults.removeObject(forKey: UserScope.scopedKey(Self.key, for: account))
