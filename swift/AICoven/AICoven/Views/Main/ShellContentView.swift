@@ -31,6 +31,14 @@ struct ShellContentView: View {
                 PersonalChatView(thread: thread, onEditAgent: nil, onBack: nil, showsHeader: false)
                     .id(thread.id)
                     .toolbar { threadActionsMenu(thread) }
+                    // The same actions, for the menu bar's Thread menu.
+                    .focusedSceneValue(\.threadCommands, ThreadCommandActions(
+                        isArchived: thread.isArchived,
+                        rename: { threadActions.renaming = thread },
+                        toggleArchive: { threadActions.setArchived(thread, !thread.isArchived) },
+                        delete: { threadActions.deleting = thread },
+                        copyMarkdown: threadActions.canCopy ? { threadActions.copy(thread) } : nil
+                    ))
             case let .draftThread(covenID):
                 // A coven's page only once the coven is in: it is the
                 // coven's agents the message can go to.

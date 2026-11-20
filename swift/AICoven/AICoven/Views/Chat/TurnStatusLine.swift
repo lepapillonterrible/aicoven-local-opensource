@@ -40,7 +40,10 @@ struct TurnStatusLineView: View {
                     if !turn.isStopping {
                         Button("Stop", action: onStop)
                             .buttonStyle(.textLink)
+                        // On the Mac ⌘. is the Thread menu's Stop.
+                        #if !os(macOS)
                             .keyboardShortcut(".", modifiers: .command)
+                        #endif
                             .accessibilityIdentifier("status-line-stop")
                             .accessibilityHint("Stops this reply")
                     }

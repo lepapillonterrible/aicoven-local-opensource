@@ -110,7 +110,7 @@ struct AICovenApp: App {
         #if os(macOS)
         .defaultSize(width: 820, height: 620)
         .commands {
-            // macOS-specific menu commands can be re-added later if needed.
+            ShellCommands()
         }
         #endif
 

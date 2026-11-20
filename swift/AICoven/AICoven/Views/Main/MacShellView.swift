@@ -56,7 +56,7 @@ struct MacShellView: View {
                 personName: ShellSidebar.personName(name: authService.currentUser?.name, email: authService.currentUser?.email),
                 onOpenSettings: { _ = appState.openSettings(for: .settings) },
                 onCreateCoven: { showCreateCoven = true },
-                onOpenConnectedApps: { _ = appState.openSettings(for: .connectedApps) },
+                onOpenPlace: openPlace,
                 onMoveCoven: moveCoven
             )
             // On the sidebar column's content, as Apple's example attaches
@@ -82,9 +82,8 @@ struct MacShellView: View {
                         Label("New Thread", systemImage: "square.and.pencil")
                     }
                     .buttonStyle(.stoneToolbar)
-                    // ⌘N comes with the menus: until then it is the
-                    // system's New Window.
-                    .help("New Thread")
+                    // ⌘N is the File menu's New Thread.
+                    .help("New Thread (⌘N)")
                     .accessibilityIdentifier("new-thread")
                 }
             }
@@ -92,6 +91,8 @@ struct MacShellView: View {
         .stoneWindowBar()
         .navigationTitle(shellWindowTitle(covenName: scopeName, covenPlaceTitle: navigator.placeTitle))
         .threadActionsHost(threadActions)
+        // What this window offers the menu bar while it is in front.
+        .focusedSceneValue(\.shellCommands, shellCommands)
         .sheet(isPresented: $showCreateCoven) {
             CreateCovenSheet(onCreated: { _ in
                 Task { await loadCovens() }
@@ -181,6 +182,39 @@ struct MacShellView: View {
         let ids = CovenOrder.moving(covenID, to: index, in: orderedCovens)
         covenOrder = ids
         orderStore.save(ids, for: UserScope.currentUserID)
+    }
+
+    /// The shell's actions for the menu bar: each does what its button in
+    /// the window does.
+    private var shellCommands: ShellCommandActions {
+        ShellCommandActions(
+            covens: orderedCovens,
+            selected: navigator.selected,
+            newThread: newThread,
+            newCoven: { showCreateCoven = true },
+            searchThreads: {
+                // The search is in the sidebar: shown first, if it is hidden.
+                columnVisibility = .all
+                navigator.requestSearch()
+            },
+            openPlace: openPlace,
+            select: { navigator.select($0) },
+            moveSelectedCoven: { up in
+                guard let target = ShellCommandRules.moveTarget(up: up, selected: navigator.selected, covens: orderedCovens) else { return }
+                moveCoven(target.covenID, to: target.index)
+            }
+        )
+    }
+
+    /// Opens a place of the scope on screen, for its sidebar button and the
+    /// Go menu alike. Strix uses every connection, so its Connections are
+    /// the person's connected apps, in Settings.
+    private func openPlace(_ item: ShellSidebarItem) {
+        if item == .connectedApps, navigator.selected == .strix {
+            _ = appState.openSettings(for: .connectedApps)
+        } else {
+            navigator.openPlace(item)
+        }
     }
 
     /// New Thread: the scope's new-thread page. Its thread is made when
