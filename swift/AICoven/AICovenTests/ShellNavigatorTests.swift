@@ -348,6 +348,19 @@ final class ShellNavigatorTests: XCTestCase {
         XCTAssertEqual(navigator.phonePlaceTitle, "Agents")
         navigator.openPlace(.connectedApps)
         XCTAssertEqual(navigator.phonePlaceTitle, "Connections")
+        // A place's forms are named as the place is.
+        for form in [
+            WorkspaceTab.addMemory(covenId: "work"), .editMemory(memoryId: "m", memoryTitle: "A memory", covenId: "work"),
+            .memoryProposals(covenId: "work"),
+        ] {
+            navigator.open(form)
+            XCTAssertEqual(navigator.phonePlaceTitle, "Memory", form.id)
+        }
+        for form in [WorkspaceTab.addRole(covenId: "work"), .editRole(roleId: "r", roleName: "Scout")] {
+            navigator.open(form)
+            XCTAssertEqual(navigator.phonePlaceTitle, "Agents", form.id)
+        }
+        navigator.openPlace(.connectedApps)
         // Covered by Settings, the place underneath keeps its name.
         navigator.openPersonPlace(.settings(pane: nil))
         XCTAssertEqual(navigator.phonePlaceTitle, "Connections")

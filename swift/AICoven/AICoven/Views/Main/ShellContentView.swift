@@ -303,45 +303,43 @@ private struct PhoneConversationBar: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
-        .toolbarRole(.editor)
-        .toolbar {
-            StoneToolbarItem(placement: .principal) {
-                Button(action: onOpenSwitcher) {
-                    HStack(spacing: Spacing.xxs) {
-                        Text(title)
-                            .font(.aicovenH2)
-                            .foregroundColor(.aicovenTextPrimary)
-                            .lineLimit(1)
-                        Image(systemName: "chevron.down")
-                            .font(.aicovenCaption.weight(.semibold))
-                            .foregroundColor(.aicovenTextSecondary)
-                    }
-                    .frame(minHeight: 44)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(title)
-                .accessibilityHint("Switch coven")
-                .accessibilityIdentifier("conversation-title")
-            }
-            if let onCopy {
-                StoneToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        Button(action: onCopy) {
-                            Label("Copy Thread as Markdown", systemImage: "doc.on.doc")
+            .toolbarRole(.editor)
+            .toolbar {
+                StoneToolbarItem(placement: .principal) {
+                    Button(action: onOpenSwitcher) {
+                        HStack(spacing: Spacing.xxs) {
+                            Text(title)
+                                .font(.aicovenH2)
+                                .foregroundColor(.aicovenTextPrimary)
+                                .lineLimit(1)
+                            Image(systemName: "chevron.down")
+                                .font(.aicovenCaption.weight(.semibold))
+                                .foregroundColor(.aicovenTextSecondary)
                         }
-                        .disabled(!canCopy)
-                    } label: {
-                        Label("Thread Actions", systemImage: "ellipsis.circle")
+                        // A short title is still a target a finger finds.
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
                     }
-                    .stoneToolbarMenu()
-                    .accessibilityIdentifier("thread-actions")
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(title)
+                    .accessibilityHint("Switch coven")
+                    .accessibilityIdentifier("conversation-title")
+                }
+                if let onCopy {
+                    StoneToolbarItem(placement: .primaryAction) {
+                        Menu {
+                            Button(action: onCopy) {
+                                Label("Copy Thread as Markdown", systemImage: "doc.on.doc")
+                            }
+                            .disabled(!canCopy)
+                        } label: {
+                            Label("Thread Actions", systemImage: "ellipsis.circle")
+                        }
+                        .stoneToolbarMenu()
+                        .accessibilityIdentifier("thread-actions")
+                    }
                 }
             }
-        }
     }
 }
 

@@ -158,13 +158,18 @@ final class ShellNavigator: ObservableObject {
         // The person's own place belongs to no row of the scope's.
         guard personPlace == nil else { return nil }
         guard let place else { return .overview }
+        return Self.row(of: place)
+    }
+
+    /// The row a place belongs to; nil for one that has none (the
+    /// new-thread page).
+    private static func row(of place: WorkspaceTab) -> ShellSidebarItem? {
         switch place.type {
-        case let .thread(thread): return .thread(thread.id)
-        case .memoryList, .memoryProposals, .addMemory, .editMemory: return .memory
-        case .covenAgents, .addRole, .editRole, .personalStrixSettings: return .agents
-        case .covenConnections: return .connectedApps
-        // The new-thread page belongs to no row.
-        default: return nil
+        case let .thread(thread): .thread(thread.id)
+        case .memoryList, .memoryProposals, .addMemory, .editMemory: .memory
+        case .covenAgents, .addRole, .editRole, .personalStrixSettings: .agents
+        case .covenConnections: .connectedApps
+        default: nil
         }
     }
 
@@ -313,12 +318,7 @@ final class ShellNavigator: ObservableObject {
         guard let place = places[selected] else { return "" }
         if let thread = place.threadValue { return ThreadListRules.title(of: thread) }
         // The row the place belongs to, whatever person's place covers it.
-        let item: ShellSidebarItem? = switch place.type {
-        case .memoryList, .memoryProposals, .addMemory, .editMemory: .memory
-        case .covenAgents, .addRole, .editRole, .personalStrixSettings: .agents
-        case .covenConnections: .connectedApps
-        default: nil
-        }
+        let item = Self.row(of: place)
         return ShellSidebarItem.scopePlaces.first { $0.item == item }?.name ?? place.title
     }
 

@@ -199,6 +199,12 @@ struct ShellRootView: View {
                 }
         }
         .sheet(isPresented: $showSwitcher, onDismiss: runSwitcherFollowUp) { switcherSheet }
+        // Settings was opened: said once for each ask, as wherever
+        // Settings opens, and not again on coming back to its list from a
+        // pane.
+        .onChange(of: navigator.personPlaceRequest) { _, _ in
+            if case .settings = navigator.personPlace { AnalyticsService.shared.trackSettingsOpened() }
+        }
     }
 
     /// The scope's place, pushed: the same view the split layout shows in
@@ -238,8 +244,6 @@ struct ShellRootView: View {
             }
             // Made anew for each ask, so it shows the pane now asked for.
             .id(navigator.personPlaceRequest)
-            // Settings was opened: said as it is wherever Settings opens.
-            .onAppear { AnalyticsService.shared.trackSettingsOpened() }
         }
     }
 
