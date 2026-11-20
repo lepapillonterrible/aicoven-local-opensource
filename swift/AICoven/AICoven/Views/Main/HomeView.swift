@@ -31,10 +31,12 @@ struct HomeView: View {
         root
             // Its state is one account's: another account starts afresh.
             .id(authService.currentUser?.id ?? UserScope.localUserID)
+        #if os(macOS)
+            // The Mac's window, as it has always been reported: the iPhone
+            // and iPad report no such screen.
             .task {
                 AnalyticsService.shared.trackScreenView(screenName: "HomeView", screenClass: "HomeView")
             }
-        #if os(macOS)
             // Also the link that was waiting when the window came up.
             .onChange(of: appState.pendingDeepLink, initial: true) { _, newValue in
                 guard let target = newValue else { return }
