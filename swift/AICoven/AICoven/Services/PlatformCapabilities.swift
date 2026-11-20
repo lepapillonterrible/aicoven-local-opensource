@@ -67,8 +67,8 @@ nonisolated struct PlatformCapabilities: Equatable {
 extension EnvironmentValues {
     /// Whether controls take the iPad's shape: on an iPad, and on an
     /// iPhone in the split layout. The Mac, and an iPhone in the phone's
-    /// layout, are false. Set by the shell from its layout, so a sheet or
-    /// popover it presents reads the shell's answer and not its own size
-    /// class.
+    /// layout, are false. The shell is to set it from its layout, so a
+    /// sheet or popover it presents reads the shell's answer and not its
+    /// own size class; until it shows off the Mac nothing sets it.
     @Entry var isPadLayout = false
 }

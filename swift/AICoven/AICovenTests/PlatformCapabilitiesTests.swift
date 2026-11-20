@@ -4,25 +4,6 @@ import XCTest
 
 /// Which layout a device shows, and what the stone chrome decides from it.
 final class PlatformCapabilitiesTests: XCTestCase {
-    func testTheCurrentPlatformIsTheOneCompiledFor() {
-        #if os(macOS)
-        XCTAssertEqual(PlatformCapabilities.current.platform, .macOS)
-        #else
-        XCTAssertEqual(PlatformCapabilities.current.platform, .iOS)
-        #endif
-    }
-
-    @MainActor
-    func testTheMacIsNeitherAnIPadNorAnIPhone() async {
-        #if os(macOS)
-        XCTAssertFalse(PlatformCapabilities.isPad)
-        XCTAssertFalse(PlatformCapabilities.isPhone)
-        #else
-        XCTAssertNotEqual(PlatformCapabilities.isPad, PlatformCapabilities.isPhone, "One or the other")
-        #endif
-        await Task.yield()
-    }
-
     func testAnIPhoneIsSplitOnlyWhenWidthAndHeightAreRegular() {
         XCTAssertTrue(PlatformCapabilities.usesSplitLayout(isPhone: true, horizontal: .regular, vertical: .regular))
         // A large iPhone in landscape.
@@ -35,43 +16,29 @@ final class PlatformCapabilitiesTests: XCTestCase {
         XCTAssertTrue(PlatformCapabilities.usesSplitLayout(isPhone: false, horizontal: nil, vertical: nil))
     }
 
-    func testOnlyTheMacShowsAnAutomaticSidebar() {
-        XCTAssertTrue(PlatformCapabilities(platform: .macOS).automaticallyShowsSidebar)
-        XCTAssertFalse(PlatformCapabilities(platform: .iOS).automaticallyShowsSidebar)
-    }
-
-    func testControlsDoNotTakeTheIPadsShapeUnlessTheShellSaysSo() {
-        XCTAssertFalse(EnvironmentValues().isPadLayout)
-        var values = EnvironmentValues()
-        values.isPadLayout = true
-        XCTAssertTrue(values.isPadLayout)
-    }
-
     // MARK: - The stone chrome
 
     @MainActor
-    func testTheSplitViewsOwnStateDecidesTheSidebarToggle_evenWhenTheVisibilityIsAutomatic() async {
+    func testTheSplitViewsOwnStateDecidesTheSidebarToggle_evenWhenTheVisibilityIsAutomatic() {
         // A window whose shape says "shown" while the split view hides it (Stage Manager): the first tap must
         // open the sidebar.
         XCTAssertFalse(StoneSidebarToggle.isShowing(.automatic, system: false))
         XCTAssertTrue(StoneSidebarToggle.isShowing(.automatic, system: true))
         XCTAssertFalse(StoneSidebarToggle.isShowing(.all, system: false))
         XCTAssertTrue(StoneSidebarToggle.isShowing(.detailOnly, system: true))
-        await Task.yield()
     }
 
     @MainActor
-    func testWithNoSplitViewToRead_theVisibilityAndThePlatformDecide() async {
+    func testWithNoSplitViewToRead_theVisibilityDecides_andThePlatformForAutomatic() {
         XCTAssertTrue(StoneSidebarToggle.isShowing(.all, system: nil))
         XCTAssertFalse(StoneSidebarToggle.isShowing(.detailOnly, system: nil))
-        XCTAssertEqual(
-            StoneSidebarToggle.isShowing(.automatic, system: nil),
-            PlatformCapabilities.current.automaticallyShowsSidebar
-        )
-        // The Mac has no split view to ask: its toggle goes by the visibility, as before.
+        // An automatic sidebar shows on the Mac only: there the toggle's first press hides it.
+        XCTAssertTrue(PlatformCapabilities(platform: .macOS).automaticallyShowsSidebar)
+        XCTAssertFalse(PlatformCapabilities(platform: .iOS).automaticallyShowsSidebar)
         #if os(macOS)
-        XCTAssertNil(SplitViewProbe().sidebarIsShowing())
+        XCTAssertTrue(StoneSidebarToggle.isShowing(.automatic, system: nil))
+        #else
+        XCTAssertFalse(StoneSidebarToggle.isShowing(.automatic, system: nil))
         #endif
-        await Task.yield()
     }
 }

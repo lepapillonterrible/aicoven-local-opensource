@@ -133,7 +133,8 @@ extension View {
 
 /// An icon-only toolbar button: the icon in primary ink on the bar, a stone
 /// square while the pointer is over it, a darker one while pressed. 30 pt on
-/// the Mac, 40 pt in the iPad's layout, 44 pt on the iPhone.
+/// the Mac, 40 pt in the iPad's layout (an iPhone in the split layout
+/// too), 44 pt in the phone's.
 struct StoneToolbarButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         StoneToolbarButton(configuration: configuration)
