@@ -106,15 +106,21 @@ nonisolated enum VisitWords {
     }
 
     private static func when(_ date: Date, now: Date, calendar: Calendar) -> String {
+        // The day is named in the calendar the days were counted in, and
+        // its time zone: one visit is not Friday by one and Saturday by
+        // the other.
+        var style = Date.FormatStyle.dateTime
+        style.calendar = calendar
+        style.timeZone = calendar.timeZone
         switch daysBetween(date, now, calendar) {
         case ..<1: return "earlier today"
         case 1: return "yesterday"
-        case ..<7: return "on " + date.formatted(.dateTime.weekday(.wide))
+        case ..<7: return "on " + date.formatted(style.weekday(.wide))
         default:
             if calendar.isDate(date, equalTo: now, toGranularity: .year) {
-                return "on " + date.formatted(.dateTime.day().month(.wide))
+                return "on " + date.formatted(style.day().month(.wide))
             }
-            return "on " + date.formatted(.dateTime.day().month(.wide).year())
+            return "on " + date.formatted(style.day().month(.wide).year())
         }
     }
 
