@@ -15,8 +15,11 @@ struct ShellContentView: View {
     let coven: Coven?
     /// Starts a thread with one of the coven's agents.
     let onNewThreadWithAgent: (Role) -> Void
-    /// Told of a thread the new-thread page, or the Overview, made.
+    /// Told of a thread the new-thread page made, which takes the page's
+    /// place; and of one asked for from the Overview, which opens only if
+    /// the person stayed there.
     let onThreadCreated: (Thread) -> Void
+    let onThreadAsked: (Thread) -> Void
     let onOpenProviderKeys: () -> Void
 
     var body: some View {
@@ -90,7 +93,7 @@ struct ShellContentView: View {
             submission: drafts.submission(for: navigator.selected),
             coven: coven,
             onOpenProviderKeys: onOpenProviderKeys,
-            onThreadCreated: onThreadCreated
+            onThreadAsked: onThreadAsked
         )
         .id(navigator.selected)
     }

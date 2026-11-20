@@ -72,6 +72,7 @@ struct MacShellView: View {
                 coven: selectedCoven,
                 onNewThreadWithAgent: newThread(with:),
                 onThreadCreated: threadCreated,
+                onThreadAsked: threadMade,
                 onOpenProviderKeys: { _ = appState.openSettings(for: .providerKeys) }
             )
             .toolbar {
@@ -184,9 +185,16 @@ struct MacShellView: View {
     }
 
     /// The new-thread page made its thread: it takes the page's place
-    /// (where the page still is), and the list shows it.
+    /// (where the page still is).
     private func threadCreated(_ thread: Thread) {
         navigator.handleCreatedThread(thread)
+        threadMade(thread)
+    }
+
+    /// A thread was made, by the new-thread page or from an Overview: the
+    /// list shows it. Where it opens is the navigator's to say, for each
+    /// of the two in its own way.
+    private func threadMade(_ thread: Thread) {
         shellThreads.reload()
         if let covenID = thread.covenId {
             AnalyticsService.shared.trackThreadCreate(threadId: thread.id, covenId: covenID, hasTitle: thread.title != nil)

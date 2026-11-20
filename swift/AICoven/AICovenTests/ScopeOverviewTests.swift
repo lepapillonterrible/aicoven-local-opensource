@@ -57,6 +57,10 @@ final class ScopeOverviewTests: XCTestCase {
             VisitWords.lastHere(now.addingTimeInterval(-ago), now: now, calendar: calendar)
         }
         let hour: TimeInterval = 3600
+        // In the calendar the days are counted in, whatever the device's own.
+        var style = Date.FormatStyle.dateTime
+        style.calendar = calendar
+        style.timeZone = calendar.timeZone
         XCTAssertEqual(last(2 * hour), "You were last here earlier today.")
         XCTAssertEqual(last(14 * hour), "You were last here earlier today.", "01:00 the same day")
         XCTAssertEqual(last(16 * hour), "You were last here yesterday.", "23:00 the day before, whatever the hours between")
@@ -64,14 +68,21 @@ final class ScopeOverviewTests: XCTestCase {
 
         // Within the week: the day's name; then the day and month; another year, with the year.
         let friday = now.addingTimeInterval(-5 * 24 * hour)
-        XCTAssertEqual(last(5 * 24 * hour), "You were last here on \(friday.formatted(.dateTime.weekday(.wide))).")
+        XCTAssertEqual(last(5 * 24 * hour), "You were last here on \(friday.formatted(style.weekday(.wide))).")
         let weeksAgo = now.addingTimeInterval(-20 * 24 * hour)
-        XCTAssertEqual(last(20 * 24 * hour), "You were last here on \(weeksAgo.formatted(.dateTime.day().month(.wide))).")
+        XCTAssertEqual(last(20 * 24 * hour), "You were last here on \(weeksAgo.formatted(style.day().month(.wide))).")
         let lastYear = now.addingTimeInterval(-400 * 24 * hour)
-        XCTAssertEqual(last(400 * 24 * hour), "You were last here on \(lastYear.formatted(.dateTime.day().month(.wide).year())).")
+        XCTAssertEqual(last(400 * 24 * hour), "You were last here on \(lastYear.formatted(style.day().month(.wide).year())).")
+        // Late on the 13th in the calendar's zone is the 14th on a device further east: it is named by the calendar's day.
+        let lateFriday = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 13, hour: 23, minute: 30)))
+        let named = VisitWords.lastHere(lateFriday, now: now, calendar: calendar)
+        XCTAssertEqual(named, "You were last here on \(lateFriday.formatted(style.weekday(.wide))).")
+        var east = Date.FormatStyle.dateTime
+        east.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Bangkok"))
+        XCTAssertNotEqual(lateFriday.formatted(style.weekday(.wide)), lateFriday.formatted(east.weekday(.wide)), "The two zones name different days")
         // Seven days is no longer "on Wednesday".
         let weekAgo = now.addingTimeInterval(-7 * 24 * hour)
-        XCTAssertEqual(last(7 * 24 * hour), "You were last here on \(weekAgo.formatted(.dateTime.day().month(.wide))).")
+        XCTAssertEqual(last(7 * 24 * hour), "You were last here on \(weekAgo.formatted(style.day().month(.wide))).")
     }
 
     func testVisitsAreKeptOnTheDevice_forEachAccountAndScope() throws {

@@ -19,8 +19,9 @@ struct ScopeOverviewView: View {
     /// The coven on screen; nil for Strix.
     let coven: Coven?
     let onOpenProviderKeys: () -> Void
-    /// Told of a thread asked for from here once it is made.
-    let onThreadCreated: (Thread) -> Void
+    /// Told of a thread asked for from here once it is made. It opens,
+    /// through the navigator, only if the person is still here.
+    let onThreadAsked: (Thread) -> Void
 
     /// What each thread is doing, for its row and which section it is in.
     @ObservedObject private var activities = ThreadActivities.shared
@@ -67,22 +68,36 @@ struct ScopeOverviewView: View {
             .padding(.vertical, Spacing.lg)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            NewThreadComposer(
-                coven: coven,
-                askedAgentID: nil,
-                submission: submission,
-                autoFocus: false,
-                onSend: { ask = navigator.askFromOverview() },
-                onThreadCreated: { thread in
-                    onThreadCreated(thread)
-                    if let ask { navigator.openThreadAskedFromOverview(thread, ask: ask) }
-                }
-            )
-            .frame(maxWidth: 800)
-            .frame(maxWidth: .infinity)
-            .padding(Spacing.md)
-            .background(Color.aicovenSurface)
+            // No asking in a coven that is not in yet: there is no saying
+            // whose agents it would go to, and it must not go to Strix.
+            if scope == .strix || coven != nil {
+                composer
+            }
         }
+        .background(Color.aicovenSurface)
+        // Said once when it comes, as well as shown.
+        .onChange(of: shellThreads.failed) { _, failed in
+            if failed, shellThreads.scope == navigator.selected {
+                AccessibilityNotification.Announcement("Couldn't load threads.").post()
+            }
+        }
+    }
+
+    private var composer: some View {
+        NewThreadComposer(
+            coven: coven,
+            askedAgentID: nil,
+            submission: submission,
+            autoFocus: false,
+            onSend: { ask = navigator.askFromOverview() },
+            onThreadCreated: { thread in
+                onThreadAsked(thread)
+                if let ask { navigator.openThreadAskedFromOverview(thread, ask: ask) }
+            }
+        )
+        .frame(maxWidth: 800)
+        .frame(maxWidth: .infinity)
+        .padding(Spacing.md)
         .background(Color.aicovenSurface)
     }
 
