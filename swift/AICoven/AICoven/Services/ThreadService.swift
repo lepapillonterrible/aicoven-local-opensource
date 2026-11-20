@@ -144,6 +144,17 @@ actor ThreadService {
         return includeArchived ? filtered : filtered.filter { !$0.isArchived }
     }
 
+    /// The coven of each of the account's threads that is in one and is
+    /// not archived, by thread id.
+    func covensOfThreads() async throws -> [String: String] {
+        try await ensureLoaded()
+        var covens: [String: String] = [:]
+        for thread in personalThreads where !thread.isArchived {
+            if let coven = thread.covenId { covens[thread.id] = coven }
+        }
+        return covens
+    }
+
     /// Create a new thread in a coven or personal
     /// - Parameters:
     ///   - title: Thread title (optional)

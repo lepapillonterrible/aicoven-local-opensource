@@ -621,7 +621,15 @@ struct PersonalChatView: View {
                 Task { await ComposerDrafts.shared.saveNow() }
             }
         }
+        // On screen, the thread is read as replies arrive; what its
+        // composer holds is an unsent message once it has left.
+        .onAppear { ThreadActivities.shared.show(thread.id) }
+        .onChange(of: thread.id) { was, now in
+            ThreadActivities.shared.hide(was)
+            ThreadActivities.shared.show(now)
+        }
         .onDisappear {
+            ThreadActivities.shared.hide(thread.id)
             Task { await ComposerDrafts.shared.saveNow() }
             // Nobody is composing in a composer that is gone: nothing it
             // was told keeps an approval back.
