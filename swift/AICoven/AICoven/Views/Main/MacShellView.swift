@@ -81,8 +81,9 @@ struct MacShellView: View {
                         Label("New Thread", systemImage: "square.and.pencil")
                     }
                     .buttonStyle(.stoneToolbar)
-                    .keyboardShortcut("n", modifiers: .command)
-                    .help("New Thread (⌘N)")
+                    // ⌘N comes with the menus: until then it is the
+                    // system's New Window.
+                    .help("New Thread")
                     .accessibilityIdentifier("new-thread")
                 }
             }
