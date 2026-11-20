@@ -115,13 +115,17 @@ nonisolated struct OpenAITranscriptionService {
     /// The body of the request: a form with the model's id and the
     /// recording as a file, as OpenAI takes it.
     static func form(audio: Data, fileName: String, model: String, boundary: String) -> Data {
-        // A name that could end its own header is not sent as it is.
-        let safeName = String(fileName.unicodeScalars.filter { $0.value >= 0x20 && $0.value < 0x7F && $0 != "\"" && $0 != "\\" })
-        let name = safeName.isEmpty ? "voice-note.m4a" : safeName
+        // A name that could end its own header is not sent as it is, and
+        // one of which only the ending is left is given a stem.
+        let sendable = String(fileName.unicodeScalars.filter { $0.value >= 0x20 && $0.value < 0x7F && $0 != "\"" && $0 != "\\" })
+        let dot = sendable.lastIndex(of: ".")
+        let stem = dot.map { String(sendable[..<$0]) } ?? sendable
+        let ending = dot.map { String(sendable[sendable.index(after: $0)...]) } ?? ""
+        let name = stem.trimmingCharacters(in: .whitespaces).isEmpty ? "voice-note." + (ending.isEmpty ? "m4a" : ending) : sendable
         var body = Data()
         body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n\(model)\r\n".utf8))
-        // Its type is by the name it has, whatever of it can be sent.
-        let type = safeName.isEmpty && fileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? VoiceAudio.mimeType(ofFileNamed: name) : VoiceAudio.mimeType(ofFileNamed: fileName)
+        // Its type is by the name it is sent under.
+        let type = VoiceAudio.mimeType(ofFileNamed: name)
         body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(name)\"\r\nContent-Type: \(type)\r\n\r\n".utf8))
         body.append(audio)
         body.append(Data("\r\n--\(boundary)--\r\n".utf8))

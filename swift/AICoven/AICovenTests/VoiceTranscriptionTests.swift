@@ -118,9 +118,11 @@ final class VoiceTranscriptionTests: XCTestCase {
     func testOpenAI_aFileNameCannotEndItsOwnHeader() {
         let form = String(decoding: OpenAITranscriptionService.form(audio: Data("a".utf8), fileName: "x\".m4a\r\nX-Other: 1", model: "m", boundary: "b"), as: UTF8.self)
         XCTAssertTrue(form.contains("filename=\"x.m4aX-Other: 1\"\r\nContent-Type: application/octet-stream\r\n\r\na\r\n"), form)
-        // A name of which nothing can be sent keeps its type.
+        // A name of which only the ending can be sent is given a stem, and keeps its type.
         let japanese = String(decoding: OpenAITranscriptionService.form(audio: Data("a".utf8), fileName: "録音.m4a", model: "m", boundary: "b"), as: UTF8.self)
-        XCTAssertTrue(japanese.contains("filename=\".m4a\"\r\nContent-Type: audio/mp4\r\n"), japanese)
+        XCTAssertTrue(japanese.contains("filename=\"voice-note.m4a\"\r\nContent-Type: audio/mp4\r\n"), japanese)
+        let wav = String(decoding: OpenAITranscriptionService.form(audio: Data("a".utf8), fileName: "é.wav", model: "m", boundary: "b"), as: UTF8.self)
+        XCTAssertTrue(wav.contains("filename=\"voice-note.wav\"\r\nContent-Type: audio/wav\r\n"), wav)
         let controls = String(decoding: OpenAITranscriptionService.form(audio: Data("a".utf8), fileName: "v\u{7F}\u{1}é.m4a", model: "m", boundary: "b"), as: UTF8.self)
         XCTAssertTrue(controls.contains("filename=\"v.m4a\"\r\n"), controls)
         let unnamed = String(decoding: OpenAITranscriptionService.form(audio: Data("a".utf8), fileName: "\n", model: "m", boundary: "b"), as: UTF8.self)
