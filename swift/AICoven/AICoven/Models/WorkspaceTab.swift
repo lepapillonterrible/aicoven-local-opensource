@@ -12,6 +12,10 @@ enum WorkspaceTabType: Equatable {
     case usage
     case addRole(covenId: String)
     case editRole(roleId: String)
+    /// A coven's agents.
+    case covenAgents(covenId: String)
+    /// Which of the person's connections a coven's agents may use.
+    case covenConnections(covenId: String)
     case memoryList(covenId: String?)
     case memoryProposals(covenId: String?)
     case addMemory(covenId: String?)
@@ -33,6 +37,10 @@ enum WorkspaceTabType: Equatable {
             c1 == c2
         case let (.editRole(r1), .editRole(r2)):
             r1 == r2
+        case let (.covenAgents(c1), .covenAgents(c2)):
+            c1 == c2
+        case let (.covenConnections(c1), .covenConnections(c2)):
+            c1 == c2
         case let (.memoryList(c1), .memoryList(c2)):
             c1 == c2
         case let (.memoryProposals(c1), .memoryProposals(c2)):
@@ -70,6 +78,8 @@ enum WorkspaceTabType: Equatable {
         case .usage: "usage"
         case .addRole: "add_role"
         case .editRole: "edit_role"
+        case .covenAgents: "coven_agents"
+        case .covenConnections: "coven_connections"
         case .memoryList: "memory_list"
         case .memoryProposals: "memory_proposals"
         case .addMemory: "add_memory"
@@ -126,6 +136,22 @@ struct WorkspaceTab: Identifiable, Equatable {
             type: .editRole(roleId: roleId),
             title: "Edit \(roleName)"
         )
+    }
+
+    /// A coven's agents.
+    static func covenAgents(covenId: String) -> WorkspaceTab {
+        WorkspaceTab(id: "coven-agents-\(covenId)", type: .covenAgents(covenId: covenId), title: "Agents")
+    }
+
+    /// Which of the person's connections a coven's agents may use.
+    static func covenConnections(covenId: String) -> WorkspaceTab {
+        WorkspaceTab(id: "coven-connections-\(covenId)", type: .covenConnections(covenId: covenId), title: "Connections")
+    }
+
+    /// The thread this is the place of, if it is a thread's.
+    var threadValue: Thread? {
+        if case let .thread(thread) = type { return thread }
+        return nil
     }
 
     /// Create a tab for viewing memory list
