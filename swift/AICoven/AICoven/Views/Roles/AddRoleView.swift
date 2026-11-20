@@ -614,6 +614,9 @@ struct AddRoleView: View {
     private func loadTemplate(_ templateId: String) async {
         do {
             let template = try await RoleTemplateService.shared.getTemplate(templateId)
+            // Another template, or none, was chosen while this one was read:
+            // it fills in nothing.
+            guard selectedTemplateId == templateId else { return }
             name = template.role.name
             if !didChooseSymbol, let symbol = AgentFace.symbol(forEmoji: template.role.emoji) { iconSymbol = symbol }
             description = template.purpose.joined(separator: "\n")

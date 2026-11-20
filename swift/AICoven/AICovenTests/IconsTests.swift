@@ -198,7 +198,9 @@ final class IconsTests: XCTestCase {
         } catch {
             XCTAssertEqual(error.localizedDescription, "That is not a symbol's name")
         }
-        // Covens made at once do not start with the same icon.
+        // Covens made at once do not start with the same icon, while
+        // there is a symbol and a tint none shows.
+        let before = try await CovenService.shared.loadCovens()
         async let one = CovenService.shared.createCoven(name: "At once \(UUID().uuidString)")
         async let two = CovenService.shared.createCoven(name: "At once \(UUID().uuidString)")
         let together = try await [one, two]
@@ -208,8 +210,10 @@ final class IconsTests: XCTestCase {
                 try? await CovenService.shared.deleteCoven(id: coven.id)
             }
         }
-        XCTAssertNotEqual(together[0].settings?.iconSymbol, together[1].settings?.iconSymbol)
-        XCTAssertNotEqual(together[0].settings?.iconTint, together[1].settings?.iconTint)
+        if before.count + 2 <= IconTint.allCases.count {
+            XCTAssertNotEqual(together[0].settings?.iconSymbol, together[1].settings?.iconSymbol)
+            XCTAssertNotEqual(together[0].settings?.iconTint, together[1].settings?.iconTint)
+        }
 
         // An agent starts with a face: its emoji's symbol, on a tint no other agent of the coven wears.
         let writer = try await RoleService.shared.createRole(covenId: first.id, name: "Writer", emoji: "✍️")
@@ -242,6 +246,24 @@ final class IconsTests: XCTestCase {
             XCTAssertEqual(error.localizedDescription, "Coven not found")
         }
 
+        // The tints worn are those the agents show: one whose settings do
+        // not read as settings shows sand, whatever tint is written in them.
+        let fresh = try await CovenService.shared.createCoven(name: "Icons \(UUID().uuidString)")
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await CovenService.shared.deleteCoven(id: fresh.id)
+        }
+        let odd = try await RoleService.shared.createRole(covenId: fresh.id, name: "Odd")
+        XCTAssertEqual(odd.iconTintValue, .warm)
+        let store = try await MainActor.run { try XCTUnwrap(DatabaseManager.shared.dbQueue) }
+        try await store.write { db in
+            try db.execute(sql: "UPDATE roles SET settings = ? WHERE id = ?", arguments: [#"{"icon_tint": "water", "autonomous_mode": "not a flag"}"#, odd.id])
+        }
+        let shown = try await RoleService.shared.getRole(roleId: odd.id)
+        XCTAssertNil(shown.iconTintValue, "It shows sand")
+        let next = try await RoleService.shared.createRole(covenId: fresh.id, name: "Next")
+        XCTAssertEqual(next.iconTintValue, .water, "Water is worn by no one")
+
         // Settings that cannot be read are not written over by a new face.
         let queue = try await MainActor.run { try XCTUnwrap(DatabaseManager.shared.dbQueue) }
         try await queue.write { db in
@@ -257,5 +279,17 @@ final class IconsTests: XCTestCase {
             try String.fetchOne(db, sql: "SELECT settings FROM roles WHERE id = ?", arguments: [writer.id])
         }
         XCTAssertEqual(kept, "not settings")
+        // Nor by the form that saves an agent's other settings: nothing of it is changed.
+        do {
+            _ = try await RoleService.shared.updateRole(roleId: writer.id, name: "Renamed", autonomousMode: true)
+            XCTFail("Replaced settings that could not be read")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "This agent's settings could not be read")
+        }
+        let untouched = try await queue.read { db in
+            try Row.fetchOne(db, sql: "SELECT name, settings FROM roles WHERE id = ?", arguments: [writer.id])
+        }
+        XCTAssertEqual(untouched?["name"], "Writer")
+        XCTAssertEqual(untouched?["settings"], "not settings")
     }
 }

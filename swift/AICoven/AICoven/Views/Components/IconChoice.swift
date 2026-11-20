@@ -51,7 +51,8 @@ private extension View {
 
 /// The icon a new coven is made with: it starts as one no other coven
 /// shows (`CovenIcon.startingIcon`), unless the person has chosen one by
-/// then. Until that is known the coven is not made (`isReady`).
+/// then. Until that is known, or the person chooses, the coven is not
+/// made (`isReady`).
 struct NewCovenIcon: View {
     @Binding var symbol: String
     @Binding var tint: IconTint
@@ -67,18 +68,23 @@ struct NewCovenIcon: View {
             symbol: Binding(get: { symbol }, set: { chosen in
                 symbol = chosen
                 didChoose = true
+                isReady = true
             }),
             tint: Binding(get: { tint }, set: { chosen in
                 tint = chosen
                 didChoose = true
+                isReady = true
             }),
             suggestedSymbols: CovenIcon.suggestedSymbols
         ) {
             SymbolDisc(symbol: symbol, tint: tint, size: 64, fallback: CovenIcon.defaultSymbol)
         }
         .task {
-            let start = await CovenIcon.startingIcon(among: (try? CovenService.shared.loadCovens()) ?? [])
+            // If the other covens cannot be read, what none of them shows
+            // is not known: the icon is then the person's to choose.
+            guard let covens = try? await CovenService.shared.loadCovens() else { return }
             if !didChoose {
+                let start = CovenIcon.startingIcon(among: covens)
                 symbol = start.symbol
                 tint = start.tint
             }
