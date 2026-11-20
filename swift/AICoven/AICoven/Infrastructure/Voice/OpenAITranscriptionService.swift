@@ -120,7 +120,9 @@ nonisolated struct OpenAITranscriptionService {
         let name = safeName.isEmpty ? "voice-note.m4a" : safeName
         var body = Data()
         body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n\(model)\r\n".utf8))
-        body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(name)\"\r\nContent-Type: \(VoiceAudio.mimeType(ofFileNamed: name))\r\n\r\n".utf8))
+        // Its type is by the name it has, whatever of it can be sent.
+        let type = safeName.isEmpty && fileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? VoiceAudio.mimeType(ofFileNamed: name) : VoiceAudio.mimeType(ofFileNamed: fileName)
+        body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(name)\"\r\nContent-Type: \(type)\r\n\r\n".utf8))
         body.append(audio)
         body.append(Data("\r\n--\(boundary)--\r\n".utf8))
         return body

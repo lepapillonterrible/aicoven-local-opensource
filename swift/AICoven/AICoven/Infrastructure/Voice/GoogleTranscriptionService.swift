@@ -48,11 +48,13 @@ nonisolated struct GoogleTranscriptionService {
             try Task.checkCancellation()
             guard !candidates.isEmpty else { throw Failure.noModel }
         }
+        // The recording is written out once, whatever is asked.
+        let encoded = audio.base64EncodedString()
         var last: Error = Failure.noWords
         for candidate in candidates {
             try Task.checkCancellation()
             do {
-                let heard = try await attempt(audio, mimeType: mimeType, model: candidate)
+                let heard = try await attempt(encoded, mimeType: mimeType, model: candidate)
                 // Stopped while the answer was being read: it is not given.
                 try Task.checkCancellation()
                 return heard
@@ -131,7 +133,7 @@ nonisolated struct GoogleTranscriptionService {
         return found
     }
 
-    private func attempt(_ audio: Data, mimeType: String, model: String) async throws -> String {
+    private func attempt(_ encoded: String, mimeType: String, model: String) async throws -> String {
         struct Body: Encodable {
             struct Content: Encodable {
                 struct Part: Encodable {
@@ -180,7 +182,7 @@ nonisolated struct GoogleTranscriptionService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(Body(contents: [.init(parts: [
             .init(text: Self.instruction),
-            .init(inlineData: .init(mimeType: mimeType, data: audio.base64EncodedString())),
+            .init(inlineData: .init(mimeType: mimeType, data: encoded)),
         ])]))
 
         let (data, response) = try await session.data(for: request)

@@ -118,6 +118,9 @@ final class VoiceTranscriptionTests: XCTestCase {
     func testOpenAI_aFileNameCannotEndItsOwnHeader() {
         let form = String(decoding: OpenAITranscriptionService.form(audio: Data("a".utf8), fileName: "x\".m4a\r\nX-Other: 1", model: "m", boundary: "b"), as: UTF8.self)
         XCTAssertTrue(form.contains("filename=\"x.m4aX-Other: 1\"\r\nContent-Type: application/octet-stream\r\n\r\na\r\n"), form)
+        // A name of which nothing can be sent keeps its type.
+        let japanese = String(decoding: OpenAITranscriptionService.form(audio: Data("a".utf8), fileName: "録音.m4a", model: "m", boundary: "b"), as: UTF8.self)
+        XCTAssertTrue(japanese.contains("filename=\".m4a\"\r\nContent-Type: audio/mp4\r\n"), japanese)
         let controls = String(decoding: OpenAITranscriptionService.form(audio: Data("a".utf8), fileName: "v\u{7F}\u{1}é.m4a", model: "m", boundary: "b"), as: UTF8.self)
         XCTAssertTrue(controls.contains("filename=\"v.m4a\"\r\n"), controls)
         let unnamed = String(decoding: OpenAITranscriptionService.form(audio: Data("a".utf8), fileName: "\n", model: "m", boundary: "b"), as: UTF8.self)
@@ -405,7 +408,23 @@ final class VoiceTranscriptionTests: XCTestCase {
         error = await thrown {
             try await VoiceTranscription.transcribe(self.anywhere, with: [script.transcriber(.device, .failure(TranscriptionFailure.notOnThisDevice(language: "Romanian")))])
         }
-        XCTAssertEqual((error as? VoiceTranscription.Unheard)?.message, "This device cannot transcribe Romanian on its own. Add an OpenAI or Google key that can transcribe.")
+        XCTAssertEqual((error as? VoiceTranscription.Unheard)?.message, "This device cannot transcribe Romanian on its own. An OpenAI or Google key that can transcribe would be used instead.")
+
+        // Where keys are not asked, the person is not told a key would help.
+        script = Script()
+        error = await thrown {
+            try await VoiceTranscription.transcribe(self.anywhere, with: [
+                script.transcriber(.openai, .success("Hello")),
+                script.transcriber(.device, .failure(TranscriptionFailure.speechNotAllowed)),
+            ], onDeviceOnly: true)
+        }
+        XCTAssertEqual(
+            (error as? VoiceTranscription.Unheard)?.message,
+            "Speech recognition is not allowed for AICoven on this device. That is set in the device's privacy settings. A message for a model on this device or network is transcribed on this device only."
+        )
+        XCTAssertEqual(script.asked, [.device])
+        XCTAssertNil(VoiceTranscription.whatElse(after: TranscriptionFailure.deviceFailed(message: "Busy"), onDeviceOnly: true))
+        XCTAssertNil(VoiceTranscription.whatElse(after: URLError(.timedOut), onDeviceOnly: false))
 
         // Nothing to ask at all.
         error = await thrown { try await VoiceTranscription.transcribe(self.anywhere, with: []) }
@@ -523,6 +542,12 @@ final class VoiceTranscriptionTests: XCTestCase {
         XCTAssertThrowsError(try VoiceAudio.bytes(ofFileAt: folder.appendingPathComponent("gone.m4a"))) { XCTAssertEqual($0 as? TranscriptionFailure, .nothingRecorded) }
         try Data(count: VoiceAudio.largest + 1).write(to: file)
         XCTAssertThrowsError(try VoiceAudio.bytes(ofFileAt: file)) { XCTAssertEqual($0 as? TranscriptionFailure, .tooLarge) }
+        XCTAssertThrowsError(try VoiceAudio.check(fileAt: file)) { XCTAssertEqual($0 as? TranscriptionFailure, .tooLarge) }
+        XCTAssertThrowsError(try VoiceAudio.check(fileAt: folder.appendingPathComponent("gone.m4a"))) { XCTAssertEqual($0 as? TranscriptionFailure, .nothingRecorded) }
+        try Data().write(to: file)
+        XCTAssertThrowsError(try VoiceAudio.check(fileAt: file)) { XCTAssertEqual($0 as? TranscriptionFailure, .nothingRecorded) }
+        try Self.recording.write(to: file)
+        XCTAssertNoThrow(try VoiceAudio.check(fileAt: file))
     }
 
     func testWhatTheDevicesFailuresReadAs() {

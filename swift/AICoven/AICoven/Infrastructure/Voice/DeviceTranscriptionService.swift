@@ -36,7 +36,7 @@ nonisolated struct DeviceTranscriptionService {
     /// The words of the recording at `url`.
     func transcribe(fileAt url: URL) async throws -> String {
         // A recording with nothing in it is told so before anyone is asked.
-        _ = try VoiceAudio.bytes(ofFileAt: url)
+        try VoiceAudio.check(fileAt: url)
         guard await Self.isAllowed() else { throw Failure.speechNotAllowed }
         try Task.checkCancellation()
         guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.supportsOnDeviceRecognition, recognizer.isAvailable else {

@@ -71,9 +71,9 @@ nonisolated enum TranscriptionFailure: Error, Equatable {
         case .tooLarge:
             return "The recording is too long to transcribe (more than 10 MB)."
         case .speechNotAllowed:
-            return "Speech recognition is turned off for AICoven on this device. Turn it on in the device's privacy settings, or add an OpenAI or Google key that can transcribe."
+            return "Speech recognition is not allowed for AICoven on this device. That is set in the device's privacy settings."
         case let .notOnThisDevice(language):
-            return "This device cannot transcribe \(language) on its own. Add an OpenAI or Google key that can transcribe."
+            return "This device cannot transcribe \(language) on its own."
         case let .deviceFailed(message):
             return "This device could not transcribe the recording: \(message)"
         }
@@ -102,11 +102,23 @@ nonisolated enum VoiceAudio {
         }
     }
 
+    /// Checks the recording at `url` without reading it: that it is
+    /// there, holds something, and not more than `largest`.
+    static func check(fileAt url: URL) throws {
+        guard let size = size(ofFileAt: url), size > 0 else { throw TranscriptionFailure.nothingRecorded }
+        guard size <= largest else { throw TranscriptionFailure.tooLarge }
+    }
+
+    /// The size of the file at `url` as it is now (asked of the file
+    /// system each time: a URL keeps what it was told before).
+    private static func size(ofFileAt url: URL) -> Int? {
+        ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.intValue
+    }
+
     /// The bytes of the recording at `url`: not more than `largest`, and
     /// not none.
     static func bytes(ofFileAt url: URL) throws -> Data {
-        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
-        if let size, size > largest { throw TranscriptionFailure.tooLarge }
+        if let size = size(ofFileAt: url), size > largest { throw TranscriptionFailure.tooLarge }
         guard let data = try? Data(contentsOf: url), !data.isEmpty else { throw TranscriptionFailure.nothingRecorded }
         guard data.count <= largest else { throw TranscriptionFailure.tooLarge }
         return data
@@ -203,7 +215,7 @@ nonisolated enum VoiceTranscription {
             } catch {
                 // Stopped, however that showed.
                 if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { throw CancellationError() }
-                let unheard = Unheard(source: transcriber.source, message: said(error, of: transcriber.source))
+                let unheard = Unheard(source: transcriber.source, message: said(error, of: transcriber.source) + (whatElse(after: error, onDeviceOnly: onDeviceOnly).map { " \($0)" } ?? ""))
                 // A recording with nothing in it, or one that was listened
                 // to and held no words, is so whoever is asked next.
                 // (What is told is still what the first one asked said.)
@@ -216,6 +228,21 @@ nonisolated enum VoiceTranscription {
         // Stopped with no one to ask is still stopped.
         try Task.checkCancellation()
         throw first ?? Unheard(source: .device, message: "There is nothing to transcribe with.")
+    }
+
+    /// What else the person is told where this device cannot hear the
+    /// recording itself: that a key would (true only where keys are asked
+    /// at all), or why none is asked. (It is the first failure only where
+    /// no key was there to be asked before it.)
+    static func whatElse(after error: Error, onDeviceOnly: Bool) -> String? {
+        switch error as? TranscriptionFailure {
+        case .speechNotAllowed, .notOnThisDevice:
+            onDeviceOnly
+                ? "A message for a model on this device or network is transcribed on this device only."
+                : "An OpenAI or Google key that can transcribe would be used instead."
+        default:
+            nil
+        }
     }
 
     /// What a failure is told as, naming what was asked.
