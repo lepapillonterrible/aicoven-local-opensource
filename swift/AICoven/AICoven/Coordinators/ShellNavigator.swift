@@ -97,6 +97,9 @@ final class ShellNavigator: ObservableObject {
     /// The agent a scope's new thread was asked for by name ("New Thread
     /// with Scout"), by its id; the composer otherwise chooses.
     @Published private var draftAgents: [ShellScope: String] = [:]
+    /// Counts the asks for a new-thread page, so the page knows it was
+    /// asked for again, also for the agent it already had.
+    @Published private(set) var draftRequests = 0
     /// The latest ask from an Overview: its identity, the scope it was
     /// sent in, and the place generation then.
     private var overviewAsk: (id: UUID, scope: ShellScope, generation: Int)?
@@ -167,6 +170,7 @@ final class ShellNavigator: ObservableObject {
     /// go to where the person chose one; asked again without one, the
     /// composer chooses as it does.
     func requestNewThread(agentID: String? = nil) {
+        draftRequests += 1
         draftAgents[selected] = agentID
         open(.draftThread(covenId: selected.covenID))
     }
