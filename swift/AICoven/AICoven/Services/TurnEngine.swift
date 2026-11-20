@@ -90,7 +90,8 @@ final class TurnEngine: ObservableObject {
     /// they were sent, by thread id. Kept while the app runs.
     @Published private(set) var waiting: [String: [WaitingMessage]] = [:]
     /// What was handed back to each thread's composer and not yet taken:
-    /// waiting messages that were not sent, or one taken back to be edited.
+    /// waiting messages that were not sent, one taken back to be edited,
+    /// or a new thread's first message that could not be sent into it.
     @Published private(set) var returned: [String: ComposerDraft] = [:]
     /// The waiting message being sent in each thread, by thread id: its
     /// turn is being started, and it can no longer be edited or removed.
@@ -102,8 +103,8 @@ final class TurnEngine: ObservableObject {
     /// finds some gone, by their numbers, reads the thread again from
     /// where it is stored.
     @Published private(set) var additions: [String: [Addition]] = [:]
-    /// Why a thread's waiting messages were not sent, for its composer to
-    /// say, until the next message is sent there.
+    /// Why a thread's waiting messages, or its first message, were not
+    /// sent, for its composer to say, until the next message is sent there.
     @Published private(set) var notSent: [String: String] = [:]
     /// The ending of the last turn this engine ran in each thread, by
     /// thread id. A thread shows it from here, so the reply appears where
@@ -294,6 +295,20 @@ final class TurnEngine: ObservableObject {
             draft = draft.followed(by: ComposerDraft(text: message.text, attachments: message.attachments))
         }
         if !draft.isEmpty { returned[threadID] = draft }
+    }
+
+    /// Hands a message that could not be sent into its thread back to the
+    /// thread's composer, which says why: a new thread's first message.
+    /// It goes in front of whatever that composer holds, after anything
+    /// handed back before and not yet taken; a composer already showing
+    /// the thread takes it at once, one opened later with the thread's
+    /// draft. Said to VoiceOver here, once.
+    func handBack(_ draft: ComposerDraft, to threadID: String, because error: Error) {
+        guard !draft.isEmpty else { return }
+        returned[threadID] = (returned[threadID] ?? ComposerDraft()).followed(by: draft)
+        let notice = "Your message could not be sent: \(error.localizedDescription)"
+        notSent[threadID] = notice
+        AccessibilityNotification.Announcement(notice).post()
     }
 
     /// Hands everything waiting in a thread back to its composer, which

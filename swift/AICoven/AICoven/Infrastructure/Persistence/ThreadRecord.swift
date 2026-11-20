@@ -209,12 +209,15 @@ actor ThreadRepository {
     }
 
     /// Load a single thread, including its decrypted summary if present.
-    /// Only returns the thread if it belongs to the current user.
+    /// Only returns the thread if it belongs to the current user. The row
+    /// the account's files wait under before their thread is made is no
+    /// thread.
     func loadThread(id: String) async throws -> LocalThread? {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
         // Get current user ID for data isolation
         let currentUserId = await MainActor.run { UserScope.currentUserID }
+        guard id != AttachmentStore.holdingThreadID(for: currentUserId) else { return nil }
 
         let record: ThreadRecord? = try await dbQueue.read { db in
             // Filter by both ID and user_id to ensure user can only see their own threads
@@ -242,17 +245,20 @@ actor ThreadRepository {
         )
     }
 
-    /// Fetch all threads belonging to the current user.
+    /// Fetch all threads belonging to the current user: not the row its
+    /// files wait under before their thread is made, which is no thread.
     func fetchAllThreads() async throws -> [LocalThread] {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
         // Get current user ID for data isolation
         let currentUserId = await MainActor.run { UserScope.currentUserID }
+        let holding = AttachmentStore.holdingThreadID(for: currentUserId)
 
         let records: [ThreadRecord] = try await dbQueue.read { db in
             // Only fetch threads belonging to the current user
             try ThreadRecord
                 .filter(ThreadRecord.Columns.userId == currentUserId)
+                .filter(ThreadRecord.Columns.id != holding)
                 .order(ThreadRecord.Columns.updatedAt.desc)
                 .fetchAll(db)
         }
@@ -933,6 +939,8 @@ extension ThreadRepository {
     /// form cannot be read.
     func covenID(ofThread threadID: String, for userID: String) async throws -> String? {
         guard let queue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        // The row the account's files wait under is no thread of theirs.
+        guard threadID != AttachmentStore.holdingThreadID(for: userID) else { throw ThreadLookupError.noSuchThread }
         let stored = try await queue.read { db in
             try ThreadRecord
                 .filter(ThreadRecord.Columns.id == threadID)
@@ -952,9 +960,11 @@ extension ThreadRepository {
     }
 
     /// Whether the thread is this account's, as the database has it.
-    /// Throws where that cannot be read.
+    /// Throws where that cannot be read. The row the account's files wait
+    /// under before their thread is made is no thread.
     func isThread(_ threadID: String, of userID: String) async throws -> Bool {
         guard let queue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        guard threadID != AttachmentStore.holdingThreadID(for: userID) else { return false }
         return try await queue.read { db in
             try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM threads WHERE id = ? AND user_id = ?)", arguments: [threadID, userID]) ?? false
         }

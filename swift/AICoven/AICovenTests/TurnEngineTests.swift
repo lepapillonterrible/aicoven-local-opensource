@@ -543,6 +543,49 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertNil(engine.notSent[threadID])
     }
 
+    func testAFirstMessageThatCouldNotBeSent_isHandedBackInFrontOfWhatWasHandedBackBefore_withWhy() {
+        let engine = makeEngine()
+        let file = FileAttachmentDetail(id: "a", name: "notes.txt", mimeType: "text/plain", sizeBytes: 3, width: nil, height: nil, url: nil)
+        let later = FileAttachmentDetail(id: "b", name: "more.txt", mimeType: "text/plain", sizeBytes: 3, width: nil, height: nil, url: nil)
+
+        // Nothing to hand back is nothing said.
+        engine.handBack(ComposerDraft(text: "  "), to: threadID, because: URLError(.networkConnectionLost))
+        XCTAssertNil(engine.returned[threadID])
+        XCTAssertNil(engine.notSent[threadID])
+
+        engine.handBack(ComposerDraft(text: "Read these", attachments: [file]), to: threadID, because: URLError(.networkConnectionLost))
+        XCTAssertEqual(engine.returned[threadID], ComposerDraft(text: "Read these", attachments: [file]))
+        XCTAssertEqual(engine.notSent[threadID]?.hasPrefix("Your message could not be sent: "), true)
+        // What comes after joins it, and takes nothing of it away.
+        engine.handBack(ComposerDraft(text: "And this", attachments: [later]), to: threadID, because: URLError(.networkConnectionLost))
+        XCTAssertEqual(engine.returned[threadID], ComposerDraft(text: "Read these\n\nAnd this", attachments: [file, later]))
+        // Taken once, by the thread's composer.
+        XCTAssertEqual(engine.takeReturned(threadID: threadID)?.attachments, [file, later])
+        XCTAssertNil(engine.returned[threadID])
+    }
+
+    func testANewThreadsFirstMessageThatCouldNotBeSent_goesToItsComposerInFrontOfWhatItHolds_notOverIt() async {
+        let engine = makeEngine()
+        let file = FileAttachmentDetail(id: "a", name: "notes.txt", mimeType: "text/plain", sizeBytes: 3, width: nil, height: nil, url: nil)
+        let newer = FileAttachmentDetail(id: "n", name: "newer.txt", mimeType: "text/plain", sizeBytes: 3, width: nil, height: nil, url: nil)
+        // The thread was opened while its first message was on its way, and something was written there.
+        let written = ComposerDraft(text: "Newer words", attachments: [newer])
+        ComposerDrafts.shared.set(written, for: threadID)
+
+        NewThreadComposer.handBack("Read these", [file], toThread: threadID, because: URLError(.networkConnectionLost), engine: engine)
+
+        // What was written there is as it was: nothing replaced it.
+        let kept = await ComposerDrafts.shared.draft(for: threadID)
+        XCTAssertEqual(kept, written)
+        // The message waits for the thread's composer, which puts it in front of what it holds.
+        let handedBack = engine.takeReturned(threadID: threadID)
+        XCTAssertEqual(handedBack, ComposerDraft(text: "Read these", attachments: [file]))
+        XCTAssertEqual(handedBack?.followed(by: kept), ComposerDraft(text: "Read these\n\nNewer words", attachments: [file, newer]))
+        XCTAssertNotNil(engine.notSent[threadID])
+        ComposerDrafts.shared.set(ComposerDraft(), for: threadID)
+        await ComposerDrafts.shared.saveNow()
+    }
+
     func testAfterAStop_nothingWaitingIsSentAndItGoesBackToTheComposer() async throws {
         let engine = makeEngine()
         let file = FileAttachmentDetail(id: "a", name: "notes.txt", mimeType: "text/plain", sizeBytes: 3, width: nil, height: nil, url: nil)

@@ -306,6 +306,12 @@ actor ThreadService {
         if isShowing(userID) {
             personalThreads.removeAll { $0.id == threadId }
         }
+        await MainActor.run {
+            // Told to whatever lists or shows it, whoever deleted it; only
+            // to the account it was, checked where it is posted.
+            guard UserScope.currentUserID == userID else { return }
+            NotificationCenter.default.post(name: .didDeleteThread, object: nil, userInfo: [Notification.Name.threadIDKey: threadId])
+        }
         AppErrorReporter.log(message: "Deleted thread from local store", context: "ThreadService.deleteThread")
         await AnalyticsService.shared.trackThreadDeleted(threadId: threadId)
     }
@@ -313,4 +319,8 @@ actor ThreadService {
 
 extension Notification.Name {
     static let didCreateThread = Notification.Name("didCreateThread")
+    /// A thread of the signed-in account's was deleted; its id is in the
+    /// user info under `threadIDKey`.
+    static let didDeleteThread = Notification.Name("didDeleteThread")
+    static let threadIDKey = "threadID"
 }

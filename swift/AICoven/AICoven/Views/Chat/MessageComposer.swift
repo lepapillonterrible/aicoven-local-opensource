@@ -148,9 +148,10 @@ struct MessageComposer: View {
     var recipientChoices: [Role] = []
     var recipientID: String?
     var onChooseRecipient: ((Role) -> Void)?
-    /// Whether files can be attached here: not to a thread that is not
-    /// made yet, which has nowhere to keep them.
-    var allowsAttachments: Bool = true
+    /// The thread files attached here are kept under, where that is not
+    /// `threadId`: a thread that is not made yet keeps them elsewhere
+    /// until it is.
+    var fileThread: (() async throws -> String)?
     /// Something the thread has to say above the box: why waiting messages
     /// were not sent. Whoever sets it announces it, once.
     var notice: String?
@@ -382,7 +383,7 @@ struct MessageComposer: View {
                 )
             }
             HStack(alignment: .bottom, spacing: Spacing.xxs) {
-                if allowsAttachments { attachButton }
+                attachButton
                 field
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .layoutPriority(1)
@@ -529,7 +530,7 @@ struct MessageComposer: View {
                 autoFocus: autoFocus,
                 onSend: send,
                 onFocusChange: onFocusChange,
-                onAttach: pastedOrDroppedHandler,
+                onAttach: { files, pictures in attachPastedOrDropped(files: files, pictures: pictures) },
                 // Whether Space may start talking changes as the composer
                 // does; letting go of it, and calling it off, are always
                 // heard, or a hold under way could not be ended.
@@ -727,6 +728,9 @@ struct MessageComposer: View {
     /// `CancellationError` if the composer left the thread while a photo
     /// was being fetched from the library: it is then not kept at all.
     private func kept(_ source: AttachSource, while task: UUID) async throws -> FileAttachmentDetail {
+        // Where this composer's files are kept: its thread, or, for a
+        // thread that is not made yet, where they wait for it.
+        let threadId = try await fileThread?() ?? threadId
         switch source {
         case let .file(url):
             return try await AttachmentStore.shared.add(fileAt: url, toThread: threadId)
@@ -763,13 +767,6 @@ struct MessageComposer: View {
             let urls = response == .OK ? panel.urls : []
             Task { await attach(urls.map(AttachSource.file), chosen: (.files, choosing)) }
         }
-    }
-
-    /// Takes what is pasted or dropped on the field as attachments, where
-    /// files can be attached here at all.
-    private var pastedOrDroppedHandler: ((_ files: [URL], _ pictures: [Data]) -> Void)? {
-        guard allowsAttachments else { return nil }
-        return { files, pictures in attachPastedOrDropped(files: files, pictures: pictures) }
     }
 
     /// Files and pictures pasted or dropped into the field.
@@ -1008,7 +1005,7 @@ struct MessageComposer: View {
         }
         attachments = merged.attachments
         // The field changes without being typed in, wherever focus is.
-        AccessibilityNotification.Announcement("Your waiting message is back in the message field").post()
+        AccessibilityNotification.Announcement("Your message is back in the message field").post()
     }
 
     /// Shows suggestions while the text ends in an unfinished @mention.

@@ -421,7 +421,7 @@ struct PersonalChatView: View {
         if !handedBack.isEmpty {
             // The field holds more than was left in it: said, as it is
             // when a waiting message comes back while the thread is shown.
-            AccessibilityNotification.Announcement("Your waiting message is back in the message field").post()
+            AccessibilityNotification.Announcement("Your message is back in the message field").post()
         }
         let draft = handedBack.followed(by: kept).followed(by: ComposerDraft(text: messageText, attachments: attachments))
         putInTheField(draft.text)

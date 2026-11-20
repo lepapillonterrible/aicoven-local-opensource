@@ -226,6 +226,8 @@ final class DraftThreadTests: XCTestCase {
         var did: [String] = []
         var createFails = false
         var sendFails = false
+        /// The files cannot be taken into the thread that was made.
+        var takeFails = false
         /// Held until the test lets the thread be made.
         var beforeCreating: (() async -> Void)?
         /// Held until the test lets the message be sent into the thread.
@@ -233,6 +235,14 @@ final class DraftThreadTests: XCTestCase {
 
         func submission() -> DraftThreadSubmission {
             DraftThreadSubmission(currentAccount: { self.account })
+        }
+
+        static func names(_ files: [FileAttachmentDetail]) -> String {
+            files.map(\.name).joined(separator: "+")
+        }
+
+        static func with(_ files: [FileAttachmentDetail]) -> String {
+            files.isEmpty ? "" : " with \(names(files))"
         }
 
         func send(_ submission: DraftThreadSubmission) -> Task<Void, Never>? {
@@ -246,15 +256,164 @@ final class DraftThreadTests: XCTestCase {
                         createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0), lastMessageAt: nil
                     )
                 },
-                sendFirstMessage: { thread, text in
+                files: DraftThreadSubmission.Files(
+                    take: { files, thread, account in
+                        if self.takeFails { throw URLError(.cannotMoveFile) }
+                        self.did.append("take \(Self.names(files)) into \(thread.id) as \(account)")
+                    },
+                    discardThread: { thread, account in self.did.append("discard \(thread.id) as \(account)") },
+                    drop: { files in self.did.append("drop \(Self.names(files))") }
+                ),
+                sendFirstMessage: { thread, text, files in
                     await self.beforeSending?()
                     if self.sendFails { throw URLError(.networkConnectionLost) }
-                    self.did.append("send '\(text)' in \(thread.id)")
+                    self.did.append("send '\(text)'\(Self.with(files)) in \(thread.id)")
                 },
-                keepUnsent: { thread, text, _ in self.did.append("keep '\(text)' for \(thread.id)") },
+                keepUnsent: { thread, text, files, _ in self.did.append("keep '\(text)'\(Self.with(files)) for \(thread.id)") },
                 onThreadCreated: { self.did.append("created \($0.id)") }
             )
         }
+    }
+
+    private nonisolated static func file(_ name: String) -> FileAttachmentDetail {
+        FileAttachmentDetail(id: name, name: name, mimeType: nil, sizeBytes: nil, width: nil, height: nil, url: nil)
+    }
+
+    @MainActor
+    func testFilesAttachedBeforeThereIsAThread_goIntoItWithTheFirstMessage() async {
+        let world = World()
+        let submission = world.submission()
+        submission.messageText = "Read these"
+        submission.attachments = [Self.file("a.pdf"), Self.file("b.png")]
+
+        var held: CheckedContinuation<Void, Never>?
+        let (reached, reach) = AsyncStream<Void>.makeStream()
+        world.beforeCreating = {
+            reach.yield()
+            await withCheckedContinuation { held = $0 }
+        }
+        let sending = world.send(submission)
+        // Taken at Send: the composer holds neither the text nor the files, and the page shows both as sent.
+        XCTAssertEqual(submission.attachments, [])
+        XCTAssertEqual(submission.submittedAttachments.map(\.name), ["a.pdf", "b.png"])
+        XCTAssertEqual(DraftThreadView.names(of: submission.submittedAttachments), "a.pdf, b.png")
+        for await _ in reached {
+            break
+        }
+        // Attached while the thread is being made: for the next message, not this one.
+        submission.attachments = [Self.file("later.txt")]
+        world.beforeCreating = nil
+        held?.resume()
+        await sending?.value
+
+        XCTAssertEqual(world.did, [
+            "create 'Read these' as ada", "take a.pdf+b.png into t1 as ada", "send 'Read these' with a.pdf+b.png in t1", "created t1"
+        ])
+        XCTAssertEqual(submission.attachments.map(\.name), ["later.txt"])
+        XCTAssertEqual(submission.submittedAttachments, [])
+
+        // A message with no files takes none.
+        world.did = []
+        submission.attachments = []
+        submission.messageText = "No files"
+        await world.send(submission)?.value
+        XCTAssertEqual(world.did, ["create 'No files' as ada", "send 'No files' in t1", "created t1"])
+
+        // The message could not be sent into the thread that was made: the thread keeps the text and the files.
+        world.did = []
+        world.sendFails = true
+        submission.messageText = "Keep these"
+        submission.attachments = [Self.file("c.md")]
+        await world.send(submission)?.value
+        XCTAssertEqual(world.did, [
+            "create 'Keep these' as ada", "take c.md into t1 as ada", "keep 'Keep these' with c.md for t1", "created t1"
+        ])
+        XCTAssertEqual(submission.attachments, [], "They are the thread's now")
+    }
+
+    @MainActor
+    func testFilesThatCannotGoIntoTheThread_undoIt_andComeBackWithTheMessage() async {
+        let world = World()
+        world.takeFails = true
+        let submission = world.submission()
+        submission.messageText = "Read these"
+        submission.attachments = [Self.file("a.pdf")]
+        await world.send(submission)?.value
+        // Nothing was sent: the thread made for it is not kept, and is not opened.
+        XCTAssertEqual(world.did, ["create 'Read these' as ada", "discard t1 as ada"])
+        XCTAssertEqual(submission.messageText, "Read these")
+        XCTAssertEqual(submission.attachments.map(\.name), ["a.pdf"])
+        XCTAssertEqual(submission.errorMessage, DraftThreadSubmission.couldNotStart)
+        XCTAssertFalse(submission.isCreatingThread)
+    }
+
+    @MainActor
+    func testAThreadThatCannotBeMadeGivesTheFilesBackWithTheText_orDropsThemWithIt() async {
+        let world = World()
+        world.createFails = true
+        let submission = world.submission()
+
+        // Back with the text, in front of what was attached since.
+        var held: CheckedContinuation<Void, Never>?
+        let (reached, reach) = AsyncStream<Void>.makeStream()
+        world.beforeCreating = {
+            reach.yield()
+            await withCheckedContinuation { held = $0 }
+        }
+        submission.messageText = "Read these"
+        submission.attachments = [Self.file("a.pdf")]
+        var sending = world.send(submission)
+        for await _ in reached {
+            break
+        }
+        submission.attachments = [Self.file("later.txt")]
+        held?.resume()
+        await sending?.value
+        XCTAssertEqual(world.did, [])
+        XCTAssertEqual(submission.messageText, "Read these")
+        XCTAssertEqual(submission.attachments.map(\.name), ["a.pdf", "later.txt"])
+        XCTAssertEqual(submission.errorMessage, DraftThreadSubmission.couldNotStart)
+
+        // Words typed since: the message does not come back, and its files are not sent with other words.
+        let (reachedAgain, reachAgain) = AsyncStream<Void>.makeStream()
+        world.beforeCreating = {
+            reachAgain.yield()
+            await withCheckedContinuation { held = $0 }
+        }
+        submission.attachments = [Self.file("a.pdf")]
+        sending = world.send(submission)
+        for await _ in reachedAgain {
+            break
+        }
+        submission.messageText = "Something newer"
+        submission.attachments = [Self.file("newer.txt")]
+        held?.resume()
+        await sending?.value
+        XCTAssertEqual(world.did, ["drop a.pdf"])
+        XCTAssertEqual(submission.messageText, "Something newer")
+        XCTAssertEqual(submission.attachments.map(\.name), ["newer.txt"])
+        XCTAssertEqual(submission.errorMessage, DraftThreadSubmission.couldNotStartNotGivenBack)
+
+        // Another account by then: nothing comes back, and nothing of the first account's is touched.
+        world.did = []
+        let (reachedLast, reachLast) = AsyncStream<Void>.makeStream()
+        world.beforeCreating = {
+            reachLast.yield()
+            await withCheckedContinuation { held = $0 }
+        }
+        submission.messageText = "Ada's files"
+        submission.attachments = [Self.file("ada.pdf")]
+        sending = world.send(submission)
+        for await _ in reachedLast {
+            break
+        }
+        world.account = "grace"
+        held?.resume()
+        await sending?.value
+        XCTAssertEqual(world.did, [])
+        XCTAssertEqual(submission.messageText, "")
+        XCTAssertEqual(submission.attachments, [])
+        XCTAssertNil(submission.errorMessage)
     }
 
     @MainActor

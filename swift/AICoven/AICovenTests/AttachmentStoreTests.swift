@@ -350,6 +350,170 @@ final class AttachmentStoreTests: XCTestCase {
         }
     }
 
+    // MARK: - For a thread that is not made yet
+
+    func testFilesForAThreadThatIsNotMadeYet_areKeptUnderARowThatIsNoThread_andMovedToTheThreadMadeForThem() async throws {
+        let userID = await MainActor.run { UserScope.currentUserID }
+        let holding = try await store.holdingThread()
+        XCTAssertEqual(holding, AttachmentStore.holdingThreadID(for: userID))
+        XCTAssertTrue(holding.hasPrefix("unsent-files-"))
+        XCTAssertEqual(holding.count, "unsent-files-".count + 64, "A digest, not the account's id")
+        XCTAssertFalse(holding.contains(userID))
+        // Asked for again: the same row, once.
+        let again = try await store.holdingThread()
+        XCTAssertEqual(again, holding)
+        let rows = try await MainActor.run { DatabaseManager.shared.dbQueue }?.read { db in
+            try Row.fetchAll(db, sql: "SELECT user_id, payload_ciphertext FROM threads WHERE id = ?", arguments: [holding])
+        } ?? []
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.first?["user_id"] as String?, userID)
+        XCTAssertNil(rows.first?["payload_ciphertext"] as Data?, "It holds no thread")
+        // It is no thread to list, mark or count.
+        let listed = try await ThreadRepository.shared.loadChatThreads()
+        XCTAssertFalse(listed.contains { $0.id == holding })
+        let marks = try await ThreadRepository.shared.threadMarks(for: userID)
+        XCTAssertNil(marks[holding])
+        await ThreadService.shared.reloadForCurrentUser()
+        let shown = try await ThreadService.shared.loadThreads(covenId: nil, includeArchived: true)
+        XCTAssertFalse(shown.contains { $0.id == holding })
+        // Nor to the older readers, which read every row of the account's: the agents' own threads, which hold no
+        // payload either, are still theirs to read.
+        let agentThread = try await ThreadRepository.shared.createThread(title: "An agent's thread \(UUID().uuidString)")
+        let all = try await ThreadRepository.shared.fetchAllThreads()
+        XCTAssertFalse(all.contains { $0.id == holding })
+        XCTAssertTrue(all.contains { $0.id == agentThread.id })
+        let opened = try await ThreadRepository.shared.loadThread(id: holding)
+        XCTAssertNil(opened)
+        let agentOpened = try await ThreadRepository.shared.loadThread(id: agentThread.id)
+        XCTAssertEqual(agentOpened?.id, agentThread.id)
+        let isOne = try await ThreadRepository.shared.isThread(holding, of: userID)
+        XCTAssertFalse(isOne)
+        do {
+            _ = try await ThreadRepository.shared.covenID(ofThread: holding, for: userID)
+            XCTFail("The holding row was read as a thread in no coven")
+        } catch {
+            XCTAssertEqual(error as? ThreadLookupError, .noSuchThread)
+        }
+        let agentIsOne = try await ThreadRepository.shared.isThread(agentThread.id, of: userID)
+        XCTAssertTrue(agentIsOne)
+        _ = try await ThreadRepository.shared.deleteThread(id: agentThread.id, for: userID)
+
+        // A file attached there is read like any other, and moves to the thread made for it without its bytes moving.
+        let kept = try await store.add(Data("first".utf8), named: "first.txt", mimeType: "text/plain", toThread: holding)
+        let other = try await store.add(Data("second".utf8), named: "second.txt", mimeType: "text/plain", toThread: holding)
+        let before = Set(filesKept().map(\.lastPathComponent))
+        try await store.moveUnsent([kept.id, other.id], toThread: threadID, for: userID)
+        let moved = try await attachmentIDs()
+        XCTAssertEqual(Set(moved), [kept.id, other.id])
+        XCTAssertEqual(Set(filesKept().map(\.lastPathComponent)), before)
+        let read = try await store.data(of: kept.id)
+        XCTAssertEqual(String(decoding: read, as: UTF8.self), "first")
+        // The thread's now: sent with a message of it.
+        try await store.markSent([kept.id, other.id], with: "m1", inThread: threadID)
+    }
+
+    func testOnlyUnsentFilesOfTheAccountsHoldingRowAreMoved_allOrNone() async throws {
+        let userID = await MainActor.run { UserScope.currentUserID }
+        let holding = try await store.holdingThread()
+        let waiting = try await store.add(Data("waiting".utf8), named: "waiting.txt", mimeType: "text/plain", toThread: holding)
+        let elsewhere = try await store.add(Data("elsewhere".utf8), named: "elsewhere.txt", mimeType: "text/plain", toThread: threadID)
+
+        func threadOf(_ id: String) async throws -> String? {
+            try await row(id)?["thread_id"]
+        }
+        // One that is not under the holding row: nothing is moved, the one before it either.
+        do {
+            try await store.moveUnsent([waiting.id, elsewhere.id], toThread: threadID, for: userID)
+            XCTFail("Moved a file that was not waiting for a thread")
+        } catch {
+            XCTAssertEqual(error as? AttachmentStore.Failure, .missing)
+        }
+        let stillWaiting = try await threadOf(waiting.id)
+        XCTAssertEqual(stillWaiting, holding)
+        // One that is not there, and one asked for as another account.
+        for (ids, account) in [([waiting.id, UUID().uuidString], userID), ([waiting.id], "someone-else")] {
+            do {
+                try await store.moveUnsent(ids, toThread: threadID, for: account)
+                XCTFail("Moved")
+            } catch {
+                XCTAssertEqual(error as? AttachmentStore.Failure, .missing)
+            }
+        }
+        // To a thread that is not there: refused by the store, and it stays where it was.
+        do {
+            try await store.moveUnsent([waiting.id], toThread: "no-such-thread", for: userID)
+            XCTFail("Moved to a thread that is not the account's")
+        } catch {
+            XCTAssertNotEqual(error as? AttachmentStore.Failure, .missing)
+        }
+        let afterAll = try await threadOf(waiting.id)
+        XCTAssertEqual(afterAll, holding)
+        // None to move is nothing to do.
+        try await store.moveUnsent([], toThread: threadID, for: userID)
+
+        // While the data is locked there is no row to keep files under.
+        await DataEncryptionService.shared.lock()
+        do {
+            _ = try await store.holdingThread()
+            XCTFail("Made while the data is locked")
+        } catch {
+            XCTAssertEqual(error as? RepositoryError, .dataLocked)
+        }
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        await store.removeUnsent([waiting.id, elsewhere.id])
+    }
+
+    /// The ids of the threads said to be deleted.
+    private final class Deleted: @unchecked Sendable {
+        var ids: [String] = []
+    }
+
+    @MainActor
+    func testAsTheAppKeepsThem_aNewThreadsFilesAreTakenIntoIt_andAThreadTheyCannotGoIntoIsDeletedAndSaidToBe() async throws {
+        let userID = UserScope.currentUserID
+        let files = DraftThreadSubmission.Files.stored
+        let holding = try await AttachmentStore.shared.holdingThread()
+        let kept = try await AttachmentStore.shared.add(Data("x".utf8), named: "x.txt", mimeType: "text/plain", toThread: holding)
+        let dropped = try await AttachmentStore.shared.add(Data("y".utf8), named: "y.txt", mimeType: "text/plain", toThread: holding)
+        let made = try await ThreadService.shared.createThread(title: "Made \(UUID().uuidString)", covenId: nil, agentId: nil, agentName: nil, as: userID)
+
+        try await files.take([kept], made, userID)
+        let movedTo: String? = try await row(kept.id)?["thread_id"]
+        XCTAssertEqual(movedTo, made.id)
+
+        // Files that go with no message after all are removed.
+        await files.drop([dropped])
+        let droppedRow = try await row(dropped.id)
+        XCTAssertNil(droppedRow)
+
+        // They cannot be taken (here: they no longer wait): the thread made for them is deleted, and said to be,
+        // so nothing goes on listing it.
+        let deleted = Deleted()
+        let watching = NotificationCenter.default.addObserver(forName: .didDeleteThread, object: nil, queue: nil) { note in
+            if let id = note.userInfo?[Notification.Name.threadIDKey] as? String { deleted.ids.append(id) }
+        }
+        defer { NotificationCenter.default.removeObserver(watching) }
+        do {
+            try await files.take([kept], made, userID)
+            XCTFail("Taken twice")
+        } catch {
+            XCTAssertEqual(error as? AttachmentStore.Failure, .missing)
+        }
+        await files.discardThread(made, userID)
+        XCTAssertEqual(deleted.ids, [made.id])
+        let listed = try await ThreadService.shared.loadThreads(covenId: nil, includeArchived: true)
+        XCTAssertFalse(listed.contains { $0.id == made.id })
+        let shell = ShellThreads()
+        await shell.load(.strix).value
+        XCTAssertFalse(shell.threads.contains { $0.id == made.id })
+        // What had gone into it went with it.
+        let gone = try await row(kept.id)
+        XCTAssertNil(gone)
+        // Not as another account: nothing is deleted through a thread that is not theirs.
+        await files.discardThread(made, "someone-else")
+        XCTAssertEqual(deleted.ids, [made.id])
+    }
+
     // MARK: - Pictures
 
     /// A picture as a camera writes it: `orientation` and where it was taken
