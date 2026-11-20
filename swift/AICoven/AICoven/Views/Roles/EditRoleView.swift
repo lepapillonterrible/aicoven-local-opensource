@@ -12,6 +12,8 @@ struct EditRoleView: View {
     @State private var role: Role?
     @State private var name = ""
     @State private var emoji = "🤖"
+    @State private var iconSymbol = SymbolDisc.fallbackSymbol
+    @State private var iconTint = IconTint.warm
     @State private var description = ""
     @State private var systemPrompt = ""
     @State private var model = ""
@@ -25,7 +27,6 @@ struct EditRoleView: View {
     /// Planner configuration (plan_and_execute)
     @State private var plannerMaxTasks = "5"
     @State private var plannerMaxSeconds = "30"
-    @State private var showEmojiPicker = false
     @State private var showDeleteConfirmation = false
     @State private var deleting = false
 
@@ -106,39 +107,14 @@ struct EditRoleView: View {
                             // Basic info
                             GlassCard {
                                 VStack(spacing: Spacing.md) {
-                                    // Emoji picker
+                                    // The agent's face, and its picker.
                                     VStack(alignment: .leading, spacing: Spacing.sm) {
                                         Text("Icon")
                                             .font(.aicovenH3)
                                             .foregroundColor(.aicovenTextPrimary)
 
-                                        Button {
-                                            showEmojiPicker.toggle()
-                                        } label: {
-                                            Text(emoji)
-                                                .font(.system(size: 48))
-                                                .frame(width: 80, height: 80)
-                                                .background(Color.aicovenGlass)
-                                                .cornerRadius(BorderRadius.md)
-                                        }
-                                        .buttonStyle(.plain)
-
-                                        if showEmojiPicker {
-                                            FlowLayout(spacing: Spacing.sm) {
-                                                ForEach(emojiOptions, id: \.self) { option in
-                                                    Button {
-                                                        emoji = option
-                                                        showEmojiPicker = false
-                                                    } label: {
-                                                        Text(option)
-                                                            .font(.system(size: 32))
-                                                            .frame(width: 50, height: 50)
-                                                            .background(emoji == option ? Color.aicovenGlass : Color.clear)
-                                                            .cornerRadius(BorderRadius.sm)
-                                                    }
-                                                    .buttonStyle(.plain)
-                                                }
-                                            }
+                                        IconChoice(symbol: $iconSymbol, tint: $iconTint, suggestedSymbols: AgentFace.suggestedSymbols) {
+                                            AgentFace(symbol: iconSymbol, tint: iconTint, provider: provider.isEmpty ? nil : provider, size: 64)
                                         }
                                     }
 
@@ -492,6 +468,8 @@ struct EditRoleView: View {
             if let role {
                 name = role.name
                 emoji = role.emoji ?? "🤖"
+                iconSymbol = role.iconSymbol ?? SymbolDisc.fallbackSymbol
+                iconTint = role.iconTintValue ?? .warm
                 description = role.description ?? ""
                 systemPrompt = role.systemPrompt ?? ""
                 model = role.model ?? ""
@@ -586,6 +564,7 @@ struct EditRoleView: View {
                 plannerMaxTasks: plannerTasksInt,
                 plannerMaxSeconds: plannerSecondsDouble
             )
+            try await RoleService.shared.setIcon(symbol: iconSymbol, tint: iconTint, forRole: roleId)
 
             analytics.trackRoleUpdate(roleId: roleId, field: "all")
             onComplete()

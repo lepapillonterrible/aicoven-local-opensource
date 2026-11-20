@@ -1,0 +1,200 @@
+@testable import AICoven
+import XCTest
+
+/// A coven has an icon and an agent a face: a symbol on one of twelve
+/// tints, as the cloud app draws them, kept with their settings.
+final class IconsTests: XCTestCase {
+
+    // MARK: - Tints, symbols
+
+    func testTheTwelveTints() {
+        XCTAssertEqual(IconTint.allCases.map(\.rawValue), ["warm", "water", "rust", "ink", "moss", "sky", "lilac", "rose", "mint", "pine", "slate", "plum"])
+        XCTAssertEqual(IconTint.allCases.map(\.label), ["Sand", "Water", "Clay", "Ink", "Moss", "Sky", "Lilac", "Rose", "Mint", "Pine", "Slate", "Plum"])
+        XCTAssertEqual(IconTint.nextUnused(worn: []), .warm)
+        XCTAssertEqual(IconTint.nextUnused(worn: ["warm", nil, "rust", "no-such-tint"]), .water)
+        XCTAssertEqual(IconTint.nextUnused(worn: IconTint.allCases.map(\.rawValue)), .warm, "When every one is worn, the first")
+        XCTAssertNil(IconTint(rawValue: "teal"))
+    }
+
+    func testWhatMayBeASymbolsName() {
+        for name in ["house", "chart.bar.xaxis", "building.2", "0.circle.fill", String(repeating: "a", count: 64)] {
+            XCTAssertTrue(IconRules.isSymbolName(name), name)
+        }
+        for name in ["", "House", "house fill", "house/..", "🏠", "a\nb", String(repeating: "a", count: 65)] {
+            XCTAssertFalse(IconRules.isSymbolName(name), name)
+        }
+    }
+
+    func testTheSymbolAnAgentsEmojiStandsFor() {
+        XCTAssertEqual(AgentFace.suggestedSymbols.count, 16)
+        XCTAssertEqual(CovenIcon.suggestedSymbols.count, 16)
+        XCTAssertEqual(AgentFace.symbol(forEmoji: "🤖"), "cpu")
+        XCTAssertEqual(AgentFace.symbol(forEmoji: "🧠"), "brain")
+        XCTAssertEqual(AgentFace.symbol(forEmoji: "⚙️"), "gearshape", "With or without its variation selector")
+        XCTAssertEqual(AgentFace.symbol(forEmoji: "⚙"), "gearshape")
+        XCTAssertEqual(AgentFace.symbol(forEmoji: "✍️"), "pencil")
+        XCTAssertEqual(AgentFace.symbol(forEmoji: "💻"), "laptopcomputer")
+        XCTAssertNil(AgentFace.symbol(forEmoji: "🦄"))
+        XCTAssertNil(AgentFace.symbol(forEmoji: nil))
+        // Every symbol an emoji stands for, and every suggested one, can be a stored symbol.
+        for emoji in ["🤖", "🧠", "💡", "🎨", "📝", "🔍", "⚙️", "📊", "🚀", "💬", "🎯", "🔬", "📚", "✨", "💻", "✍️", "🎓"] {
+            let symbol = AgentFace.symbol(forEmoji: emoji)
+            XCTAssertEqual(symbol.map(IconRules.isSymbolName), true, emoji)
+        }
+        for symbol in AgentFace.suggestedSymbols + CovenIcon.suggestedSymbols {
+            XCTAssertTrue(IconRules.isSymbolName(symbol), symbol)
+        }
+    }
+
+    @MainActor
+    func testASymbolThisSystemCannotDrawIsReplaced() {
+        XCTAssertEqual(SymbolDisc.renderable("house", fallback: "cpu"), "house")
+        XCTAssertEqual(SymbolDisc.renderable("no.such.symbol.anywhere", fallback: "cpu"), "cpu")
+        for symbol in AgentFace.suggestedSymbols + CovenIcon.suggestedSymbols + ["scope", "laptopcomputer", "graduationcap", "doc.text"] {
+            XCTAssertTrue(SymbolDisc.isRenderable(symbol), "\(symbol) can be drawn on this system")
+        }
+    }
+
+    func testTheSymbolsThePickerSearches() {
+        let catalog = SymbolCatalog(symbols: [["pencil", "write draw edit"], ["pencil.circle"], ["square.and.pencil", "compose"], ["house", "home building"], []])
+        XCTAssertEqual(catalog.count, 4)
+        XCTAssertEqual(catalog.search("pencil"), ["pencil", "pencil.circle", "square.and.pencil"])
+        XCTAssertEqual(catalog.search(" WRITE "), ["pencil"], "By its keywords, whatever the case")
+        XCTAssertEqual(catalog.search("home"), ["house"])
+        XCTAssertEqual(catalog.search(""), [])
+        XCTAssertEqual(catalog.search("zzz"), [])
+        let many = SymbolCatalog(symbols: (0 ..< 300).map { ["symbol.\($0)"] })
+        XCTAssertEqual(many.search("symbol").count, SymbolCatalog.resultLimit)
+
+        // The list that comes with the app is there and is read.
+        XCTAssertGreaterThan(SymbolCatalog.shared.count, 4000)
+        XCTAssertTrue(SymbolCatalog.shared.search("write").contains("pencil"))
+    }
+
+    // MARK: - As stored
+
+    private func coven(_ id: String, settings: CovenSettings?) -> Coven {
+        Coven(id: id, name: id, settings: settings, createdAt: Date(), updatedAt: Date())
+    }
+
+    func testACovensIcon_isReadFromItsSettings() throws {
+        let stored = try JSONDecoder().decode(CovenSettings.self, from: Data(#"{"icon_symbol": "leaf", "icon_tint": "moss", "connections": {"apps": {}, "mcp_servers": {}}}"#.utf8))
+        XCTAssertEqual(stored.iconSymbol, "leaf")
+        XCTAssertEqual(stored.iconTint, "moss")
+        let leaf = coven("a", settings: stored)
+        XCTAssertEqual(leaf.iconSymbol, "leaf")
+        XCTAssertEqual(leaf.iconTintValue, .moss)
+
+        // None stored, or one that is no symbol or no tint: the default is shown.
+        XCTAssertNil(coven("b", settings: nil).iconSymbol)
+        XCTAssertNil(coven("b", settings: nil).iconTintValue)
+        let odd = coven("c", settings: CovenSettings(iconSymbol: "../etc", iconTint: "teal"))
+        XCTAssertNil(odd.iconSymbol)
+        XCTAssertNil(odd.iconTintValue)
+        // An icon stored as something else does not hide the other settings.
+        let unreadable = try JSONDecoder().decode(CovenSettings.self, from: Data(#"{"icon_symbol": 3, "icon_tint": ["moss"], "budget_caps": {"monthly": 5}}"#.utf8))
+        XCTAssertNil(unreadable.iconSymbol)
+        XCTAssertNil(unreadable.iconTint)
+        XCTAssertEqual(unreadable.budgetCaps, ["monthly": 5])
+        // It is written under the cloud app's names.
+        let written = try String(decoding: JSONEncoder().encode(CovenSettings(iconSymbol: "leaf", iconTint: "moss")), as: UTF8.self)
+        XCTAssertTrue(written.contains(#""icon_symbol":"leaf""#) && written.contains(#""icon_tint":"moss""#), written)
+    }
+
+    func testANewCovenStartsWithAnIconNoOtherShows() {
+        XCTAssertEqual(CovenIcon.startingIcon(among: []).symbol, "house")
+        XCTAssertEqual(CovenIcon.startingIcon(among: []).tint, .warm)
+        // One made before covens had icons shows a house on sand.
+        let old = coven("old", settings: nil)
+        let second = CovenIcon.startingIcon(among: [old])
+        XCTAssertEqual(second.symbol, "briefcase")
+        XCTAssertEqual(second.tint, .water)
+        let third = CovenIcon.startingIcon(among: [old, coven("b", settings: CovenSettings(iconSymbol: "briefcase", iconTint: "water"))])
+        XCTAssertEqual(third.symbol, "book.closed")
+        XCTAssertEqual(third.tint, .rust)
+        // When every symbol and tint is shown, the first of each.
+        let all = zip(CovenIcon.suggestedSymbols, IconTint.allCases + IconTint.allCases).map { symbol, tint in
+            coven(symbol, settings: CovenSettings(iconSymbol: symbol, iconTint: tint.rawValue))
+        }
+        XCTAssertEqual(CovenIcon.startingIcon(among: all).symbol, "house")
+        XCTAssertEqual(CovenIcon.startingIcon(among: all).tint, .warm)
+    }
+
+    private func role(emoji: String?, settings: RoleSettings?) -> Role {
+        Role(id: "r", covenId: "c", name: "Agent", emoji: emoji, description: nil, systemPrompt: nil, model: nil, provider: "openai", providerAccountId: nil, temperature: nil, maxTokens: nil, settings: settings, createdAt: Date(), updatedAt: Date())
+    }
+
+    func testAnAgentsFace_isItsStoredSymbol_orTheOneItsEmojiStandsFor() throws {
+        XCTAssertEqual(role(emoji: "🧠", settings: RoleSettings(iconSymbol: "star", iconTint: "plum")).iconSymbol, "star")
+        XCTAssertEqual(role(emoji: "🧠", settings: RoleSettings(iconSymbol: "star", iconTint: "plum")).iconTintValue, .plum)
+        XCTAssertEqual(role(emoji: "🧠", settings: nil).iconSymbol, "brain", "An agent made when agents had an emoji")
+        XCTAssertEqual(role(emoji: "🧠", settings: RoleSettings(iconSymbol: "Not A Symbol")).iconSymbol, "brain")
+        XCTAssertNil(role(emoji: "🦄", settings: nil).iconSymbol, "The face then shows cpu")
+        XCTAssertNil(role(emoji: nil, settings: RoleSettings(iconTint: "teal")).iconTintValue)
+
+        let stored = try JSONDecoder().decode(RoleSettings.self, from: Data(#"{"icon_symbol": "map", "icon_tint": "sky", "autonomous_mode": true}"#.utf8))
+        XCTAssertEqual(stored.iconSymbol, "map")
+        XCTAssertEqual(stored.iconTint, "sky")
+        XCTAssertEqual(stored.autonomousMode, true)
+        let unreadable = try JSONDecoder().decode(RoleSettings.self, from: Data(#"{"icon_symbol": {}, "autonomous_max_steps": 4}"#.utf8))
+        XCTAssertNil(unreadable.iconSymbol)
+        XCTAssertEqual(unreadable.autonomousMaxSteps, 4)
+    }
+
+    // MARK: - Kept on the device
+
+    func testIconsAreKeptWithTheirCovenAndAgent_andWhatElseIsStoredStays() async throws {
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        await MainActor.run { DatabaseManager.shared.configureIfNeeded() }
+        let first = try await CovenService.shared.createCoven(name: "Icons \(UUID().uuidString)")
+        let chosen = try await CovenService.shared.createCoven(name: "Icons \(UUID().uuidString)", icon: ("leaf", .moss))
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await CovenService.shared.deleteCoven(id: first.id)
+            try? await CovenService.shared.deleteCoven(id: chosen.id)
+            await DataEncryptionService.shared.lock()
+        }
+
+        // A coven made without one starts with an icon; one made with one has it.
+        XCTAssertNotNil(first.iconSymbol)
+        XCTAssertNotNil(first.iconTintValue)
+        XCTAssertEqual(chosen.iconSymbol, "leaf")
+        XCTAssertEqual(chosen.iconTintValue, .moss)
+        XCTAssertEqual(chosen.settings?.connections, CovenConnections(), "It still starts with nothing connected")
+
+        // Changing the icon keeps the coven's other settings.
+        try await CovenService.shared.setConnections(CovenConnections(apps: ["github": .readOnly]), forCoven: first.id)
+        try await CovenService.shared.setIcon(symbol: "flask", tint: .sky, forCoven: first.id)
+        var stored = try await CovenService.shared.loadCovens().first { $0.id == first.id }
+        XCTAssertEqual(stored?.iconSymbol, "flask")
+        XCTAssertEqual(stored?.iconTintValue, .sky)
+        XCTAssertEqual(stored?.settings?.connections, CovenConnections(apps: ["github": .readOnly]))
+        // And changing the connections keeps the icon.
+        try await CovenService.shared.setConnections(CovenConnections(), forCoven: first.id)
+        stored = try await CovenService.shared.loadCovens().first { $0.id == first.id }
+        XCTAssertEqual(stored?.iconSymbol, "flask")
+        // What cannot be a symbol is not stored.
+        do {
+            try await CovenService.shared.setIcon(symbol: "Not A Symbol", tint: .sky, forCoven: first.id)
+            XCTFail("Stored what is no symbol")
+        } catch {}
+
+        // An agent starts with a face: its emoji's symbol, on a tint no other agent of the coven wears.
+        let writer = try await RoleService.shared.createRole(covenId: first.id, name: "Writer", emoji: "✍️")
+        let coder = try await RoleService.shared.createRole(covenId: first.id, name: "Coder", emoji: "💻", autonomousMode: true)
+        XCTAssertEqual(writer.iconSymbol, "pencil")
+        XCTAssertEqual(writer.iconTintValue, .warm)
+        XCTAssertEqual(coder.iconSymbol, "laptopcomputer")
+        XCTAssertEqual(coder.iconTintValue, .water)
+        XCTAssertEqual(coder.settings?.autonomousMode, true)
+
+        // Its face is changed, and stays when the form saves its other settings.
+        try await RoleService.shared.setIcon(symbol: "star", tint: .plum, forRole: coder.id)
+        let saved = try await RoleService.shared.updateRole(roleId: coder.id, name: "Coder 2", autonomousMode: false, autonomousMaxSteps: 3)
+        XCTAssertEqual(saved.name, "Coder 2")
+        XCTAssertEqual(saved.iconSymbol, "star")
+        XCTAssertEqual(saved.iconTintValue, .plum)
+        XCTAssertEqual(saved.settings?.autonomousMode, false)
+        XCTAssertEqual(saved.settings?.autonomousMaxSteps, 3)
+    }
+}

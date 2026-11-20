@@ -313,6 +313,7 @@ private struct CovenScopePopoverContent: View {
                 ForEach(covens) { coven in
                     scopeRow(
                         icon: "person.3.fill",
+                        coven: coven,
                         title: coven.name,
                         action: { onSelectCoven(coven) }
                     )
@@ -338,6 +339,7 @@ private struct CovenScopePopoverContent: View {
 
     private func scopeRow(
         icon: String,
+        coven: Coven? = nil,
         title: String,
         subtitle: String? = nil,
         isSelected: Bool = false,
@@ -346,9 +348,14 @@ private struct CovenScopePopoverContent: View {
     ) -> some View {
         Button(action: action) {
             HStack(spacing: Spacing.sm) {
-                Image(systemName: icon)
-                    .font(.aicovenBodySmall)
-                    .foregroundColor(tint)
+                if let coven {
+                    // A coven is shown by its own icon.
+                    CovenIcon(coven: coven, size: 20)
+                } else {
+                    Image(systemName: icon)
+                        .font(.aicovenBodySmall)
+                        .foregroundColor(tint)
+                }
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)

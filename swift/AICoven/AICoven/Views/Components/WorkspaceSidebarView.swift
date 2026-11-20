@@ -287,11 +287,7 @@ struct CovenSelectorView: View {
                     showCovenMenu.toggle()
                 } label: {
                     HStack(spacing: Spacing.xs) {
-                        IconBadge(
-                            icon: "sparkles",
-                            size: 28,
-                            color: .aicovenTeal
-                        )
+                        CovenIcon(coven: coven, size: 28)
 
                         VStack(alignment: .leading, spacing: 2) {
                             Text(coven.name)
@@ -438,11 +434,7 @@ struct CovenMenuItem: View {
     var body: some View {
         Button(action: onSelect) {
             HStack {
-                IconBadge(
-                    icon: "sparkles",
-                    size: 24,
-                    color: .aicovenTeal
-                )
+                CovenIcon(coven: coven, size: 24)
 
                 Text(coven.name)
                     .font(.aicovenBody)
@@ -523,7 +515,7 @@ struct SelectCovenPrompt: View {
                 ForEach(covens.prefix(3)) { coven in
                     Button(action: { onSelect(coven) }) {
                         HStack(spacing: Spacing.xs) {
-                            IconBadge(icon: "sparkles", size: 24, color: .aicovenTeal)
+                            CovenIcon(coven: coven, size: 24)
                             Text(coven.name)
                                 .font(.aicovenBody)
                                 .foregroundColor(.aicovenTextPrimary)
@@ -863,13 +855,7 @@ struct RoleListItemWithMenu: View {
 
     var body: some View {
         HStack(spacing: Spacing.xs) {
-            ZStack {
-                Circle()
-                    .fill(Color.aicovenGlass)
-                    .frame(width: 28, height: 28)
-                Text(role.emoji ?? "🤖")
-                    .font(.system(size: 16))
-            }
+            role.face(size: 28)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(role.name)

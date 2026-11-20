@@ -130,6 +130,11 @@ actor RoleService {
         )
     }
 
+    /// Sets an agent's face.
+    func setIcon(symbol: String, tint: IconTint, forRole id: String) async throws {
+        try await CovenRepository.shared.setIcon(symbol: symbol, tint: tint, forRole: id)
+    }
+
     /// Delete a role
     /// - Parameter roleId: The role ID to delete
     func deleteRole(roleId: String) async throws {
