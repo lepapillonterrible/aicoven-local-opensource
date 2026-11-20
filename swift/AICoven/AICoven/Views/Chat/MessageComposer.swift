@@ -1005,7 +1005,7 @@ struct MessageComposer: View {
         }
         attachments = merged.attachments
         // The field changes without being typed in, wherever focus is.
-        AccessibilityNotification.Announcement("Your waiting message is back in the message field").post()
+        AccessibilityNotification.Announcement("Your message is back in the message field").post()
     }
 
     /// Shows suggestions while the text ends in an unfinished @mention.

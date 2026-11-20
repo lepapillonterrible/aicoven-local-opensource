@@ -202,10 +202,10 @@ struct NewThreadComposer: View {
             keepUnsent: { thread, text, files, error in
                 // The kind of failure only.
                 AppErrorReporter.log(message: "Could not send a new thread's first message (\(type(of: error)))", context: "NewThreadComposer.send")
-                // The thread's own composer gives it back, with why; its
-                // files, the thread's by now, are in that composer too.
-                TurnEngine.shared.keepUnsent(text, for: thread.id, because: error.localizedDescription)
-                if !files.isEmpty { ComposerDrafts.shared.set(ComposerDraft(attachments: files), for: thread.id) }
+                // Handed to the thread's own composer, with why: the text
+                // and its files, the thread's by now. In front of anything
+                // typed or attached there meanwhile, never over it.
+                TurnEngine.shared.handBack(ComposerDraft(text: text, attachments: files), to: thread.id, because: error)
             },
             onThreadCreated: onThreadCreated
         )

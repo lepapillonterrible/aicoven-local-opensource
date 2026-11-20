@@ -376,6 +376,21 @@ final class AttachmentStoreTests: XCTestCase {
         await ThreadService.shared.reloadForCurrentUser()
         let shown = try await ThreadService.shared.loadThreads(covenId: nil, includeArchived: true)
         XCTAssertFalse(shown.contains { $0.id == holding })
+        // Nor to the older readers, which read every row of the account's: the agents' own threads, which hold no
+        // payload either, are still theirs to read.
+        let agentThread = try await ThreadRepository.shared.createThread(title: "An agent's thread \(UUID().uuidString)")
+        let all = try await ThreadRepository.shared.fetchAllThreads()
+        XCTAssertFalse(all.contains { $0.id == holding })
+        XCTAssertTrue(all.contains { $0.id == agentThread.id })
+        let opened = try await ThreadRepository.shared.loadThread(id: holding)
+        XCTAssertNil(opened)
+        let agentOpened = try await ThreadRepository.shared.loadThread(id: agentThread.id)
+        XCTAssertEqual(agentOpened?.id, agentThread.id)
+        let isOne = try await ThreadRepository.shared.isThread(holding, of: userID)
+        XCTAssertFalse(isOne)
+        let agentIsOne = try await ThreadRepository.shared.isThread(agentThread.id, of: userID)
+        XCTAssertTrue(agentIsOne)
+        _ = try await ThreadRepository.shared.deleteThread(id: agentThread.id, for: userID)
 
         // A file attached there is read like any other, and moves to the thread made for it without its bytes moving.
         let kept = try await store.add(Data("first".utf8), named: "first.txt", mimeType: "text/plain", toThread: holding)
