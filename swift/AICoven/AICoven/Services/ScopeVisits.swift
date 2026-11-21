@@ -28,9 +28,10 @@ struct ScopeVisitStore {
     }
 
     /// The scope `account` was last in on this device, which is where a
-    /// cold start opens; nil if this device knows of none.
+    /// cold start opens; nil if this device knows of none. (Of two visits
+    /// at the same instant, always the same one.)
     func latest(for account: String) -> ShellScope? {
-        guard let name = visits(for: account).max(by: { $0.value < $1.value })?.key else { return nil }
+        guard let name = visits(for: account).max(by: { ($0.value, $0.key) < ($1.value, $1.key) })?.key else { return nil }
         return name == Self.strix ? .strix : .coven(name)
     }
 

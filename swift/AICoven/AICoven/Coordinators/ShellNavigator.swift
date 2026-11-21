@@ -40,10 +40,10 @@ nonisolated enum ShellSidebarItem: Hashable {
 ///
 /// The shell shows one scope at a time: Strix or a coven. It starts on the
 /// Overview of the scope this device was last in (Strix where it knows of
-/// none), never in a thread. Switching to a scope opens its Overview, even where a
-/// thread was open in it earlier; the other places the person opens (a
-/// thread, Memory, Agents, …) stay open until they move. Settings, where it
-/// is no window of its own, is the person's and not a scope's: it covers
+/// none), never in a thread. Switching to a scope opens its Overview, even
+/// where a thread was open in it earlier; the other places the person opens
+/// (a thread, Memory, Agents, …) stay open until they move. Settings, where
+/// it is no window of its own, is the person's and not a scope's: it covers
 /// the scope's content while open.
 ///
 /// Owns navigation state only: no rendering, no loading, no analytics.
