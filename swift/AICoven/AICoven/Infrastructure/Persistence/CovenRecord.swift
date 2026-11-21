@@ -472,11 +472,18 @@ actor CovenRepository {
         return records.map { mapRecordToRole($0) }
     }
 
+    /// An agent of the signed-in account's, by its id. Another account's
+    /// agent is not found, as one that is not there is not.
     func getRole(roleId: String) async throws -> Role {
+        // Whose agents are read, asked once before anything is waited for.
+        let uid = await MainActor.run { UserScope.currentUserID }
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
         let record: RoleRecord? = try await dbQueue.read { db in
-            try RoleRecord.fetchOne(db, key: roleId)
+            try RoleRecord
+                .filter(RoleRecord.Columns.id == roleId)
+                .filter(RoleRecord.Columns.userId == uid)
+                .fetchOne(db)
         }
 
         guard let record else { throw CovenRepositoryError.roleNotFound }
