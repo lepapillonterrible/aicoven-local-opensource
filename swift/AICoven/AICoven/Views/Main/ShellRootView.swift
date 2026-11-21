@@ -146,16 +146,25 @@ struct ShellRootView: View {
             .onReceive(NotificationCenter.default.publisher(for: .didCreateThread)) { _ in
                 shellThreads.reload()
             }
-        #if !os(macOS)
-            // A deep link leads into Settings, which is a place here (the
-            // Mac's main view opens its Settings window for it). Also the
-            // link that was waiting when this came up.
+            // A link that was opened, also the one waiting when this came
+            // up. One to Strix's new-thread page opens that page, as the
+            // person left it (the link gives it nothing). One
+            // into Settings opens the Settings place here; the Mac's main
+            // view opens its Settings window for it instead.
             .onChange(of: appState.pendingDeepLink, initial: true) { _, target in
                 guard let target else { return }
-                openSettings(HomeView.settingsPlace(for: target))
+                if target == .newThread {
+                    _ = appState.consumeDeepLink()
+                    navigator.select(.strix)
+                    navigator.requestNewThread()
+                    return
+                }
+                #if !os(macOS)
+                guard let place = HomeView.settingsPlace(for: target) else { return }
                 _ = appState.consumeDeepLink()
+                openSettings(place)
+                #endif
             }
-        #endif
             // A thread was deleted, by whatever did it (a new thread whose
             // files could not go into it is deleted again, with no list's
             // action behind it): it is no longer listed, open or marked.

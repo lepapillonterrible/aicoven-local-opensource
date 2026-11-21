@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The app's main view once signed in: the shell, as the cloud app's. On
 /// the Mac it is one split view, with the Settings window opened on request
-/// and deep links, which all lead into Settings. On the iPad and iPhone it
+/// and for a link that leads into Settings. On the iPad and iPhone it
 /// is the split layout where there is room for it (an iPad unless its
 /// width is compact) and the phone's layout otherwise: one view either way,
 /// so a device that changes between them keeps where it is.
@@ -38,11 +38,13 @@ struct HomeView: View {
             .task {
                 AnalyticsService.shared.trackScreenView(screenName: "HomeView", screenClass: "HomeView")
             }
-            // Also the link that was waiting when the window came up.
+            // A link into Settings opens the Settings window (the shell
+            // takes the others). Also the link that was waiting when the
+            // window came up.
             .onChange(of: appState.pendingDeepLink, initial: true) { _, newValue in
-                guard let target = newValue else { return }
-                _ = appState.openSettings(for: HomeView.settingsPlace(for: target))
+                guard let place = newValue.flatMap(HomeView.settingsPlace(for:)) else { return }
                 _ = appState.consumeDeepLink()
+                _ = appState.openSettings(for: place)
             }
             .onChange(of: appState.settingsRequests) { _, _ in
                 openSettingsWindow()
@@ -68,14 +70,16 @@ struct HomeView: View {
         #endif
     }
 
-    /// The place in Settings a deep link leads to.
-    static func settingsPlace(for target: DeepLinkTarget) -> WorkspaceTabType {
+    /// The place in Settings a deep link leads to; nil for a link that
+    /// leads elsewhere.
+    static func settingsPlace(for target: DeepLinkTarget) -> WorkspaceTabType? {
         switch target {
         case .connectedApps: .connectedApps
         case .providerKeys: .providerKeys
         case .budgets: .budget
         case .usage: .usage
         case .settings: .settings
+        case .newThread: nil
         }
     }
 }

@@ -66,6 +66,8 @@ class AuthService: ObservableObject {
         authStateHandle = Auth.auth().addStateDidChangeListener { [weak self] _, firebaseUser in
             Task { @MainActor in
                 self?.isLoading = true
+                // Who is signed in now, for a link that is waiting.
+                AppState.shared.accountReported(firebaseUser?.uid)
                 // Whoever is signed in now, nothing the rows said of the
                 // account before stays said: on signing in, switching,
                 // signing out, and when an account is deleted.
