@@ -218,55 +218,27 @@ struct ProposalCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
-            // Header
-            HStack {
-                VStack(alignment: .leading, spacing: Spacing.xxs) {
-                    if let title = proposal.title {
-                        Text(title)
-                            .font(.aicovenH3)
-                            .foregroundColor(.aicovenTextPrimary)
-                    }
-
-                    HStack(spacing: Spacing.xs) {
-                        // Status badge
-                        StatusBadge(status: proposal.status)
-
-                        // Scope badge
-                        if let scope = proposal.scope {
-                            Text(scope.capitalized)
-                                .font(.aicovenCaption)
-                                .foregroundColor(.aicovenTeal)
-                                .padding(.horizontal, Spacing.xs)
-                                .padding(.vertical, 2)
-                                .background(Color.aicovenGlass)
-                                .cornerRadius(BorderRadius.sm)
+            // Header. Where there is room (a wide window) Approve and Reject
+            // are also here; where there is not (a phone) they are only in
+            // the row of actions below, and the status line keeps its width.
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    titleAndStatus
+                    Spacer()
+                    if proposal.status == "pending" {
+                        HStack(spacing: Spacing.xs) {
+                            GradientButton("Approve", icon: "checkmark", style: .primary) {
+                                onApprove()
+                            }
+                            .frame(width: 100)
+                            GradientButton("Reject", icon: "xmark", style: .secondary) {
+                                onReject()
+                            }
+                            .frame(width: 100)
                         }
-
-                        // Date
-                        Text(proposal.createdAt, style: .relative)
-                            .font(.aicovenCaption)
-                            .foregroundColor(.aicovenTextTertiary)
                     }
                 }
-
-                Spacer()
-
-                // Actions (only for pending proposals)
-                if proposal.status == "pending" {
-                    HStack(spacing: Spacing.xs) {
-                        // Approve button
-                        GradientButton("Approve", icon: "checkmark", style: .primary) {
-                            onApprove()
-                        }
-                        .frame(width: 100)
-
-                        // Reject button
-                        GradientButton("Reject", icon: "xmark", style: .secondary) {
-                            onReject()
-                        }
-                        .frame(width: 100)
-                    }
-                }
+                titleAndStatus
             }
 
             // Content (editable when in edit mode)
@@ -317,65 +289,23 @@ struct ProposalCard: View {
                 }
             }
 
-            // Actions (only for pending proposals)
+            // Actions (only for pending proposals): on one line where they
+            // fit, on two where they do not.
             if proposal.status == "pending" {
-                HStack(spacing: Spacing.xs) {
-                    if isEditing {
-                        GradientButton("Save as Memory", icon: "checkmark", style: .primary) {
-                            onSaveAsMemory(draftContent)
-                        }
-                        .frame(width: 150)
-                        // Disable when the current edited content is effectively
-                        // empty; this avoids silently reusing the original
-                        // proposal text when the user has cleared the field.
-                        .disabled(trimmedDraftContent.isEmpty)
-
-                        Button("Cancel") {
-                            isEditing = false
-                            draftContent = proposal.proposedContent
-                        }
-                        .font(.aicovenBodySmall)
-                        .foregroundColor(.aicovenTeal)
-                        .buttonStyle(.plain)
-                    } else {
-                        GradientButton("Approve", icon: "checkmark", style: .primary) {
-                            onApprove()
-                        }
-                        .frame(width: 100)
-
-                        GradientButton("Reject", icon: "xmark", style: .secondary) {
-                            onReject()
-                        }
-                        .frame(width: 100)
-
-                        Button {
-                            isEditing = true
-                            if draftContent.isEmpty {
-                                draftContent = proposal.proposedContent
-                            }
-                        } label: {
-                            HStack(spacing: Spacing.xxs) {
-                                Image(systemName: "pencil")
-                                Text("Edit")
-                            }
-                            .font(.aicovenBodySmall)
-                            .foregroundColor(.aicovenTeal)
-                        }
-                        .buttonStyle(.plain)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: Spacing.xs) {
+                        mainActions
+                        otherActions
                     }
-
-                    Button(role: .destructive) {
-                        onDelete()
-                    } label: {
-                        HStack(spacing: Spacing.xxs) {
-                            Image(systemName: "trash")
-                            Text("Delete")
-                        }
-                        .font(.aicovenBodySmall)
+                    VStack(alignment: .leading, spacing: Spacing.xs) {
+                        HStack(spacing: Spacing.xs) { mainActions }
+                        HStack(spacing: Spacing.md) { otherActions }
                     }
                 }
             }
         }
+        // As wide as the list, whatever it holds.
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Spacing.md)
         .glassMorphism(cornerRadius: BorderRadius.md)
         .onAppear {
@@ -391,6 +321,111 @@ struct ProposalCard: View {
                 draftContent = newValue
             }
         }
+    }
+
+    /// The title, and under it the status, the scope and when it was
+    /// proposed, each at its own width: none is squeezed into a column.
+    private var titleAndStatus: some View {
+        VStack(alignment: .leading, spacing: Spacing.xxs) {
+            if let title = proposal.title {
+                Text(title)
+                    .font(.aicovenH3)
+                    .foregroundColor(.aicovenTextPrimary)
+            }
+
+            HStack(spacing: Spacing.xs) {
+                // Status badge
+                StatusBadge(status: proposal.status)
+                    .fixedSize()
+
+                // Scope badge
+                if let scope = proposal.scope {
+                    Text(scope.capitalized)
+                        .font(.aicovenCaption)
+                        .foregroundColor(.aicovenTeal)
+                        .lineLimit(1)
+                        .padding(.horizontal, Spacing.xs)
+                        .padding(.vertical, 2)
+                        .background(Color.aicovenGlass)
+                        .cornerRadius(BorderRadius.sm)
+                        .fixedSize()
+                }
+
+                // Date
+                Text(proposal.createdAt, style: .relative)
+                    .font(.aicovenCaption)
+                    .foregroundColor(.aicovenTextTertiary)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    /// Approve and Reject; or, while the text is edited, Save and Cancel.
+    @ViewBuilder
+    private var mainActions: some View {
+        if isEditing {
+            GradientButton("Save as Memory", icon: "checkmark", style: .primary) {
+                onSaveAsMemory(draftContent)
+            }
+            .frame(width: 150)
+            // Disable when the current edited content is effectively
+            // empty; this avoids silently reusing the original
+            // proposal text when the user has cleared the field.
+            .disabled(trimmedDraftContent.isEmpty)
+
+            Button("Cancel") {
+                isEditing = false
+                draftContent = proposal.proposedContent
+            }
+            .font(.aicovenBodySmall)
+            .foregroundColor(.aicovenTeal)
+            .buttonStyle(.plain)
+            .fixedSize()
+        } else {
+            GradientButton("Approve", icon: "checkmark", style: .primary) {
+                onApprove()
+            }
+            .frame(width: 100)
+
+            GradientButton("Reject", icon: "xmark", style: .secondary) {
+                onReject()
+            }
+            .frame(width: 100)
+        }
+    }
+
+    /// Edit (unless the text is being edited) and Delete: words that stay
+    /// whole.
+    @ViewBuilder
+    private var otherActions: some View {
+        if !isEditing {
+            Button {
+                isEditing = true
+                if draftContent.isEmpty {
+                    draftContent = proposal.proposedContent
+                }
+            } label: {
+                HStack(spacing: Spacing.xxs) {
+                    Image(systemName: "pencil")
+                    Text("Edit")
+                }
+                .font(.aicovenBodySmall)
+                .foregroundColor(.aicovenTeal)
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
+        }
+
+        Button(role: .destructive) {
+            onDelete()
+        } label: {
+            HStack(spacing: Spacing.xxs) {
+                Image(systemName: "trash")
+                Text("Delete")
+            }
+            .font(.aicovenBodySmall)
+        }
+        .fixedSize()
     }
 }
 
