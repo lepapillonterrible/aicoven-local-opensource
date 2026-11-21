@@ -27,6 +27,13 @@ struct ScopeVisitStore {
         visits(for: account)[Self.name(of: scope)]
     }
 
+    /// The scope `account` was last in on this device, which is where a
+    /// cold start opens; nil if this device knows of none.
+    func latest(for account: String) -> ShellScope? {
+        guard let name = visits(for: account).max(by: { $0.value < $1.value })?.key else { return nil }
+        return name == Self.strix ? .strix : .coven(name)
+    }
+
     /// Notes that `account` is in `scope` at `now`, and gives back when
     /// they were last there before.
     @discardableResult

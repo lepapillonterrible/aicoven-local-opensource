@@ -19,9 +19,14 @@ struct ShellRootView: View {
     /// Where the shell is. It notes each arrival in a scope on this device,
     /// for the account signed in, so the Overview can say when the person
     /// was last there.
-    @StateObject private var navigator = ShellNavigator(arrive: { scope in
-        ScopeVisitStore().arrive(in: scope, at: Date(), for: UserScope.currentUserID)
-    })
+    @StateObject private var navigator = ShellNavigator(
+        // A cold start opens where this device was last, as read before
+        // this start is itself noted as an arrival.
+        startingIn: ScopeVisitStore().latest(for: UserScope.currentUserID) ?? .strix,
+        arrive: { scope in
+            ScopeVisitStore().arrive(in: scope, at: Date(), for: UserScope.currentUserID)
+        }
+    )
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var shellThreads = ShellThreads()
     /// Rename, archive, delete and copy, for the sidebar's threads. Owned
