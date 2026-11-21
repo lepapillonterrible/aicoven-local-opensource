@@ -290,8 +290,8 @@ struct PersonalChatView: View {
         .sheet(item: $shownTrace) { target in
             WorkTraceSheet(target: target)
         }
-        // When the bound thread changes (e.g. user switches tabs on macOS),
-        // reset and reload the messages/provider keys for the new thread.
+        // When the thread shown changes, what was held of the one before
+        // is let go and the new thread's messages are read.
         .task(id: thread.id) {
             // A recording begun in the thread that was shown is called off.
             voice.cancel()
