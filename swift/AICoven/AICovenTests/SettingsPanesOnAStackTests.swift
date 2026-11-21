@@ -51,6 +51,10 @@ final class SettingsPanesOnAStackTests: XCTestCase {
             _ = try await settled("\(pane.title) left the stack as it arrived") {
                 stack.viewControllers.count == 2 && stack.transitionCoordinator == nil ? stack : nil
             }
+            // And it is still there a moment on: a pane that empties the
+            // path does so as it comes on screen.
+            try await Task.sleep(nanoseconds: 300_000_000)
+            XCTAssertEqual(stack.viewControllers.count, 2, "\(pane.title) left the stack once it had arrived")
             XCTAssertEqual(path.panes, [pane], "\(pane.title) emptied the path that pushed it")
 
             path.panes = []

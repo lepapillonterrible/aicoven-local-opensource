@@ -5,9 +5,10 @@ import SwiftUI
 /// window's title. The Mac's window, and the iPad's layout at regular
 /// width, where Settings is a place in it and not a window.
 ///
-/// It has a second layout over the same state, for a phone: no sidebar,
-/// the scope's Overview as the root of one stack. Being the same view, a
-/// device that changes between the two keeps where it is.
+/// It has a second layout over the same state, which the iPhone shows, and
+/// an iPad at compact width: no sidebar, the scope's Overview as the root
+/// of one stack. Being the same view, a device that changes between the
+/// two keeps where it is.
 struct ShellRootView: View {
     /// The split layout (sidebar and content); false is the phone's.
     var isSplit = true
