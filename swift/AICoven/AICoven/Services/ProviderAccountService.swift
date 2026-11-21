@@ -18,6 +18,9 @@ struct LocalProviderAccount: Codable {
     let baseURL: String?
     let status: String
     let createdAt: Date
+    /// For an OpenClaw connection, the address of its native Gateway, if
+    /// the person gave one.
+    var gatewayURL: String?
 }
 
 extension ProviderAccount {
@@ -50,10 +53,36 @@ enum LocalProviderAccountError: Error {
 enum KeychainHelper {
     /// Base Keychain service; scoped per-user at call sites via UserScope.
     private static var service: String {
-        UserScope.scopedKeychainService("AICovenProviderKeys")
+        service(for: UserScope.currentUserID)
     }
 
-    static func save(key: String, value: String) throws {
+    /// The current account's Keychain service, to keep for work that waits:
+    /// passed back as `service`, what is saved or deleted afterwards is
+    /// that account's, whoever is signed in by then.
+    static var currentService: String {
+        service
+    }
+
+    /// A named account's Keychain service.
+    nonisolated static func service(for userID: String) -> String {
+        UserScope.scopedKeychainService("AICovenProviderKeys", for: userID)
+    }
+
+    static func save(key: String, value: String, service: String? = nil) throws {
+        try save(key: key, value: value, in: service ?? self.service)
+    }
+
+    static func load(key: String, service: String? = nil) -> String? {
+        load(key: key, in: service ?? self.service)
+    }
+
+    static func delete(key: String, service: String? = nil) {
+        delete(key: key, in: service ?? self.service)
+    }
+
+    /// The three above with the service named, which can be called from
+    /// anywhere: nothing here looks at who is signed in.
+    nonisolated static func save(key: String, value: String, in service: String) throws {
         let data = Data(value.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -71,7 +100,7 @@ enum KeychainHelper {
         }
     }
 
-    static func load(key: String) -> String? {
+    nonisolated static func load(key: String, in service: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -87,7 +116,7 @@ enum KeychainHelper {
         return String(data: data, encoding: .utf8)
     }
 
-    static func delete(key: String) {
+    nonisolated static func delete(key: String, in service: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -110,6 +139,36 @@ actor ProviderAccountService {
     /// User-scoped storage key so each Firebase user gets their own provider accounts.
     private var storageKey: String {
         UserScope.scopedKey("provider_accounts.v1")
+    }
+
+    /// OpenRouter's model list is public and about 1 MB, and every chat turn
+    /// rebuilds the model list, so one download is reused for 15 minutes from
+    /// its start, by callers that arrive while it runs too. A failed download
+    /// is not kept.
+    private var openRouterCatalog: (startedAt: Date, download: Task<OpenRouterCatalog, Error>)?
+
+    /// What is kept of OpenRouter's catalog: the models a chat turn can
+    /// use, and every model it lists as taking pictures, whether or not it
+    /// is one of those.
+    struct OpenRouterCatalog {
+        let chatModels: [ProviderInitializationStatus.ModelMetadata]
+        let imageModels: Set<String>
+    }
+
+    #if DEBUG
+    /// Drops the kept catalog, so a test downloads the one it scripts.
+    func forgetOpenRouterCatalog() {
+        openRouterCatalog = nil
+    }
+    #endif
+
+    /// Asks a Gateway what it offers; stood in for by tests.
+    private var gatewayHello: @Sendable (URL, String?) async throws -> OpenClawGatewayHello = { address, token in
+        try await OpenClawGateway.hello(at: address, token: token)
+    }
+
+    func askGateways(with hello: @escaping @Sendable (URL, String?) async throws -> OpenClawGatewayHello) {
+        gatewayHello = hello
     }
 
     private init() {}
@@ -229,7 +288,8 @@ actor ProviderAccountService {
         displayName: String,
         baseURL: String,
         apiKey: String?,
-        defaultModel: String?
+        defaultModel: String?,
+        gatewayURL: String? = nil
     ) async throws -> ProviderAccount {
         var locals = try loadLocalAccounts()
         let now = Date()
@@ -242,7 +302,8 @@ actor ProviderAccountService {
             defaultModel: defaultModel,
             baseURL: baseURL,
             status: "healthy",
-            createdAt: now
+            createdAt: now,
+            gatewayURL: gatewayURL.flatMap { $0.isEmpty ? nil : $0 }
         )
         locals.append(local)
         try saveLocalAccounts(locals)
@@ -259,36 +320,85 @@ actor ProviderAccountService {
         return ProviderAccount(from: local)
     }
 
-    /// Create a local Hermes provider account.
+    /// A token a Gateway issued this device goes with the connection that
+    /// named the Gateway, unless another connection still names it.
+    private func forgetIssuedToken(for gateway: String?, unlessStillNamedIn accounts: [LocalProviderAccount]) {
+        guard let gateway, !accounts.contains(where: { $0.gatewayURL == gateway }) else { return }
+        OpenClawGateway.forgetIssuedToken(for: gateway)
+    }
+
+    /// The Gateway address stored with a connection, if it has one.
+    func gatewayAddress(forAccount id: String) throws -> String? {
+        try loadLocalAccounts().first { $0.id == id }?.gatewayURL
+    }
+
+    /// Create a connection to a Hermes agent: the address of its API server,
+    /// and the key that server was started with, if it was started with one.
     @discardableResult
-    func createHermesAccount(
-        displayName: String,
-        apiKey: String?,
-        baseURL: String?,
-        defaultModel: String?
-    ) async throws -> ProviderAccount {
+    func createHermesAgentAccount(displayName: String, baseURL: String, apiKey: String?) async throws -> ProviderAccount {
         var locals = try loadLocalAccounts()
-        let now = Date()
         let id = UUID().uuidString
         let local = LocalProviderAccount(
             id: id,
             provider: "hermes",
             displayName: displayName,
             scopes: ["chat"],
-            defaultModel: defaultModel,
+            defaultModel: nil,
             baseURL: baseURL,
             status: "healthy",
-            createdAt: now
+            createdAt: Date()
         )
         locals.append(local)
-        try saveLocalAccounts(locals)
-
+        // The key first, as for a server: a failed key save leaves no
+        // connection behind, and a failed account save takes its key back out.
         if let apiKey, !apiKey.isEmpty {
             try KeychainHelper.save(key: keychainKey(for: id), value: apiKey)
         }
+        do {
+            try saveLocalAccounts(locals)
+        } catch {
+            KeychainHelper.delete(key: keychainKey(for: id))
+            throw error
+        }
 
-        updateProviderConfigCache(provider: "hermes", baseURL: baseURL)
-        clearLegacyAPIKeyCache(provider: "hermes")
+        await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
+
+        return ProviderAccount(from: local)
+    }
+
+    /// Create a connection to a server that speaks the OpenAI chat API. The
+    /// key is optional: many servers on a person's own machine ask for none.
+    @discardableResult
+    func createOpenAICompatibleAccount(
+        displayName: String,
+        baseURL: String,
+        apiKey: String?,
+        defaultModel: String?
+    ) async throws -> ProviderAccount {
+        var locals = try loadLocalAccounts()
+        let id = UUID().uuidString
+        let local = LocalProviderAccount(
+            id: id,
+            provider: "openai_compatible",
+            displayName: displayName,
+            scopes: ["chat"],
+            defaultModel: defaultModel,
+            baseURL: baseURL,
+            status: "healthy",
+            createdAt: Date()
+        )
+        locals.append(local)
+        // The key first: a failed key save then leaves no connection behind,
+        // and a failed account save takes its key back out.
+        if let apiKey, !apiKey.isEmpty {
+            try KeychainHelper.save(key: keychainKey(for: id), value: apiKey)
+        }
+        do {
+            try saveLocalAccounts(locals)
+        } catch {
+            KeychainHelper.delete(key: keychainKey(for: id))
+            throw error
+        }
 
         await MainActor.run { NotificationCenter.default.post(name: .providerKeysUpdated, object: nil) }
 
@@ -301,7 +411,8 @@ actor ProviderAccountService {
         displayName: String? = nil,
         apiKey: String? = nil,
         baseURL: String? = nil,
-        defaultModel: String? = nil
+        defaultModel: String? = nil,
+        gatewayURL: String? = nil
     ) async throws {
         var locals = try loadLocalAccounts()
         guard let index = locals.firstIndex(where: { $0.id == id }) else {
@@ -314,12 +425,18 @@ actor ProviderAccountService {
             displayName: displayName ?? old.displayName,
             scopes: old.scopes,
             defaultModel: defaultModel ?? old.defaultModel,
-            baseURL: baseURL ?? old.baseURL,
+            // An empty address clears it, and the provider's own applies again.
+            baseURL: baseURL.map { $0.isEmpty ? nil : $0 } ?? old.baseURL,
             status: old.status,
-            createdAt: old.createdAt
+            createdAt: old.createdAt,
+            // As for the address: not given leaves it, empty clears it.
+            gatewayURL: gatewayURL.map { $0.isEmpty ? nil : $0 } ?? old.gatewayURL
         )
         locals[index] = updated
         try saveLocalAccounts(locals)
+        if old.gatewayURL != updated.gatewayURL {
+            forgetIssuedToken(for: old.gatewayURL, unlessStillNamedIn: locals)
+        }
 
         // Update Keychain if API key changed. Do not mirror secrets into UserDefaults.
         if let apiKey, !apiKey.isEmpty {
@@ -346,6 +463,7 @@ actor ProviderAccountService {
 
         // Remove Keychain entry
         KeychainHelper.delete(key: keychainKey(for: id))
+        forgetIssuedToken(for: removed.gatewayURL, unlessStillNamedIn: locals)
 
         // If this was the last account for its provider, clear the global
         // UserDefaults API key hint so the UI can surface a proper error.
@@ -368,17 +486,103 @@ actor ProviderAccountService {
             throw LocalProviderAccountError.accountNotFound
         }
         let models: [ProviderInitializationStatus.ModelMetadata]
-        do {
-            models = try await fetchRemoteModels(for: account)
-        } catch {
-            AppErrorReporter.log(error: error, context: "ProviderAccountService.getInitializationStatus.fetchRemoteModels")
+        if account.provider.lowercased() == "hermes" {
+            // A Hermes agent has no models to choose among, so the screens
+            // that list a connection's models do not ask it: only Test does.
             models = []
+        } else {
+            do {
+                models = try await fetchRemoteModels(for: account)
+            } catch {
+                AppErrorReporter.log(error: error, context: "ProviderAccountService.getInitializationStatus.fetchRemoteModels")
+                models = []
+            }
         }
         return ProviderInitializationStatus(
             providerAccountId: account.id,
             status: "initialized",
             modelMetadata: models
         )
+    }
+
+    /// Ask OpenRouter whether it accepts an account's stored key, without
+    /// running a model. OpenRouter's model list is public, so listing models
+    /// cannot tell a refused key from a working one.
+    func checkOpenRouterKey(accountId: String) async throws {
+        guard let apiKey = KeychainHelper.load(key: keychainKey(for: accountId)) else {
+            throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing OpenRouter API key for account \(accountId)"])
+        }
+        var request = URLRequest(url: OpenAILLMClient.openRouterBaseURL.appendingPathComponent("key"))
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        let (_, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
+            throw NSError(
+                domain: "ProviderAccountService",
+                code: http.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "OpenRouter key check HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."]
+            )
+        }
+    }
+
+    /// Tests an account against its provider and records the outcome as the
+    /// account's status. It reads the models the account can use; for
+    /// OpenRouter, whose model list is public, it first asks whether the key
+    /// is accepted. Returns the number of models, and throws what failed.
+    @discardableResult
+    func testConnection(accountId: String) async throws -> Int {
+        guard let account = try loadLocalAccounts().first(where: { $0.id == accountId }) else {
+            throw LocalProviderAccountError.accountNotFound
+        }
+        let testedKey = KeychainHelper.load(key: keychainKey(for: accountId))
+        let outcome: Result<Int, Error>
+        do {
+            if account.provider.lowercased() == "openrouter" {
+                try await checkOpenRouterKey(accountId: accountId)
+            }
+            if let gateway = account.gatewayURL {
+                // A connection with a Gateway is tested at its Gateway,
+                // where its turns run: that it answers as one, takes this
+                // device and the token, and offers what a turn needs.
+                guard let address = OpenClawGatewayConnection.address(gateway) else { throw OpenClawGatewayError.invalidAddress }
+                let hello = try await gatewayHello(address, testedKey)
+                if let missing = hello.missing { throw OpenClawGatewayError.notSupported(missing) }
+                // The models are asked of the server address with the key
+                // as it is stored now. If either was edited while the
+                // Gateway answered, the new key is not sent to the old
+                // address: the models are not asked.
+                let current = try loadLocalAccounts().first { $0.id == accountId }
+                let unchanged = current?.baseURL == account.baseURL && KeychainHelper.load(key: keychainKey(for: accountId)) == testedKey
+                outcome = unchanged ? await .success((try? fetchRemoteModels(for: account).count) ?? 0) : .success(0)
+            } else {
+                outcome = try await .success(fetchRemoteModels(for: account).count)
+            }
+        } catch {
+            outcome = .failure(error)
+        }
+        // Read again: the account may have been edited or deleted while the
+        // provider answered. The outcome is about the address and key that
+        // were tested, so it is recorded only if they are still the ones
+        // stored.
+        var locals = try loadLocalAccounts()
+        if let index = locals.firstIndex(where: { $0.id == accountId }),
+           locals[index].baseURL == account.baseURL,
+           locals[index].gatewayURL == account.gatewayURL,
+           KeychainHelper.load(key: keychainKey(for: accountId)) == testedKey {
+            let current = locals[index]
+            locals[index] = LocalProviderAccount(
+                id: current.id,
+                provider: current.provider,
+                displayName: current.displayName,
+                scopes: current.scopes,
+                defaultModel: current.defaultModel,
+                baseURL: current.baseURL,
+                status: (try? outcome.get()) == nil ? "unhealthy" : "healthy",
+                createdAt: current.createdAt,
+                gatewayURL: current.gatewayURL
+            )
+            try saveLocalAccounts(locals)
+        }
+        return try outcome.get()
     }
 
     /// Run initialization for a provider account. In the local-only client we
@@ -416,23 +620,94 @@ actor ProviderAccountService {
         }
     }
 
+    /// What chat chooses a model from: the models the router picks among,
+    /// and, by provider, every model the provider's own list says takes
+    /// pictures (for OpenRouter, every such model in its catalog, of which
+    /// the router is given one model).
+    struct ModelCatalog {
+        var routed: [ModelDescriptor] = []
+        var imageModels: [String: Set<String>] = [:]
+    }
+
     /// Build dynamic ModelDescriptors for all configured provider accounts
     /// using live ListModels responses. Only chat-capable models are included.
     func loadAllModelDescriptors() async throws -> [ModelDescriptor] {
+        try await loadModelCatalog().routed
+    }
+
+    /// The same, with the models listed as taking pictures.
+    func loadModelCatalog() async throws -> ModelCatalog {
         let locals = try loadLocalAccounts()
         var descriptors: [ModelDescriptor] = []
+        var imageModels: [String: Set<String>] = [:]
+
+        // Chat reaches one OpenAI-compatible server, the first connected, so
+        // only its models are offered.
+        let compatibleServerID = locals.first { $0.provider.lowercased() == "openai_compatible" }?.id
 
         for account in locals {
             let providerID = account.provider.lowercased()
+            if providerID == "openai_compatible", account.id != compatibleServerID { continue }
+            // A Hermes agent has no models for the router to choose among,
+            // and is not asked for any here: this runs before every turn,
+            // and an agent that is switched off would hold each one up.
+            if providerID == "hermes" { continue }
             let metadata: [ProviderInitializationStatus.ModelMetadata]
             do {
                 metadata = try await fetchRemoteModels(for: account)
             } catch {
                 AppErrorReporter.log(error: error, context: "ProviderAccountService.loadAllModelDescriptors.fetchRemoteModels.\(providerID)")
-                continue
+                // A server's model list can fail while it still answers
+                // chat, so its chosen model stays on offer below.
+                guard providerID == "openai_compatible" else { continue }
+                metadata = []
             }
 
-            for modelMeta in metadata {
+            // Every model the catalog just read lists as taking pictures,
+            // those a chat turn is not offered included.
+            if providerID == "openrouter", let seeing = try? await openRouterCatalog?.download.value.imageModels {
+                imageModels[providerID] = seeing
+            }
+
+            // The router picks by a coarse cost class, which cannot rank
+            // OpenRouter's whole catalog, so it sees one OpenRouter model: the
+            // one chosen in Strix settings, whether or not the catalog still
+            // lists it, or the catalog's default when none is chosen.
+            var routed = metadata
+            if providerID == "openrouter" {
+                if let chosen = UserDefaults.standard.string(forKey: UserScope.scopedKey("openrouter_model")) {
+                    routed = [metadata.first { $0.id == chosen } ?? ProviderInitializationStatus.ModelMetadata(
+                        id: chosen,
+                        name: chosen,
+                        provider: "openrouter",
+                        contextLength: nil,
+                        // Not among the models chat is offered, but the
+                        // catalog may still say it takes pictures.
+                        takesImages: imageModels["openrouter"]?.contains(chosen)
+                    )]
+                } else {
+                    routed = Array(metadata.prefix(1))
+                }
+            }
+            // A server's models cannot be ranked by cost class either, so the
+            // router sees one: the model chosen in Strix settings, else the
+            // one chosen when the server was connected, else the first listed.
+            if providerID == "openai_compatible" {
+                let chosen = UserDefaults.standard.string(forKey: UserScope.scopedKey("openai_compatible_model"))
+                    ?? account.defaultModel
+                if let chosen {
+                    routed = [metadata.first { $0.id == chosen } ?? ProviderInitializationStatus.ModelMetadata(
+                        id: chosen,
+                        name: chosen,
+                        provider: "openai_compatible",
+                        contextLength: nil
+                    )]
+                } else {
+                    routed = Array(metadata.prefix(1))
+                }
+            }
+
+            for modelMeta in routed {
                 let context = modelMeta.contextLength ?? 128_000
                 let cost: ModelDescriptor.CostClass
                 let lowerID = modelMeta.id.lowercased()
@@ -444,14 +719,16 @@ actor ProviderAccountService {
                     cost = .expensive
                 }
 
+                let provider = modelMeta.provider?.lowercased() ?? providerID
                 descriptors.append(
                     ModelDescriptor(
-                        providerID: modelMeta.provider?.lowercased() ?? providerID,
+                        providerID: provider,
                         modelID: modelMeta.id,
                         maxContextTokens: context,
                         supportsTools: true,
                         supportsEmbeddings: false,
-                        costClass: cost
+                        costClass: cost,
+                        takesImages: ModelDescriptor.takesImages(providerID: provider, modelID: modelMeta.id, listed: modelMeta.takesImages)
                     )
                 )
             }
@@ -479,7 +756,7 @@ actor ProviderAccountService {
             )
         }
 
-        return descriptors
+        return ModelCatalog(routed: descriptors, imageModels: imageModels)
     }
 
     /// Helper to refresh all provider accounts for the current user in parallel.
@@ -512,6 +789,52 @@ actor ProviderAccountService {
 // MARK: - ProviderAccountService Private Helpers
 
 extension ProviderAccountService {
+    /// The Hermes agent the app runs Hermes turns with: the first one
+    /// connected.
+    static func hermesAgent() -> HermesAgentClient? {
+        guard let account = loadLocalAccountsFromDefaults().first(where: { $0.provider.lowercased() == "hermes" }),
+              let baseURL = account.baseURL.flatMap(LocalProviderDiscoveryService.serverBaseURL(from:)) else {
+            return nil
+        }
+        let key = KeychainHelper.load(key: keychainKey(forAccountId: account.id))
+        return HermesAgentClient(baseURL: baseURL, apiKey: key?.isEmpty == false ? key : nil)
+    }
+
+    /// The OpenClaw Gateway the app runs OpenClaw turns through: that of
+    /// the first OpenClaw connection, if it names one, with that
+    /// connection's token.
+    static func openClawGateway() -> (address: URL, token: String?)? {
+        guard let (account, address) = openClawConnectionWithGateway() else { return nil }
+        let token = KeychainHelper.load(key: keychainKey(forAccountId: account.id))
+        return (address, token?.isEmpty == false ? token : nil)
+    }
+
+    /// Whether OpenClaw runs its turns itself: its connection names its
+    /// Gateway. Reads no secret.
+    static var openClawRunsItsTurns: Bool {
+        openClawConnectionWithGateway() != nil
+    }
+
+    private static func openClawConnectionWithGateway() -> (account: LocalProviderAccount, address: URL)? {
+        guard let account = loadLocalAccountsFromDefaults().first(where: { $0.provider.lowercased() == "openclaw" }),
+              let address = account.gatewayURL.flatMap(OpenClawGatewayConnection.address) else {
+            return nil
+        }
+        return (account, address)
+    }
+
+    /// The OpenAI-compatible server chat reaches: the first connected, with
+    /// its own key. Both come from the same connection, so one server's key
+    /// is never sent to another.
+    static func openAICompatibleServer() -> (baseURL: URL, apiKey: String?)? {
+        guard let account = loadLocalAccountsFromDefaults().first(where: { $0.provider.lowercased() == "openai_compatible" }),
+              let baseURL = account.baseURL.flatMap(URL.init(string:)), baseURL.host != nil else {
+            return nil
+        }
+        let key = KeychainHelper.load(key: keychainKey(forAccountId: account.id))
+        return (baseURL, key?.isEmpty == false ? key : nil)
+    }
+
     /// Resolve the first configured API key for a provider from Keychain using
     /// user-scoped account metadata. This intentionally bypasses UserDefaults
     /// secret mirrors; UserDefaults may only contain non-secret metadata.
@@ -521,9 +844,6 @@ extension ProviderAccountService {
             let lower = candidate.lowercased()
             if normalized == "google" || normalized == "gemini" {
                 return lower == "google" || lower == "gemini"
-            }
-            if normalized == "hermes" || normalized == "together" {
-                return lower == "hermes" || lower == "together"
             }
             return lower == normalized
         }
@@ -557,6 +877,7 @@ extension ProviderAccountService {
     }
 
     private static func loadLocalAccountsFromDefaults() -> [LocalProviderAccount] {
+        convertHermesModelConnectionsIfNeeded()
         let storageKey = UserScope.scopedKey("provider_accounts.v1")
         guard let data = UserDefaults.standard.data(forKey: storageKey) else {
             return []
@@ -573,6 +894,144 @@ extension ProviderAccountService {
         "provider-account-\(accountId)"
     }
 
+    // MARK: - Hermes model connections
+
+    static let togetherAddress = "https://api.together.xyz"
+
+    /// "Hermes" used to mean Nous Research's Hermes models, served by
+    /// Together AI or by a server of the person's own, over the OpenAI chat
+    /// API. Such a connection becomes what it is: an OpenAI-compatible
+    /// server, at Together AI's address when it named none, with the model
+    /// it was using. Its id stays, and so its key stays where it is in the
+    /// Keychain. Done once for each account on this device, before anything
+    /// reads the connections or the provider chosen for replies: "hermes"
+    /// is to mean the Hermes agent, whose connections must not be taken for
+    /// these.
+    static func convertHermesModelConnectionsIfNeeded() {
+        // One at a time: the connections are read from the chat's own
+        // actor and from this service's, and a second conversion begun
+        // before the first had finished would work from what the first
+        // was in the middle of changing.
+        hermesConversion.withLock {
+            let defaults = UserDefaults.standard
+            let doneKey = UserScope.scopedKey("hermes_model_connections_converted.v1")
+            guard !defaults.bool(forKey: doneKey) else { return }
+            let storageKey = UserScope.scopedKey("provider_accounts.v1")
+            do {
+                // No connections stored is none to convert; a choice of
+                // Hermes can still have been left behind.
+                let accounts = try defaults.data(forKey: storageKey).map {
+                    try JSONDecoder().decode([LocalProviderAccount].self, from: $0)
+                } ?? []
+                let alias = defaults.string(forKey: UserScope.scopedKey("hermes_model"))
+                let isHermes: (LocalProviderAccount) -> Bool = { ["hermes", "together"].contains($0.provider.lowercased()) }
+                let existingServer = accounts.first { $0.provider.lowercased() == "openai_compatible" }
+                var convertedIDs: Set<String> = []
+                var converted = accounts.map { account -> LocalProviderAccount in
+                    guard isHermes(account) else { return account }
+                    convertedIDs.insert(account.id)
+                    let ownAddress = account.baseURL.flatMap { $0.isEmpty ? nil : $0 }
+                    let address = ownAddress ?? togetherAddress
+                    let named = account.defaultModel ?? alias ?? "hermes-3"
+                    // Together AI is sent the name it knows; a server of the
+                    // person's own, the name as they gave it.
+                    let isTogether = URL(string: address)?.host?.lowercased() == URL(string: togetherAddress)?.host
+                    return LocalProviderAccount(
+                        id: account.id,
+                        provider: "openai_compatible",
+                        displayName: account.displayName,
+                        scopes: account.scopes,
+                        defaultModel: isTogether ? togetherModelID(for: named) : named,
+                        baseURL: address,
+                        status: account.status,
+                        createdAt: account.createdAt
+                    )
+                }
+                // The model in use is the server in use's: the earlier
+                // server's own where there is one, else the converted
+                // connection's.
+                let modelKey = UserScope.scopedKey("openai_compatible_model")
+                let inUse = existingServer ?? converted.first { convertedIDs.contains($0.id) }
+                let model = (existingServer == nil ? nil : defaults.string(forKey: modelKey)) ?? inUse?.defaultModel
+                // First, so that a failure after it leaves the connections
+                // to be converted again, to the same end.
+                try moveChosenProviderOffHermes(toServerWith: convertedIDs.isEmpty ? nil : model, isConverted: !convertedIDs.isEmpty)
+                if !convertedIDs.isEmpty {
+                    // Each stays where it was listed, so what comes first
+                    // among the other providers does not change. The server
+                    // in use is the first one listed, though, so a converted
+                    // connection listed before a server connected earlier
+                    // goes just after it: that server keeps its place.
+                    if let existingServer, let place = converted.firstIndex(where: { $0.id == existingServer.id }) {
+                        let ahead = converted[..<place].filter { convertedIDs.contains($0.id) }
+                        converted.removeAll { account in ahead.contains { $0.id == account.id } }
+                        let after = converted.firstIndex { $0.id == existingServer.id }.map { $0 + 1 } ?? converted.endIndex
+                        converted.insert(contentsOf: ahead, at: after)
+                    }
+                    try defaults.set(JSONEncoder().encode(converted), forKey: storageKey)
+                    if existingServer == nil, let model {
+                        defaults.set(model, forKey: modelKey)
+                    }
+                }
+                defaults.removeObject(forKey: UserScope.scopedKey("hermes_base_url"))
+                defaults.removeObject(forKey: UserScope.scopedKey("hermes_model"))
+                defaults.set(true, forKey: doneKey)
+            } catch {
+                // Left to be tried again: nothing has been changed.
+                AppErrorReporter.log(error: error, context: "ProviderAccountService.convertHermesModelConnections")
+            }
+        }
+    }
+
+    private static let hermesConversion = NSLock()
+
+    /// The name Together AI knows a Hermes model by, for the short names
+    /// this app used.
+    static func togetherModelID(for alias: String) -> String {
+        let known = [
+            "hermes-3": "NousResearch/Hermes-3-Llama-3.1-405B-Turbo",
+            "hermes-3-405b": "NousResearch/Hermes-3-Llama-3.1-405B-Turbo",
+            "hermes-3-70b": "NousResearch/Hermes-3-Llama-3.1-70B",
+            "hermes-3-8b": "NousResearch/Hermes-3-Llama-3.1-8B",
+            "hermes-2": "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO",
+            "hermes-2-mixtral": "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO",
+            "hermes-2-mistral": "NousResearch/Nous-Hermes-2-Mistral-7B-DPO",
+            "hermes-2-vision": "NousResearch/Nous-Hermes-2-Vision-Alpha",
+        ]
+        return known[alias.lowercased()] ?? alias
+    }
+
+    /// Hermes stops being the provider chosen for replies, wherever that
+    /// is stored. Where a connection was converted, the server is chosen in
+    /// its place, with the model of the server in use. Where none was (the
+    /// Hermes connection had been removed and the choice left behind),
+    /// nothing is chosen, and the app falls back as it does for any
+    /// provider that is not connected: left as it was, the choice would
+    /// come to mean the Hermes agent.
+    private static func moveChosenProviderOffHermes(toServerWith model: String?, isConverted: Bool) throws {
+        let defaults = UserDefaults.standard
+        let providerKey = UserScope.scopedKey("llm_provider")
+        if defaults.string(forKey: providerKey)?.lowercased() == "hermes" {
+            if isConverted {
+                defaults.set("openai_compatible", forKey: providerKey)
+            } else {
+                defaults.removeObject(forKey: providerKey)
+            }
+        }
+        let settingsKey = UserScope.scopedKey("strix_settings.v1")
+        // Settings that cannot be read name no provider to anything that
+        // reads them, and are replaced the next time they are saved.
+        guard let data = defaults.data(forKey: settingsKey),
+              var settings = try? JSONDecoder().decode(LocalStrixSettings.self, from: data),
+              settings.provider?.lowercased() == "hermes" else { return }
+        settings.provider = isConverted ? "openai_compatible" : nil
+        settings.model = isConverted ? model : nil
+        if !isConverted {
+            settings.providerAccountId = nil
+        }
+        try defaults.set(JSONEncoder().encode(settings), forKey: settingsKey)
+    }
+
     private static func sanitizedHTTPError(provider: String, statusCode: Int) -> NSError {
         NSError(
             domain: "ProviderAccountService",
@@ -582,6 +1041,7 @@ extension ProviderAccountService {
     }
 
     private func loadLocalAccounts() throws -> [LocalProviderAccount] {
+        Self.convertHermesModelConnectionsIfNeeded()
         let defaults = UserDefaults.standard
         guard let data = defaults.data(forKey: storageKey) else {
             return []
@@ -607,15 +1067,13 @@ extension ProviderAccountService {
     private func updateProviderConfigCache(provider: String, baseURL: String? = nil) {
         let defaults = UserDefaults.standard
         clearLegacyAPIKeyCache(provider: provider)
-        switch provider.lowercased() {
-        case "ollama":
-            if let baseURL { defaults.set(baseURL, forKey: UserScope.scopedKey("ollama_base_url")) }
-        case "openclaw":
-            if let baseURL { defaults.set(baseURL, forKey: UserScope.scopedKey("openclaw_base_url")) }
-        case "hermes":
-            if let baseURL { defaults.set(baseURL, forKey: UserScope.scopedKey("hermes_base_url")) }
-        default:
-            break
+        guard let baseURL, ["ollama", "openclaw"].contains(provider.lowercased()) else { return }
+        let key = UserScope.scopedKey("\(provider.lowercased())_base_url")
+        // An empty address is no address, as it is in the stored account.
+        if baseURL.isEmpty {
+            defaults.removeObject(forKey: key)
+        } else {
+            defaults.set(baseURL, forKey: key)
         }
     }
 
@@ -630,8 +1088,8 @@ extension ProviderAccountService {
             defaults.removeObject(forKey: "MLXModelManager.downloadedModelIDs")
         case "openclaw":
             defaults.removeObject(forKey: UserScope.scopedKey("openclaw_base_url"))
-        case "hermes":
-            defaults.removeObject(forKey: UserScope.scopedKey("hermes_base_url"))
+        case "openai_compatible":
+            defaults.removeObject(forKey: UserScope.scopedKey("openai_compatible_model"))
         default:
             break
         }
@@ -756,10 +1214,13 @@ extension ProviderAccountService {
                     contextLength: 128_000
                 )
             }
-        case "openclaw", "hermes":
+        case "openclaw", "openai_compatible", "hermes":
             let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) ?? ""
-            let baseURLStr = account.baseURL ?? (provider == "openclaw" ? "http://localhost:3000" : "https://api.together.xyz")
-            guard let url = URL(string: baseURLStr)?.appendingPathComponent("v1/models") else {
+            let defaultBaseURL = switch provider {
+            case "openclaw": "http://localhost:3000"
+            default: ""
+            }
+            guard let url = URL(string: account.baseURL ?? defaultBaseURL)?.appendingPathComponent("v1/models"), url.host != nil else {
                 throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid base URL for \(provider)"])
             }
             struct OpenAIListResponse: Decodable { struct Item: Decodable { let id: String }
@@ -773,7 +1234,7 @@ extension ProviderAccountService {
             request.setValue("application/json", forHTTPHeaderField: "Accept")
             let (data, response) = try await URLSession.shared.data(for: request)
             if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-                throw Self.sanitizedHTTPError(provider: provider, statusCode: http.statusCode)
+                throw Self.sanitizedHTTPError(provider: provider == "openai_compatible" ? "Server" : provider, statusCode: http.statusCode)
             }
             let decoded = try JSONDecoder().decode(OpenAIListResponse.self, from: data)
             let chatOnly = decoded.data
@@ -787,6 +1248,31 @@ extension ProviderAccountService {
                     provider: provider,
                     contextLength: nil
                 )
+            }
+        case "openrouter":
+            if let cached = openRouterCatalog, Date().timeIntervalSince(cached.startedAt) < 15 * 60 {
+                return try await cached.download.value.chatModels
+            }
+            let download = Task {
+                var request = URLRequest(url: OpenAILLMClient.openRouterBaseURL.appendingPathComponent("models"))
+                request.setValue("application/json", forHTTPHeaderField: "Accept")
+                let (data, response) = try await URLSession.shared.data(for: request)
+                if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
+                    throw Self.sanitizedHTTPError(provider: "OpenRouter", statusCode: http.statusCode)
+                }
+                return try OpenRouterCatalog(
+                    chatModels: Self.openRouterToolModels(from: data),
+                    imageModels: Self.openRouterImageModels(from: data)
+                )
+            }
+            openRouterCatalog = (Date(), download)
+            do {
+                return try await download.value.chatModels
+            } catch {
+                if openRouterCatalog?.download == download {
+                    openRouterCatalog = nil
+                }
+                throw error
             }
         case "anthropic":
             guard let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) else {
@@ -826,6 +1312,75 @@ extension ProviderAccountService {
             // Other providers: fall back to static metadata for now.
             throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "No remote model fetch implemented for provider \(provider)"])
         }
+    }
+
+    /// The models in OpenRouter's catalog that a chat turn can use, default
+    /// model first: those served at the chat completions endpoint (a `:batch`
+    /// variant is served only at the batch endpoint) that support tool
+    /// calling. A chat turn may carry tools, and OpenRouter refuses a request
+    /// with tools for a model that does not support them.
+    ///
+    /// The default is the first Claude Sonnet, else GPT, else Gemini model in
+    /// the catalog. An id with a `:` suffix is a variant of a model (`:free`,
+    /// `:batch`) with its own limits, so it is never the default.
+    static func openRouterToolModels(from data: Data) throws -> [ProviderInitializationStatus.ModelMetadata] {
+        struct Catalog: Decodable {
+            struct Model: Decodable {
+                let id: String
+                let name: String?
+                let context_length: Int?
+                let supported_parameters: [String]?
+                let endpoints: [String]?
+                let architecture: Architecture?
+            }
+
+            struct Architecture: Decodable {
+                let input_modalities: [String]?
+            }
+
+            let data: [Model]
+        }
+        var models = try JSONDecoder().decode(Catalog.self, from: data).data
+            .filter { $0.supported_parameters?.contains("tools") == true }
+            .filter { $0.endpoints?.contains("/api/v1/chat/completions") == true }
+            .map { model in
+                ProviderInitializationStatus.ModelMetadata(
+                    id: model.id,
+                    name: model.name ?? model.id,
+                    provider: "openrouter",
+                    contextLength: model.context_length,
+                    takesImages: model.architecture?.input_modalities?.contains("image") == true
+                )
+            }
+        for prefix in ["anthropic/claude-sonnet", "openai/gpt-", "google/gemini-"] {
+            if let index = models.firstIndex(where: { $0.id.hasPrefix(prefix) && !$0.id.contains(":") }) {
+                models.insert(models.remove(at: index), at: 0)
+                break
+            }
+        }
+        return models
+    }
+
+    /// Every model in OpenRouter's catalog that lists `image` among what it
+    /// takes in, whether or not a chat turn is offered it.
+    static func openRouterImageModels(from data: Data) throws -> Set<String> {
+        struct Catalog: Decodable {
+            struct Model: Decodable {
+                let id: String
+                let architecture: Architecture?
+            }
+
+            struct Architecture: Decodable {
+                let input_modalities: [String]?
+            }
+
+            let data: [Model]
+        }
+        return try Set(
+            JSONDecoder().decode(Catalog.self, from: data).data
+                .filter { $0.architecture?.input_modalities?.contains("image") == true }
+                .map(\.id)
+        )
     }
 
     /// Heuristic filter to decide whether a model ID represents a chat model

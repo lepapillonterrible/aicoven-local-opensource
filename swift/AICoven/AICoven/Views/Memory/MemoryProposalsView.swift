@@ -12,6 +12,10 @@ struct MemoryProposalsView: View {
     @State private var selectedStatus = "pending"
     @State private var isLoading = false
     @State private var errorMessage: String?
+    /// Counts the loads, so that only the latest is shown.
+    @State private var loads = 0
+    /// The proposals being reviewed now: their buttons are off meanwhile.
+    @State private var reviewing: Set<String> = []
 
     let statuses = ["pending", "approved", "rejected", "all"]
 
@@ -49,6 +53,8 @@ struct MemoryProposalsView: View {
                                     )
                             }
                             .buttonStyle(.plain)
+                            // Which filter is on is not only its colour.
+                            .accessibilityAddTraits(selectedStatus == status ? .isSelected : [])
                         }
                     }
                 }
@@ -94,6 +100,8 @@ struct MemoryProposalsView: View {
                                         }
                                     }
                                 )
+                                // One review of a proposal at a time.
+                                .disabled(reviewing.contains(proposal.id))
                             }
                         }
                         .padding(Spacing.lg)
@@ -108,111 +116,80 @@ struct MemoryProposalsView: View {
 
     // MARK: - Actions
 
-    /// Load proposals from API
+    /// Reads the scope's proposals of the status chosen. Only the latest
+    /// load is shown, and only to the account that asked.
     private func loadProposals() async {
+        loads += 1
+        let load = loads
+        let account = UserScope.currentUserID
         isLoading = true
         errorMessage = nil
-
+        let loaded: Result<[MemoryProposal], Error>
         do {
-            proposals = try await MemoryService.shared.listProposals(
-                covenId: covenId,
-                status: selectedStatus
-            )
+            loaded = try await .success(MemoryService.shared.listProposals(covenId: covenId, status: selectedStatus))
         } catch {
-            errorMessage = error.localizedDescription
+            loaded = .failure(error)
         }
-
+        guard load == loads, UserScope.currentUserID == account else { return }
+        switch loaded {
+        case let .success(found): proposals = found
+        case let .failure(error): errorMessage = error.localizedDescription
+        }
         isLoading = false
     }
 
-    /// Review a proposal (approve/reject only – used by the Approve/Reject
-    /// buttons. Edit/save/delete flows are handled separately below.)
-    private func reviewProposal(_ proposal: MemoryProposal, action: String) async {
+    /// Runs one review of a proposal: nothing while another of it is under
+    /// way here. What it settled as replaces it in the list, or takes it
+    /// out of the pending ones; what could not be done is said, to the
+    /// account that asked. A proposal that turned out to be reviewed
+    /// already is read again with the rest.
+    private func review(_ proposal: MemoryProposal, failing what: String, _ run: () async throws -> MemoryProposal) async {
+        guard reviewing.insert(proposal.id).inserted else { return }
+        defer { reviewing.remove(proposal.id) }
+        let account = UserScope.currentUserID
         do {
-            let updated = try await MemoryService.shared.reviewProposal(
-                proposalId: proposal.id,
-                action: action
-            )
-            // Update in local list
+            let updated = try await run()
+            guard UserScope.currentUserID == account else { return }
             if let index = proposals.firstIndex(where: { $0.id == updated.id }) {
                 proposals[index] = updated
             }
-            // If we are showing only pending proposals, remove non-pending ones
             if selectedStatus == "pending", updated.status != "pending" {
                 proposals.removeAll { $0.id == updated.id }
             }
         } catch {
-            errorMessage = "Failed to \(action) proposal: \(error.localizedDescription)"
+            guard UserScope.currentUserID == account else { return }
+            // Reviewed already, here or in another window: the card was out
+            // of date. The list is read again and shows it as it is; that
+            // load says for itself what it finds, and nothing is said over
+            // a newer one.
+            if error as? ProposalReviewError == .alreadyReviewed {
+                return await loadProposals()
+            }
+            errorMessage = "Failed to \(what): \(error.localizedDescription)"
         }
     }
 
-    /// Save the (possibly edited) proposal content as a real memory chunk and
-    /// mark the underlying proposal as rejected so it no longer appears as
-    /// pending. This lets users treat proposals as editable drafts without
-    /// requiring backend schema changes.
+    /// Approve or reject, from the buttons of those names.
+    private func reviewProposal(_ proposal: MemoryProposal, action: String) async {
+        await review(proposal, failing: "\(action) proposal") {
+            try await MemoryService.shared.reviewProposal(proposalId: proposal.id, action: action)
+        }
+    }
+
+    /// Saves the proposal's content, as edited, as a memory, and marks the
+    /// proposal reviewed so it is no longer pending.
     private func saveProposalAsMemory(_ proposal: MemoryProposal, editedContent: String) async {
         let trimmed = editedContent.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        do {
-            // Derive title from first line if not already present
-            let firstLine = trimmed.split(separator: "\n").first.map(String.init) ?? ""
-            let title = firstLine.isEmpty ? proposal.title : firstLine
-            let scope = proposal.scope ?? (covenId == nil ? "user" : "coven")
-            let tags = proposal.proposedTags
-            // For personal proposals, covenId will be nil; otherwise use the
-            // coven context for this view.
-            _ = try await MemoryService.shared.createMemory(
-                covenId: covenId,
-                scope: scope,
-                title: title,
-                content: trimmed,
-                tags: tags,
-                isPinned: false
-            )
-            // Also index this memory locally with an embedding so it can be
-            // used by the context sandwich, even while the legacy backend
-            // APIs are being phased out.
-            _ = try await EmbeddingService.shared.indexMemory(
-                scope: scope,
-                text: trimmed,
-                tags: tags ?? [],
-                pii: false,
-                createdBy: nil,
-                source: proposal.sourceMessageId
-            )
-            // Mark proposal as rejected so it no longer shows in "pending".
-            let updated = try await MemoryService.shared.reviewProposal(
-                proposalId: proposal.id,
-                action: "reject",
-                feedback: "Saved as manual memory from Swift client"
-            )
-            if let index = proposals.firstIndex(where: { $0.id == updated.id }) {
-                proposals[index] = updated
-            }
-            if selectedStatus == "pending" {
-                proposals.removeAll { $0.id == updated.id }
-            }
-        } catch {
-            errorMessage = "Failed to save memory: \(error.localizedDescription)"
+        await review(proposal, failing: "save memory") {
+            try await MemoryService.shared.saveProposalAsMemory(proposalId: proposal.id, content: trimmed)
         }
     }
 
     /// Delete (reject) a proposal and remove it from the current list.
     private func deleteProposal(_ proposal: MemoryProposal) async {
-        do {
-            let updated = try await MemoryService.shared.reviewProposal(
-                proposalId: proposal.id,
-                action: "reject",
-                feedback: "Deleted by user"
-            )
-            if let index = proposals.firstIndex(where: { $0.id == updated.id }) {
-                proposals[index] = updated
-            }
-            if selectedStatus == "pending" {
-                proposals.removeAll { $0.id == updated.id }
-            }
-        } catch {
-            errorMessage = "Failed to delete proposal: \(error.localizedDescription)"
+        await review(proposal, failing: "delete proposal") {
+            try await MemoryService.shared.reviewProposal(proposalId: proposal.id, action: "reject", feedback: "Deleted by user")
         }
     }
 }
@@ -241,55 +218,27 @@ struct ProposalCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
-            // Header
-            HStack {
-                VStack(alignment: .leading, spacing: Spacing.xxs) {
-                    if let title = proposal.title {
-                        Text(title)
-                            .font(.aicovenH3)
-                            .foregroundColor(.aicovenTextPrimary)
-                    }
-
-                    HStack(spacing: Spacing.xs) {
-                        // Status badge
-                        StatusBadge(status: proposal.status)
-
-                        // Scope badge
-                        if let scope = proposal.scope {
-                            Text(scope.capitalized)
-                                .font(.aicovenCaption)
-                                .foregroundColor(.aicovenTeal)
-                                .padding(.horizontal, Spacing.xs)
-                                .padding(.vertical, 2)
-                                .background(Color.aicovenGlass)
-                                .cornerRadius(BorderRadius.sm)
+            // Header. Where there is room (a wide window) Approve and Reject
+            // are also here; where there is not (a phone) they are only in
+            // the row of actions below, and the status line keeps its width.
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    titleAndStatus
+                    Spacer()
+                    if proposal.status == "pending" {
+                        HStack(spacing: Spacing.xs) {
+                            GradientButton("Approve", icon: "checkmark", style: .primary) {
+                                onApprove()
+                            }
+                            .frame(width: 100)
+                            GradientButton("Reject", icon: "xmark", style: .secondary) {
+                                onReject()
+                            }
+                            .frame(width: 100)
                         }
-
-                        // Date
-                        Text(proposal.createdAt, style: .relative)
-                            .font(.aicovenCaption)
-                            .foregroundColor(.aicovenTextTertiary)
                     }
                 }
-
-                Spacer()
-
-                // Actions (only for pending proposals)
-                if proposal.status == "pending" {
-                    HStack(spacing: Spacing.xs) {
-                        // Approve button
-                        GradientButton("Approve", icon: "checkmark", style: .primary) {
-                            onApprove()
-                        }
-                        .frame(width: 100)
-
-                        // Reject button
-                        GradientButton("Reject", icon: "xmark", style: .secondary) {
-                            onReject()
-                        }
-                        .frame(width: 100)
-                    }
-                }
+                titleAndStatus
             }
 
             // Content (editable when in edit mode)
@@ -340,65 +289,23 @@ struct ProposalCard: View {
                 }
             }
 
-            // Actions (only for pending proposals)
+            // Actions (only for pending proposals): on one line where they
+            // fit, on two where they do not.
             if proposal.status == "pending" {
-                HStack(spacing: Spacing.xs) {
-                    if isEditing {
-                        GradientButton("Save as Memory", icon: "checkmark", style: .primary) {
-                            onSaveAsMemory(draftContent)
-                        }
-                        .frame(width: 150)
-                        // Disable when the current edited content is effectively
-                        // empty; this avoids silently reusing the original
-                        // proposal text when the user has cleared the field.
-                        .disabled(trimmedDraftContent.isEmpty)
-
-                        Button("Cancel") {
-                            isEditing = false
-                            draftContent = proposal.proposedContent
-                        }
-                        .font(.aicovenBodySmall)
-                        .foregroundColor(.aicovenTeal)
-                        .buttonStyle(.plain)
-                    } else {
-                        GradientButton("Approve", icon: "checkmark", style: .primary) {
-                            onApprove()
-                        }
-                        .frame(width: 100)
-
-                        GradientButton("Reject", icon: "xmark", style: .secondary) {
-                            onReject()
-                        }
-                        .frame(width: 100)
-
-                        Button {
-                            isEditing = true
-                            if draftContent.isEmpty {
-                                draftContent = proposal.proposedContent
-                            }
-                        } label: {
-                            HStack(spacing: Spacing.xxs) {
-                                Image(systemName: "pencil")
-                                Text("Edit")
-                            }
-                            .font(.aicovenBodySmall)
-                            .foregroundColor(.aicovenTeal)
-                        }
-                        .buttonStyle(.plain)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: Spacing.xs) {
+                        mainActions
+                        otherActions
                     }
-
-                    Button(role: .destructive) {
-                        onDelete()
-                    } label: {
-                        HStack(spacing: Spacing.xxs) {
-                            Image(systemName: "trash")
-                            Text("Delete")
-                        }
-                        .font(.aicovenBodySmall)
+                    VStack(alignment: .leading, spacing: Spacing.xs) {
+                        HStack(spacing: Spacing.xs) { mainActions }
+                        HStack(spacing: Spacing.md) { otherActions }
                     }
                 }
             }
         }
+        // As wide as the list, whatever it holds.
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Spacing.md)
         .glassMorphism(cornerRadius: BorderRadius.md)
         .onAppear {
@@ -414,6 +321,111 @@ struct ProposalCard: View {
                 draftContent = newValue
             }
         }
+    }
+
+    /// The title, and under it the status, the scope and when it was
+    /// proposed, each at its own width: none is squeezed into a column.
+    private var titleAndStatus: some View {
+        VStack(alignment: .leading, spacing: Spacing.xxs) {
+            if let title = proposal.title {
+                Text(title)
+                    .font(.aicovenH3)
+                    .foregroundColor(.aicovenTextPrimary)
+            }
+
+            HStack(spacing: Spacing.xs) {
+                // Status badge
+                StatusBadge(status: proposal.status)
+                    .fixedSize()
+
+                // Scope badge
+                if let scope = proposal.scope {
+                    Text(scope.capitalized)
+                        .font(.aicovenCaption)
+                        .foregroundColor(.aicovenTeal)
+                        .lineLimit(1)
+                        .padding(.horizontal, Spacing.xs)
+                        .padding(.vertical, 2)
+                        .background(Color.aicovenGlass)
+                        .cornerRadius(BorderRadius.sm)
+                        .fixedSize()
+                }
+
+                // Date
+                Text(proposal.createdAt, style: .relative)
+                    .font(.aicovenCaption)
+                    .foregroundColor(.aicovenTextTertiary)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    /// Approve and Reject; or, while the text is edited, Save and Cancel.
+    @ViewBuilder
+    private var mainActions: some View {
+        if isEditing {
+            GradientButton("Save as Memory", icon: "checkmark", style: .primary) {
+                onSaveAsMemory(draftContent)
+            }
+            .frame(width: 150)
+            // Disable when the current edited content is effectively
+            // empty; this avoids silently reusing the original
+            // proposal text when the user has cleared the field.
+            .disabled(trimmedDraftContent.isEmpty)
+
+            Button("Cancel") {
+                isEditing = false
+                draftContent = proposal.proposedContent
+            }
+            .font(.aicovenBodySmall)
+            .foregroundColor(.aicovenTeal)
+            .buttonStyle(.plain)
+            .fixedSize()
+        } else {
+            GradientButton("Approve", icon: "checkmark", style: .primary) {
+                onApprove()
+            }
+            .frame(width: 100)
+
+            GradientButton("Reject", icon: "xmark", style: .secondary) {
+                onReject()
+            }
+            .frame(width: 100)
+        }
+    }
+
+    /// Edit (unless the text is being edited) and Delete: words that stay
+    /// whole.
+    @ViewBuilder
+    private var otherActions: some View {
+        if !isEditing {
+            Button {
+                isEditing = true
+                if draftContent.isEmpty {
+                    draftContent = proposal.proposedContent
+                }
+            } label: {
+                HStack(spacing: Spacing.xxs) {
+                    Image(systemName: "pencil")
+                    Text("Edit")
+                }
+                .font(.aicovenBodySmall)
+                .foregroundColor(.aicovenTeal)
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
+        }
+
+        Button(role: .destructive) {
+            onDelete()
+        } label: {
+            HStack(spacing: Spacing.xxs) {
+                Image(systemName: "trash")
+                Text("Delete")
+            }
+            .font(.aicovenBodySmall)
+        }
+        .fixedSize()
     }
 }
 

@@ -82,6 +82,19 @@ struct Thread: Codable, Identifiable, Hashable {
     }
 }
 
+extension Thread {
+    /// This thread, with when its last message was stored: the later of
+    /// what it holds and `date` (nil changes nothing).
+    func lastUsed(at date: Date?) -> Thread {
+        guard let date, lastMessageAt.map({ $0 < date }) ?? true else { return self }
+        return Thread(
+            id: id, userId: userId, covenId: covenId, title: title, agentId: agentId, agentName: agentName, agentModel: agentModel,
+            isPinned: isPinned, isArchived: isArchived, messageCount: messageCount, createdAt: createdAt, updatedAt: updatedAt,
+            lastMessageAt: date
+        )
+    }
+}
+
 /// Message model
 struct Message: Codable, Identifiable {
     let id: String

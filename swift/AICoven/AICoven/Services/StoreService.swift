@@ -12,6 +12,8 @@ enum PurchasableFeature: String, CaseIterable {
     case shellTool
     case githubTool
     case googleDriveTool
+    case figmaTool
+    case linearTool
 }
 
 /// Manages StoreKit 2 in-app purchases for AICoven.
@@ -76,7 +78,7 @@ class StoreService: ObservableObject {
         switch feature {
         case .covens, .multipleAgents, .modelCustomization:
             return hasCreator
-        case .shellTool, .githubTool, .googleDriveTool:
+        case .shellTool, .githubTool, .googleDriveTool, .figmaTool, .linearTool:
             return hasToolsPack
         }
     }
@@ -86,7 +88,7 @@ class StoreService: ObservableObject {
         switch feature {
         case .covens, .multipleAgents, .modelCustomization:
             "Creator"
-        case .shellTool, .githubTool, .googleDriveTool:
+        case .shellTool, .githubTool, .googleDriveTool, .figmaTool, .linearTool:
             "Tools Pack"
         }
     }

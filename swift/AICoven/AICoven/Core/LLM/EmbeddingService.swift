@@ -23,30 +23,6 @@ final class EmbeddingService {
         llmClients = env.clients
     }
 
-    /// Indexes a new memory chunk:
-    /// - Picks an embedding-capable model via the router.
-    /// - Computes an embedding for the given text.
-    /// - Stores the memory+embedding via MemoryRepository.
-    func indexMemory(
-        scope: String,
-        text: String,
-        tags: [String],
-        pii: Bool,
-        createdBy: String?,
-        source: String?
-    ) async throws -> LocalMemoryChunk {
-        let embedding = try await embedText(text)
-        return try await memoryRepository.storeMemory(
-            scope: scope,
-            text: text,
-            tags: tags,
-            pii: pii,
-            createdBy: createdBy,
-            source: source,
-            embedding: embedding
-        )
-    }
-
     /// Computes an embedding for ad-hoc queries (e.g., search prompts).
     func embedText(_ text: String) async throws -> [Float]? {
         guard !llmClients.isEmpty else { return nil }

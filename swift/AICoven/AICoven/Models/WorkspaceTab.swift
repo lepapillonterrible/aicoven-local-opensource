@@ -3,6 +3,9 @@ import Foundation
 /// Type of workspace tab
 enum WorkspaceTabType: Equatable {
     case thread(Thread)
+    /// A thread not made yet: it is made when its first message is sent.
+    /// In a coven, or in Strix (no coven).
+    case draftThread(covenId: String?)
     case profile
     case settings
     case providerKeys
@@ -12,6 +15,10 @@ enum WorkspaceTabType: Equatable {
     case usage
     case addRole(covenId: String)
     case editRole(roleId: String)
+    /// A coven's agents.
+    case covenAgents(covenId: String)
+    /// Which of the person's connections a coven's agents may use.
+    case covenConnections(covenId: String)
     case memoryList(covenId: String?)
     case memoryProposals(covenId: String?)
     case addMemory(covenId: String?)
@@ -29,10 +36,16 @@ enum WorkspaceTabType: Equatable {
         switch (lhs, rhs) {
         case let (.thread(t1), .thread(t2)):
             t1.id == t2.id
+        case let (.draftThread(c1), .draftThread(c2)):
+            c1 == c2
         case let (.addRole(c1), .addRole(c2)):
             c1 == c2
         case let (.editRole(r1), .editRole(r2)):
             r1 == r2
+        case let (.covenAgents(c1), .covenAgents(c2)):
+            c1 == c2
+        case let (.covenConnections(c1), .covenConnections(c2)):
+            c1 == c2
         case let (.memoryList(c1), .memoryList(c2)):
             c1 == c2
         case let (.memoryProposals(c1), .memoryProposals(c2)):
@@ -61,6 +74,7 @@ enum WorkspaceTabType: Equatable {
     var analyticsName: String {
         switch self {
         case .thread: "thread"
+        case .draftThread: "draft_thread"
         case .profile: "profile"
         case .settings: "settings"
         case .providerKeys: "provider_keys"
@@ -70,6 +84,8 @@ enum WorkspaceTabType: Equatable {
         case .usage: "usage"
         case .addRole: "add_role"
         case .editRole: "edit_role"
+        case .covenAgents: "coven_agents"
+        case .covenConnections: "coven_connections"
         case .memoryList: "memory_list"
         case .memoryProposals: "memory_proposals"
         case .addMemory: "add_memory"
@@ -101,66 +117,12 @@ struct WorkspaceTab: Identifiable, Equatable {
         )
     }
 
-    /// Create a tab for profile
-    static var profile: WorkspaceTab {
-        WorkspaceTab(
-            id: "profile",
-            type: .profile,
-            title: "Profile"
-        )
-    }
-
-    /// Create a tab for settings
-    static var settings: WorkspaceTab {
-        WorkspaceTab(
-            id: "settings",
-            type: .settings,
-            title: "Settings"
-        )
-    }
-
-    /// Create a tab for provider keys
-    static var providerKeys: WorkspaceTab {
-        WorkspaceTab(
-            id: "provider-keys",
-            type: .providerKeys,
-            title: "Provider Keys"
-        )
-    }
-
-    /// Create a tab for budgets
-    static var budget: WorkspaceTab {
-        WorkspaceTab(
-            id: "budget",
-            type: .budget,
-            title: "Budgets"
-        )
-    }
-
-    /// Create a tab for connected apps
-    static var connectedApps: WorkspaceTab {
-        WorkspaceTab(
-            id: "connected-apps",
-            type: .connectedApps,
-            title: "Connected Apps"
-        )
-    }
-
     /// Create a tab for MCP Servers
     static var mcpServers: WorkspaceTab {
         WorkspaceTab(
             id: "mcp-servers",
             type: .mcpServers,
             title: "MCP Servers"
-        )
-    }
-
-    /// Create a tab for usage dashboard
-    static var usage: WorkspaceTab {
-        WorkspaceTab(
-            id: "usage",
-            type: .usage,
-            title: "Budgets & Usage"
         )
     }
 
@@ -180,6 +142,27 @@ struct WorkspaceTab: Identifiable, Equatable {
             type: .editRole(roleId: roleId),
             title: "Edit \(roleName)"
         )
+    }
+
+    /// A thread not made yet, in a coven or in Strix.
+    static func draftThread(covenId: String?) -> WorkspaceTab {
+        WorkspaceTab(id: "draft-thread-\(covenId ?? "strix")", type: .draftThread(covenId: covenId), title: "New Thread")
+    }
+
+    /// A coven's agents.
+    static func covenAgents(covenId: String) -> WorkspaceTab {
+        WorkspaceTab(id: "coven-agents-\(covenId)", type: .covenAgents(covenId: covenId), title: "Agents")
+    }
+
+    /// Which of the person's connections a coven's agents may use.
+    static func covenConnections(covenId: String) -> WorkspaceTab {
+        WorkspaceTab(id: "coven-connections-\(covenId)", type: .covenConnections(covenId: covenId), title: "Connections")
+    }
+
+    /// The thread this is the place of, if it is a thread's.
+    var threadValue: Thread? {
+        if case let .thread(thread) = type { return thread }
+        return nil
     }
 
     /// Create a tab for viewing memory list
@@ -227,30 +210,4 @@ struct WorkspaceTab: Identifiable, Equatable {
         )
     }
 
-    /// Tab for the in-app purchase store
-    static var store: WorkspaceTab {
-        WorkspaceTab(
-            id: "store",
-            type: .store,
-            title: "Upgrade"
-        )
-    }
-
-    /// Tab for Terms of Service
-    static var terms: WorkspaceTab {
-        WorkspaceTab(
-            id: "terms",
-            type: .terms,
-            title: "Terms & Conditions"
-        )
-    }
-
-    /// Tab for Privacy Policy
-    static var privacy: WorkspaceTab {
-        WorkspaceTab(
-            id: "privacy",
-            type: .privacy,
-            title: "Privacy Policy"
-        )
-    }
 }

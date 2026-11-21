@@ -134,7 +134,7 @@ Tests for core business logic services that orchestrate LLM interactions and dat
 |-------------|-------------|--------|
 | `testUsageService_logsDecodeErrorAndFallsBack` | Tests graceful degradation on corrupted usage data | ✅ |
 | `testPricingUpdateService_logsDecodeErrorAndReturnsEmpty` | Validates pricing service error handling | ✅ |
-| `testThreadService_logsDecodeErrorOnCorruptJSON` | Tests thread service resilience to bad data | ✅ |
+| `testLegacyChatHistory_logsAndSetsAsideAFileItCannotRead` | Tests that an unreadable chat-history file is logged and kept, not deleted | ✅ |
 | `testDatabaseManager_logsErrorOnFailedMigration` | Validates database migration error logging | ✅ |
 
 **Coverage:**
@@ -329,13 +329,12 @@ Tests for tool execution, message processing, and helper utilities.
 
 Smoke tests for SwiftUI view initialization.
 
-#### **SwiftUIViewTests.swift** (2 tests)
+#### **SwiftUIViewTests.swift** (1 test)
 **Purpose:** Basic UI smoke tests
 
 | Test Method | Description | Status |
 |-------------|-------------|--------|
 | `testHomeViewInitializes` | Smoke test for HomeView creation | ✅ |
-| `testMainTabViewInitializes` | Smoke test for MainTabView creation | ✅ |
 
 **Coverage:**
 - ✅ Basic view initialization

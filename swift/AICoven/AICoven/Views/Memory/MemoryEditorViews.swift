@@ -214,17 +214,9 @@ struct AddMemoryView: View {
                     tags: tags.isEmpty ? nil : tags,
                     isPinned: isPinned
                 )
-
-                // Also index this memory locally with an embedding so chat
-                // and agents can retrieve it via the context sandwich.
-                _ = try await EmbeddingService.shared.indexMemory(
-                    scope: scope,
-                    text: content,
-                    tags: tags,
-                    pii: false,
-                    createdBy: nil,
-                    source: nil
-                )
+                // `createMemory` stores it with its embedding, which is what
+                // chat and agents retrieve it by: it is not stored a second
+                // time here.
 
                 // Call completion handler
                 onSave()
@@ -232,35 +224,6 @@ struct AddMemoryView: View {
                 errorMessage = error.localizedDescription
                 isLoading = false
             }
-        }
-    }
-}
-
-/// Wrapper used on mobile to present EditMemoryView in a sheet and refresh list
-struct EditMemorySheetWrapper: View {
-    let memoryId: String
-    let covenId: String?
-    let onSaved: () -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        EditMemoryView(memoryId: memoryId, covenId: covenId) {
-            onSaved()
-            dismiss()
-        }
-    }
-}
-
-/// Wrapper used on mobile to present AddMemoryView in a sheet and refresh list
-struct AddMemorySheetWrapper: View {
-    let covenId: String?
-    let onSaved: () -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        AddMemoryView(covenId: covenId) {
-            onSaved()
-            dismiss()
         }
     }
 }

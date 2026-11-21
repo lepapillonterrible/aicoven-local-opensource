@@ -43,7 +43,7 @@ struct RichMessageBubble: View {
 
                 // Attachments
                 if let atts = message.attachments, !atts.isEmpty {
-                    AttachmentsListView(attachments: atts, compact: true)
+                    MessageAttachmentsView(attachments: atts, alignment: isUser ? .trailing : .leading)
                 }
 
                 // Generated files (e.g., from file.generate)
@@ -60,7 +60,8 @@ struct RichMessageBubble: View {
                                     .font(.system(size: 13, weight: .medium))
                                     .lineLimit(1)
                                 Spacer()
-                                if let url = file.url {
+                                // Only an address a reply can have opened.
+                                if let url = file.url, ReplyLinks.opens(url) {
                                     Button("Download") {
                                         #if os(macOS)
                                         NSWorkspace.shared.open(url)

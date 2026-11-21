@@ -66,6 +66,12 @@ class AuthService: ObservableObject {
         authStateHandle = Auth.auth().addStateDidChangeListener { [weak self] _, firebaseUser in
             Task { @MainActor in
                 self?.isLoading = true
+                // Who is signed in now, for a link that is waiting.
+                AppState.shared.accountReported(firebaseUser?.uid)
+                // Whoever is signed in now, nothing the rows said of the
+                // account before stays said: on signing in, switching,
+                // signing out, and when an account is deleted.
+                ThreadActivities.shared.accountChanged()
                 if let firebaseUser {
                     print("✅ Firebase user signed in: \(firebaseUser.email ?? "unknown")")
                     // Clear any previous user's data first
@@ -76,6 +82,8 @@ class AuthService: ObservableObject {
                     // Reload all services for the newly signed-in user to ensure
                     // user-scoped data isolation (prevents seeing other users' data)
                     await ThreadService.shared.reloadForCurrentUser()
+                    // Read again now that the threads are this account's.
+                    ThreadActivities.shared.accountChanged()
 
                     // One-time cleanup: clear stale test purchases that were cached
                     // during automated testing. This runs once per user.
@@ -88,7 +96,6 @@ class AuthService: ObservableObject {
                     }
 
                     await StoreService.shared.reloadForCurrentUser()
-                    await ChatService.shared.reloadForCurrentUser()
                 } else {
                     print("❌ No Firebase user - signed out")
                     self?.currentUser = nil
@@ -187,6 +194,9 @@ class AuthService: ObservableObject {
         if isFirebaseAvailable {
             try Auth.auth().signOut()
         }
+        // At once, before this returns: nothing the rows said of the
+        // account stays said.
+        ThreadActivities.shared.accountChanged()
         currentUser = nil
         isAuthenticated = false
     }
@@ -319,9 +329,14 @@ class AuthService: ObservableObject {
 
         // Delete all user data from local SQLite database
         await deleteLocalUserData(userId: userId)
+        // And the files attached to the account's messages.
+        await AttachmentStore.shared.deleteAllFiles(for: userId)
 
         // Clear user-specific UserDefaults
         UserDefaults.standard.removeObject(forKey: AuthService.onboardingKey(for: userId))
+        CovenOrderStore().remove(for: userId)
+        LastUsedAgentStore().remove(for: userId)
+        ScopeVisitStore().remove(for: userId)
 
         // Delete the Firebase Auth user
         do {
@@ -332,6 +347,9 @@ class AuthService: ObservableObject {
             // Re-throw the error since the user expects account to be fully deleted
             throw error
         }
+
+        // Its threads are gone: so is what their rows said.
+        ThreadActivities.shared.accountChanged()
 
         print("✅ Account deleted successfully")
 

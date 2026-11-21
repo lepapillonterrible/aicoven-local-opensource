@@ -81,9 +81,30 @@ struct ContextBuilder {
         /// Configuration that dynamically includes only tools whose backing
         /// connected app (GitHub, Google Workspace) is actually linked.
         /// Call this instead of `.allTools` so the LLM never sees tools it can't use.
-        static func connected() async -> ToolConfig {
-            let tools = await PromptTemplates.connectedToolSet()
-            let mcpServers = await ConnectedAccountsService.shared.getAllMCPServers()
+        ///
+        /// `deliversFiles` says the caller gives the files a tool makes to
+        /// its reply (a chat turn does; an agent run does not): only then
+        /// are the tools that make files for the person offered.
+        ///
+        /// `seesPictures` says the caller's model can be sent pictures and
+        /// the caller sends it those a tool makes (a chat turn of such a
+        /// model does; an agent run does not): only then are the tools
+        /// that make pictures for the model offered.
+        ///
+        /// `connections` is the choice of the thread's coven
+        /// (`CovenService.connections(forThread:)`): the connected apps'
+        /// tools and the MCP servers offered are those it allows.
+        static func connected(deliversFiles: Bool = false, seesPictures: Bool = false, connections: CovenConnections? = nil) async -> ToolConfig {
+            var connectedTools = await PromptTemplates.connectedToolSet()
+            if deliversFiles {
+                connectedTools.formUnion(PromptTemplates.offeredImageTools())
+            }
+            connectedTools.formUnion(PromptTemplates.pictureTools(among: connectedTools, seesPictures: seesPictures))
+            let (tools, mcpServers) = await CovenConnectionRules.offered(
+                tools: connectedTools,
+                servers: ConnectedAccountsService.shared.getAllMCPServers(),
+                in: connections
+            )
 
             // Add all cached tools to the enabled list so the prompt generator includes them.
             var allTools = tools
@@ -104,8 +125,8 @@ struct ContextBuilder {
 
         /// Configuration optimized for small local models (MLX, Ollama).
         /// Uses fewer tools and no thought/scratchpad/memory instructions.
-        static func mlxTools() async -> ToolConfig {
-            let mcpServers = await ConnectedAccountsService.shared.getAllMCPServers()
+        static func mlxTools(connections: CovenConnections? = nil) async -> ToolConfig {
+            let (_, mcpServers) = await CovenConnectionRules.offered(tools: [], servers: ConnectedAccountsService.shared.getAllMCPServers(), in: connections)
             var tools = PromptTemplates.basicChatTools
                 .union(PromptTemplates.fileTools)
                 .union(PromptTemplates.shellTools)
@@ -149,6 +170,8 @@ struct ContextBuilder {
     ///     tool-generated context blocks (e.g. "[Web search results]" or
     ///     "[Attachment analysis]") which we treat as system context rather
     ///     than literal user text.
+    ///   - images: The pictures that go with the current user input, for a
+    ///     model that can see them.
     ///   - maxContextTokens: Optional soft limit on prompt tokens for the
     ///     assembled context. When provided, we apply truncation rules that
     ///     preserve system/policies, thread summary, top memories, and the last
@@ -158,6 +181,7 @@ struct ContextBuilder {
     func buildContext(
         threadID: String?,
         userMessage: String,
+        images: [LLMImage] = [],
         maxContextTokens: Int? = nil,
         toolConfig: ToolConfig? = nil
     ) async throws -> [LLMMessage] {
@@ -307,7 +331,7 @@ struct ContextBuilder {
         }
 
         // Layer 7: current user message (human-authored question only)
-        segments.user.append(LLMMessage(role: .user, content: question))
+        segments.user.append(LLMMessage(role: .user, content: question, images: images))
 
         // Layer 8: response guidance – kept deliberately brief and
         // conversational so models do not echo it verbatim.
@@ -367,15 +391,18 @@ private extension ContextBuilder {
 
     /// Approximate token count for a list of messages. We use a very cheap
     /// heuristic (characters / 4) that is monotonic with true token count and
-    /// sufficient for truncation decisions.
+    /// sufficient for truncation decisions. A picture counts as a flat
+    /// number of tokens, as the cloud app counts it.
     static func approximateTokenCount(for messages: [LLMMessage]) -> Int {
         var total = 0
         for message in messages {
             let charCount = message.content.count
-            total += max(1, charCount / 4)
+            total += max(1, charCount / 4) + message.images.count * tokensPerImage
         }
         return total
     }
+
+    static let tokensPerImage = 560
 
     /// Assemble segments back into the final ordered message list.
     static func assemble(segments: ContextSegments) -> [LLMMessage] {

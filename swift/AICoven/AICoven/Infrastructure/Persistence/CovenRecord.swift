@@ -196,25 +196,48 @@ actor CovenRepository {
 
     // MARK: - Coven CRUD
 
-    func createCoven(name: String, description: String? = nil, avatar: String? = nil) async throws -> Coven {
+    /// `icon` is the icon chosen for it; without one it starts with the
+    /// first suggested symbol and tint that none of the person's covens
+    /// shows (`CovenIcon.startingIcon`).
+    ///
+    /// `account` is the account that asked, where the caller took note of
+    /// it as it was asked (a form does, before it waits for anything);
+    /// without it, it is the account signed in when this gets to read it.
+    func createCoven(
+        name: String, description: String? = nil, avatar: String? = nil, icon: (symbol: String, tint: IconTint)? = nil,
+        as account: String? = nil
+    ) async throws -> Coven {
+        if let icon, !IconRules.isSymbolName(icon.symbol) { throw CovenRepositoryError.notASymbol }
+        // Whose it is, read once: the coven is made for the account that
+        // asked.
+        let uid = if let account { account } else { await MainActor.run { UserScope.currentUserID } }
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
         let now = Date()
         let id = UUID().uuidString
-        let uid = await UserScope.currentUserID
-        let record = CovenRecord(
-            id: id,
-            name: name,
-            description: description,
-            avatar: avatar,
-            settings: nil,
-            userId: uid,
-            createdAt: now,
-            updatedAt: now
-        )
-
-        try await dbQueue.write { db in
-            try record.insert(db)
+        // A new coven starts with none of the person's connections on:
+        // its agents use only what is turned on in its Connections. (A
+        // coven made before there was a choice has none stored, and keeps
+        // using everything until one is made for it.)
+        // The icon it starts with is chosen in the same write that makes
+        // it, among the covens that are there then: two made at once do
+        // not take the same one.
+        let settings: CovenSettings = try await dbQueue.write { db in
+            let chosen = try icon ?? CovenIcon.startingIcon(
+                amongIcons: CovenRecord.filter(CovenRecord.Columns.userId == uid).fetchAll(db).map(Self.storedIcon(of:))
+            )
+            let settings = CovenSettings(connections: CovenConnections(), iconSymbol: chosen.symbol, iconTint: chosen.tint.rawValue)
+            try CovenRecord(
+                id: id,
+                name: name,
+                description: description,
+                avatar: avatar,
+                settings: String(data: JSONEncoder().encode(settings), encoding: .utf8),
+                userId: uid,
+                createdAt: now,
+                updatedAt: now
+            ).insert(db)
+            return settings
         }
 
         return Coven(
@@ -222,10 +245,17 @@ actor CovenRepository {
             name: name,
             description: description,
             avatar: avatar,
-            settings: nil,
+            settings: settings,
             createdAt: now,
             updatedAt: now
         )
+    }
+
+    /// The icon a stored coven shows, as far as it is stored: nil for
+    /// what is not there or cannot be read.
+    private static func storedIcon(of record: CovenRecord) -> (symbol: String?, tint: String?) {
+        let settings = record.settings.flatMap { try? JSONDecoder().decode(CovenSettings.self, from: Data($0.utf8)) }
+        return (settings?.iconSymbol, settings?.iconTint)
     }
 
     func loadCovens() async throws -> [Coven] {
@@ -282,6 +312,138 @@ actor CovenRepository {
         return coven
     }
 
+    /// Sets which connections the coven's agents may use, keeping
+    /// everything else in its settings as it is stored. `nil` takes the
+    /// choice away. Only `userID`'s coven is changed, and only while
+    /// `userID` is still the account signed in. Settings that cannot be
+    /// read are not written over: that throws.
+    func setConnections(_ connections: CovenConnections?, forCoven id: String) async throws {
+        let uid = await MainActor.run { UserScope.currentUserID }
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        // The account can have changed while the database was waited for.
+        guard await MainActor.run(body: { UserScope.currentUserID }) == uid else { throw RepositoryError.accountChanged }
+        let chosen = try connections.map { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) }
+        try await dbQueue.write { db in
+            guard var record = try CovenRecord
+                .filter(CovenRecord.Columns.id == id)
+                .filter(CovenRecord.Columns.userId == uid)
+                .fetchOne(db) else {
+                throw CovenRepositoryError.covenNotFound
+            }
+            var settings = try Self.storedSettings(of: record)
+            settings["connections"] = chosen
+            record.settings = try String(data: JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys]), encoding: .utf8)
+            record.updatedAt = Date()
+            try record.update(db)
+        }
+    }
+
+    /// Sets the coven's icon, keeping everything else in its settings as
+    /// it is stored. Whose coven it is is read once, when this is called:
+    /// only that account's coven is changed, whoever is signed in by the
+    /// time it is written.
+    /// Settings that cannot be read are not written over: that throws, as
+    /// does a symbol that cannot be one.
+    func setIcon(symbol: String, tint: IconTint, forCoven id: String) async throws {
+        guard IconRules.isSymbolName(symbol) else { throw CovenRepositoryError.notASymbol }
+        let uid = await MainActor.run { UserScope.currentUserID }
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        try await dbQueue.write { db in
+            guard var record = try CovenRecord
+                .filter(CovenRecord.Columns.id == id)
+                .filter(CovenRecord.Columns.userId == uid)
+                .fetchOne(db) else {
+                throw CovenRepositoryError.covenNotFound
+            }
+            var settings = try Self.storedSettings(of: record)
+            settings["icon_symbol"] = symbol
+            settings["icon_tint"] = tint.rawValue
+            record.settings = try String(data: JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys]), encoding: .utf8)
+            record.updatedAt = Date()
+            try record.update(db)
+        }
+    }
+
+    /// Sets an agent's face, keeping everything else in its settings as it
+    /// is stored. Only the signed-in person's agent is changed. Settings
+    /// that cannot be read are not written over: that throws.
+    func setIcon(symbol: String, tint: IconTint, forRole id: String) async throws {
+        guard IconRules.isSymbolName(symbol) else { throw CovenRepositoryError.notASymbol }
+        let uid = await MainActor.run { UserScope.currentUserID }
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        try await dbQueue.write { db in
+            guard var record = try RoleRecord.fetchOne(db, key: id), record.userId == uid else {
+                throw CovenRepositoryError.roleNotFound
+            }
+            guard var settings = Self.storedSettings(ofRole: record) else { throw CovenRepositoryError.roleSettingsUnreadable }
+            settings["icon_symbol"] = symbol
+            settings["icon_tint"] = tint.rawValue
+            record.settings = try String(data: JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys]), encoding: .utf8)
+            record.updatedAt = Date()
+            try record.update(db)
+        }
+    }
+
+    /// The tint a stored agent shows, read as the agent itself is read
+    /// (`mapRecordToRole`): nil for none, an unknown one, or settings that
+    /// are not settings.
+    private static func shownTint(of record: RoleRecord) -> IconTint? {
+        record.settings
+            .flatMap { try? JSONDecoder().decode(RoleSettings.self, from: Data($0.utf8)) }?
+            .iconTint.flatMap(IconTint.init(rawValue:))
+    }
+
+    /// An agent's settings as they are stored: an object, empty if none
+    /// are stored; nil if what is stored is not one.
+    private static func storedSettings(ofRole record: RoleRecord) -> [String: Any]? {
+        guard let text = record.settings else { return [:] }
+        return try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
+    }
+
+    /// Settings as they are written when an agent's are replaced: the new
+    /// ones, with the face that was stored (which the form that replaces
+    /// them does not carry).
+    private static func settingsText(_ new: RoleSettings, keepingTheFaceOf record: RoleRecord?) -> String? {
+        guard let data = try? JSONEncoder().encode(new), var merged = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        let kept = record.flatMap(storedSettings(ofRole:)) ?? [:]
+        for key in ["icon_symbol", "icon_tint"] where merged[key] == nil {
+            merged[key] = kept[key]
+        }
+        guard let text = try? JSONSerialization.data(withJSONObject: merged, options: [.sortedKeys]) else { return nil }
+        return String(data: text, encoding: .utf8)
+    }
+
+    /// The coven's choice of connections as it is stored: nil if it has
+    /// made none. Throws if the coven is not `userID`'s, or its settings
+    /// or its choice cannot be read: what is not read is not taken for no
+    /// choice.
+    func connections(ofCoven id: String, for userID: String) async throws -> CovenConnections? {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let stored: Any? = try await dbQueue.read { db in
+            guard let record = try CovenRecord
+                .filter(CovenRecord.Columns.id == id)
+                .filter(CovenRecord.Columns.userId == userID)
+                .fetchOne(db) else {
+                throw CovenRepositoryError.covenNotFound
+            }
+            return try Self.storedSettings(of: record)["connections"]
+        }
+        guard let stored, !(stored is NSNull) else { return nil }
+        guard stored is [String: Any] else { throw CovenRepositoryError.settingsUnreadable }
+        return try JSONDecoder().decode(CovenConnections.self, from: JSONSerialization.data(withJSONObject: stored))
+    }
+
+    /// A coven's settings as they are stored: an object, empty if none
+    /// are stored. Throws if what is stored is not one (empty text
+    /// included).
+    private static func storedSettings(of record: CovenRecord) throws -> [String: Any] {
+        guard let text = record.settings else { return [:] }
+        guard let settings = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else {
+            throw CovenRepositoryError.settingsUnreadable
+        }
+        return settings
+    }
+
     func deleteCoven(id: String) async throws {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
@@ -310,11 +472,18 @@ actor CovenRepository {
         return records.map { mapRecordToRole($0) }
     }
 
+    /// An agent of the signed-in account's, by its id. Another account's
+    /// agent is not found, as one that is not there is not.
     func getRole(roleId: String) async throws -> Role {
+        // Whose agents are read, asked once before anything is waited for.
+        let uid = await MainActor.run { UserScope.currentUserID }
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
         let record: RoleRecord? = try await dbQueue.read { db in
-            try RoleRecord.fetchOne(db, key: roleId)
+            try RoleRecord
+                .filter(RoleRecord.Columns.id == roleId)
+                .filter(RoleRecord.Columns.userId == uid)
+                .fetchOne(db)
         }
 
         guard let record else { throw CovenRepositoryError.roleNotFound }
@@ -337,17 +506,47 @@ actor CovenRepository {
         autonomousMode: Bool? = nil,
         autonomousMaxSteps: Int? = nil,
         plannerMaxTasks: Int? = nil,
-        plannerMaxSeconds: Double? = nil
+        plannerMaxSeconds: Double? = nil,
+        icon: (symbol: String, tint: IconTint)? = nil
     ) async throws -> Role {
+        if let icon, !IconRules.isSymbolName(icon.symbol) { throw CovenRepositoryError.notASymbol }
+        // Whose it is, read once: the agent is made for this account, in
+        // a coven of this account, whoever is signed in by the time it is
+        // written.
+        let uid = await MainActor.run { UserScope.currentUserID }
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
         let now = Date()
         let id = UUID().uuidString
 
-        // Build settings JSON if needed
-        var settingsJSON: String? = nil
-        if allowedTools != nil || collaboratorRoleIds != nil || autonomousMode != nil ||
-            autonomousMaxSteps != nil || plannerMaxTasks != nil || plannerMaxSeconds != nil {
+        // A new agent starts with a face: the one chosen for it, or the
+        // symbol its emoji stands for (or none, which shows `cpu`) on the
+        // first tint none of the coven's agents wears. The tint is chosen
+        // in the same write that makes the agent, among the agents that
+        // are there then.
+        let record: RoleRecord = try await dbQueue.write { db in
+            guard try CovenRecord
+                .filter(CovenRecord.Columns.id == covenId)
+                .filter(CovenRecord.Columns.userId == uid)
+                .fetchCount(db) == 1 else {
+                throw CovenRepositoryError.covenNotFound
+            }
+            // The tints worn are those the coven's agents show: one whose
+            // settings cannot be read as settings shows sand.
+            let face: (symbol: String?, tint: IconTint) = if let icon {
+                icon
+            } else {
+                try (
+                    AgentFace.symbol(forEmoji: emoji),
+                    IconTint.nextUnused(
+                        worn: RoleRecord
+                            .filter(RoleRecord.Columns.covenId == covenId)
+                            .filter(RoleRecord.Columns.userId == uid)
+                            .fetchAll(db)
+                            .map { (Self.shownTint(of: $0) ?? .warm).rawValue }
+                    )
+                )
+            }
             let roleSettings = RoleSettings(
                 toolConfig: nil,
                 allowedTools: allowedTools,
@@ -355,33 +554,29 @@ actor CovenRepository {
                 autonomousMode: autonomousMode,
                 autonomousMaxSteps: autonomousMaxSteps,
                 plannerMaxTasks: plannerMaxTasks,
-                plannerMaxSeconds: plannerMaxSeconds
+                plannerMaxSeconds: plannerMaxSeconds,
+                iconSymbol: face.symbol,
+                iconTint: face.tint.rawValue
             )
-            if let data = try? JSONEncoder().encode(roleSettings) {
-                settingsJSON = String(data: data, encoding: .utf8)
-            }
-        }
-
-        let record = await RoleRecord(
-            id: id,
-            covenId: covenId,
-            name: name,
-            emoji: emoji,
-            description: description,
-            systemPrompt: systemPrompt,
-            model: model,
-            provider: provider,
-            providerAccountId: providerAccountId,
-            temperature: temperature,
-            maxTokens: maxTokens,
-            settings: settingsJSON,
-            userId: UserScope.currentUserID,
-            createdAt: now,
-            updatedAt: now
-        )
-
-        try await dbQueue.write { db in
+            let record = RoleRecord(
+                id: id,
+                covenId: covenId,
+                name: name,
+                emoji: emoji,
+                description: description,
+                systemPrompt: systemPrompt,
+                model: model,
+                provider: provider,
+                providerAccountId: providerAccountId,
+                temperature: temperature,
+                maxTokens: maxTokens,
+                settings: Self.settingsText(roleSettings, keepingTheFaceOf: nil),
+                userId: uid,
+                createdAt: now,
+                updatedAt: now
+            )
             try record.insert(db)
+            return record
         }
 
         return mapRecordToRole(record)
@@ -405,10 +600,12 @@ actor CovenRepository {
         plannerMaxTasks: Int? = nil,
         plannerMaxSeconds: Double? = nil
     ) async throws -> Role {
+        // Whose agent it is, read once: only that account's is changed.
+        let uid = await MainActor.run { UserScope.currentUserID }
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
         try await dbQueue.write { db in
-            guard var record = try RoleRecord.fetchOne(db, key: roleId) else {
+            guard var record = try RoleRecord.fetchOne(db, key: roleId), record.userId == uid else {
                 throw CovenRepositoryError.roleNotFound
             }
             if let name { record.name = name }
@@ -424,6 +621,9 @@ actor CovenRepository {
             // Update settings if any settings-related param is provided
             if allowedTools != nil || collaboratorRoleIds != nil || autonomousMode != nil ||
                 autonomousMaxSteps != nil || plannerMaxTasks != nil || plannerMaxSeconds != nil {
+                // What is stored and cannot be read is not written over
+                // (nothing of this agent is changed).
+                guard Self.storedSettings(ofRole: record) != nil else { throw CovenRepositoryError.roleSettingsUnreadable }
                 let roleSettings = RoleSettings(
                     toolConfig: nil,
                     allowedTools: allowedTools,
@@ -433,8 +633,8 @@ actor CovenRepository {
                     plannerMaxTasks: plannerMaxTasks,
                     plannerMaxSeconds: plannerMaxSeconds
                 )
-                if let data = try? JSONEncoder().encode(roleSettings) {
-                    record.settings = String(data: data, encoding: .utf8)
+                if let text = Self.settingsText(roleSettings, keepingTheFaceOf: record) {
+                    record.settings = text
                 }
             }
 
@@ -445,11 +645,23 @@ actor CovenRepository {
         return try await getRole(roleId: roleId)
     }
 
-    func deleteRole(roleId: String) async throws {
+    /// Deletes an agent of `account`'s (the signed-in account's where none
+    /// is named). `account` is whoever asked: if another has signed in by
+    /// the time this runs, nothing is deleted. An agent that is not that
+    /// account's is not found.
+    func deleteRole(roleId: String, as account: String? = nil) async throws {
+        let current = await MainActor.run { UserScope.currentUserID }
+        let uid = account ?? current
+        guard uid == current else { throw RepositoryError.accountChanged }
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        // Asked again once the database is in hand, just before the write.
+        guard await MainActor.run(body: { UserScope.currentUserID }) == uid else { throw RepositoryError.accountChanged }
 
         try await dbQueue.write { db in
-            _ = try RoleRecord.deleteOne(db, key: roleId)
+            guard let record = try RoleRecord.fetchOne(db, key: roleId), record.userId == uid else {
+                throw CovenRepositoryError.roleNotFound
+            }
+            try record.delete(db)
         }
     }
 
@@ -487,11 +699,20 @@ actor CovenRepository {
 enum CovenRepositoryError: Error, LocalizedError {
     case covenNotFound
     case roleNotFound
+    /// What is stored as a coven's settings is not settings.
+    case settingsUnreadable
+    /// What is stored as an agent's settings is not settings.
+    case roleSettingsUnreadable
+    /// What was given as an icon's symbol cannot be a symbol's name.
+    case notASymbol
 
     var errorDescription: String? {
         switch self {
         case .covenNotFound: "Coven not found"
         case .roleNotFound: "Role not found"
+        case .settingsUnreadable: "This coven's settings could not be read"
+        case .roleSettingsUnreadable: "This agent's settings could not be read"
+        case .notASymbol: "That is not a symbol's name"
         }
     }
 }

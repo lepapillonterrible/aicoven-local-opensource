@@ -93,7 +93,7 @@ struct OnboardingFlowView: View {
                 // No-op for now; the standard flow persists the new key.
             }
         }
-        .preferredColorScheme(.dark)
+        .themedColorScheme()
         .onAppear {
             AnalyticsService.shared.track(
                 event: "onboarding_started",
@@ -490,7 +490,7 @@ private struct KeysStepView: View {
                 onAddProviderKey()
             }
 
-            Text("You can add keys now or skip and add them later in Settings → Provider Keys.")
+            Text("You can add keys now or skip and add them later in Settings → \(SettingsPane.aiConnections.listedTitle).")
                 .font(.aicovenBodySmall)
                 .foregroundColor(.aicovenTextSecondary)
 

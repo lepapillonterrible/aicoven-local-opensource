@@ -14,10 +14,12 @@ The `LLMClient` layer is designed to work with multiple providers. The exact lis
 - **OpenAI-compatible APIs** – chat completions and embeddings.
 - **Anthropic** – Claude models via the Messages API.
 - **Google / Gemini** – Gemini models via the Generative Language API.
+- **OpenRouter** – any model in OpenRouter's catalog that is served at its chat completions endpoint and supports tool calling, with an OpenRouter API key. Requests go to `https://openrouter.ai/api/v1` in the OpenAI chat completions format. The model picker lists those models with a default first (a Claude Sonnet, else a GPT, else a Gemini model). Summaries, agent steps and fallback routing use only the OpenRouter model chosen in Strix settings, or that default when none is chosen. The account's Test action asks OpenRouter whether it accepts the key. OpenRouter usage is recorded with a cost of $0, because the app has no OpenRouter prices.
 - **Ollama** – local model server running on `http://localhost:11434`. Models are discovered automatically via `/api/tags`. No API key required.
 - **MLX (on-device)** – runs models directly on Apple Silicon (Mac, iPad 8 GB+, iPhone 6 GB+) using Apple's MLX framework. Models are downloaded from HuggingFace and cached locally. The curated catalog includes 11 models organized by category (General, Coding, Mobile) and tier (Core, Specialized), with device-aware filtering for iPhones.
 - **OpenClaw** – An OpenAI-compatible self-hosted proxy. Can point at a local endpoint (`http://localhost:3000`) or a remote cloud API. The client exposes `isLocalEndpoint` so `ChatService` applies the correct timeout profile (300s/600s for local vs. 60s/120s for cloud) and skips cloud-only behavior like background thread summarization.
-- **Hermes** – Nous Research's Hermes model family, available via **Together AI** (cloud) or **self-hosted** (any OpenAI-compatible server like LM Studio or llama.cpp). Like OpenClaw, `HermesLLMClient` exposes `isLocalEndpoint` using the same `isLocalAddress()` helper. API key is optional when a custom `baseURL` is provided for self-hosted use.
+- **OpenAI-compatible server** – any server that speaks the OpenAI chat API, on this machine (LM Studio, llama.cpp, vLLM) or hosted: an address, a key if the server asks for one, and a model. A connection made for Nous Research's Hermes models in an earlier version becomes one of these the first time the app reads its connections: at Together AI's address when it named none, with its key and its model (`ProviderAccountService.convertHermesModelConnectionsIfNeeded`).
+- **Hermes agent** – Nous Research's Hermes Agent, through its API server (usually `http://127.0.0.1:8642`, with the key it was started with as `API_SERVER_KEY`). Hermes is an agent, not a model: it runs the turn itself, with its own tools, memory and model, through its `/v1/runs` API. The app starts a run for each message, shows its progress, answers what it asks to be allowed through the approval card, and stops it when the turn is stopped.
 - **MCP servers** – external tool servers connected via the Model Context Protocol. See the [MCP server integration](#mcp-server-integration) section below.
 
 `ModelRouter` selects a `(providerID, modelID)` pair for each task (chat, summarization, embeddings, MCP tool calling, etc.) based on the set of providers that have keys configured on your device. The `.mcpToolCalling` task type prefers models flagged as tool-capable, falling back to the cheapest available model.
@@ -36,7 +38,7 @@ For more on encryption and local storage, see `docs/local-context-architecture.m
 
 > UI labels and exact flows may change slightly over time, but this is the intended user experience.
 
-1. **Open the app** (iOS or macOS) and navigate to the **Settings / Provider Keys** screen.
+1. **Open the app** (iOS or macOS) and go to **Settings → AI connections** (⌘, opens Settings on the Mac).
 2. For each provider you want to use (e.g. OpenAI, Anthropic, Gemini):
    - Paste your API key into the corresponding field.
    - Optionally choose a default model if the UI exposes model selection.
@@ -93,13 +95,15 @@ These are used in two main places:
 
 ### Image generation
 
-- `generateImage(prompt:)` is a simple, provider-backed image helper.
-- Today it delegates to an OpenAI chat model when available with a constrained system prompt that returns a data URL.
-- The app decodes the data URL locally and writes a PNG under the app's caches directory.
-- Returns a small `GeneratedImage` struct with an `id` and a local file `url`.
-- The UI attaches these as `FileAttachmentDetail` objects so they behave like regular attachments.
-
-In the future this may be upgraded to use first-class image generation endpoints for multiple providers, but the public API of `ToolService` is intended to remain stable.
+- Image generation is a tool a model calls, `image.generate` (`prompt`, and optionally `provider`, `model`, `size`, `quality`), not a `ToolService` function.
+- The app supplies no key. An image is made with whichever of your keys can make one: OpenAI's or Google's.
+- It is offered to a chat turn answered by a cloud model, only where one of those keys is stored (the key need not be the answering model's). Agent runs, models on this device, and Hermes and OpenClaw runs are not offered it.
+- `ImageGenerationService` (`Infrastructure/Tools/ImageGenerationService.swift`) makes the image with an OpenAI key at OpenAI's image endpoint (`POST /v1/images/generations`). With no model named, the key's image models are tried in order, four at most.
+- `GoogleImageGenerationService` makes it with a Google key, with a Gemini model that answers with an image (`POST v1beta/models/{model}:generateContent`). With no model named, the key's image models are tried, four at most. The size is asked for as the nearest of square, wide and tall.
+- A call that names a provider, or a model that says whose it is, is asked of that provider's key only. A call that names neither is asked of each key in turn (OpenAI's, then Google's) until one makes the image.
+- `ToolExecutionService` keeps the image in the app's encrypted attachment store (`AttachmentStore`) for the thread, only if the thread is the signed-in account's.
+- The turn gives it to its reply, which shows it like any attachment (`FileAttachmentDetail`): a thumbnail that opens in Quick Look. The model is told the person has the image, not where it is.
+- OpenRouter's image models are not used yet.
 
 ### File generation
 
@@ -113,7 +117,6 @@ The enhanced message composer in the personal chat view wires several of these t
 
 - **Web search** – Takes the current draft message as a query and appends a `[Web search results]` section with top results.
 - **Summarize attachments** – Runs `analyzeAttachment` for each attached file/image and appends an `[Attachment analysis]` section.
-- **Generate image from message** – Calls `generateImage` and attaches the resulting PNG.
 - **Generate file from message** – Calls `generateFile` to save the draft text as a `.txt` file and attaches it.
 
 When you hit send:
@@ -127,7 +130,7 @@ This keeps the conversation history readable while still giving the model access
 
 The same `ToolService` instance is available to the autonomous `AgentRunner`.
 
-- Agents can call web search, attachment analysis, and file/image generation helpers as part of their planning/execution loop.
+- Agents can call web search, attachment analysis, and file generation helpers as part of their planning/execution loop. Agent runs are not offered `image.generate`: only a chat turn gives an image to its reply.
 - Each use of a tool is recorded in the `agent_steps` table along with any intermediate reasoning the model exposes.
 - The step limit (`max_steps`) is enforced regardless of tool usage, so tools cannot cause unbounded execution.
 
@@ -151,7 +154,8 @@ The app supports the [Model Context Protocol (MCP)](https://modelcontextprotocol
 
 ### Architecture
 
-- `MCPClient` (actor, `Features/MCP/MCPClient.swift`) handles the JSON-RPC 2.0 transport. Connects via HTTP POST and supports both plain JSON and SSE (`text/event-stream`) response formats.
+- `MCPClient` (actor, `Features/MCP/MCPClient.swift`) handles JSON-RPC 2.0 over Streamable HTTP. It speaks the current revision of the protocol (2026-07-28: no handshake, each request saying its version) and falls back to the earlier ones (`initialize`, a session id); it asks a server which it speaks once per run. Answers are read as plain JSON or as a stream of events (`text/event-stream`). The deprecated HTTP+SSE transport is not spoken.
+- A tool call asks the person first (`ToolApprovals`), showing the tool, the server's name and host, and the arguments, unless the server marks the tool as read-only (`annotations.readOnlyHint`).
 - `MCPServerAccount` (`Features/ConnectedApps/MCPServerAccount.swift`) stores per-server configuration: URL, transport type (`sse` or `streamable_http`), auth type (`none`, `bearer`, `api_key`), and cached tool definitions.
 - `ConnectedAccountsService` persists server configs in `UserDefaults` and stores auth tokens in Keychain.
 - `MCPServerManagementView` provides the settings UI for managing servers.
@@ -190,51 +194,21 @@ If you intend to extend the tools layer (for example, to add Git or local shell 
 
 ---
 
-## Hybrid providers: OpenClaw and Hermes
+## Servers that can be local or remote: OpenClaw and OpenAI-compatible servers
 
-OpenClaw and Hermes are **hybrid providers** — they can point at either a local server or a remote cloud API. The client detects this automatically via the `isLocalEndpoint` computed property.
+An OpenClaw connection and an OpenAI-compatible server can each point at a server on this machine or at a remote one. The client detects which via the `isLocalEndpoint` computed property.
 
 ### `isLocalEndpoint` detection
-
-`OpenClawLLMClient` provides a static `isLocalAddress(_ url: URL) -> Bool` helper that checks whether the base URL resolves to a loopback address, `localhost`, or a private RFC1918 IP range (`10.x`, `172.16-31.x`, `192.168.x`). `HermesLLMClient` reuses this same helper.
+`OpenClawLLMClient` provides a static `isLocalAddress(_ url: URL) -> Bool` helper that checks whether the base URL resolves to a loopback address, `localhost`, or a private network range.
 
 When `isLocalEndpoint` is `true`:
 - Timeouts are extended: **300s connect / 600s response** (local inference is slow).
 - `ChatService.isLocalDeployment(providerID:)` returns `true`, suppressing cloud-only behaviors such as background thread summarization on iOS.
 - `hasCloudProvider` (used for background summary gating) returns `false`.
 
-When `isLocalEndpoint` is `false` (cloud endpoint, e.g. Together AI):
+When `isLocalEndpoint` is `false` (a remote address, e.g. Together AI):
 - Standard cloud timeouts apply: **60s connect / 120s response**.
 - Background summarization is enabled.
-
-### Strix Settings UI
-
-Both OpenClaw and Hermes appear in the `StrixSettingsView` provider picker:
-
-- **OpenClaw** – subtitle: *"OpenAI-compatible self-hosted proxy"*
-- **Hermes** – subtitle: *"Nous Research – Together AI or self-hosted"*
-  - When cloud Hermes is selected, the model picker shows Together AI model aliases.
-  - When self-hosted Hermes is selected (custom `baseURL`), the picker shows the raw model ID as configured.
-- `isLocalProvider` in the settings view now checks the actual Hermes `baseURL` rather than the provider name, so the UI is consistent with `isLocalEndpoint`.
-
-### Self-hosted Hermes without an API key
-
-Self-hosted Hermes servers (LM Studio, llama.cpp, Ollama-compatible) typically run unauthenticated. `HermesLLMClient` handles this:
-
-- `apiKey` is `Optional<String>` — no key is required.
-- The `Authorization: Bearer` header is **only** injected if a key is present.
-- `LLMConfiguration.makeDefaultClients()` initializes `HermesLLMClient` if **either** an API key is present **or** a custom `baseURL` is configured.
-
-```swift
-// No API key required for self-hosted:
-let client = HermesLLMClient(baseURL: URL(string: "http://localhost:8080/v1")!)
-
-// Together AI (cloud) requires a key:
-let cloudClient = HermesLLMClient(
-    baseURL: URL(string: "https://api.together.xyz/v1")!,
-    apiKey: "tok_..."
-)
-```
 
 ---
 

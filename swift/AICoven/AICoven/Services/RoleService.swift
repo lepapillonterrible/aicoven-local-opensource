@@ -51,7 +51,8 @@ actor RoleService {
         autonomousMode: Bool? = nil,
         autonomousMaxSteps: Int? = nil,
         plannerMaxTasks: Int? = nil,
-        plannerMaxSeconds: Double? = nil
+        plannerMaxSeconds: Double? = nil,
+        icon: (symbol: String, tint: IconTint)? = nil
     ) async throws -> Role {
         try await CovenRepository.shared.createRole(
             covenId: covenId,
@@ -69,7 +70,8 @@ actor RoleService {
             autonomousMode: autonomousMode,
             autonomousMaxSteps: autonomousMaxSteps,
             plannerMaxTasks: plannerMaxTasks,
-            plannerMaxSeconds: plannerMaxSeconds
+            plannerMaxSeconds: plannerMaxSeconds,
+            icon: icon
         )
     }
 
@@ -130,10 +132,19 @@ actor RoleService {
         )
     }
 
+    /// Sets an agent's face.
+    func setIcon(symbol: String, tint: IconTint, forRole id: String) async throws {
+        try await CovenRepository.shared.setIcon(symbol: symbol, tint: tint, forRole: id)
+    }
+
     /// Delete a role
-    /// - Parameter roleId: The role ID to delete
-    func deleteRole(roleId: String) async throws {
-        try await CovenRepository.shared.deleteRole(roleId: roleId)
+    /// - Parameters:
+    ///   - roleId: The role ID to delete
+    ///   - account: Whoever asked, where the caller read it before waiting;
+    ///     the signed-in account where none is named. Only that account's
+    ///     own agent is deleted, and none if another is signed in by now.
+    func deleteRole(roleId: String, as account: String? = nil) async throws {
+        try await CovenRepository.shared.deleteRole(roleId: roleId, as: account)
     }
 
     /// Get a specific role by ID

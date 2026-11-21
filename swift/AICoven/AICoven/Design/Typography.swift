@@ -82,21 +82,17 @@ enum TypographySizeScale: String, CaseIterable, Identifiable, Codable {
 /// lives in `Resources/Fonts/OFL.txt` and is surfaced to users in
 /// Settings › About.
 ///
-/// `.system` is the default and falls through to the active theme's
-/// `displayFontDesign` for display-size type. Picking any other variant
-/// overrides the theme's display preference globally.
+/// `.system` is the default: SF Pro for display and body. Picking any
+/// other variant overrides both.
 enum TypographyVariant: String, CaseIterable, Identifiable, Codable {
-    /// Theme-driven default. Display follows `theme.displayFontDesign`,
-    /// body uses SF Pro Text. The original four-theme behaviour.
+    /// The default: SF Pro for display and body.
     case system
 
-    /// SF Pro Rounded for both display and body. Soft, approachable;
-    /// pairs well with Nebula / Observatory / Orchard.
+    /// SF Pro Rounded for both display and body. Soft, approachable.
     case rounded
 
     /// New York for display and body. Editorial / book voice; the
-    /// system serif Apple ships on iOS 13+ and macOS 10.15+. Pairs
-    /// well with Apothecary and Grimoire.
+    /// system serif Apple ships on iOS 13+ and macOS 10.15+.
     case bookish
 
     /// Avenir Next throughout. A geometric humanist sans that reads as
@@ -145,12 +141,12 @@ enum TypographyVariant: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    /// Short caption shown under the variant name in the picker. Like
-    /// the theme tagline, this describes *when you would choose this
-    /// voice*, not which font names are inside it.
+    /// Short caption shown under the variant name in the picker. It
+    /// describes *when you would choose this voice*, not which font names
+    /// are inside it.
     var tagline: String {
         switch self {
-        case .system: "Follow the active theme"
+        case .system: "The system font"
         case .rounded: "Soft, approachable"
         case .bookish: "Editorial, page‑like"
         case .geometric: "Modern humanist"
@@ -165,11 +161,6 @@ enum TypographyVariant: String, CaseIterable, Identifiable, Codable {
 
     /// Display-size font (used by `aicovenDisplayLarge` / Medium / Small).
     ///
-    /// `themeDesign` is the active theme's `displayFontDesign`; it is only
-    /// consulted when `self == .system` (or when `.custom` has no family
-    /// stored), so themes still set a sensible default for users who never
-    /// touch the typography picker.
-    ///
     /// `customFontFamily` is only consulted when `self == .custom`. It is
     /// the name of an OS-installed font family (e.g. `"Iowan Old Style"`).
     /// If `nil` or empty, this variant is treated as `.system` so the UI
@@ -177,12 +168,11 @@ enum TypographyVariant: String, CaseIterable, Identifiable, Codable {
     func displayFont(
         size: CGFloat,
         weight: Font.Weight,
-        themeDesign: Font.Design,
         customFontFamily: String? = nil
     ) -> Font {
         switch self {
         case .system:
-            return .system(size: size, weight: weight, design: themeDesign)
+            return .system(size: size, weight: weight)
         case .rounded:
             return .system(size: size, weight: weight, design: .rounded)
         case .bookish:
@@ -203,15 +193,13 @@ enum TypographyVariant: String, CaseIterable, Identifiable, Codable {
             if let family = customFontFamily, !family.isEmpty {
                 return .custom(family, size: size).weight(weight)
             }
-            return .system(size: size, weight: weight, design: themeDesign)
+            return .system(size: size, weight: weight)
         }
     }
 
     /// Body-size font (used by `aicovenH1` through `aicovenCaption`).
     ///
-    /// `.system` always uses SF Pro Text at body sizes regardless of theme;
-    /// body type stays neutral so chat / settings / chrome don't take on
-    /// the theme's display character.
+    /// `.system` uses SF Pro Text at body sizes.
     ///
     /// `customFontFamily` is only consulted when `self == .custom`. If
     /// `nil` or empty, this variant is treated as `.system`.
@@ -335,8 +323,7 @@ enum TypographyVariant: String, CaseIterable, Identifiable, Codable {
 /// Owns the user's typography choice and persists it to `UserDefaults`.
 ///
 /// Lives alongside `ThemeManager` rather than inside it because typography
-/// and palette are independent axes — a user might want Apothecary's
-/// daytime palette but with their preferred Avenir Next body font.
+/// and appearance are independent choices.
 ///
 /// `Font.aicoven*` extensions in `DesignSystem.swift` read from this
 /// manager at render time, so any view body that re-evaluates picks up

@@ -8,9 +8,15 @@ struct AddRoleView: View {
 
     private let analytics = AnalyticsService.shared
 
-    // Basic fields
+    /// Basic fields
     @State private var name = ""
-    @State private var emoji = "🤖"
+    /// The face the agent is made with. Its tint starts as the first no
+    /// other agent of the coven wears, and its symbol as its template's,
+    /// unless the person has chosen by then.
+    @State private var iconSymbol = SymbolDisc.fallbackSymbol
+    @State private var iconTint = IconTint.warm
+    @State private var didChooseSymbol = false
+    @State private var didChooseTint = false
     @State private var description = ""
     @State private var systemPrompt = ""
     @State private var model = ""
@@ -24,7 +30,6 @@ struct AddRoleView: View {
     /// Planner configuration (plan_and_execute)
     @State private var plannerMaxTasks = "5"
     @State private var plannerMaxSeconds = "30"
-    @State private var showEmojiPicker = false
 
     // Template state
     @State private var templates: [RoleTemplate] = []
@@ -45,11 +50,12 @@ struct AddRoleView: View {
     /// Collaborators state
     @State private var selectedCollaborators: Set<String> = []
 
-    let emojiOptions = ["🤖", "🧠", "💡", "🎨", "📝", "🔍", "⚙️", "📊", "🚀", "💬", "🎯", "🔬", "📚", "✨", "🌟", "🎭"]
     let providerOptions = [
         ("openai", "OpenAI"),
         ("anthropic", "Anthropic"),
         ("google", "Google AI"),
+        ("openrouter", "OpenRouter"),
+        ("openai_compatible", "OpenAI-compatible server"),
         ("ollama", "Ollama (Local)"),
         ("mlx", "MLX (On-Device)")
     ]
@@ -103,38 +109,29 @@ struct AddRoleView: View {
                     // Basic info
                     GlassCard {
                         VStack(spacing: Spacing.md) {
-                            // Emoji picker
+                            // The agent's face, and its picker.
                             VStack(alignment: .leading, spacing: Spacing.sm) {
                                 Text("Icon")
                                     .font(.aicovenH3)
                                     .foregroundColor(.aicovenTextPrimary)
 
-                                Button {
-                                    showEmojiPicker.toggle()
-                                } label: {
-                                    Text(emoji)
-                                        .font(.system(size: 48))
-                                        .frame(width: 80, height: 80)
-                                        .background(Color.aicovenGlass)
-                                        .cornerRadius(BorderRadius.md)
+                                IconChoice(
+                                    symbol: Binding(get: { iconSymbol }, set: { chosen in
+                                        iconSymbol = chosen
+                                        didChooseSymbol = true
+                                    }),
+                                    tint: Binding(get: { iconTint }, set: { chosen in
+                                        iconTint = chosen
+                                        didChooseTint = true
+                                    }),
+                                    suggestedSymbols: AgentFace.suggestedSymbols
+                                ) {
+                                    AgentFace(symbol: iconSymbol, tint: iconTint, provider: provider.isEmpty ? nil : provider, size: 64)
                                 }
-                                .buttonStyle(.plain)
-
-                                if showEmojiPicker {
-                                    FlowLayout(spacing: Spacing.sm) {
-                                        ForEach(emojiOptions, id: \.self) { option in
-                                            Button {
-                                                emoji = option
-                                                showEmojiPicker = false
-                                            } label: {
-                                                Text(option)
-                                                    .font(.system(size: 32))
-                                                    .frame(width: 50, height: 50)
-                                                    .background(emoji == option ? Color.aicovenGlass : Color.clear)
-                                                    .cornerRadius(BorderRadius.sm)
-                                            }
-                                            .buttonStyle(.plain)
-                                        }
+                                // It starts on a tint no other agent of the coven wears.
+                                .onAppear {
+                                    if !didChooseTint {
+                                        iconTint = IconTint.nextUnused(worn: roles.map { ($0.iconTintValue ?? .warm).rawValue })
                                     }
                                 }
                             }
@@ -174,8 +171,7 @@ struct AddRoleView: View {
                                             selectedTemplateId = nil
                                         } label: {
                                             VStack {
-                                                Text("✨")
-                                                    .font(.system(size: 32))
+                                                SymbolDisc(symbol: "sparkles", tint: .warm, size: 32)
                                                 Text("From Scratch")
                                                     .font(.aicovenCaption)
                                                     .foregroundColor(.aicovenTextSecondary)
@@ -198,8 +194,7 @@ struct AddRoleView: View {
                                                 }
                                             } label: {
                                                 VStack {
-                                                    Text(template.emoji ?? "📝")
-                                                        .font(.system(size: 32))
+                                                    SymbolDisc(symbol: AgentFace.symbol(forEmoji: template.emoji) ?? "pencil", tint: .warm, size: 32)
                                                     Text(template.name)
                                                         .font(.aicovenCaption)
                                                         .foregroundColor(.aicovenTextSecondary)
@@ -508,10 +503,7 @@ struct AddRoleView: View {
                                             Image(systemName: selectedCollaborators.contains(role.id) ? "checkmark.square.fill" : "square")
                                                 .foregroundColor(selectedCollaborators.contains(role.id) ? .aicovenTeal : .aicovenTextTertiary)
 
-                                            if let emoji = role.emoji {
-                                                Text(emoji)
-                                                    .font(.system(size: 16))
-                                            }
+                                            role.face(size: 20)
 
                                             Text(role.name)
                                                 .font(.aicovenBody)
@@ -621,8 +613,11 @@ struct AddRoleView: View {
     private func loadTemplate(_ templateId: String) async {
         do {
             let template = try await RoleTemplateService.shared.getTemplate(templateId)
+            // Another template, or none, was chosen while this one was read:
+            // it fills in nothing.
+            guard selectedTemplateId == templateId else { return }
             name = template.role.name
-            emoji = template.role.emoji ?? "🤖"
+            if !didChooseSymbol, let symbol = AgentFace.symbol(forEmoji: template.role.emoji) { iconSymbol = symbol }
             description = template.purpose.joined(separator: "\n")
             systemPrompt = template.systemPrompt ?? ""
 
@@ -649,7 +644,6 @@ struct AddRoleView: View {
             let createdRole = try await RoleService.shared.createRole(
                 covenId: covenId,
                 name: name,
-                emoji: emoji,
                 description: description.isEmpty ? nil : description,
                 systemPrompt: systemPrompt.isEmpty ? nil : systemPrompt,
                 model: model.isEmpty ? nil : model,
@@ -662,7 +656,8 @@ struct AddRoleView: View {
                 autonomousMode: autonomousMode,
                 autonomousMaxSteps: stepsInt,
                 plannerMaxTasks: plannerTasksInt,
-                plannerMaxSeconds: plannerSecondsDouble
+                plannerMaxSeconds: plannerSecondsDouble,
+                icon: (iconSymbol, iconTint)
             )
 
             analytics.trackRoleCreate(roleId: createdRole.id, templateId: selectedTemplateId, isCustom: selectedTemplateId == nil)

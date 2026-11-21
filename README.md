@@ -17,19 +17,19 @@ For the cloud version of the app go to https://aicoven.ai/
 
 This repo started as an extraction of the original multi-tenant AICoven app and is being reshaped into a **standalone, local-first client**. The current codebase already includes:
 
-- A provider-agnostic `LLMClient` + `ModelRouter` used for all LLM calls, supporting OpenAI, Anthropic, Google Gemini, Ollama, and on-device MLX models.
+- A provider-agnostic `LLMClient` + `ModelRouter` used for all LLM calls, supporting OpenAI, Anthropic, Google Gemini, OpenRouter, Ollama, and on-device MLX models.
 - Encrypted local context storage (threads, memories, settings) backed by SQLite/GRDB.
 - A "context sandwich" builder that composes system contract, policies, time, memories, history, and the current turn — with device-aware context limits for iPhones.
-- A tools layer (`ToolEnvironment` + `ToolService`) that exposes web search, file/image analysis, and local file/image generation using only your provider keys.
-- An MCP client (`MCPClient`) that connects to remote MCP servers over HTTP/SSE, discovers tools, and executes them — with semantic tool selection via embedding-based matching and a benchmark suite for evaluating local model tool-calling accuracy.
-- Shell command tools with an approval flow, and connected-app integrations (GitHub, Google Drive).
+- A tools layer (`ToolEnvironment` + `ToolService`) that exposes web search, file/image analysis, and local file generation using only your provider keys, and an `image.generate` tool that makes images with your OpenAI or Google key.
+- An MCP client (`MCPClient`) that connects to remote MCP servers over Streamable HTTP (the current revision of the protocol, and the earlier ones' `initialize` handshake), discovers tools, and executes them — with semantic tool selection via embedding-based matching and a benchmark suite for evaluating local model tool-calling accuracy.
+- Shell command tools with an approval flow, and connected-app integrations (GitHub, Google Drive, Figma, Linear).
 - StoreKit 2 in-app purchase support with a community edition compile flag.
 
 Some files from the original cloud app remain in the codebase (e.g. covens, roles, remote memory services). Covens and roles are actively being reintegrated into the local client. These features are **not** required to use the basic local assistant.
 
 ### In-App Purchases
 
-Some premium features (shell tools, GitHub integration, Google Drive integration) require an in-app purchase. The StoreKit 2 purchase flow is enabled for all builds — users see the Store UI and can unlock features by making a purchase.
+Some premium features (shell tools and the GitHub, Google Drive, Figma and Linear integrations) require an in-app purchase. The StoreKit 2 purchase flow is enabled for all builds — users see the Store UI and can unlock features by making a purchase.
 
 ## High-level architecture
 
@@ -38,7 +38,7 @@ Some premium features (shell tools, GitHub integration, Google Drive integration
 - **Encryption**: chats, memories, and provider configs encrypted at rest using a key derived from a user passphrase.
 - **Secrets**: API keys stored via a `SecretsStore` abstraction backed by the system Keychain.
 - **LLM abstraction**: `LLMClient` protocol and `HeuristicModelRouter` to pick the right `(providerID, modelID)` for each task, with user-preference-first routing via `findExact`.
-- **Tools layer**: `ToolEnvironment` + `ToolService` offering time, web search, attachment analysis, file/image generation, shell commands (with approval), and connected apps.
+- **Tools layer**: `ToolEnvironment` + `ToolService` offering time, web search, attachment analysis and file generation; the `image.generate` tool (`ImageGenerationService`); shell commands (with approval); and connected apps.
 - **Memory model**: encrypted `memory_chunks` and `memory_proposals` tables accessed via repositories and `MemoryService`, with user- and thread-scoped snippets stored alongside optional embeddings and tags.
 - **Autonomous agents**: an `AgentRunner` that executes bounded multi-step runs fully locally, backed by encrypted `agent_runs`/`agent_steps` tables and sharing the same context sandwich, tools, and routing as interactive chat.
 
@@ -60,7 +60,7 @@ The Swift sources live under `swift/` and are organized as:
   - `Infrastructure/Keychain` – `SecretsStore` and Keychain-backed implementation.
   - `Infrastructure/Design` – Design system and shared styles.
   - `Infrastructure/Security` – `DataEncryptionService` for encrypted storage.
-  - `Infrastructure/Tools` – `ToolService` (time, web search, attachment analysis, file/image generation).
+  - `Infrastructure/Tools` – `ToolService` (time, web search, attachment analysis, file generation) and `ImageGenerationService` and `GoogleImageGenerationService` (images with an OpenAI or a Google key, for the `image.generate` tool).
 - `swift/AICoven/AICoven/Models` – Domain model types (threads, messages, memories, provider configs, agent runs/steps).
 - `swift/AICoven/AICoven/Networking` – Environment configuration.
 - `swift/AICoven/AICoven/Features` – Feature-oriented SwiftUI modules (chat, settings, etc.).
@@ -83,14 +83,16 @@ The local-first client is functional for core workflows but some features are st
 - Autonomous agent runner with bounded multi-step execution
 - Web search via DuckDuckGo (no API key required)
 - Attachment analysis for files and images
-- Enhanced chat UI with thread management
+- Enhanced chat UI with thread management: rename, archive, delete, and copy a thread as Markdown
+- Thread lists that show what each thread is doing (working, waiting for your OK, stopped on a problem, an unsent message) and which hold a reply you have not seen, with read marks kept on the device
+- Voice messages: hold the mic to talk on iPhone and iPad, click it (or hold Space in an empty field) on the Mac; the recording is transcribed with your own OpenAI or Google key, or on the device, and sent as text
 - Shell command tools with approval flow
-- Connected apps: GitHub and Google Drive integrations
+- Connected apps: GitHub, Google Drive, Figma and Linear integrations
 - Local LLM support via Ollama and on-device MLX with automatic model discovery
 - MLX model catalog with category/tier classification (General, Coding, Mobile), device-aware filtering, and AICoven fine-tuned MCP models
 - MLX on iPhone support (6 GB+ RAM) with automatic memory management (model eviction, GPU cache limits, tool context truncation)
 - Native tool calling for API providers (OpenAI, Anthropic, Gemini) with text-based fallback for local models
-- MCP server integration with tool discovery, execution, caching, SSE transport, and semantic tool selection
+- MCP server integration with tool discovery, execution, caching, Streamable HTTP transport, and semantic tool selection
 - MCP tool-calling benchmark suite for evaluating local model accuracy (`MCPToolCallingBenchmark`)
 - StoreKit 2 in-app purchases for premium features
 - SwiftLint configuration (`.swiftlint.yml`) and CI workflow
@@ -118,11 +120,11 @@ The tools layer is provider-agnostic and designed to work with whatever keys you
 - **File read/write/list** (`file.read`, `file.write`, `file.list`) – Read, write, and list local files and directories.
 - **Shell commands** (`shell.execute`) – Execute local shell commands with a user-approval flow before execution.
 - **Attachment analysis** – Summarization/QA over attached files and images using the best available vision/chat model.
-- **Image generation** – Simple image generation using a chat model and local decoding; images are stored as local files and appear as attachments.
-- **Connected apps** – GitHub repository tools (read/write files, create branches/PRs, search code) and Google Drive file tools (list, read, upload, Sheets read/write), authenticated via user-provided tokens.
-- **MCP server tools** – Any tools exposed by connected [MCP](https://modelcontextprotocol.io) servers (e.g. email via Zapier, calendar, Slack). Tools are discovered automatically via `tools/list`, cached locally, and executed via JSON-RPC over HTTP or SSE. Semantic tool selection uses embedding-based matching when many tools are available.
+- **Image generation** (`image.generate`) – A model can make an image with your OpenAI or Google key. If it names a provider or one of its models, that key is asked; otherwise OpenAI's key is asked first and Google's next, until one makes the image. The image is kept on the device, encrypted, and shown under the reply.
+- **Connected apps** – GitHub repository tools (read/write files, create branches/PRs, search code), Google Drive, Docs, Sheets and Slides tools (list, read, upload, write), Figma tools (read a file's structure and comments, render frames as images for the model, post a comment), and Linear tools (read an issue, comment on one, change one), authenticated via user-provided tokens.
+- **MCP server tools** – Any tools exposed by connected [MCP](https://modelcontextprotocol.io) servers (e.g. email via Zapier, calendar, Slack). Tools are discovered automatically via `tools/list`, cached locally, and executed via JSON-RPC over Streamable HTTP. A tool the server marks as read-only is used directly; any other asks you first, showing what it will be sent. Semantic tool selection uses embedding-based matching when many tools are available.
 
-These tools are available both to the autonomous `AgentRunner` and to the interactive chat UI via the enhanced message composer.
+These tools are available both to the autonomous `AgentRunner` and to the interactive chat UI via the enhanced message composer, except the two that work with images (image generation and Figma frame rendering), which are for chat replies only.
 
 ### Tool calling by provider
 
@@ -133,7 +135,7 @@ These tools are available both to the autonomous `AgentRunner` and to the intera
 | **Google Gemini** | Native function declarations API | ✅ Fully supported |
 | **Ollama** (local) | Text-based (JSON in system prompt) | ⚠️ Works, less reliable |
 | **MLX** (on-device) | Text-based (JSON in system prompt) + pre-execution | ⚠️ Works, less reliable |
-| **MCP servers** | JSON-RPC tool calls (HTTP/SSE) | ✅ Fully supported |
+| **MCP servers** | JSON-RPC tool calls (Streamable HTTP) | ✅ Supported (not the deprecated HTTP+SSE transport) |
 
 API providers (OpenAI, Anthropic, Gemini) use **native tool calling** — tool schemas are sent as structured function declarations and the model returns structured tool calls. This is reliable and well-supported.
 
@@ -156,7 +158,7 @@ See `docs/local-context-architecture.md` for more details on the encryption and 
 For a complete documentation index, see [`docs/README.md`](docs/README.md).
 
 - `docs/local-context-architecture.md` – Local context sandwich, GRDB persistence, encryption, routing, and autonomous agents.
-- `docs/tools-and-providers.md` – Provider keys, `LLMClient`/`ModelRouter` routing, the tools layer (web search, attachment analysis, file/image generation), and MCP server integration.
+- `docs/tools-and-providers.md` – Provider keys, `LLMClient`/`ModelRouter` routing, the tools layer (web search, attachment analysis, file generation, the `image.generate` tool), and MCP server integration.
 - `docs/TEST_COVERAGE.md` – Comprehensive test coverage documentation with 18 test files and 41 test methods across all layers.
 - `docs/CODE_REVIEW.md` – Detailed code review findings and architectural recommendations.
 - `docs/REVIEW_SUMMARY.md` – High-level summary of code quality, implementation status, and readiness assessment.
@@ -184,7 +186,7 @@ For a complete documentation index, see [`docs/README.md`](docs/README.md).
 3. Select the `AICoven` scheme and your desired destination (iOS simulator or My Mac).
 4. Set a unique bundle identifier and configure signing for your account if needed.
 5. Build & run.
-6. In the app, open Settings → Provider Keys and add your own API keys (e.g. OpenAI, Anthropic, Gemini). The app will then route LLM and embedding calls through those providers.
+6. In the app, open Settings (⌘, on the Mac; the Settings tab on iPhone) → AI connections and add your own API keys (e.g. OpenAI, Anthropic, Gemini). The app will then route LLM and embedding calls through those providers.
 
 ### Using MLX (On-Device Models)
 
@@ -238,7 +240,7 @@ You can run models on your machine with [Ollama](https://ollama.com) — no API 
 
 AICoven supports the [Model Context Protocol (MCP)](https://modelcontextprotocol.io), allowing you to connect external tool servers (e.g. Zapier, custom services) and use their tools directly from chat.
 
-1. In the app, go to **Settings → Connected Apps → MCP Servers**.
+1. In the app, go to **Settings → Connected apps → MCP Servers**.
 2. Tap **Add Server** and enter the server URL and authentication details (Bearer token or API key).
 3. The app will connect and discover available tools via `tools/list`.
 4. Discovered tools are cached locally and automatically included in chat prompts.
@@ -250,7 +252,7 @@ AICoven supports the [Model Context Protocol (MCP)](https://modelcontextprotocol
 - For **local models** (MLX, Ollama): `ChatService` uses keyword matching and fuzzy scoring to pre-select the most relevant MCP tool before sending to the model. When many MCP tools are available, **semantic tool selection** via embedding-based cosine similarity narrows the candidate set.
 - MCP tool results are injected into the context sandwich and truncated to fit device memory constraints (4 KB on iPhone, 8 KB on Mac/iPad).
 
-**Supported transports:** SSE (`text/event-stream`) and Streamable HTTP.
+**Supported transport:** Streamable HTTP, with answers as JSON or as a stream of events (`text/event-stream`). The client speaks the current revision of the protocol (2026-07-28) and the earlier ones that start with `initialize`. The deprecated HTTP+SSE transport is not spoken yet; a server's transport setting is not used.
 **Authentication:** None, Bearer token, or API key.
 
 ### MLX vs. Ollama

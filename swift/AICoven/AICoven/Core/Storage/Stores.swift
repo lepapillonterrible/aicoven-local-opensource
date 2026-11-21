@@ -10,6 +10,11 @@ protocol ThreadStore {
     func updateSummary(forThreadID threadID: String, summary: String?) async throws
     func appendMessage(toThreadID threadID: String, role: String, content: String) async throws -> LocalMessage
     func loadMessages(forThreadID threadID: String, limit: Int?) async throws -> [LocalMessage]
+    /// Adds a message of the app's chat history to the end of its thread.
+    func appendChatMessage(_ message: ChatMessage) async throws
+    /// A page of a thread's chat history, oldest first: the `limit` newest
+    /// messages, or the `limit` just before the message `before`.
+    func loadChatMessages(threadID: String, limit: Int, before: String?) async throws -> [ChatMessage]
 }
 
 /// Protocol abstraction for long-term memory storage.
@@ -25,6 +30,21 @@ protocol MemoryStore {
         createdBy: String?,
         source: String?,
         embedding: [Float]?
+    ) async throws -> LocalMemoryChunk
+    /// As `storeMemory`, for the account that wrote the memory, read by
+    /// the caller before anything it waited for: it is stored as that
+    /// account's, and not at all if another is signed in, or the data key
+    /// has changed hands, by the time it is stored.
+    @discardableResult
+    func storeMemory(
+        scope: String,
+        text: String,
+        tags: [String],
+        pii: Bool,
+        createdBy: String?,
+        source: String?,
+        embedding: [Float]?,
+        as account: String
     ) async throws -> LocalMemoryChunk
     func loadMemories(scope: String?, limit: Int) async throws -> [LocalMemoryChunk]
     func loadMemory(id: String) async throws -> LocalMemoryChunk?
@@ -51,4 +71,21 @@ protocol AgentRunStore {
         output: String,
         toolCallsJSON: String?
     ) async throws -> LocalAgentStep
+}
+
+extension MemoryStore {
+    /// A store that keeps no accounts apart stores it as it stores any.
+    @discardableResult
+    func storeMemory(
+        scope: String,
+        text: String,
+        tags: [String],
+        pii: Bool,
+        createdBy: String?,
+        source: String?,
+        embedding: [Float]?,
+        as _: String
+    ) async throws -> LocalMemoryChunk {
+        try await storeMemory(scope: scope, text: text, tags: tags, pii: pii, createdBy: createdBy, source: source, embedding: embedding)
+    }
 }

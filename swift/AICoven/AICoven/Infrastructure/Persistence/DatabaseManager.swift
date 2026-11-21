@@ -283,6 +283,141 @@ final class DatabaseManager {
                 """)
             }
 
+            // v7: the app's own threads and messages move here from plain
+            // JSON files. A thread's whole record, its title included, is in
+            // `payload_ciphertext`. `payload_format` 1 marks a message whose
+            // ciphertext is its whole record; 0 is the earlier plain content.
+            migrator.registerMigration("v7_chat_history") { db in
+                try db.alter(table: "threads") { t in
+                    t.add(column: "payload_ciphertext", .blob)
+                }
+                try db.alter(table: "messages") { t in
+                    t.add(column: "payload_format", .integer).notNull().defaults(to: 0)
+                }
+            }
+
+            // v8: one row for each reply the app starts, from the person's
+            // message to its outcome, so a reply cut off by the app closing
+            // is known to have been running. Its work trace (v9) is the only
+            // content a turn holds, and is encrypted.
+            migrator.registerMigration("v8_turns") { db in
+                try db.create(table: "turns") { t in
+                    t.column("id", .text).primaryKey()
+                    t.column("user_id", .text).notNull()
+                    t.column("thread_id", .text).notNull()
+                    t.column("status", .text).notNull()
+                    t.column("started_at", .datetime).notNull()
+                    t.column("finished_at", .datetime)
+                    t.column("message_id", .text)
+                    t.foreignKey(["thread_id"], references: "threads", columns: ["id"], onDelete: .cascade)
+                }
+                try db.create(index: "turns_user_thread_status", on: "turns", columns: ["user_id", "thread_id", "status"])
+                // As for messages: a turn belongs to the user its thread does.
+                try db.execute(sql: """
+                CREATE TRIGGER turns_match_thread_user_insert
+                BEFORE INSERT ON turns
+                WHEN length(trim(NEW.user_id)) = 0 OR NOT EXISTS (
+                    SELECT 1 FROM threads
+                    WHERE threads.id = NEW.thread_id AND threads.user_id = NEW.user_id
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'turns.thread_id must reference a thread owned by the same user');
+                END;
+                """)
+                try db.execute(sql: """
+                CREATE TRIGGER turns_match_thread_user_update
+                BEFORE UPDATE OF user_id, thread_id ON turns
+                WHEN length(trim(NEW.user_id)) = 0 OR NOT EXISTS (
+                    SELECT 1 FROM threads
+                    WHERE threads.id = NEW.thread_id AND threads.user_id = NEW.user_id
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'turns.thread_id must reference a thread owned by the same user');
+                END;
+                """)
+            }
+
+            // v9: the work behind a turn's answer (its tools and reasoning,
+            // with their times), kept encrypted with the turn.
+            migrator.registerMigration("v9_turn_trace") { db in
+                try db.alter(table: "turns") { t in
+                    t.add(column: "trace_ciphertext", .blob)
+                }
+            }
+
+            // v10: for a turn an agent of the person's own is running (a
+            // Hermes run), which run it is, kept encrypted with the turn: the
+            // run goes on when this app closes, and is picked up from this.
+            migrator.registerMigration("v10_turn_run") { db in
+                try db.alter(table: "turns") { t in
+                    t.add(column: "run_ciphertext", .blob)
+                }
+            }
+
+            // v11: what is typed in a thread's composer and not sent, kept
+            // encrypted with the thread, so it is there when the thread is
+            // opened again and goes when the thread does.
+            migrator.registerMigration("v11_thread_draft") { db in
+                try db.alter(table: "threads") { t in
+                    t.add(column: "draft_ciphertext", .blob)
+                }
+            }
+
+            // v12: the files attached to messages. A file's bytes are kept
+            // encrypted in the app's own folder, under the attachment's id;
+            // its row says whose it is and which thread it was attached in,
+            // and holds its name and kind encrypted. `message_id` is set
+            // once the message it went with has been stored: until then it
+            // is only in a composer or waiting to be sent.
+            migrator.registerMigration("v12_attachments") { db in
+                try db.create(table: "attachments") { t in
+                    t.column("id", .text).primaryKey()
+                    t.column("user_id", .text).notNull()
+                    t.column("thread_id", .text).notNull()
+                    t.column("meta_ciphertext", .blob).notNull()
+                    t.column("message_id", .text)
+                    t.column("created_at", .datetime).notNull()
+                    t.foreignKey(["thread_id"], references: "threads", columns: ["id"], onDelete: .cascade)
+                }
+                try db.create(index: "attachments_user_thread", on: "attachments", columns: ["user_id", "thread_id"])
+                // As for messages and turns: an attachment belongs to the
+                // user its thread does.
+                try db.execute(sql: """
+                CREATE TRIGGER attachments_match_thread_user_insert
+                BEFORE INSERT ON attachments
+                WHEN length(trim(NEW.user_id)) = 0 OR NOT EXISTS (
+                    SELECT 1 FROM threads
+                    WHERE threads.id = NEW.thread_id AND threads.user_id = NEW.user_id
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'attachments.thread_id must reference a thread owned by the same user');
+                END;
+                """)
+                try db.execute(sql: """
+                CREATE TRIGGER attachments_match_thread_user_update
+                BEFORE UPDATE OF user_id, thread_id ON attachments
+                WHEN length(trim(NEW.user_id)) = 0 OR NOT EXISTS (
+                    SELECT 1 FROM threads
+                    WHERE threads.id = NEW.thread_id AND threads.user_id = NEW.user_id
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'attachments.thread_id must reference a thread owned by the same user');
+                END;
+                """)
+            }
+
+            // v13: when each thread was last on screen, so that a reply
+            // stored since is known not to have been seen. A time, kept as
+            // it is. A thread from before this is read up to now: what it
+            // holds was there before marks were, and a reply stored in it
+            // from here on is one the person has not seen.
+            migrator.registerMigration("v13_thread_read_at") { db in
+                try db.alter(table: "threads") { t in
+                    t.add(column: "read_at", .datetime)
+                }
+                try db.execute(sql: "UPDATE threads SET read_at = ?", arguments: [Date()])
+            }
+
             try migrator.migrate(queue)
             dbQueue = queue
         } catch {
