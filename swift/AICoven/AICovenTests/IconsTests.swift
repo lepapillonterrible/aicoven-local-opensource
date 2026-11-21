@@ -192,6 +192,32 @@ final class IconsTests: XCTestCase {
         } catch CovenRepositoryError.covenNotFound {}
     }
 
+    func testAnAgentIsReadOnlyByItsOwnAccount() async throws {
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        await MainActor.run { DatabaseManager.shared.configureIfNeeded() }
+        let coven = try await CovenService.shared.createCoven(name: "Agents \(UUID().uuidString)")
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await CovenService.shared.deleteCoven(id: coven.id)
+            await DataEncryptionService.shared.lock()
+        }
+        let mine = try await RoleService.shared.createRole(covenId: coven.id, name: "Mine", systemPrompt: "Answer briefly.")
+        let read = try await RoleService.shared.getRole(roleId: mine.id)
+        XCTAssertEqual(read.systemPrompt, "Answer briefly.")
+
+        // The same agent, once it and its coven are another account's: its id is known, and it is not found.
+        let store = try await MainActor.run { try XCTUnwrap(DatabaseManager.shared.dbQueue) }
+        let another = "another-\(UUID().uuidString)"
+        try await store.write { db in
+            try db.execute(sql: "UPDATE covens SET user_id = ? WHERE id = ?", arguments: [another, coven.id])
+            try db.execute(sql: "UPDATE roles SET user_id = ? WHERE id = ?", arguments: [another, mine.id])
+        }
+        do {
+            _ = try await RoleService.shared.getRole(roleId: mine.id)
+            XCTFail("Another account's agent was read")
+        } catch CovenRepositoryError.roleNotFound {}
+    }
+
     // MARK: - Kept on the device
 
     func testIconsAreKeptWithTheirCovenAndAgent_andWhatElseIsStoredStays() async throws {
