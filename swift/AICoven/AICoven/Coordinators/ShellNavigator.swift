@@ -132,9 +132,10 @@ final class ShellNavigator: ObservableObject {
     /// Counts the asks for a new-thread page, so the page knows it was
     /// asked for again, also for the agent it already had.
     @Published private(set) var draftRequests = 0
-    /// Counts the asks for the sidebar's thread search (⌘K), and how many
-    /// the sidebar has answered: one asked while the sidebar was not on
-    /// screen is answered when it is.
+    /// Counts the asks for the thread search (⌘K), and how many were
+    /// answered: by the sidebar (one asked while it was not on screen is
+    /// answered when it is), or in the phone layout by the root, with the
+    /// Overview's search.
     @Published private(set) var searchAsked = 0
     private var searchAnswered = 0
     /// The latest ask from an Overview: its identity, the scope it was
@@ -282,7 +283,8 @@ final class ShellNavigator: ObservableObject {
         }
     }
 
-    /// Asks the sidebar to open its thread search.
+    /// Asks for the thread search: the sidebar's, or in the phone layout
+    /// the Overview's.
     func requestSearch() {
         searchAsked += 1
     }

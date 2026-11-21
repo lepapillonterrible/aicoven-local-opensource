@@ -1,7 +1,7 @@
 @testable import AICoven
 import XCTest
 
-/// The Mac's menus for the shell: which places and scopes they offer and
+/// The menus for the shell: which places and scopes they offer and
 /// with which keys, when the coven on screen can move, and how Search
 /// Threads reaches the sidebar.
 final class ShellCommandsTests: XCTestCase {

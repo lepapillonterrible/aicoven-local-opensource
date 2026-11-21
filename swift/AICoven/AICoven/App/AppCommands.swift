@@ -11,7 +11,8 @@ struct ShellCommandActions {
     let newThread: () -> Void
     /// The New Coven sheet, as the switcher opens it.
     let newCoven: () -> Void
-    /// Shows the sidebar and opens its thread search.
+    /// Opens the thread search: the sidebar's, shown first if it is
+    /// hidden, or in the phone layout the Overview's.
     let searchThreads: () -> Void
     /// Opens a place of the scope on screen, as its sidebar row does.
     let openPlace: (ShellSidebarItem) -> Void
