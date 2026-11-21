@@ -58,6 +58,7 @@ struct ConnectedAppsView: View {
                             provider: provider,
                             account: accounts.first { $0.provider == provider && $0.status == .connected },
                             isConnecting: connectingProvider == provider,
+                            waitsForAnotherSignIn: connectingProvider != nil && !provider.connectsWithToken,
                             onConnect: { await connect(provider: provider) },
                             onDisconnect: { await disconnect(provider: provider) },
                             onBrowseDrive: provider == .googleDrive ? { showingGooglePicker = true } : nil,
@@ -120,10 +121,12 @@ struct ConnectedAppsView: View {
                 userCode: deviceUserCode,
                 verificationUrl: deviceVerificationUrl,
                 onCancel: {
+                    // The sign-in is called off. `connect` says it is over
+                    // (`connectingProvider`) once it has ended, and not
+                    // before: no other begins while this one still runs.
                     deviceFlowTask?.cancel()
                     deviceFlowTask = nil
                     showingDeviceCodeSheet = false
-                    connectingProvider = nil
                 }
             )
         }
@@ -270,6 +273,9 @@ struct ConnectedAppsView: View {
             return
         }
 
+        // One sign-in at a time: the code on screen, and what its Cancel
+        // calls off, are then the one sign-in's.
+        guard connectingProvider == nil else { return }
         connectingProvider = provider
         // Signing in waits for the person and the app: what comes of it
         // is kept only for the account that began it.
@@ -343,7 +349,7 @@ struct ConnectedAppsView: View {
             connectingProvider = nil
             return
         } catch let error as URLError where error.code == .cancelled {
-            // Called off while GitHub was being asked: the same.
+            // Called off while a request was under way: the same.
             connectingProvider = nil
             return
         } catch ConnectedAccountError.accountChanged {
@@ -429,6 +435,8 @@ struct ConnectedAppRow: View {
     let provider: ConnectedAppProvider
     let account: ConnectedAccount?
     let isConnecting: Bool
+    /// Another app's sign-in is under way: this one's waits for it to end.
+    var waitsForAnotherSignIn = false
     let onConnect: () async -> Void
     let onDisconnect: () async -> Void
     let onBrowseDrive: (() -> Void)?
@@ -522,6 +530,7 @@ struct ConnectedAppRow: View {
                             Task { await onConnect() }
                         }
                         .buttonStyle(ConnectButtonStyle())
+                        .disabled(waitsForAnotherSignIn)
                     }
                 }
             }
