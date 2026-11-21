@@ -199,11 +199,18 @@ actor CovenRepository {
     /// `icon` is the icon chosen for it; without one it starts with the
     /// first suggested symbol and tint that none of the person's covens
     /// shows (`CovenIcon.startingIcon`).
-    func createCoven(name: String, description: String? = nil, avatar: String? = nil, icon: (symbol: String, tint: IconTint)? = nil) async throws -> Coven {
+    ///
+    /// `account` is the account that asked, where the caller took note of
+    /// it as it was asked (a form does, before it waits for anything);
+    /// without it, it is the account signed in when this gets to read it.
+    func createCoven(
+        name: String, description: String? = nil, avatar: String? = nil, icon: (symbol: String, tint: IconTint)? = nil,
+        as account: String? = nil
+    ) async throws -> Coven {
         if let icon, !IconRules.isSymbolName(icon.symbol) { throw CovenRepositoryError.notASymbol }
-        // Whose it is, read once, before anything is waited for: the
-        // coven is made for the account that asked.
-        let uid = await MainActor.run { UserScope.currentUserID }
+        // Whose it is, read once: the coven is made for the account that
+        // asked.
+        let uid = if let account { account } else { await MainActor.run { UserScope.currentUserID } }
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
         let now = Date()

@@ -193,22 +193,26 @@ struct NewCovenForm: View {
         let operation = UUID()
         creation = operation
         errorMessage = nil
-        // The coven is made for the account that asked. What follows is
-        // done only if this making is still the sheet's own and that
-        // account is still the one signed in.
+        // The coven is made for the account that asked, noted here before
+        // anything is waited for. What follows is done only if this making
+        // is still the form's own and that account is still the one signed
+        // in.
         let account = UserScope.currentUserID
         let icon = (iconSymbol, iconTint)
 
         Task {
             do {
-                let coven = try await CovenService.shared.createCoven(name: name, icon: icon)
+                let coven = try await CovenService.shared.createCoven(name: name, icon: icon, as: account)
                 guard creation == operation, UserScope.currentUserID == account else { return }
                 onCreated(coven)
                 dismiss()
             } catch {
                 guard creation == operation, UserScope.currentUserID == account else { return }
-                errorMessage = "Failed to create coven: \(error.localizedDescription)"
+                let message = "Failed to create coven: \(error.localizedDescription)"
+                errorMessage = message
                 creation = nil
+                // Said, too: the line appears where VoiceOver is not looking.
+                AccessibilityNotification.Announcement(message).post()
             }
         }
     }

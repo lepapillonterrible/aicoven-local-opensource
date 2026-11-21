@@ -23,12 +23,16 @@ actor CovenService {
     ///   - description: Optional description
     ///   - avatar: Optional avatar URL
     /// - Returns: The created coven
-    func createCoven(name: String, description: String? = nil, avatar: String? = nil, icon: (symbol: String, tint: IconTint)? = nil) async throws -> Coven {
+    func createCoven(
+        name: String, description: String? = nil, avatar: String? = nil, icon: (symbol: String, tint: IconTint)? = nil,
+        as account: String? = nil
+    ) async throws -> Coven {
         let coven = try await CovenRepository.shared.createCoven(
             name: name,
             description: description,
             avatar: avatar,
-            icon: icon
+            icon: icon,
+            as: account
         )
         print("✅ Created coven: \(coven.id)")
         return coven

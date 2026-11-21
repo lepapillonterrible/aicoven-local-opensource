@@ -91,14 +91,19 @@ struct ShellRootView: View {
             .focusedSceneValue(\.shellCommands, shellCommands)
             .sheet(isPresented: $showCreateCoven) {
                 CreateCovenSheet(onCreated: { coven in
+                    // Where the person is as the coven is made.
+                    let generation = navigator.placeGeneration
                     Task {
                         await loadCovens()
                         // The new coven is where the person goes next (the
                         // cloud app opens its settings, which this app has
                         // none of): once it is among the covens read, not
                         // before, since a coven on screen that is not among
-                        // them counts as gone.
-                        if covens.contains(where: { $0.id == coven.id }) { navigator.select(.coven(coven.id)) }
+                        // them counts as gone; and only if they have not
+                        // moved meanwhile.
+                        if navigator.placeGeneration == generation, covens.contains(where: { $0.id == coven.id }) {
+                            navigator.select(.coven(coven.id))
+                        }
                     }
                 })
                 .environmentObject(StoreService.shared)

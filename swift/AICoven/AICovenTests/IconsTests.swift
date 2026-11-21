@@ -169,6 +169,29 @@ final class IconsTests: XCTestCase {
         XCTAssertEqual(unreadable.autonomousMaxSteps, 4)
     }
 
+    func testACovenIsMadeForTheAccountThatAsked_whoeverIsSignedInWhenItIsStored() async throws {
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        await MainActor.run { DatabaseManager.shared.configureIfNeeded() }
+        // The account that asked, noted as it asked; another is signed in by the time the coven is stored.
+        let asked = "asked-\(UUID().uuidString)"
+        let coven = try await CovenService.shared.createCoven(name: "Owned \(UUID().uuidString)", as: asked)
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await CovenService.shared.deleteCoven(id: coven.id)
+            await DataEncryptionService.shared.lock()
+        }
+
+        let ofTheSignedIn = try await CovenService.shared.loadCovens()
+        XCTAssertFalse(ofTheSignedIn.contains { $0.id == coven.id }, "It is not the signed-in account's")
+        let itsOwners = try await CovenRepository.shared.connections(ofCoven: coven.id, for: asked)
+        XCTAssertEqual(itsOwners, CovenConnections(), "It is the account's that asked")
+        let signedIn = await MainActor.run { UserScope.currentUserID }
+        do {
+            _ = try await CovenRepository.shared.connections(ofCoven: coven.id, for: signedIn)
+            XCTFail("The signed-in account was given another's coven")
+        } catch CovenRepositoryError.covenNotFound {}
+    }
+
     // MARK: - Kept on the device
 
     func testIconsAreKeptWithTheirCovenAndAgent_andWhatElseIsStoredStays() async throws {
