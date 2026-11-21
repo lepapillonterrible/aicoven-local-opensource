@@ -224,7 +224,11 @@ struct ScopeOverviewView: View {
         // Asked each time the list comes on screen, so the card goes once
         // a key was added in Settings.
         .task {
-            if scope == .strix { lacksProvider = await AddProviderKeysCard.lacksProvider() }
+            guard scope == .strix else { return }
+            let lacks = await AddProviderKeysCard.lacksProvider()
+            // A reading called off as the list left the screen says
+            // nothing: the card stays as it was until the list is back.
+            if !Task.isCancelled { lacksProvider = lacks }
         }
         .environment(\.defaultMinListRowHeight, 1)
         .contentMargins(.top, Spacing.lg, for: .scrollContent)
