@@ -205,8 +205,6 @@ struct LoginView: View {
     }
 }
 
-// MARK: - Auth Mode Button Component
-
 // MARK: - Signup Tutorial Layout
 
 private extension LoginView {
