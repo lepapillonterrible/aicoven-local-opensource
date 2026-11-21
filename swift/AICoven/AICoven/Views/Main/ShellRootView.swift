@@ -217,6 +217,13 @@ struct ShellRootView: View {
                 }
         }
         .sheet(isPresented: $showSwitcher, onDismiss: runSwitcherFollowUp) { switcherSheet }
+        // Search Threads, asked from a keyboard: the search is the
+        // Overview's here, so whatever is pushed over it is left.
+        .onChange(of: navigator.searchAsked) { _, _ in
+            guard navigator.takeSearchRequest() else { return }
+            navigator.showOverview()
+            isSearchingThreads = true
+        }
         // Settings was opened: said once for each ask, as wherever
         // Settings opens, and not again on coming back to its list from a
         // pane.
@@ -383,7 +390,8 @@ struct ShellRootView: View {
             newThread: newThread,
             newCoven: { showCreateCoven = true },
             searchThreads: {
-                // The search is in the sidebar: shown first, if it is hidden.
+                // The search is in the sidebar (shown first, if it is
+                // hidden), or over the phone layout's Overview.
                 columnVisibility = .all
                 navigator.requestSearch()
             },

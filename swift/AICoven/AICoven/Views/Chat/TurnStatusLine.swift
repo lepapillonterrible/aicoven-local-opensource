@@ -38,12 +38,9 @@ struct TurnStatusLineView: View {
                         .accessibilityIdentifier("status-line-details")
                         .accessibilityHint("Shows the steps behind this answer")
                     if !turn.isStopping {
+                        // ⌘. is the Thread menu's Stop, on every platform.
                         Button("Stop", action: onStop)
                             .buttonStyle(.textLink)
-                        // On the Mac ⌘. is the Thread menu's Stop.
-                        #if !os(macOS)
-                            .keyboardShortcut(".", modifiers: .command)
-                        #endif
                             .accessibilityIdentifier("status-line-stop")
                             .accessibilityHint("Stops this reply")
                     }
