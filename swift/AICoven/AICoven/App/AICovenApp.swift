@@ -83,6 +83,11 @@ struct AICovenApp: App {
                     }
                 }
             }
+            // An `aicoven://` link, from wherever it was opened. The same
+            // window takes it: without this the Mac opens another for
+            // each link.
+            .onOpenURL { AppState.shared.handleDeepLink($0) }
+            .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
             .onChange(of: authService.isAuthenticated) { _, authenticated in
                 // When user signs out, reset encryption so next user gets a fresh unlock.
                 if !authenticated {

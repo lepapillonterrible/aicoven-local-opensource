@@ -2,13 +2,16 @@ import Foundation
 import SwiftUI
 internal import Combine
 
-/// Deep link destinations supported by the app.
-enum DeepLinkTarget: Equatable {
+/// Where an `aicoven://` link leads (`DeepLinkParser`): a place in
+/// Settings, or Strix's new-thread page.
+nonisolated enum DeepLinkTarget: Equatable {
     case connectedApps
     case providerKeys
     case budgets
     case usage
     case settings
+    /// Strix's new-thread page, empty: a link gives it no words.
+    case newThread
 }
 
 /// Global app state management
@@ -39,9 +42,12 @@ class AppState: ObservableObject {
         return true
     }
 
-    /// Handle incoming deep links.
+    /// A link came in from outside the app. One that reads as a link of
+    /// this app's (`DeepLinkParser`) is held until the main view takes it:
+    /// at once if it is up, else once the person is signed in and their
+    /// data unlocked. Any other does nothing.
     func handleDeepLink(_ url: URL) {
-        guard let target = AppState.parseDeepLink(url) else { return }
+        guard let target = DeepLinkParser.target(for: url) else { return }
         pendingDeepLink = target
     }
 
@@ -50,39 +56,6 @@ class AppState: ObservableObject {
         let target = pendingDeepLink
         pendingDeepLink = nil
         return target
-    }
-
-    private static func parseDeepLink(_ url: URL) -> DeepLinkTarget? {
-        guard url.scheme == "aicoven" else { return nil }
-
-        let host = url.host ?? ""
-        let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-
-        switch host {
-        case "connected-services", "connected-apps":
-            return .connectedApps
-        case "settings":
-            switch path {
-            case "connected-apps":
-                return .connectedApps
-            case "providers":
-                return .providerKeys
-            case "budgets":
-                return .budgets
-            case "usage":
-                return .usage
-            default:
-                return .settings
-            }
-        case "providers":
-            return .providerKeys
-        case "budgets":
-            return .budgets
-        case "usage":
-            return .usage
-        default:
-            return nil
-        }
     }
 
     /// Create a new thread (personal-only in the open client)
@@ -106,12 +79,14 @@ class AppState: ObservableObject {
     }
 
     /// Clear all user-specific state. Call on sign-in/sign-out to prevent
-    /// data leakage between users.
-    func clearUserData() {
+    /// data leakage between users. A link that is waiting stays through a
+    /// sign-in (it may be what the app was opened with, and it names a
+    /// place, nobody's data); `signedOut` drops it.
+    func clearUserData(signedOut: Bool = false) {
         selectedThread = nil
         threads = []
         hasCompletedOnboarding = false
-        pendingDeepLink = nil
+        if signedOut { pendingDeepLink = nil }
         requestedSettingsPane = nil
     }
 

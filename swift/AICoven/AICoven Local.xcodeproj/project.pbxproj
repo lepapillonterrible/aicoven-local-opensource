@@ -614,6 +614,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				"INFOPLIST_FILE[sdk=iphoneos*]" = "Resources/Info-iOS.plist";
+				"INFOPLIST_FILE[sdk=iphonesimulator*]" = "Resources/Info-iOS.plist";
 				"INFOPLIST_FILE[sdk=macosx*]" = "Resources/Info-macOS.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "AI Coven Local";
 				INFOPLIST_KEY_CFBundleIconName = AppIcon;
@@ -671,6 +672,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				"INFOPLIST_FILE[sdk=iphoneos*]" = "Resources/Info-iOS.plist";
+				"INFOPLIST_FILE[sdk=iphonesimulator*]" = "Resources/Info-iOS.plist";
 				"INFOPLIST_FILE[sdk=macosx*]" = "Resources/Info-macOS.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "AI Coven Local";
 				INFOPLIST_KEY_CFBundleIconName = AppIcon;
@@ -720,6 +722,7 @@
 				CURRENT_PROJECT_VERSION = 21;
 				GENERATE_INFOPLIST_FILE = YES;
 				"INFOPLIST_FILE[sdk=iphoneos*]" = "Resources/Info-iOS.plist";
+				"INFOPLIST_FILE[sdk=iphonesimulator*]" = "Resources/Info-iOS.plist";
 				"INFOPLIST_FILE[sdk=macosx*]" = "Resources/Info-macOS.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "AI Coven Local";
 				INFOPLIST_KEY_CFBundleIconName = AppIcon;

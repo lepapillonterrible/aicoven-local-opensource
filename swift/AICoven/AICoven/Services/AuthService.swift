@@ -96,6 +96,9 @@ class AuthService: ObservableObject {
                     await StoreService.shared.reloadForCurrentUser()
                 } else {
                     print("❌ No Firebase user - signed out")
+                    // A link that was waiting for the account that left is
+                    // not kept for the next.
+                    AppState.shared.clearUserData(signedOut: true)
                     self?.currentUser = nil
                     self?.isAuthenticated = false
                 }

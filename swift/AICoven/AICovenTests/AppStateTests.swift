@@ -21,6 +21,30 @@ final class AppStateTests: XCTestCase {
         XCTAssertNil(AppState.shared.consumeDeepLink())
     }
 
+    func testALinkThatIsWaiting_staysThroughASignIn_andGoesWithASignOut() throws {
+        let state = AppState.shared
+        // Opened before anyone is signed in: it is what the app was opened with.
+        try state.handleDeepLink(XCTUnwrap(URL(string: "aicoven://providers")))
+        state.clearUserData()
+        XCTAssertEqual(state.pendingDeepLink, .providerKeys, "Signing in keeps it for the main view")
+
+        // Not taken by the time the account signs out: the next account is not led anywhere by it.
+        state.clearUserData(signedOut: true)
+        XCTAssertNil(state.pendingDeepLink)
+
+        // A link that is none of this app's is not held, and takes the place of nothing.
+        try state.handleDeepLink(XCTUnwrap(URL(string: "aicoven://usage")))
+        try state.handleDeepLink(XCTUnwrap(URL(string: "aicoven://oauth/google/callback?code=abc")))
+        XCTAssertEqual(state.consumeDeepLink(), .usage)
+    }
+
+    func testOnlyALinkIntoSettingsNamesAPlaceInSettings() {
+        XCTAssertEqual(HomeView.settingsPlace(for: .connectedApps), .connectedApps)
+        XCTAssertEqual(HomeView.settingsPlace(for: .budgets), .budget)
+        XCTAssertEqual(HomeView.settingsPlace(for: .settings), .settings)
+        XCTAssertNil(HomeView.settingsPlace(for: .newThread), "The shell takes that one")
+    }
+
     func testCreateNewThreadAppendsAndSelectsThread() async throws {
         // Threads are stored encrypted, so the data must be unlocked.
         await DataEncryptionService.shared.unlockForTestingEphemeral()
