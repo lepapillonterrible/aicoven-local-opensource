@@ -1,9 +1,31 @@
 import SwiftUI
 
-/// Sheet for creating a new coven
+/// The sheet that makes a coven. Covens are behind the Creator upgrade:
+/// without it the sheet says so, in place of the form.
 struct CreateCovenSheet: View {
-    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var storeService: StoreService
+
+    /// Called with the coven that was made, before the sheet closes.
+    let onCreated: (Coven) -> Void
+
+    var body: some View {
+        if storeService.hasCreator {
+            NewCovenForm(onCreated: onCreated)
+        } else {
+            FeatureUpsellView(
+                feature: .covens,
+                featureDescription: "Creating covens with multiple AI agent roles requires the Creator upgrade."
+            )
+        }
+    }
+}
+
+/// The form that makes a coven, as the cloud app's is: its icon, with
+/// "Change", beside its name. On the Mac it has a title bar and a bar of
+/// buttons; on the iPhone and iPad, Cancel and Create are in the
+/// navigation bar.
+struct NewCovenForm: View {
+    @Environment(\.dismiss) private var dismiss
 
     @State private var covenName = ""
     /// The icon the coven is made with, once it is the one to make it
@@ -11,163 +33,186 @@ struct CreateCovenSheet: View {
     @State private var iconSymbol = CovenIcon.defaultSymbol
     @State private var iconTint = IconTint.warm
     @State private var isIconReady = false
-    @State private var covenDescription = ""
-    @State private var isCreating = false
+    /// The making under way, if one is: what it comes to is acted on only
+    /// while it is still this one.
+    @State private var creation: UUID?
     @State private var errorMessage: String?
+    @FocusState private var nameFocused: Bool
 
-    /// Called when a coven is successfully created. Provides the created
-    /// Coven so callers can immediately navigate into its workspace.
+    /// Called with the coven that was made, before the sheet closes.
     let onCreated: (Coven) -> Void
 
+    /// The longest name a coven is given (the cloud app's limit).
+    static let longestName = 100
+
+    /// The name a coven is made with from what was typed: without the
+    /// space around it, and no longer than the longest; nil for none.
+    static func name(from typed: String) -> String? {
+        let name = String(typed.trimmingCharacters(in: .whitespacesAndNewlines).prefix(longestName))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
+    }
+
+    private var isCreating: Bool {
+        creation != nil
+    }
+
+    private var canCreate: Bool {
+        Self.name(from: covenName) != nil && !isCreating && isIconReady
+    }
+
     var body: some View {
-        if !storeService.hasCreator {
-            FeatureUpsellView(
-                feature: .covens,
-                featureDescription: "Creating covens with multiple AI agent roles requires the Creator upgrade."
-            )
-        } else {
-            NavigationStack {
-                ZStack {
-                    NebulaBackground()
+        container
+            .onAppear { nameFocused = true }
+            // A making under way is not walked away from: what it made
+            // would appear with nobody having seen it made.
+            .interactiveDismissDisabled(isCreating)
+            .onDisappear { creation = nil }
+    }
 
-                    ScrollView {
-                        VStack(spacing: Spacing.lg) {
-                            // Header
-                            VStack(spacing: Spacing.sm) {
-                                NewCovenIcon(symbol: $iconSymbol, tint: $iconTint, isReady: $isIconReady)
-
-                                Text("Create a Coven")
-                                    .font(.aicovenDisplaySmall)
-                                    .foregroundColor(.aicovenTextPrimary)
-
-                                Text("Collaborate with multiple AI roles in a shared workspace")
-                                    .font(.aicovenBody)
-                                    .foregroundColor(.aicovenTextSecondary)
-                                    .multilineTextAlignment(.center)
-                                    .frame(maxWidth: 400)
-                            }
-                            .padding(.top, Spacing.xl)
-
-                            // Form
-                            VStack(spacing: Spacing.md) {
-                                // Name field
-                                VStack(alignment: .leading, spacing: Spacing.xs) {
-                                    Text("Coven Name")
-                                        .font(.aicovenBodyMedium)
-                                        .foregroundColor(.aicovenTextPrimary)
-
-                                    TextField("", text: $covenName, prompt: Text("My Project").foregroundColor(.aicovenTextTertiary))
-                                        .font(.aicovenBody)
-                                        .foregroundColor(.aicovenTextPrimary)
-                                        .padding(Spacing.sm)
-                                        .background(Color.aicovenGlass)
-                                        .cornerRadius(BorderRadius.md)
-                                }
-
-                                // Description field
-                                VStack(alignment: .leading, spacing: Spacing.xs) {
-                                    Text("Description (Optional)")
-                                        .font(.aicovenBodyMedium)
-                                        .foregroundColor(.aicovenTextPrimary)
-
-                                    TextField("", text: $covenDescription, prompt: Text("What's this coven for?").foregroundColor(.aicovenTextTertiary), axis: .vertical)
-                                        .font(.aicovenBody)
-                                        .foregroundColor(.aicovenTextPrimary)
-                                        .padding(Spacing.sm)
-                                        .background(Color.aicovenGlass)
-                                        .cornerRadius(BorderRadius.md)
-                                        .lineLimit(3 ... 6)
-                                }
-                            }
-                            .padding(.horizontal, Spacing.xl)
-                            .glassMorphism()
-                            .padding(.horizontal, Spacing.lg)
-
-                            // Error message
-                            if let errorMessage {
-                                Text(errorMessage)
-                                    .font(.aicovenBodySmall)
-                                    .foregroundColor(.aicovenError)
-                                    .padding(.horizontal, Spacing.lg)
-                            }
-
-                            // Actions
-                            HStack(spacing: Spacing.md) {
-                                // Cancel button with teal text styling
-                                Button("Cancel") {
-                                    dismiss()
-                                }
-                                .buttonStyle(.plain)
-                                .padding(.horizontal, Spacing.lg)
-                                .padding(.vertical, Spacing.sm)
-                                .background(Color.aicovenGlass)
-                                .foregroundColor(.aicovenTeal)
-                                .cornerRadius(BorderRadius.md)
-
-                                Button(action: createCoven) {
-                                    HStack(spacing: Spacing.xs) {
-                                        if isCreating {
-                                            ProgressView()
-                                                .controlSize(.small)
-                                                .tint(.white)
-                                        }
-                                        Text(isCreating ? "Creating..." : "Create Coven")
-                                            .font(.aicovenBodyMedium)
-                                    }
-                                    .padding(.horizontal, Spacing.lg)
-                                    .padding(.vertical, Spacing.sm)
-                                    .frame(minWidth: 150)
-                                    .background(
-                                        Group {
-                                            if covenName.isEmpty {
-                                                Color.aicovenGlass
-                                            } else {
-                                                LinearGradient(
-                                                    colors: [Color.aicovenTeal, Color.aicovenPurple],
-                                                    startPoint: .leading,
-                                                    endPoint: .trailing
-                                                )
-                                            }
-                                        }
-                                    )
-                                    .foregroundColor(.white)
-                                    .cornerRadius(BorderRadius.md)
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(covenName.isEmpty || isCreating || !isIconReady)
-                            }
-                            .padding(.horizontal, Spacing.lg)
-                        }
-                        .padding(.bottom, Spacing.xl)
+    @ViewBuilder
+    private var container: some View {
+        #if os(macOS)
+        VStack(spacing: 0) {
+            Text("New Coven")
+                .font(.aicovenH3)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+                .frame(height: 44)
+                .background(Color.aicovenChrome)
+            Rectangle().fill(Color.aicovenRule).frame(height: 1)
+            form
+            Rectangle().fill(Color.aicovenRule).frame(height: 1)
+            HStack(spacing: Spacing.xs) {
+                Spacer(minLength: Spacing.sm)
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(isCreating)
+                Button(action: createCoven) { createLabel }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canCreate)
+            }
+            .padding(.horizontal, Spacing.sm)
+            .frame(height: 52)
+            .background(Color.aicovenChrome)
+        }
+        .frame(width: 440)
+        .background(Color.aicovenSurfaceElevated)
+        #else
+        NavigationStack {
+            form
+                .frame(maxHeight: .infinity, alignment: .top)
+                .background(Color.aicovenSurface.ignoresSafeArea())
+                .navigationTitle("New Coven")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
+                            .disabled(isCreating)
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(action: createCoven) { createLabel }
+                            .disabled(!canCreate)
                     }
                 }
+        }
+        #endif
+    }
+
+    private var createLabel: some View {
+        HStack(spacing: Spacing.xs) {
+            if isCreating {
+                ProgressView()
+                    .controlSize(.small)
             }
-        } // end else (hasCreator)
+            Text(isCreating ? "Creating…" : "Create")
+        }
+    }
+
+    private var form: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            HStack(alignment: .top, spacing: Spacing.md) {
+                NewCovenIcon(symbol: $iconSymbol, tint: $iconTint, isReady: $isIconReady)
+                    .disabled(isCreating)
+                nameField
+            }
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.aicovenBodySmall)
+                    .foregroundColor(.aicovenError)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(Spacing.md)
+    }
+
+    private var nameField: some View {
+        VStack(alignment: .leading, spacing: Spacing.xxs) {
+            Text("Name")
+                .font(.aicovenCaption.weight(.semibold))
+                .foregroundStyle(Color.aicovenTextTertiary)
+                .accessibilityHidden(true)
+            TextField("Name", text: $covenName, prompt: Text("Name"))
+                .textFieldStyle(.plain)
+                .focused($nameFocused)
+                .submitLabel(.done)
+                .onSubmit(createCoven)
+            #if os(iOS)
+                .textInputAutocapitalization(.words)
+            #endif
+                .disabled(isCreating)
+                .padding(.horizontal, Spacing.sm)
+                .frame(minHeight: fieldHeight)
+                .background(
+                    RoundedRectangle(cornerRadius: BorderRadius.sm)
+                        .fill(fieldFill)
+                        .overlay(RoundedRectangle(cornerRadius: BorderRadius.sm).strokeBorder(Color.aicovenBorder, lineWidth: 1))
+                )
+                .accessibilityIdentifier("new-coven-name")
+        }
+    }
+
+    private var fieldHeight: CGFloat {
+        #if os(macOS)
+        36
+        #else
+        44
+        #endif
+    }
+
+    private var fieldFill: Color {
+        #if os(macOS)
+        Color.aicovenSurface
+        #else
+        Color.aicovenSurfaceElevated
+        #endif
     }
 
     private func createCoven() {
-        guard !covenName.isEmpty else { return }
-
-        isCreating = true
+        guard canCreate, let name = Self.name(from: covenName) else { return }
+        let operation = UUID()
+        creation = operation
         errorMessage = nil
+        // The coven is made for the account that asked, noted here before
+        // anything is waited for. What follows is done only if this making
+        // is still the form's own and that account is still the one signed
+        // in.
+        let account = UserScope.currentUserID
+        let icon = (iconSymbol, iconTint)
 
         Task {
             do {
-                let coven = try await CovenService.shared.createCoven(
-                    name: covenName,
-                    description: covenDescription.isEmpty ? nil : covenDescription,
-                    icon: (iconSymbol, iconTint)
-                )
-
-                await MainActor.run {
-                    onCreated(coven)
-                    dismiss()
-                }
+                let coven = try await CovenService.shared.createCoven(name: name, icon: icon, as: account)
+                guard creation == operation, UserScope.currentUserID == account else { return }
+                onCreated(coven)
+                dismiss()
             } catch {
-                await MainActor.run {
-                    errorMessage = "Failed to create coven: \(error.localizedDescription)"
-                    isCreating = false
-                }
+                guard creation == operation, UserScope.currentUserID == account else { return }
+                let message = "Failed to create coven: \(error.localizedDescription)"
+                errorMessage = message
+                creation = nil
+                // Said, too: the line appears where VoiceOver is not looking.
+                AccessibilityNotification.Announcement(message).post()
             }
         }
     }
@@ -175,4 +220,5 @@ struct CreateCovenSheet: View {
 
 #Preview {
     CreateCovenSheet(onCreated: { _ in })
+        .environmentObject(StoreService.shared)
 }

@@ -81,7 +81,9 @@ struct NewCovenIcon: View {
         ) {
             SymbolDisc(symbol: symbol, tint: tint, size: 64, fallback: CovenIcon.defaultSymbol)
         }
-        .overlay(alignment: .bottom) {
+        // From the icon's leading edge: the icon stands at the form's
+        // edge, and the line is wider than it.
+        .overlay(alignment: .bottomLeading) {
             // Why the coven cannot be made yet, where that is so.
             if mustChoose, !didChoose {
                 Text("Choose an icon to continue.")
