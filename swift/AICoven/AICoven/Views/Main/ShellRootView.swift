@@ -147,7 +147,8 @@ struct ShellRootView: View {
                 shellThreads.reload()
             }
             // A link that was opened, also the one waiting when this came
-            // up. One to Strix's new-thread page opens that page, empty. One
+            // up. One to Strix's new-thread page opens that page, as the
+            // person left it (the link gives it nothing). One
             // into Settings opens the Settings place here; the Mac's main
             // view opens its Settings window for it instead.
             .onChange(of: appState.pendingDeepLink, initial: true) { _, target in

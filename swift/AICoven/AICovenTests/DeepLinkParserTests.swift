@@ -68,6 +68,13 @@ final class DeepLinkParserTests: XCTestCase {
             // A sign-in's answer is the sign-in's own, never a link's.
             "aicoven://oauth/google/callback?code=abc",
             "aicoven://provider-accounts/openrouter/oauth?code=abc",
+            // A path that is not written as its place is: a doubled slash, a step spelled with escapes.
+            "aicoven://strix//new-thread",
+            "aicoven://strix/new-thread//",
+            "aicoven://settings//providers",
+            "aicoven:////settings",
+            "aicoven://strix/new%2Dthread",
+            "aicoven://strix/new-thread%2F",
             // Paths beyond a place.
             "aicoven://connected-apps/github",
             "aicoven://providers/edit",

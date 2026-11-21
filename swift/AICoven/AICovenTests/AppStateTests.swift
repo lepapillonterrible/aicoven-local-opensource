@@ -21,16 +21,13 @@ final class AppStateTests: XCTestCase {
         XCTAssertNil(AppState.shared.consumeDeepLink())
     }
 
-    func testALinkThatIsWaiting_staysThroughASignIn_andGoesWithASignOut() throws {
+    func testALinkThatIsWaiting_staysThroughASignIn() throws {
         let state = AppState.shared
         // Opened before anyone is signed in: it is what the app was opened with.
         try state.handleDeepLink(XCTUnwrap(URL(string: "aicoven://providers")))
         state.clearUserData()
         XCTAssertEqual(state.pendingDeepLink, .providerKeys, "Signing in keeps it for the main view")
-
-        // Not taken by the time the account signs out: the next account is not led anywhere by it.
-        state.clearUserData(signedOut: true)
-        XCTAssertNil(state.pendingDeepLink)
+        XCTAssertEqual(state.consumeDeepLink(), .providerKeys)
 
         // A link that is none of this app's is not held, and takes the place of nothing.
         try state.handleDeepLink(XCTUnwrap(URL(string: "aicoven://usage")))

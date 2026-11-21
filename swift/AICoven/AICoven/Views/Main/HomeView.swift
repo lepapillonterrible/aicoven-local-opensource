@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The app's main view once signed in: the shell, as the cloud app's. On
 /// the Mac it is one split view, with the Settings window opened on request
-/// and deep links, which all lead into Settings. On the iPad and iPhone it
+/// and for a link that leads into Settings. On the iPad and iPhone it
 /// is the split layout where there is room for it (an iPad unless its
 /// width is compact) and the phone's layout otherwise: one view either way,
 /// so a device that changes between them keeps where it is.

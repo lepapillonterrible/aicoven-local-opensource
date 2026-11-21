@@ -10,7 +10,8 @@ nonisolated enum DeepLinkTarget: Equatable {
     case budgets
     case usage
     case settings
-    /// Strix's new-thread page, empty: a link gives it no words.
+    /// Strix's new-thread page, as the person left it: a link gives it
+    /// nothing.
     case newThread
 }
 
@@ -79,14 +80,14 @@ class AppState: ObservableObject {
     }
 
     /// Clear all user-specific state. Call on sign-in/sign-out to prevent
-    /// data leakage between users. A link that is waiting stays through a
-    /// sign-in (it may be what the app was opened with, and it names a
-    /// place, nobody's data); `signedOut` drops it.
-    func clearUserData(signedOut: Bool = false) {
+    /// data leakage between users. A link that is waiting is not such
+    /// state (it names a place, nobody's data, and may be what the app was
+    /// opened with): it stays, until an account signs out
+    /// (`consumeDeepLink`, where `AuthService` sees one leave).
+    func clearUserData() {
         selectedThread = nil
         threads = []
         hasCompletedOnboarding = false
-        if signedOut { pendingDeepLink = nil }
         requestedSettingsPane = nil
     }
 

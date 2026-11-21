@@ -7,8 +7,8 @@ import Foundation
 /// port, a fragment, a query that is not asked for) is refused, not
 /// trimmed. Every place a link leads is one the person could open with a
 /// click and that changes nothing by being opened: a place in Settings, or
-/// Strix's new-thread page. No link carries a key, a token or words to
-/// send, and none connects, approves or sends anything.
+/// Strix's new-thread page, as the person left it. No link carries a key,
+/// a token or words to send, and none connects, approves or sends anything.
 nonisolated enum DeepLinkParser {
     static let scheme = "aicoven"
 
@@ -17,7 +17,14 @@ nonisolated enum DeepLinkParser {
               url.user == nil, url.password == nil, url.port == nil, url.fragment == nil,
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
         let items = components.queryItems ?? []
-        let path = url.path.split(separator: "/").map(String.init)
+        // The path as it is written, step by step: an empty step (a doubled
+        // slash) or one spelled with escapes is not one of the shapes
+        // below. One slash at the end is none.
+        var written = components.percentEncodedPath
+        if written.hasPrefix("/") { written.removeFirst() }
+        if written.hasSuffix("/") { written.removeLast() }
+        let path = written.isEmpty ? [] : written.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard !path.contains("") else { return nil }
 
         switch (url.host?.lowercased() ?? "", path) {
         case ("connected-services", []), ("connected-apps", []), ("settings", ["connected-apps"]):
