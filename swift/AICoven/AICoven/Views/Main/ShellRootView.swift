@@ -90,8 +90,16 @@ struct ShellRootView: View {
             // What this window offers the menu bar while it is in front.
             .focusedSceneValue(\.shellCommands, shellCommands)
             .sheet(isPresented: $showCreateCoven) {
-                CreateCovenSheet(onCreated: { _ in
-                    Task { await loadCovens() }
+                CreateCovenSheet(onCreated: { coven in
+                    Task {
+                        await loadCovens()
+                        // The new coven is where the person goes next (the
+                        // cloud app opens its settings, which this app has
+                        // none of): once it is among the covens read, not
+                        // before, since a coven on screen that is not among
+                        // them counts as gone.
+                        if covens.contains(where: { $0.id == coven.id }) { navigator.select(.coven(coven.id)) }
+                    }
                 })
                 .environmentObject(StoreService.shared)
             }

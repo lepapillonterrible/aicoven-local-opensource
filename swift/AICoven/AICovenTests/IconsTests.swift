@@ -112,6 +112,17 @@ final class IconsTests: XCTestCase {
         XCTAssertTrue(written.contains(#""icon_symbol":"leaf""#) && written.contains(#""icon_tint":"moss""#), written)
     }
 
+    @MainActor
+    func testTheNameANewCovenIsMadeWith() {
+        XCTAssertEqual(NewCovenForm.name(from: "  Work \n"), "Work", "Without the space around it")
+        XCTAssertNil(NewCovenForm.name(from: ""), "None")
+        XCTAssertNil(NewCovenForm.name(from: "  \n\t "), "Space alone is no name")
+        XCTAssertEqual(NewCovenForm.name(from: "Side  project"), "Side  project", "What is inside it is the person's")
+        let long = String(repeating: "a", count: 99) + " bcd"
+        XCTAssertEqual(NewCovenForm.name(from: long), String(repeating: "a", count: 99), "Cut at the longest, and not left ending in a space")
+        XCTAssertEqual(NewCovenForm.name(from: String(repeating: "é", count: 150))?.count, NewCovenForm.longestName)
+    }
+
     func testANewCovenStartsWithAnIconNoOtherShows() {
         XCTAssertEqual(CovenIcon.startingIcon(among: []).symbol, "house")
         XCTAssertEqual(CovenIcon.startingIcon(among: []).tint, .warm)
