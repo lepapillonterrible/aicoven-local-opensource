@@ -7,7 +7,7 @@ import UIKit
 
 /// Lightweight markdown renderer with block formatting and code fences.
 /// No external deps; supports:
-/// - Paragraphs/headings via AttributedString(markdown:)
+/// - Paragraphs/headings via `ReplyLinks.attributed`: Markdown, with only the links a reply can have opened
 /// - Fenced code blocks ```lang ... ``` with copy button and monospaced styling
 struct MarkdownView: View {
     let text: String
@@ -21,7 +21,7 @@ struct MarkdownView: View {
                     #if os(macOS)
                     // On macOS, render the paragraph as a single Text so users
                     // can select across lines freely.
-                    Text(attributedMarkdown(md))
+                    Text(ReplyLinks.attributed(md))
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contextMenu {
@@ -49,11 +49,11 @@ struct MarkdownView: View {
                                 // Bullet list item
                                 HStack(alignment: .top, spacing: 6) {
                                     Text("•")
-                                    Text(attributedMarkdown(String(trimmed.dropFirst(2))))
+                                    Text(ReplyLinks.attributed(String(trimmed.dropFirst(2))))
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
                             } else {
-                                Text(attributedMarkdown(line))
+                                Text(ReplyLinks.attributed(line))
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
@@ -118,10 +118,6 @@ struct MarkdownView: View {
     }
 
     // MARK: - Helpers
-
-    private func attributedMarkdown(_ md: String) -> AttributedString {
-        ReplyLinks.attributed(md)
-    }
 
     private func copyToClipboard(_ string: String) {
         #if os(macOS)
