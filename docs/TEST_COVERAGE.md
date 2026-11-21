@@ -335,7 +335,6 @@ Smoke tests for SwiftUI view initialization.
 | Test Method | Description | Status |
 |-------------|-------------|--------|
 | `testHomeViewInitializes` | Smoke test for HomeView creation | ✅ |
-| `testMainTabViewInitializes` | Smoke test for MainTabView creation | ✅ |
 
 **Coverage:**
 - ✅ Basic view initialization
