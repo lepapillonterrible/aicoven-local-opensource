@@ -84,21 +84,6 @@ struct WaitingMark: View {
     }
 }
 
-/// The unread dot beside a coven that holds a reply not yet seen.
-struct CovenUnreadDot: View {
-    let covenID: String
-    @ObservedObject private var activities = ThreadActivities.shared
-
-    var body: some View {
-        if activities.covensWithUnread.contains(covenID) {
-            Circle()
-                .fill(Color.aicovenWater)
-                .frame(width: 7, height: 7)
-                .accessibilityLabel("Unread")
-        }
-    }
-}
-
 extension View {
     /// What VoiceOver reads after a thread row's title: what the thread is
     /// doing, or that it holds a reply not yet seen.
