@@ -136,7 +136,7 @@ struct ShellContentView: View {
     /// title's menu; the phone's bar does, its title opening the switcher.
     @ViewBuilder
     private func threadPlace(_ thread: Thread) -> some View {
-        let chat = PersonalChatView(thread: thread, onEditAgent: nil, onBack: nil, showsHeader: false)
+        let chat = PersonalChatView(thread: thread)
             .id(thread.id)
         #if os(iOS)
         if let onOpenSwitcher {

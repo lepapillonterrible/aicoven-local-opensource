@@ -228,35 +228,6 @@ struct AddMemoryView: View {
     }
 }
 
-/// Wrapper used on mobile to present EditMemoryView in a sheet and refresh list
-struct EditMemorySheetWrapper: View {
-    let memoryId: String
-    let covenId: String?
-    let onSaved: () -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        EditMemoryView(memoryId: memoryId, covenId: covenId) {
-            onSaved()
-            dismiss()
-        }
-    }
-}
-
-/// Wrapper used on mobile to present AddMemoryView in a sheet and refresh list
-struct AddMemorySheetWrapper: View {
-    let covenId: String?
-    let onSaved: () -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        AddMemoryView(covenId: covenId) {
-            onSaved()
-            dismiss()
-        }
-    }
-}
-
 // MARK: - Edit Memory View
 
 /// Form view for editing an existing memory chunk

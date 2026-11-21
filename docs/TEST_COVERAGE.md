@@ -329,13 +329,12 @@ Tests for tool execution, message processing, and helper utilities.
 
 Smoke tests for SwiftUI view initialization.
 
-#### **SwiftUIViewTests.swift** (2 tests)
+#### **SwiftUIViewTests.swift** (1 test)
 **Purpose:** Basic UI smoke tests
 
 | Test Method | Description | Status |
 |-------------|-------------|--------|
 | `testHomeViewInitializes` | Smoke test for HomeView creation | ✅ |
-| `testMainTabViewInitializes` | Smoke test for MainTabView creation | ✅ |
 
 **Coverage:**
 - ✅ Basic view initialization

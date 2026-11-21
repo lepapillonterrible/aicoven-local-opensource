@@ -292,31 +292,3 @@ private struct ThreadRowActions: ViewModifier {
             }
     }
 }
-
-/// The header of a list's archived threads: collapsed until it is opened,
-/// and there only while some thread is archived.
-struct ArchivedThreadsHeader: View {
-    @Binding var isExpanded: Bool
-
-    var body: some View {
-        Button {
-            isExpanded.toggle()
-        } label: {
-            HStack(spacing: Spacing.xs) {
-                Text("Archived")
-                    .font(.aicovenCaption)
-                    .foregroundStyle(Color.aicovenTextTertiary)
-                Spacer()
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.aicovenCaption)
-                    .foregroundStyle(Color.aicovenTextTertiary)
-                    .accessibilityHidden(true)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Archived")
-        .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
-        .accessibilityIdentifier("threads-archived")
-    }
-}

@@ -3,13 +3,6 @@ import SwiftUI
 /// Personal chat view using the same enhanced streaming tooling as coven chats
 struct PersonalChatView: View {
     let thread: Thread
-    let onEditAgent: (() -> Void)?
-    /// Optional back handler used on iOS mobile to navigate back to the
-    /// threads list without relying on a NavigationStack.
-    let onBack: (() -> Void)?
-    /// Whether the thread's name and agent are shown over its messages: not
-    /// in a window whose own title says them.
-    var showsHeader = true
 
     @State private var messages: [ChatMessage] = []
     @State private var messageText = ""
@@ -43,7 +36,6 @@ struct PersonalChatView: View {
     @State private var traces: [String: WorkTrace] = [:]
     /// The work trace Details is showing.
     @State private var shownTrace: WorkTraceTarget?
-    @State private var canEditAgent: Bool = true
 
     /// The reply on its way in this thread, if there is one.
     private var runningTurn: TurnEngine.Activity? {
@@ -62,23 +54,6 @@ struct PersonalChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if showsHeader {
-                // Chat header
-                PersonalChatHeader(
-                    thread: thread,
-                    canEditAgent: canEditAgent,
-                    onEditAgent: onEditAgent,
-                    onBack: onBack
-                )
-                #if os(iOS)
-                .padding(.horizontal, Spacing.md)
-                .padding(.vertical, Spacing.sm)
-                #else
-                .padding(Spacing.md)
-                #endif
-
-                GradientDivider()
-            }
 
             // Messages area
             ScrollViewReader { proxy in
@@ -315,8 +290,8 @@ struct PersonalChatView: View {
         .sheet(item: $shownTrace) { target in
             WorkTraceSheet(target: target)
         }
-        // When the bound thread changes (e.g. user switches tabs on macOS),
-        // reset and reload the messages/provider keys for the new thread.
+        // When the thread shown changes, what was held of the one before
+        // is let go and the new thread's messages are read.
         .task(id: thread.id) {
             // A recording begun in the thread that was shown is called off.
             voice.cancel()
@@ -351,7 +326,6 @@ struct PersonalChatView: View {
             if let unsent = TurnEngine.shared.takeUnsent(for: thread.id) {
                 giveBack(unsent.text, because: unsent.reason)
             }
-            await loadProviderKeys()
         }
         // What the composer holds is the thread's draft, kept as it changes.
         .onChange(of: messageText) { _, text in
@@ -399,11 +373,6 @@ struct PersonalChatView: View {
         .onReceive(ComposerDrafts.shared.attachmentsRemoved) { removed in
             guard removed.threadID == thread.id else { return }
             attachments.removeAll { removed.ids.contains($0.id) }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .providerKeysUpdated)) { _ in
-            Task {
-                await loadProviderKeys()
-            }
         }
     }
 
@@ -561,19 +530,6 @@ struct PersonalChatView: View {
         messages.insert(contentsOf: older, at: 0)
         oldestMessageId = messages.first?.id
         hasMoreMessages = older.count == pageSize
-    }
-
-    private func loadProviderKeys() async {
-        do {
-            let accounts = try await ProviderAccountService.shared.loadProviderAccounts()
-            await MainActor.run {
-                canEditAgent = !accounts.isEmpty
-            }
-        } catch {
-            await MainActor.run {
-                canEditAgent = false
-            }
-        }
     }
 
     /// Send a message with optional file attachments to the LLM.
@@ -796,55 +752,5 @@ struct PersonalChatView: View {
             return (userText: text, fullText: text)
         }
         return (userText: userPart, fullText: text)
-    }
-}
-
-/// Simple header for personal chat
-struct PersonalChatHeader: View {
-    let thread: Thread
-    let canEditAgent: Bool
-    let onEditAgent: (() -> Void)?
-    let onBack: (() -> Void)?
-
-    var body: some View {
-        HStack(spacing: Spacing.md) {
-            if let onBack {
-                Button(action: onBack) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.aicovenTeal)
-                }
-                .buttonStyle(.plain)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(thread.title ?? "Chat")
-                    .font(.aicovenH2)
-                    .foregroundColor(.aicovenTextPrimary)
-
-                HStack(spacing: 6) {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 10))
-                    // Show thread's agent name or generic label
-                    Text(thread.agentName ?? "Strix")
-                        .font(.aicovenCaption)
-                }
-                .foregroundColor(.aicovenTextSecondary)
-            }
-
-            Spacer()
-
-            if let onEditAgent {
-                Button(action: { if canEditAgent { onEditAgent() } }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "sparkles")
-                        Text("Edit Agent")
-                    }
-                    .font(.aicovenBodySmall)
-                }
-                .buttonStyle(.bordered)
-                .disabled(!canEditAgent)
-            }
-        }
     }
 }
