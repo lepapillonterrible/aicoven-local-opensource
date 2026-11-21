@@ -157,12 +157,22 @@ actor ConnectedAccountsService {
         return accountsCache?.first { $0.provider == provider && $0.status == .connected }
     }
 
-    /// Create a new connected account after successful OAuth flow
+    /// The account signed in now. A sign-in with an app, which has to wait
+    /// for the person and the app, takes note of it as it begins.
+    func signedInAccount() async -> String {
+        await ensureAccountsLoaded()
+    }
+
+    /// Create a new connected account after successful OAuth flow.
+    /// `startedBy` is the account that began the sign-in, where it was
+    /// waited for: one that ends when another account is signed in is
+    /// kept for nobody (`ConnectedAccountError.accountChanged`).
     func createAccount(
         provider: ConnectedAppProvider,
         displayName: String,
         tokenBundle: OAuthTokenBundle,
-        metadata: [String: String] = [:]
+        metadata: [String: String] = [:],
+        startedBy: String? = nil
     ) async throws -> ConnectedAccount {
         let id = UUID().uuidString
         let now = Date()
@@ -182,6 +192,7 @@ actor ConnectedAccountsService {
         // The token and the account are kept for the account signed in
         // now, with nothing waited for between them.
         let owner = await ensureAccountsLoaded()
+        if let startedBy, startedBy != owner { throw ConnectedAccountError.accountChanged }
         try storeTokenBundle(tokenBundle, forAccountId: id, of: owner)
 
         if accountsCache == nil {
@@ -733,6 +744,9 @@ enum ConnectedAccountError: LocalizedError {
     case tokenRefreshFailed(provider: ConnectedAppProvider)
     case missingConfiguration(key: String)
     case oauthFailed(message: String)
+    /// Another account signed in while a sign-in with an app was waited
+    /// for. Nothing was kept of it.
+    case accountChanged
     case mcpTokenNotFound(serverId: String)
     case mcpTokenStorageFailed(underlying: Error)
 
@@ -756,6 +770,8 @@ enum ConnectedAccountError: LocalizedError {
             "Missing OAuth configuration: \(key)"
         case let .oauthFailed(message):
             "OAuth authentication failed: \(message)"
+        case .accountChanged:
+            "Another account signed in before the app was connected."
         case let .mcpTokenNotFound(id):
             "MCP authentication token not found for server: \(id)"
         case let .mcpTokenStorageFailed(error):

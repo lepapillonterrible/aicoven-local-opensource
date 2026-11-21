@@ -17,7 +17,13 @@ struct ConnectedAppsView: View {
     @State private var showingDeviceCodeSheet = false
     @State private var deviceUserCode: String = ""
     @State private var deviceVerificationUrl: String = ""
-    @State private var deviceFlowTask: Task<Void, Never>?
+    /// The sign-in with GitHub that is waiting for its code to be
+    /// authorised: closing the code's sheet calls it off.
+    @State private var deviceFlowTask: Task<OAuthTokenBundle, Error>?
+    /// The code's sheet is on screen, or on its way off it: no other
+    /// sign-in begins until it has gone, so what its closing calls off is
+    /// the sign-in whose code it showed.
+    @State private var codeSheetIsUp = false
 
     /// The token sheet of an app that connects with one, when it is asked for.
     @State private var tokenRequest: AppTokenRequest?
@@ -56,6 +62,7 @@ struct ConnectedAppsView: View {
                             provider: provider,
                             account: accounts.first { $0.provider == provider && $0.status == .connected },
                             isConnecting: connectingProvider == provider,
+                            waitsForAnotherSignIn: (connectingProvider != nil || codeSheetIsUp) && !provider.connectsWithToken,
                             onConnect: { await connect(provider: provider) },
                             onDisconnect: { await disconnect(provider: provider) },
                             onBrowseDrive: provider == .googleDrive ? { showingGooglePicker = true } : nil,
@@ -110,18 +117,22 @@ struct ConnectedAppsView: View {
             if let errorMessage { Text(errorMessage) }
         }
         .sheet(isPresented: $showingDeviceCodeSheet) {
-            // Called when sheet is dismissed (user cancelled)
+            // The sheet has gone, however it was closed: its sign-in is
+            // called off if it still runs.
             deviceFlowTask?.cancel()
             deviceFlowTask = nil
+            codeSheetIsUp = false
         } content: {
             GitHubDeviceCodeSheet(
                 userCode: deviceUserCode,
                 verificationUrl: deviceVerificationUrl,
                 onCancel: {
+                    // The sign-in is called off. `connect` says it is over
+                    // (`connectingProvider`) once it has ended, and not
+                    // before: no other begins while this one still runs.
                     deviceFlowTask?.cancel()
                     deviceFlowTask = nil
                     showingDeviceCodeSheet = false
-                    connectingProvider = nil
                 }
             )
         }
@@ -268,7 +279,19 @@ struct ConnectedAppsView: View {
             return
         }
 
+        // One sign-in at a time: the code on screen, and what its Cancel
+        // calls off, are then the one sign-in's.
+        guard connectingProvider == nil, !codeSheetIsUp else { return }
         connectingProvider = provider
+        // However it ends, the sign-in is over then, and not before; and
+        // its code is off the screen, an error's too.
+        defer {
+            connectingProvider = nil
+            showingDeviceCodeSheet = false
+        }
+        // Signing in waits for the person and the app: what comes of it
+        // is kept only for the account that began it.
+        let startedBy = await ConnectedAccountsService.shared.signedInAccount()
 
         do {
             let tokenBundle: OAuthTokenBundle
@@ -288,16 +311,18 @@ struct ConnectedAppsView: View {
                     deviceUserCode = userCode
                     deviceVerificationUrl = verificationUrl
                     DispatchQueue.main.async {
+                        codeSheetIsUp = true
                         showingDeviceCodeSheet = true
                     }
                 }
 
-                // Start flow in a task so we can cancel it
-                tokenBundle = try await withTaskCancellationHandler {
-                    try await flow.authenticate()
-                } onCancel: {
-                    // Task was cancelled (user dismissed sheet)
-                }
+                // The waiting is a task of its own, held so that closing
+                // the code's sheet stops it.
+                let signIn = Task { try await flow.authenticate() }
+                deviceFlowTask = signIn
+                tokenBundle = try await signIn.value
+                // Called off just as GitHub answered: still called off.
+                if signIn.isCancelled { throw CancellationError() }
 
                 // Hide device code sheet
                 showingDeviceCodeSheet = false
@@ -317,7 +342,6 @@ struct ConnectedAppsView: View {
 
             case .figma, .linear:
                 // Connected in its token sheet, above.
-                connectingProvider = nil
                 return
             }
 
@@ -326,19 +350,24 @@ struct ConnectedAppsView: View {
                 provider: provider,
                 displayName: displayName,
                 tokenBundle: tokenBundle,
-                metadata: metadata
+                metadata: metadata,
+                startedBy: startedBy
             )
 
             // Reload accounts
             await loadAccounts()
-            connectingProvider = nil
 
         } catch is CancellationError {
             // User cancelled - not an error
-            connectingProvider = nil
+            return
+        } catch let error as URLError where error.code == .cancelled {
+            // Called off while a request was under way: the same.
+            return
+        } catch ConnectedAccountError.accountChanged {
+            // Another account's by now: nothing was kept, and nothing is
+            // said to whoever is signed in.
             return
         } catch {
-            connectingProvider = nil
             if (error as NSError).domain == "com.apple.AuthenticationServices.WebAuthenticationSession",
                (error as NSError).code == 1 {
                 // User cancelled - not an error
@@ -415,6 +444,8 @@ struct ConnectedAppRow: View {
     let provider: ConnectedAppProvider
     let account: ConnectedAccount?
     let isConnecting: Bool
+    /// Another app's sign-in is under way: this one's waits for it to end.
+    var waitsForAnotherSignIn = false
     let onConnect: () async -> Void
     let onDisconnect: () async -> Void
     let onBrowseDrive: (() -> Void)?
@@ -508,6 +539,7 @@ struct ConnectedAppRow: View {
                             Task { await onConnect() }
                         }
                         .buttonStyle(ConnectButtonStyle())
+                        .disabled(waitsForAnotherSignIn)
                     }
                 }
             }
