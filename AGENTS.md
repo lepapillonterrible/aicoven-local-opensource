@@ -239,7 +239,7 @@ This directory contains a mix of active and legacy services:
 - `BackgroundMemoryService.swift` – Background `actor` that subscribes to `.memoryProposalsReady` events and persists memory proposals via `MemoryService`. Started at app launch; never blocks interactive chat.
 - `BackgroundSummarizationService.swift` – Background `actor` that subscribes to `.threadNeedsSummary` events and runs thread summarization using its own independent LLM environment. Skips on iOS when only local models are available.
 - `ThreadService.swift` – Thread CRUD and listing.
-- `MessageAdapter.swift` – Transforms between internal message models and LLM request/response formats.
+- `MessageAdapter.swift` – Transforms between internal message models and LLM request/response formats. What a reply can have opened is `Utils/ReplyLinks.swift`'s to say, as in the cloud app: a link in a reply's text (`MarkdownView`), and the Open and Download buttons for a file a reply or a tool result names (`RichMessageBubble`, `AgentFeaturesView`), open only an `https` or `mailto` address; any other (a file, another app's scheme, this app's own `aicoven://`) keeps its words and opens nothing. A new place that opens an address taken from a reply, a tool result or a page must ask `ReplyLinks.opens` first.
 - `MemoryService.swift` – Manages context memory storage and retrieval.
 - `ProviderAccountService.swift` – Manages provider configurations and API keys.
 - `StoreService.swift` – StoreKit 2 in-app purchase management.

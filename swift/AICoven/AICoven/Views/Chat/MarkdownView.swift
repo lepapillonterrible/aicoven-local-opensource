@@ -120,7 +120,7 @@ struct MarkdownView: View {
     // MARK: - Helpers
 
     private func attributedMarkdown(_ md: String) -> AttributedString {
-        (try? AttributedString(markdown: md)) ?? AttributedString(md)
+        ReplyLinks.attributed(md)
     }
 
     private func copyToClipboard(_ string: String) {

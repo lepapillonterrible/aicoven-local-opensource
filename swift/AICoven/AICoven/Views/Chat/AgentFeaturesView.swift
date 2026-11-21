@@ -229,9 +229,10 @@ private struct ToolCallCard: View {
                                 .font(.system(size: 13, weight: .medium))
                                 .lineLimit(1)
                             Spacer()
+                            // Only an address a reply can have opened.
                             #if os(macOS)
                             if let fileURLString,
-                               let url = URL(string: fileURLString) {
+                               let url = URL(string: fileURLString), ReplyLinks.opens(url) {
                                 Button("Open") {
                                     NSWorkspace.shared.open(url)
                                 }
@@ -239,7 +240,7 @@ private struct ToolCallCard: View {
                             }
                             #elseif os(iOS)
                             if let fileURLString,
-                               let url = URL(string: fileURLString) {
+                               let url = URL(string: fileURLString), ReplyLinks.opens(url) {
                                 Button("Open") {
                                     UIApplication.shared.open(url)
                                 }
