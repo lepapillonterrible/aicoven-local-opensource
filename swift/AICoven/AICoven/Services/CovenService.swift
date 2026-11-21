@@ -22,6 +22,8 @@ actor CovenService {
     ///   - name: Name of the coven
     ///   - description: Optional description
     ///   - avatar: Optional avatar URL
+    ///   - icon: The icon chosen for it; without one it starts with one no other coven shows
+    ///   - account: The account that asked, noted as it asked; without it, the account signed in when the coven is stored
     /// - Returns: The created coven
     func createCoven(
         name: String, description: String? = nil, avatar: String? = nil, icon: (symbol: String, tint: IconTint)? = nil,
