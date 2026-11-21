@@ -17,7 +17,9 @@ struct ConnectedAppsView: View {
     @State private var showingDeviceCodeSheet = false
     @State private var deviceUserCode: String = ""
     @State private var deviceVerificationUrl: String = ""
-    @State private var deviceFlowTask: Task<Void, Never>?
+    /// The sign-in with GitHub that is waiting for its code to be
+    /// authorised: closing the code's sheet calls it off.
+    @State private var deviceFlowTask: Task<OAuthTokenBundle, Error>?
 
     /// The token sheet of an app that connects with one, when it is asked for.
     @State private var tokenRequest: AppTokenRequest?
@@ -269,6 +271,9 @@ struct ConnectedAppsView: View {
         }
 
         connectingProvider = provider
+        // Signing in waits for the person and the app: what comes of it
+        // is kept only for the account that began it.
+        let startedBy = await ConnectedAccountsService.shared.signedInAccount()
 
         do {
             let tokenBundle: OAuthTokenBundle
@@ -292,12 +297,11 @@ struct ConnectedAppsView: View {
                     }
                 }
 
-                // Start flow in a task so we can cancel it
-                tokenBundle = try await withTaskCancellationHandler {
-                    try await flow.authenticate()
-                } onCancel: {
-                    // Task was cancelled (user dismissed sheet)
-                }
+                // The waiting is a task of its own, held so that closing
+                // the code's sheet stops it.
+                let signIn = Task { try await flow.authenticate() }
+                deviceFlowTask = signIn
+                tokenBundle = try await signIn.value
 
                 // Hide device code sheet
                 showingDeviceCodeSheet = false
@@ -326,7 +330,8 @@ struct ConnectedAppsView: View {
                 provider: provider,
                 displayName: displayName,
                 tokenBundle: tokenBundle,
-                metadata: metadata
+                metadata: metadata,
+                startedBy: startedBy
             )
 
             // Reload accounts
@@ -335,6 +340,15 @@ struct ConnectedAppsView: View {
 
         } catch is CancellationError {
             // User cancelled - not an error
+            connectingProvider = nil
+            return
+        } catch let error as URLError where error.code == .cancelled {
+            // Called off while GitHub was being asked: the same.
+            connectingProvider = nil
+            return
+        } catch ConnectedAccountError.accountChanged {
+            // Another account's by now: nothing was kept, and nothing is
+            // said to whoever is signed in.
             connectingProvider = nil
             return
         } catch {

@@ -105,6 +105,36 @@ final class ConnectedAccountsServiceTests: XCTestCase {
         XCTAssertEqual(tokenAgain, "token-of-a")
     }
 
+    func testASignInThatEndsAsAnotherAccount_isKeptForNobody() async throws {
+        let (defaults, suite) = try defaultsOfThisTest()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let who = Who("a")
+        let tokens = InMemoryTokens()
+        let service = ConnectedAccountsService(currentUser: { who.id }, defaults: defaults, tokens: tokens.store)
+        let bundle = OAuthTokenBundle(accessToken: "token-of-a", refreshToken: nil, tokenType: "Bearer", expiresAt: nil, scopes: ["repo"])
+
+        // A begins signing in with GitHub; B is signed in by the time GitHub answers.
+        let startedBy = await service.signedInAccount()
+        who.signIn("b")
+        do {
+            _ = try await service.createAccount(provider: .github, displayName: "octocat", tokenBundle: bundle, startedBy: startedBy)
+            XCTFail("A's sign-in was kept as B's")
+        } catch ConnectedAccountError.accountChanged {}
+        XCTAssertEqual(tokens.all, [:], "No token was kept, for either")
+        let ofB = await service.getAllAccounts()
+        XCTAssertEqual(ofB.map(\.displayName), [])
+        who.signIn("a")
+        let ofA = await service.getAllAccounts()
+        XCTAssertEqual(ofA.map(\.displayName), [])
+
+        // One that ends as the account that began it is kept.
+        let again = await service.signedInAccount()
+        _ = try await service.createAccount(provider: .github, displayName: "octocat", tokenBundle: bundle, startedBy: again)
+        let kept = await service.getAllAccounts()
+        XCTAssertEqual(kept.map(\.displayName), ["octocat"])
+        XCTAssertEqual(Array(tokens.all.keys), ["AICovenProviderKeys.a"])
+    }
+
     func testConnectionsAreTheSignedInAccounts_andAnotherAccountIsShownItsOwn() async throws {
         let (defaults, suite) = try defaultsOfThisTest()
         defer { defaults.removePersistentDomain(forName: suite) }
