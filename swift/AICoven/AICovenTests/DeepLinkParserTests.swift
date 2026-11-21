@@ -71,6 +71,9 @@ final class DeepLinkParserTests: XCTestCase {
             // A path that is not written as its place is: a doubled slash, a step spelled with escapes.
             "aicoven://strix//new-thread",
             "aicoven://strix/new-thread//",
+            "aicoven://settings//",
+            "aicoven://providers//",
+            "aicoven://usage///",
             "aicoven://settings//providers",
             "aicoven:////settings",
             "aicoven://strix/new%2Dthread",

@@ -66,6 +66,8 @@ class AuthService: ObservableObject {
         authStateHandle = Auth.auth().addStateDidChangeListener { [weak self] _, firebaseUser in
             Task { @MainActor in
                 self?.isLoading = true
+                // Who is signed in now, for a link that is waiting.
+                AppState.shared.accountReported(firebaseUser?.uid)
                 // Whoever is signed in now, nothing the rows said of the
                 // account before stays said: on signing in, switching,
                 // signing out, and when an account is deleted.
@@ -96,11 +98,6 @@ class AuthService: ObservableObject {
                     await StoreService.shared.reloadForCurrentUser()
                 } else {
                     print("❌ No Firebase user - signed out")
-                    // An account left: a link that was waiting while it was
-                    // signed in is not kept for the next. (Nobody being
-                    // signed in when the app starts is no account leaving:
-                    // the link the app was opened with stays.)
-                    if self?.isAuthenticated == true { _ = AppState.shared.consumeDeepLink() }
                     self?.currentUser = nil
                     self?.isAuthenticated = false
                 }

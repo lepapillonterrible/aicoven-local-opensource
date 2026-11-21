@@ -22,9 +22,12 @@ nonisolated enum DeepLinkParser {
         // below. One slash at the end is none.
         var written = components.percentEncodedPath
         if written.hasPrefix("/") { written.removeFirst() }
-        if written.hasSuffix("/") { written.removeLast() }
-        let path = written.isEmpty ? [] : written.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
-        guard !path.contains("") else { return nil }
+        var path: [String] = []
+        if !written.isEmpty {
+            if written.hasSuffix("/") { written.removeLast() }
+            path = written.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+            guard !path.contains("") else { return nil }
+        }
 
         switch (url.host?.lowercased() ?? "", path) {
         case ("connected-services", []), ("connected-apps", []), ("settings", ["connected-apps"]):

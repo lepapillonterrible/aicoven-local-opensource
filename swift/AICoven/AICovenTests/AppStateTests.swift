@@ -35,6 +35,32 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(state.consumeDeepLink(), .usage)
     }
 
+    func testALinkThatWaitedUnderAnAccount_isNotKeptForTheNext() throws {
+        let state = AppState.shared
+        let link = try XCTUnwrap(URL(string: "aicoven://connected-apps"))
+        addTeardownBlock { await MainActor.run { state.accountReported(nil) } }
+
+        // The app is opened with a link; the sign-in service's first report is that nobody is signed in.
+        state.accountReported(nil)
+        state.handleDeepLink(link)
+        state.accountReported(nil)
+        XCTAssertEqual(state.pendingDeepLink, .connectedApps, "Nobody signed in at the start is no account leaving")
+        state.accountReported("ada")
+        XCTAssertEqual(state.pendingDeepLink, .connectedApps, "Signing in keeps it for the main view")
+
+        // It is still waiting (the data is locked, say) when the account signs out.
+        state.accountReported(nil)
+        XCTAssertNil(state.pendingDeepLink, "The next account is not led anywhere by it")
+
+        // One waiting under an account is dropped too when another takes its place without a sign-out between.
+        state.accountReported("ada")
+        state.handleDeepLink(link)
+        state.accountReported("ada")
+        XCTAssertEqual(state.pendingDeepLink, .connectedApps, "The same account reported again")
+        state.accountReported("grace")
+        XCTAssertNil(state.pendingDeepLink)
+    }
+
     func testOnlyALinkIntoSettingsNamesAPlaceInSettings() {
         XCTAssertEqual(HomeView.settingsPlace(for: .connectedApps), .connectedApps)
         XCTAssertEqual(HomeView.settingsPlace(for: .budgets), .budget)
