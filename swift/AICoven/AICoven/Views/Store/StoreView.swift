@@ -6,122 +6,135 @@ struct StoreView: View {
     @EnvironmentObject var storeService: StoreService
     @Environment(\.dismiss) private var dismiss
     @State private var purchasing: String?
+    /// Shown as a Settings pane, on the stack that shows the pane: it
+    /// brings no stack, title or Done of its own (a stack of its own
+    /// inside one pushed by a path empties that path). Elsewhere it is a
+    /// sheet, with all three.
+    var isPane = false
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: Spacing.xl) {
-                    // Header
+        if isPane {
+            page
+        } else {
+            NavigationStack {
+                page
+                    .navigationTitle("Store")
+                #if os(iOS)
+                    .navigationBarTitleDisplayMode(.inline)
+                #endif
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { dismiss() }
+                                .foregroundColor(.aicovenTeal)
+                        }
+                    }
+            }
+        }
+    }
+
+    private var page: some View {
+        ScrollView {
+            VStack(spacing: Spacing.xl) {
+                // Header
+                VStack(spacing: Spacing.md) {
+                    IconBadge(icon: "sparkles", size: 80, color: .aicovenTeal)
+
+                    Text("Upgrade AICoven")
+                        .font(.aicovenDisplayMedium)
+                        .foregroundColor(.aicovenTextPrimary)
+
+                    Text("Unlock powerful features with a one-time purchase")
+                        .font(.aicovenBody)
+                        .foregroundColor(.aicovenTextSecondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 500)
+                }
+                .padding(.top, Spacing.xl)
+
+                // Free tier (always shown)
+                FreeTierCard()
+                    .padding(.horizontal, Spacing.lg)
+
+                // Purchasable products
+                if storeService.isLoading {
+                    ProgressView("Loading products…")
+                        .tint(.aicovenTeal)
+                        .padding(.vertical, Spacing.xxl)
+                } else if storeService.products.isEmpty {
+                    // Products not yet configured in App Store Connect
                     VStack(spacing: Spacing.md) {
-                        IconBadge(icon: "sparkles", size: 80, color: .aicovenTeal)
-
-                        Text("Upgrade AICoven")
-                            .font(.aicovenDisplayMedium)
-                            .foregroundColor(.aicovenTextPrimary)
-
-                        Text("Unlock powerful features with a one-time purchase")
+                        Image(systemName: "clock")
+                            .font(.system(size: 40))
+                            .foregroundColor(.aicovenTextTertiary)
+                        Text("Products coming soon")
                             .font(.aicovenBody)
                             .foregroundColor(.aicovenTextSecondary)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: 500)
-                    }
-                    .padding(.top, Spacing.xl)
-
-                    // Free tier (always shown)
-                    FreeTierCard()
-                        .padding(.horizontal, Spacing.lg)
-
-                    // Purchasable products
-                    if storeService.isLoading {
-                        ProgressView("Loading products…")
-                            .tint(.aicovenTeal)
-                            .padding(.vertical, Spacing.xxl)
-                    } else if storeService.products.isEmpty {
-                        // Products not yet configured in App Store Connect
-                        VStack(spacing: Spacing.md) {
-                            Image(systemName: "clock")
-                                .font(.system(size: 40))
-                                .foregroundColor(.aicovenTextTertiary)
-                            Text("Products coming soon")
-                                .font(.aicovenBody)
-                                .foregroundColor(.aicovenTextSecondary)
-                            Text("In-app purchases are being set up. Check back later!")
-                                .font(.aicovenCaption)
-                                .foregroundColor(.aicovenTextTertiary)
-                                .multilineTextAlignment(.center)
-                        }
-                        .padding(.vertical, Spacing.xxl)
-                    } else {
-                        ForEach(storeService.products, id: \.id) { product in
-                            ProductCard(
-                                product: product,
-                                isPurchased: storeService.purchasedProductIDs.contains(product.id),
-                                isPurchasing: purchasing == product.id
-                            ) {
-                                Task {
-                                    purchasing = product.id
-                                    await storeService.purchase(product)
-                                    purchasing = nil
-                                }
-                            }
-                            .padding(.horizontal, Spacing.lg)
-                        }
-                    }
-
-                    // Error
-                    if let error = storeService.purchaseError {
-                        Text(error)
-                            .font(.aicovenCaption)
-                            .foregroundColor(.red)
-                            .padding(.horizontal, Spacing.lg)
-                    }
-
-                    // Restore
-                    Button {
-                        Task { await storeService.restorePurchases() }
-                    } label: {
-                        Text("Restore Purchases")
-                            .font(.aicovenBodySmall)
-                            .foregroundColor(.aicovenTeal)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.bottom, Spacing.lg)
-
-                    // Legal Links
-                    HStack(spacing: Spacing.md) {
-                        NavigationLink(destination: TermsOfServiceView()) {
-                            Text("Terms of Service")
-                                .font(.aicovenCaption)
-                                .foregroundColor(.aicovenTextTertiary)
-                                .underline()
-                        }
-
-                        Text("•")
+                        Text("In-app purchases are being set up. Check back later!")
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextTertiary)
-
-                        NavigationLink(destination: PrivacyPolicyView()) {
-                            Text("Privacy Policy")
-                                .font(.aicovenCaption)
-                                .foregroundColor(.aicovenTextTertiary)
-                                .underline()
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(.vertical, Spacing.xxl)
+                } else {
+                    ForEach(storeService.products, id: \.id) { product in
+                        ProductCard(
+                            product: product,
+                            isPurchased: storeService.purchasedProductIDs.contains(product.id),
+                            isPurchasing: purchasing == product.id
+                        ) {
+                            Task {
+                                purchasing = product.id
+                                await storeService.purchase(product)
+                                purchasing = nil
+                            }
                         }
+                        .padding(.horizontal, Spacing.lg)
                     }
-                    .padding(.bottom, Spacing.xl)
                 }
+
+                // Error
+                if let error = storeService.purchaseError {
+                    Text(error)
+                        .font(.aicovenCaption)
+                        .foregroundColor(.red)
+                        .padding(.horizontal, Spacing.lg)
+                }
+
+                // Restore
+                Button {
+                    Task { await storeService.restorePurchases() }
+                } label: {
+                    Text("Restore Purchases")
+                        .font(.aicovenBodySmall)
+                        .foregroundColor(.aicovenTeal)
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, Spacing.lg)
+
+                // Legal Links
+                HStack(spacing: Spacing.md) {
+                    NavigationLink(destination: TermsOfServiceView()) {
+                        Text("Terms of Service")
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextTertiary)
+                            .underline()
+                    }
+
+                    Text("•")
+                        .font(.aicovenCaption)
+                        .foregroundColor(.aicovenTextTertiary)
+
+                    NavigationLink(destination: PrivacyPolicyView()) {
+                        Text("Privacy Policy")
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextTertiary)
+                            .underline()
+                    }
+                }
+                .padding(.bottom, Spacing.xl)
             }
-            .background(NebulaBackground())
-            .navigationTitle("Store")
-            #if os(iOS)
-                .navigationBarTitleDisplayMode(.inline)
-            #endif
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Done") { dismiss() }
-                            .foregroundColor(.aicovenTeal)
-                    }
-                }
         }
+        .background(NebulaBackground())
     }
 }
 

@@ -81,7 +81,14 @@ struct SettingsWorkspaceView: View {
     #else
     private var content: some View {
         NavigationStack(path: $path) {
-            SettingsList(request: initialPane)
+            SettingsList()
+                // The pane a request opened arrives on the path. Declared
+                // here, at the root of the stack whose path holds panes:
+                // the list is also pushed on the phone's stack, where a
+                // destination of its own would not be the root's.
+                .navigationDestination(for: SettingsPane.self) { pane in
+                    SettingsPaneView(pane: pane, request: initialPane.flatMap { SettingsPane($0) } == pane ? initialPane : nil)
+                }
         }
     }
     #endif

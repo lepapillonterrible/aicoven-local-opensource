@@ -77,7 +77,9 @@ struct ShellContentView: View {
                     .id(covenID)
                     // Once for each opening of a scope's memory: outside the
                     // list, which is made anew after every save.
-                    .onAppear { AnalyticsService.shared.trackMemoryListOpened(covenId: covenID) }
+                    .onAppear {
+                        if ShellRootView.reportsUsage { AnalyticsService.shared.trackMemoryListOpened(covenId: covenID) }
+                    }
             case let .covenAgents(covenID):
                 // Only for the coven on screen; while it is not in, or it is
                 // another's, the Overview.

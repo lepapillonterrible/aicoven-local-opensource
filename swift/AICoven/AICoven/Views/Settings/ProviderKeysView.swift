@@ -1141,13 +1141,18 @@ struct EditProviderKeySheet: View {
 /// Simple callout card used on home views when no provider keys are configured
 struct AddProviderKeysCard: View {
     let onOpenProviderKeys: () -> Void
+    /// Supplied when the host already knows the answer; nil has the card
+    /// ask for itself. A list has to supply it: it makes no row for a card
+    /// with nothing to show yet, so the card's own asking never starts
+    /// there.
+    var hasUsableProvider: Bool?
 
     @State private var hasCheckedAccounts = false
     @State private var shouldShow = false
 
     var body: some View {
         Group {
-            if hasCheckedAccounts, shouldShow {
+            if hasUsableProvider.map({ !$0 }) ?? (hasCheckedAccounts && shouldShow) {
                 GlassCard {
                     HStack(spacing: Spacing.md) {
                         IconBadge(icon: "key.fill", size: 40, color: .aicovenTeal)
@@ -1184,15 +1189,20 @@ struct AddProviderKeysCard: View {
     }
 
     private func checkProviderAccounts() async {
-        guard !hasCheckedAccounts else { return }
-        defer { hasCheckedAccounts = true }
+        guard hasUsableProvider == nil, !hasCheckedAccounts else { return }
+        shouldShow = await Self.lacksProvider()
+        hasCheckedAccounts = true
+    }
 
+    /// Whether the person has no provider set up, which is when the card
+    /// has something to say. Where reading them throws, the card stays
+    /// away.
+    static func lacksProvider() async -> Bool {
         do {
-            let accounts = try await ProviderAccountService.shared.loadProviderAccounts()
-            shouldShow = accounts.isEmpty
+            return try await ProviderAccountService.shared.loadProviderAccounts().isEmpty
         } catch {
             AppErrorReporter.log(error: error, context: "AddProviderKeysCard.checkProviderAccounts")
-            shouldShow = false
+            return false
         }
     }
 }

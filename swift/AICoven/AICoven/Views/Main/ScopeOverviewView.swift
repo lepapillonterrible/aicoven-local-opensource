@@ -38,6 +38,10 @@ struct ScopeOverviewView: View {
     /// The archived threads are shown, on a phone, where they are listed
     /// here.
     @State private var showsArchived = false
+    /// Strix has no provider to answer with, as the list last read it. The
+    /// list asks, not the card: it makes no row for a card that has
+    /// nothing to show yet, so the card's own asking would never start.
+    @State private var lacksProvider = false
     /// What each thread is doing, for its row and which section it is in.
     @ObservedObject private var activities = ThreadActivities.shared
     /// The latest ask from here: the thread it starts opens only if the
@@ -178,8 +182,8 @@ struct ScopeOverviewView: View {
                 }
                 // Strix says how to get an answer where none can be had
                 // yet. No row at all where the card has nothing to say.
-                if scope == .strix {
-                    AddProviderKeysCard(onOpenProviderKeys: onOpenProviderKeys)
+                if scope == .strix, lacksProvider {
+                    AddProviderKeysCard(onOpenProviderKeys: onOpenProviderKeys, hasUsableProvider: false)
                         .listRowInsets(EdgeInsets(top: 0, leading: Spacing.md, bottom: Spacing.lg, trailing: Spacing.md))
                         .listRowSeparator(.hidden)
                         .listRowBackground(Color.clear)
@@ -217,6 +221,15 @@ struct ScopeOverviewView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        // Asked each time the list comes on screen, so the card goes once
+        // a key was added in Settings.
+        .task {
+            guard scope == .strix else { return }
+            let lacks = await AddProviderKeysCard.lacksProvider()
+            // A reading called off as the list left the screen says
+            // nothing: the card stays as it was until the list is back.
+            if !Task.isCancelled { lacksProvider = lacks }
+        }
         .environment(\.defaultMinListRowHeight, 1)
         .contentMargins(.top, Spacing.lg, for: .scrollContent)
         .contentMargins(.bottom, Spacing.sm, for: .scrollContent)

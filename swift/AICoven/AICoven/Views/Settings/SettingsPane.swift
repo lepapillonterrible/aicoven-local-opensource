@@ -129,7 +129,7 @@ struct SettingsPaneView: View {
         case .usage:
             UsageSettingsView()
         case .subscription:
-            StoreView()
+            StoreView(isPane: true)
         case .thisMac:
             #if os(macOS)
             ScrollView {
@@ -153,9 +153,6 @@ struct SettingsPaneView: View {
 /// The Settings list on the iPad and iPhone: every pane this device shows,
 /// pushed.
 struct SettingsList: View {
-    /// The request Settings was opened with, when it named a place.
-    var request: WorkspaceTabType?
-
     var body: some View {
         List {
             Group {
@@ -181,10 +178,6 @@ struct SettingsList: View {
         #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
         #endif
-            // The pane a request opened arrives on the navigation path.
-            .navigationDestination(for: SettingsPane.self) { pane in
-                SettingsPaneView(pane: pane, request: request.flatMap { SettingsPane($0) } == pane ? request : nil)
-            }
     }
 
     /// The rows push their pane directly, not by value.

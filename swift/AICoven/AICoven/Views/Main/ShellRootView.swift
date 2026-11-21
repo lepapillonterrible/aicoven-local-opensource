@@ -5,9 +5,10 @@ import SwiftUI
 /// window's title. The Mac's window, and the iPad's layout at regular
 /// width, where Settings is a place in it and not a window.
 ///
-/// It has a second layout over the same state, for a phone: no sidebar,
-/// the scope's Overview as the root of one stack. Being the same view, a
-/// device that changes between the two keeps where it is.
+/// It has a second layout over the same state, which the iPhone shows, and
+/// an iPad at compact width: no sidebar, the scope's Overview as the root
+/// of one stack. Being the same view, a device that changes between the
+/// two keeps where it is.
 struct ShellRootView: View {
     /// The split layout (sidebar and content); false is the phone's.
     var isSplit = true
@@ -48,6 +49,13 @@ struct ShellRootView: View {
     /// to open, done once the sheet has gone so nothing opens under it.
     @State private var showSwitcher = false
     @State private var switcherFollowUp: SwitcherFollowUp?
+
+    /// Whether the shell reports how it is used (a scope viewed, a place
+    /// opened, New Thread, a thread made, the memory list opened), where
+    /// analytics is on in Settings. These are the Mac window's events, kept
+    /// when it became the shell; the iPhone's and iPad's old root sent
+    /// none, so none are sent there.
+    static let reportsUsage = PlatformCapabilities.current.platform == .macOS
 
     /// What the switcher sheet was asked to open as it closes.
     private enum SwitcherFollowUp {
@@ -96,11 +104,11 @@ struct ShellRootView: View {
                 isSearchingThreads = false
                 threadActions.invalidate()
                 shellThreads.load(navigator.selected)
-                if let covenID = navigator.selected.covenID { AnalyticsService.shared.trackCovenView(covenId: covenID) }
+                if Self.reportsUsage, let covenID = navigator.selected.covenID { AnalyticsService.shared.trackCovenView(covenId: covenID) }
             }
             // The events the window's tabs sent when one was opened.
             .onChange(of: navigator.place?.id) { _, _ in
-                if let place = navigator.place { AnalyticsService.shared.trackTabOpened(tabType: place.type.analyticsName) }
+                if Self.reportsUsage, let place = navigator.place { AnalyticsService.shared.trackTabOpened(tabType: place.type.analyticsName) }
             }
             .onAppear {
                 threadActions.onChanged = { [shellThreads] in shellThreads.reload() }
@@ -120,6 +128,16 @@ struct ShellRootView: View {
             .onReceive(NotificationCenter.default.publisher(for: .didCreateThread)) { _ in
                 shellThreads.reload()
             }
+        #if !os(macOS)
+            // A deep link leads into Settings, which is a place here (the
+            // Mac's main view opens its Settings window for it). Also the
+            // link that was waiting when this came up.
+            .onChange(of: appState.pendingDeepLink, initial: true) { _, target in
+                guard let target else { return }
+                openSettings(HomeView.settingsPlace(for: target))
+                _ = appState.consumeDeepLink()
+            }
+        #endif
             // A thread was deleted, by whatever did it (a new thread whose
             // files could not go into it is deleted again, with no list's
             // action behind it): it is no longer listed, open or marked.
@@ -402,13 +420,7 @@ struct ShellRootView: View {
     /// New Thread: the scope's new-thread page. Its thread is made when
     /// its first message is sent.
     private func newThread() {
-        // Where the shell is: the Mac's window, the iPad's layout, or the
-        // phone's.
-        #if os(macOS)
-        AnalyticsService.shared.trackNewChatTapped(source: "mac_shell")
-        #else
-        AnalyticsService.shared.trackNewChatTapped(source: isSplit ? "ipad_shell" : "phone_shell")
-        #endif
+        if Self.reportsUsage { AnalyticsService.shared.trackNewChatTapped(source: "mac_shell") }
         navigator.requestNewThread()
     }
 
@@ -429,7 +441,7 @@ struct ShellRootView: View {
     /// of the two in its own way.
     private func threadMade(_ thread: Thread) {
         shellThreads.reload()
-        if let covenID = thread.covenId {
+        if Self.reportsUsage, let covenID = thread.covenId {
             AnalyticsService.shared.trackThreadCreate(threadId: thread.id, covenId: covenID, hasTitle: thread.title != nil)
             if let agentID = thread.agentId { AnalyticsService.shared.trackRoleAssign(roleId: agentID, threadId: thread.id) }
         }

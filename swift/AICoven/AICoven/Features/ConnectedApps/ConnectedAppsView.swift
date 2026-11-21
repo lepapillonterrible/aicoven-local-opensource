@@ -36,69 +36,70 @@ struct ConnectedAppsView: View {
         Bundle.main.infoDictionary?["GOOGLE_OAUTH_CLIENT_ID"] as? String ?? "870439799161-1c7u8utd0t0kh3ote5kugh8cj9961ugb.apps.googleusercontent.com"
     }
 
+    /// A Settings pane, on the stack that shows the pane (which its MCP
+    /// servers page is pushed on): a stack of its own inside one pushed by
+    /// a path empties that path, and the pane is gone as it arrives.
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 24) {
+        ScrollView {
+            VStack(spacing: 24) {
 
-                    // Header
-                    headerSection
+                // Header
+                headerSection
 
-                    // Info banner
-                    infoBanner
+                // Info banner
+                infoBanner
 
-                    // Connected apps list
-                    VStack(spacing: 16) {
-                        ForEach(ConnectedAppProvider.allCases, id: \.rawValue) { provider in
-                            ConnectedAppRow(
-                                provider: provider,
-                                account: accounts.first { $0.provider == provider && $0.status == .connected },
-                                isConnecting: connectingProvider == provider,
-                                onConnect: { await connect(provider: provider) },
-                                onDisconnect: { await disconnect(provider: provider) },
-                                onBrowseDrive: provider == .googleDrive ? { showingGooglePicker = true } : nil,
-                                needsToken: provider.accountWaitingForAToken(in: accounts),
-                                onReplaceToken: { replaceToken(of: $0) }
-                            )
+                // Connected apps list
+                VStack(spacing: 16) {
+                    ForEach(ConnectedAppProvider.allCases, id: \.rawValue) { provider in
+                        ConnectedAppRow(
+                            provider: provider,
+                            account: accounts.first { $0.provider == provider && $0.status == .connected },
+                            isConnecting: connectingProvider == provider,
+                            onConnect: { await connect(provider: provider) },
+                            onDisconnect: { await disconnect(provider: provider) },
+                            onBrowseDrive: provider == .googleDrive ? { showingGooglePicker = true } : nil,
+                            needsToken: provider.accountWaitingForAToken(in: accounts),
+                            onReplaceToken: { replaceToken(of: $0) }
+                        )
+                    }
+                }
+                .padding(.horizontal)
+
+                // Show recently picked files if any
+                if !pickedFiles.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Recently Picked Files")
+                            .font(.aicovenH3)
+                            .foregroundColor(.aicovenTextSecondary)
+                        ForEach(pickedFiles) { file in
+                            HStack {
+                                Image(systemName: "doc.fill")
+                                    .foregroundColor(.aicovenTeal)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(file.name)
+                                        .font(.aicovenBodySmall)
+                                        .foregroundColor(.aicovenTextPrimary)
+                                    Text(file.id)
+                                        .font(.aicovenCaption)
+                                        .foregroundColor(.aicovenTextTertiary)
+                                }
+                                Spacer()
+                            }
+                            .padding(8)
+                            .background(Color.aicovenGlass)
+                            .cornerRadius(8)
                         }
                     }
                     .padding(.horizontal)
-
-                    // Show recently picked files if any
-                    if !pickedFiles.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Recently Picked Files")
-                                .font(.aicovenH3)
-                                .foregroundColor(.aicovenTextSecondary)
-                            ForEach(pickedFiles) { file in
-                                HStack {
-                                    Image(systemName: "doc.fill")
-                                        .foregroundColor(.aicovenTeal)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(file.name)
-                                            .font(.aicovenBodySmall)
-                                            .foregroundColor(.aicovenTextPrimary)
-                                        Text(file.id)
-                                            .font(.aicovenCaption)
-                                            .foregroundColor(.aicovenTextTertiary)
-                                    }
-                                    Spacer()
-                                }
-                                .padding(8)
-                                .background(Color.aicovenGlass)
-                                .cornerRadius(8)
-                            }
-                        }
-                        .padding(.horizontal)
-                    }
-
-                    mcpServersSection
-
-                    Spacer(minLength: 40)
                 }
+
+                mcpServersSection
+
+                Spacer(minLength: 40)
             }
-            .background(NebulaBackground())
         }
+        .background(NebulaBackground())
         .task { await loadAccounts() }
         .alert("Error", isPresented: Binding(
             get: { errorMessage != nil },
@@ -207,7 +208,7 @@ struct ConnectedAppsView: View {
                 .padding(.horizontal, 16)
 
             // Navigation link to full MCP management view
-            NavigationLink(destination: MCPServerManagementView().onAppear { AnalyticsService.shared.trackMCPServersOpened() }) {
+            NavigationLink(destination: MCPServerManagementView().stoneBackButton().onAppear { AnalyticsService.shared.trackMCPServersOpened() }) {
                 GlassCard {
                     HStack(spacing: 16) {
                         // Icon badge for MCP servers
