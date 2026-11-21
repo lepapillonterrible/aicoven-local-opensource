@@ -109,10 +109,10 @@ struct AICovenApp: App {
         }
         #if os(macOS)
         .defaultSize(width: 820, height: 620)
+        #endif
         .commands {
             ShellCommands()
         }
-        #endif
 
         #if os(macOS)
         // The standard Settings window on ⌘,.

@@ -119,14 +119,19 @@ extension FocusedValues {
     }
 }
 
-#if os(macOS)
-/// The Mac's menus for the shell, as the cloud app's: New Thread and New
-/// Coven under File, a Go menu and a Thread menu. An item with nothing to
-/// act on in the front window is disabled, not hidden.
+/// The menus for the shell, as the cloud app's: New Thread and New Coven
+/// under File, a Go menu and a Thread menu. An item with nothing to act on
+/// in the front window is disabled, not hidden. The iPad's menu bar, and a
+/// keyboard on an iPad or iPhone, have them without the Mac's own (New
+/// Coven…, the scope's places, Rename… and Delete…), as in the cloud app.
 struct ShellCommands: Commands {
     @FocusedValue(\.shellCommands) private var shell
     @FocusedValue(\.threadCommands) private var thread
     @FocusedValue(\.stopTurn) private var stopTurn
+
+    private var isMac: Bool {
+        PlatformCapabilities.current.platform == .macOS
+    }
 
     var body: some Commands {
         // In place of the system's New Window: ⌘N is a new thread.
@@ -134,18 +139,22 @@ struct ShellCommands: Commands {
             Button("New Thread") { shell?.newThread() }
                 .keyboardShortcut("n")
                 .disabled(shell == nil)
-            Button("New Coven…") { shell?.newCoven() }
-                .disabled(shell == nil)
+            if isMac {
+                Button("New Coven…") { shell?.newCoven() }
+                    .disabled(shell == nil)
+            }
         }
         CommandMenu("Go") {
             Button("Search Threads") { shell?.searchThreads() }
                 .keyboardShortcut("k")
                 .disabled(shell == nil)
-            Divider()
-            ForEach(ShellCommandRules.places) { place in
-                Button(place.title) { shell?.openPlace(place.item) }
-                    .keyboardShortcut(KeyEquivalent(place.key), modifiers: [.option, .command])
-                    .disabled(shell == nil)
+            if isMac {
+                Divider()
+                ForEach(ShellCommandRules.places) { place in
+                    Button(place.title) { shell?.openPlace(place.item) }
+                        .keyboardShortcut(KeyEquivalent(place.key), modifiers: [.option, .command])
+                        .disabled(shell == nil)
+                }
             }
             Divider()
             ForEach(ShellCommandRules.scopes(covens: shell?.covens ?? [])) { scope in
@@ -160,13 +169,17 @@ struct ShellCommands: Commands {
                 .disabled(!canMove(up: false))
         }
         CommandMenu("Thread") {
-            Button("Rename…") { thread?.rename() }
-                .disabled(thread == nil)
+            if isMac {
+                Button("Rename…") { thread?.rename() }
+                    .disabled(thread == nil)
+            }
             Button(thread?.isArchived == true ? "Unarchive" : "Archive") { thread?.toggleArchive() }
                 .keyboardShortcut("a", modifiers: [.control, .command])
                 .disabled(thread == nil)
-            Button("Delete…") { thread?.delete() }
-                .disabled(thread == nil)
+            if isMac {
+                Button("Delete…") { thread?.delete() }
+                    .disabled(thread == nil)
+            }
             Divider()
             Button("Copy Thread as Markdown") { thread?.copyMarkdown?() }
                 .keyboardShortcut("c", modifiers: [.option, .shift, .command])
@@ -183,4 +196,3 @@ struct ShellCommands: Commands {
         return ShellCommandRules.canMoveSelected(up: up, selected: shell.selected, covens: shell.covens)
     }
 }
-#endif
