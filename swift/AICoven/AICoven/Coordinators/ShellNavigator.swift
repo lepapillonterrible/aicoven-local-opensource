@@ -38,11 +38,12 @@ nonisolated enum ShellSidebarItem: Hashable {
 
 /// Navigation state for the split-view shell, as the cloud app's.
 ///
-/// The shell shows one scope at a time: Strix or a coven. It starts on
-/// Strix's Overview. Switching to a scope opens its Overview, even where a
-/// thread was open in it earlier; the other places the person opens (a
-/// thread, Memory, Agents, …) stay open until they move. Settings, where it
-/// is no window of its own, is the person's and not a scope's: it covers
+/// The shell shows one scope at a time: Strix or a coven. It starts on the
+/// Overview of the scope this device was last in (Strix where it knows of
+/// none), never in a thread. Switching to a scope opens its Overview, even
+/// where a thread was open in it earlier; the other places the person opens
+/// (a thread, Memory, Agents, …) stay open until they move. Settings, where
+/// it is no window of its own, is the person's and not a scope's: it covers
 /// the scope's content while open.
 ///
 /// Owns navigation state only: no rendering, no loading, no analytics.
@@ -88,10 +89,15 @@ final class ShellNavigator: ObservableObject {
     private var hasBeenActive = false
 
     /// `arrive` notes an arrival in a scope and gives back the visit
-    /// before it. The shell starts in Strix: that arrival is noted here.
-    init(arrive: ((ShellScope) -> Date?)? = nil) {
+    /// before it. The shell starts in `scope`, on its Overview: that
+    /// arrival is noted here. A coven it starts in that turns out to be
+    /// gone gives way to Strix like any other (`handleCovenGone`).
+    init(startingIn scope: ShellScope = .strix, arrive: ((ShellScope) -> Date?)? = nil) {
         self.arrive = arrive
-        previousVisits[.strix] = arrive?(.strix)
+        // Set where it is kept, not through `selected`: the start is one
+        // arrival, noted below, and no move.
+        _selected = Published(initialValue: scope)
+        previousVisits[scope] = arrive?(scope)
     }
 
     /// When the person was last in `scope` before this visit, if this

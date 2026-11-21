@@ -177,6 +177,50 @@ final class ScopeOverviewTests: XCTestCase {
         XCTAssertEqual(ScopeOverviewView.emptyLine(hasArchived: true, canAsk: false), "No open threads.")
     }
 
+    func testWhereAnAccountWasLast_isTheScopeOfItsLatestVisitOnThisDevice() throws {
+        let suite = "ScopeVisitStoreTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        let store = ScopeVisitStore(defaults: defaults)
+        let monday = Date(timeIntervalSince1970: 1_790_000_000)
+
+        XCTAssertNil(store.latest(for: "ada"), "A device that knows of no visit")
+        store.arrive(in: .strix, at: monday, for: "ada")
+        store.arrive(in: .coven("work"), at: monday.addingTimeInterval(60), for: "ada")
+        store.arrive(in: .strix, at: monday.addingTimeInterval(30), for: "grace")
+        XCTAssertEqual(store.latest(for: "ada"), .coven("work"))
+        XCTAssertEqual(store.latest(for: "grace"), .strix, "Each account's own")
+        store.arrive(in: .strix, at: monday.addingTimeInterval(120), for: "ada")
+        XCTAssertEqual(store.latest(for: "ada"), .strix)
+
+        // A coven that is gone is no longer where they were last.
+        store.arrive(in: .coven("gone"), at: monday.addingTimeInterval(180), for: "ada")
+        XCTAssertEqual(store.latest(for: "ada"), .coven("gone"))
+        store.forget(.coven("gone"), for: "ada")
+        XCTAssertEqual(store.latest(for: "ada"), .strix)
+    }
+
+    @MainActor
+    func testTheShellStartsWhereItIsTold_onItsOverview_andACovenThatIsGoneGivesWayToStrix() {
+        var arrivals: [ShellScope] = []
+        let navigator = ShellNavigator(startingIn: .coven("work"), arrive: { scope in
+            arrivals.append(scope)
+            return scope == .coven("work") ? Date(timeIntervalSince1970: 200) : nil
+        })
+
+        // The start is the one arrival: in the coven, not in Strix first.
+        XCTAssertEqual(navigator.selected, .coven("work"))
+        XCTAssertNil(navigator.place, "On its Overview, never in a thread")
+        XCTAssertEqual(arrivals, [.coven("work")])
+        XCTAssertEqual(navigator.previousVisit(in: .coven("work")), Date(timeIntervalSince1970: 200))
+
+        // The coven turns out to be gone once the covens are read.
+        navigator.handleCovenGone(covenID: "work")
+        XCTAssertEqual(navigator.selected, .strix)
+        XCTAssertNil(navigator.place)
+        XCTAssertEqual(arrivals, [.coven("work"), .strix])
+    }
+
     @MainActor
     func testTheNavigatorNotesEachArrival_andKnowsTheVisitBefore() {
         // A device that was in each scope at the times given.
