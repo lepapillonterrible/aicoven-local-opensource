@@ -1195,7 +1195,7 @@ struct AddProviderKeysCard: View {
     }
 
     /// Whether the person has no provider set up, which is when the card
-    /// has something to say. Where that could not be read the card stays
+    /// has something to say. Where reading them throws, the card stays
     /// away.
     static func lacksProvider() async -> Bool {
         do {
