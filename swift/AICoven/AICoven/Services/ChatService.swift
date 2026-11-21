@@ -1199,7 +1199,8 @@ actor ChatService {
                         tags: proposal.category.map { [$0] },
                         isPinned: false
                     )
-                    AppErrorReporter.log(message: "Saved memory proposal: scope=\(effectiveScope) content=\(proposal.content.prefix(50))...", context: "ChatService.streamMessage.memoryWrite")
+                    // That one was saved, and for which scope: never its words.
+                    AppErrorReporter.log(message: "Saved a memory the model asked to keep (scope \(effectiveScope))", context: "ChatService.streamMessage.memoryWrite")
                 } catch {
                     AppErrorReporter.log(error: error, context: "ChatService.streamMessage.memoryWrite")
                 }
