@@ -419,6 +419,29 @@ final class LocalNotificationsTests: XCTestCase {
         ))
     }
 
+    func testTheAppIsKeptAtItsWorkUntilAnEndingHasBeenTold() async {
+        let told = Told()
+        let thread = thread("t1")
+        var kept: [Task<Void, Never>] = []
+        var dependencies = NotificationSource.Dependencies(
+            account: { "ada" }, isAway: { true },
+            thread: { _ in thread },
+            placeName: { _ in "Strix" },
+            notify: { event, thread, place, account, _ in told.events.append((event, thread.id, place, account)) },
+            replyFinished: { _, _ in }
+        )
+        dependencies.keepWorking = { kept.append($0) }
+        let source = NotificationSource(dependencies: dependencies)
+
+        let telling = source.ended(["t1": ending("turn-1", .completed, saying: "Done.")])
+        XCTAssertEqual(kept, telling, "Each telling is what the app is kept at its work for")
+        XCTAssertEqual(kept.count, 1)
+        for task in telling {
+            await task.value
+        }
+        XCTAssertEqual(told.events.count, 1)
+    }
+
     private func ending(_ turn: String, _ outcome: TurnOutcome, saying text: String) -> TurnEngine.Ending {
         TurnEngine.Ending(
             turnID: turn, outcome: outcome, trace: WorkTrace(startedAt: Date(timeIntervalSince1970: 0)),
