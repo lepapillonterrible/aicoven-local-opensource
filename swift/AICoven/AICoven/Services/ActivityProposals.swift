@@ -84,6 +84,9 @@ final class ActivityProposals: ObservableObject {
     /// The proposals a question is asking about, as last told: so many
     /// more are read, since they are left out of what is listed.
     private var asked: Set<String> = []
+    /// The proposals that were listed when the last reading landed: what
+    /// is listed after the next and was not then, newly waits.
+    private var listed: Set<String> = []
     /// Counts the readings, so that only the latest is shown.
     private var readings = 0
 
@@ -139,6 +142,7 @@ final class ActivityProposals: ObservableObject {
             byScope = [:]
             readScopes = []
             notKept = []
+            listed = []
             account = who
         }
         loadFailed = false
@@ -161,7 +165,6 @@ final class ActivityProposals: ObservableObject {
             }
         }
         let hadRead = hasRead
-        let before = Set(waiting(without: asked).map(\.id))
         // A scope no longer looked in goes; one that failed keeps what
         // was read of it before.
         var next: [ShellScope: [MemoryProposal]] = [:]
@@ -171,11 +174,16 @@ final class ActivityProposals: ObservableObject {
         byScope = next
         readScopes = readScopes.intersection(looking).union(read.keys)
         loadFailed = failed
+        // What is listed now and was not when the last reading landed
+        // newly waits: one read for the first time, or one whose question
+        // was given up.
+        let listedNow = Set(waiting(without: asked).map(\.id))
         if failed {
             announce(Self.couldNotLoad)
-        } else if hadRead, !Set(waiting(without: asked).map(\.id)).isSubset(of: before) {
+        } else if hadRead, !listedNow.isSubset(of: listed) {
             announce(Self.newlyWaiting)
         }
+        listed = listedNow
     }
 
     /// Keeps the person's answer to a proposal, as `account`, who gave

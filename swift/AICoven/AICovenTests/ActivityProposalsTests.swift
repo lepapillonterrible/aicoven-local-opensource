@@ -265,10 +265,30 @@ final class ActivityProposalsTests: XCTestCase {
         await model.load()
         XCTAssertNil(model.announcement)
 
-        // A question about another was given up, so it is listed now.
+        // Another is proposed and read.
         store.waiting[nil]?.append(proposal("b", at: 2))
         await model.load()
         XCTAssertEqual(model.announcement, .init(number: 1, words: ActivityProposals.newlyWaiting))
         XCTAssertEqual(model.shown(without: []).map(\.id), ["b", "a"])
+    }
+
+    func testAProposalWhoseQuestionWasGivenUpIsSaidAloudWhenItComesToBeListed() async {
+        let store = Store()
+        store.waiting = [nil: [proposal("p")]]
+        let model = model(store)
+        // It is being asked about beside its thread: not listed, and nothing is said.
+        await model.show(covens: [], asked: ["p"])
+        XCTAssertEqual(model.shown(without: ["p"]).count, 0)
+        XCTAssertTrue(model.hasRead)
+        XCTAssertNil(model.announcement)
+
+        // The question is given up unanswered: the proposal still waits, and is listed now.
+        await model.show(covens: [], asked: [])
+
+        XCTAssertEqual(model.shown(without: []).map(\.id), ["p"])
+        XCTAssertEqual(model.announcement, .init(number: 1, words: ActivityProposals.newlyWaiting))
+        // Shown again as it is: nothing more is said.
+        await model.show(covens: [], asked: [])
+        XCTAssertEqual(model.announcement?.number, 1)
     }
 }
