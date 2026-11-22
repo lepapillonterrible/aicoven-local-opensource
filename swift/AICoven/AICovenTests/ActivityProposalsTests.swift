@@ -20,6 +20,8 @@ final class ActivityProposalsTests: XCTestCase {
         var unreadable: Set<String?> = []
         var reviewFails: Error?
         var limitsAsked: [Int] = []
+        /// Whether whoever reads is called off as it reads.
+        var cancels = false
         /// Runs while a review is under way.
         var whileReviewing: (() async -> Void)?
 
@@ -27,6 +29,7 @@ final class ActivityProposalsTests: XCTestCase {
             ActivityProposals.Source(
                 pending: { [self] coven, limit in
                     limitsAsked.append(limit)
+                    if cancels { throw CancellationError() }
                     if unreadable.contains(coven) { throw RepositoryError.dataLocked }
                     return Array((waiting[coven] ?? []).sorted { $0.createdAt > $1.createdAt }.prefix(limit))
                 },
@@ -151,6 +154,36 @@ final class ActivityProposalsTests: XCTestCase {
         await fresh.load()
         XCTAssertFalse(fresh.loadFailed)
         XCTAssertTrue(fresh.hasRead)
+    }
+
+    func testAReadingThatWasCalledOffHasNotFailed_andChangesNothing() async {
+        let store = Store()
+        store.waiting = [nil: [proposal("mine")]]
+        let model = model(store)
+        await model.show(covens: [], asked: [])
+
+        // The page left, or a newer reading took this one's place, while the store was being read.
+        store.cancels = true
+        store.waiting = [nil: []]
+        await model.load()
+
+        XCTAssertFalse(model.loadFailed, "Nothing failed")
+        XCTAssertNil(model.announcement, "And nothing is said")
+        XCTAssertEqual(model.shown(without: []).map(\.id), ["mine"], "What was read stays as it was")
+    }
+
+    func testAProposalWhoseQuestionHasJustEndedStaysOutOfTheListUntilItIsReadAgain() async {
+        let store = Store()
+        store.waiting = [nil: [proposal("p")]]
+        let model = model(store)
+        await model.show(covens: [], asked: ["p"])
+        // Its question has ended (the page is told so at once), and it was approved there: until that
+        // is read, it is not offered here with Approve and Deny.
+        XCTAssertEqual(model.shown(without: []).count, 0)
+        store.waiting = [nil: []]
+        await model.show(covens: [], asked: [])
+        XCTAssertEqual(model.shown(without: []).count, 0)
+        XCTAssertNil(model.announcement)
     }
 
     // MARK: - Answers

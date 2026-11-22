@@ -83,6 +83,10 @@ final class ActivityProposals: ObservableObject {
     private var account: String?
     /// The proposals a question is asking about, as last told: so many
     /// more are read, since they are left out of what is listed.
+    private var askedNow: Set<String> = []
+    /// The same as the last reading that landed knew it. A proposal whose
+    /// question has just ended stays out of the list until it has been
+    /// read again: it may have had its answer.
     private var asked: Set<String> = []
     /// The proposals that were listed when the last reading landed: what
     /// is listed after the next and was not then, newly waits.
@@ -96,15 +100,20 @@ final class ActivityProposals: ObservableObject {
     }
 
     /// The proposals to list, the latest first across scopes, `most` at
-    /// most: the signed-in account's, without those being asked just now
-    /// (`asked`), which the approvals' spot shows.
-    func shown(without asked: Set<String>) -> [MemoryProposal] {
-        Array(waiting(without: asked).prefix(Self.most))
+    /// most, and whether more wait than are listed: the signed-in
+    /// account's, without those being asked just now (`asked`), which the
+    /// approvals' spot shows.
+    func listing(without asked: Set<String>) -> (shown: [MemoryProposal], hasMore: Bool) {
+        let waiting = waiting(without: asked)
+        return (Array(waiting.prefix(Self.most)), waiting.count > Self.most)
     }
 
-    /// Whether more wait than are listed.
+    func shown(without asked: Set<String>) -> [MemoryProposal] {
+        listing(without: asked).shown
+    }
+
     func hasMore(without asked: Set<String>) -> Bool {
-        waiting(without: asked).count > Self.most
+        listing(without: asked).hasMore
     }
 
     /// Whether everything that could hold a proposal of the signed-in
@@ -115,10 +124,10 @@ final class ActivityProposals: ObservableObject {
         return readScopes.isSuperset(of: scopes)
     }
 
-    private func waiting(without asked: Set<String>) -> [MemoryProposal] {
+    private func waiting(without askedOnScreen: Set<String>) -> [MemoryProposal] {
         guard account == signedIn() else { return [] }
         return byScope.values.joined()
-            .filter { !asked.contains($0.id) }
+            .filter { !askedOnScreen.contains($0.id) && !asked.contains($0.id) }
             .sorted { $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt > $1.createdAt }
     }
 
@@ -127,7 +136,7 @@ final class ActivityProposals: ObservableObject {
     /// then reads.
     func show(covens: [String]?, asked: Set<String>) async {
         scopes = covens.map { [ShellScope.strix] + $0.map(ShellScope.coven) }
-        self.asked = asked
+        askedNow = asked
         await load()
     }
 
@@ -143,13 +152,15 @@ final class ActivityProposals: ObservableObject {
             readScopes = []
             notKept = []
             listed = []
+            asked = []
             account = who
         }
         loadFailed = false
         let looking = scopes ?? [.strix]
         // One more than is listed tells that more wait; and as many more
         // as are left out for being asked about.
-        let limit = Self.most + 1 + asked.count
+        let askedAtThisReading = askedNow
+        let limit = Self.most + 1 + askedAtThisReading.count
         var read: [ShellScope: [MemoryProposal]] = [:]
         var failed = false
         for scope in looking {
@@ -157,6 +168,11 @@ final class ActivityProposals: ObservableObject {
                 let pending = try await source.pending(scope.covenID, limit)
                 guard reading == readings, signedIn() == who else { return }
                 read[scope] = pending
+            } catch is CancellationError {
+                // Whoever asked was called off (the page left, or a newer
+                // reading took its place): nothing was read, and nothing
+                // failed.
+                return
             } catch {
                 guard reading == readings, signedIn() == who else { return }
                 // The kind of failure only.
@@ -173,11 +189,14 @@ final class ActivityProposals: ObservableObject {
         }
         byScope = next
         readScopes = readScopes.intersection(looking).union(read.keys)
+        // What was being asked about when this was read. Where a scope
+        // could not be read, what was left out before stays left out.
+        asked = failed ? asked.union(askedAtThisReading) : askedAtThisReading
         loadFailed = failed
         // What is listed now and was not when the last reading landed
         // newly waits: one read for the first time, or one whose question
         // was given up.
-        let listedNow = Set(waiting(without: asked).map(\.id))
+        let listedNow = Set(waiting(without: askedAtThisReading).map(\.id))
         if failed {
             announce(Self.couldNotLoad)
         } else if hadRead, !listedNow.isSubset(of: listed) {

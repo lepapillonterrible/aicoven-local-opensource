@@ -66,7 +66,8 @@ struct ActivityView: View {
         .task { await model.load() }
         // The proposals that wait: read again when the covens are known,
         // and when a question about one starts or ends.
-        .task(id: ProposalReading(covens: covensAreKnown ? covens.map(\.id) : nil, asked: questions.asked)) {
+        // (Not when the covens are only put in another order.)
+        .task(id: ProposalReading(covens: covensAreKnown ? covens.map(\.id).sorted() : nil, asked: questions.asked)) {
             await proposals.show(covens: covensAreKnown ? covens.map(\.id) : nil, asked: questions.asked)
         }
         // Said to VoiceOver while the page is on screen: a reading of the
@@ -166,19 +167,20 @@ struct ActivityView: View {
                 ApprovalSpot(approvals: approvals)
                     .frame(maxWidth: ApprovalBlock.spansTheWidth ? .infinity : 262, alignment: .leading)
             }
-            let waitingProposals = proposals.shown(without: questions.asked)
-            // Never "Nothing is waiting" before the proposals are read, or
-            // when they could not be.
-            if rows.isEmpty, approvals.showing == nil, waitingProposals.isEmpty {
-                if proposals.hasRead, !proposals.loadFailed {
+            let waitingProposals = proposals.listing(without: questions.asked)
+            // Never "Nothing is waiting" before the proposals are read,
+            // when they could not be, or while a question about one is on
+            // its way to the spot.
+            if rows.isEmpty, approvals.showing == nil, waitingProposals.shown.isEmpty {
+                if proposals.hasRead, !proposals.loadFailed, questions.asked.isEmpty {
                     Text("Nothing is waiting for you.")
                         .font(.aicovenBodySmall)
                         .foregroundStyle(Color.aicovenTextSecondary)
                 }
             } else {
                 ForEach(rows) { row($0) }
-                ForEach(waitingProposals) { proposalRow($0) }
-                if proposals.hasMore(without: questions.asked) {
+                ForEach(waitingProposals.shown) { proposalRow($0) }
+                if waitingProposals.hasMore {
                     Text(ActivityProposals.moreWait)
                         .font(.aicovenBodySmall)
                         .foregroundStyle(Color.aicovenTextSecondary)
@@ -193,7 +195,7 @@ struct ActivityView: View {
                         Task { await proposals.load() }
                     }
                     .buttonStyle(.bordered)
-                    .accessibilityLabel("Try loading memory proposals again")
+                    .accessibilityHint("Loads the memory proposals again")
                     .accessibilityIdentifier("activity-proposals-try-again")
                 }
             }
