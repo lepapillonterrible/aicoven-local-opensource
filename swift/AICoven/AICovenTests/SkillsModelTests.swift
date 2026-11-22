@@ -182,11 +182,16 @@ final class SkillsModelTests: XCTestCase {
         XCTAssertEqual(SkillsModel.words(forNotAdding: SkillError.tooMany), SkillsModel.tooMany)
         XCTAssertEqual(SkillsModel.words(forNotAdding: RepositoryError.dataLocked), SkillsModel.couldNotAdd)
 
-        // The system did not hand over the file that was chosen.
+        // The system did not hand over the file that was chosen. Each time is said aloud, though the words are the same.
+        let saidBefore = model.announcement?.number ?? 0
         model.fileNotHandedOver(to: account)
         XCTAssertEqual(model.failure, SkillsModel.couldNotOpen)
+        XCTAssertEqual(model.announcement, .init(number: saidBefore + 1, words: SkillsModel.couldNotOpen))
+        model.fileNotHandedOver(to: account)
+        XCTAssertEqual(model.announcement, .init(number: saidBefore + 2, words: SkillsModel.couldNotOpen))
         model.fileNotHandedOver(to: "someone-else")
         XCTAssertNil(model.failure, "Not said to an account that did not ask")
+        XCTAssertEqual(model.announcement?.number, saidBefore + 2, "Nor aloud")
 
         // A skill that is gone by the time it is changed or deleted: nothing went wrong, and the list shows it gone.
         let gone = Skill(id: "gone", title: "Gone", isOn: false, updatedAt: Date())
@@ -290,9 +295,14 @@ final class SkillsModelTests: XCTestCase {
         await model.load()
         XCTAssertTrue(model.loadFailed)
         XCTAssertEqual(model.skills.count, 0)
+        XCTAssertEqual(model.announcement, .init(number: 1, words: SkillsModel.couldNotLoad))
+        // A second reading that fails is said aloud again.
+        await model.load()
+        XCTAssertEqual(model.announcement, .init(number: 2, words: SkillsModel.couldNotLoad))
 
         await DataEncryptionService.shared.unlockForTestingEphemeral()
         await model.load()
         XCTAssertFalse(model.loadFailed)
+        XCTAssertEqual(model.announcement?.number, 2, "Nothing is said of a reading that worked")
     }
 }

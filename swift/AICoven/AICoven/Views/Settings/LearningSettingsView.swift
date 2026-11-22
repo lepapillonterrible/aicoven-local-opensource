@@ -79,12 +79,10 @@ struct LearningSettingsView: View {
         .task { await model.load() }
         .onAppear { isOnScreen = true }
         .onDisappear { isOnScreen = false }
-        .onChange(of: model.failure) { _, failure in
-            // Said to VoiceOver too, while the pane is on screen.
-            if isOnScreen, let failure { AccessibilityNotification.Announcement(failure).post() }
-        }
-        .onChange(of: model.loadFailed) { _, failed in
-            if isOnScreen, failed { AccessibilityNotification.Announcement(SkillsModel.couldNotLoad).post() }
+        .onChange(of: model.announcement) { _, said in
+            // Said to VoiceOver too, while the pane is on screen: each
+            // failure once, also one in the same words as the last.
+            if isOnScreen, let said { AccessibilityNotification.Announcement(said.words).post() }
         }
     }
 

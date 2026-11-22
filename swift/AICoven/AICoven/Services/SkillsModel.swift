@@ -54,6 +54,16 @@ final class SkillsModel: ObservableObject {
     @Published private(set) var loadFailed = false
     /// What went wrong with the last thing asked, in words; nil for nothing.
     @Published private(set) var failure: String?
+    /// The last thing that went wrong, as it is said aloud: each time is
+    /// its own, also one in the same words as the time before.
+    struct Announcement: Equatable {
+        let number: Int
+        let words: String
+    }
+
+    /// What VoiceOver is told: every failure that is said, and every
+    /// reading of the skills that failed, once each.
+    @Published private(set) var announcement: Announcement?
     /// The skills whose switch is on its way: one at a time for a skill.
     @Published private(set) var changing: Set<Skill.ID> = []
     /// The skills being deleted. A skill is deleted whether or not its
@@ -101,6 +111,7 @@ final class SkillsModel: ObservableObject {
             AppErrorReporter.log(message: "Could not read the skills (\(type(of: error)))", context: "SkillsModel.load")
             skills = []
             loadFailed = true
+            announce(Self.couldNotLoad)
         }
     }
 
@@ -191,5 +202,10 @@ final class SkillsModel: ObservableObject {
     private func say(_ words: String, of ask: Int, to account: String) {
         guard ask == asks, signedIn() == account else { return }
         failure = words
+        announce(words)
+    }
+
+    private func announce(_ words: String) {
+        announcement = Announcement(number: (announcement?.number ?? 0) + 1, words: words)
     }
 }
