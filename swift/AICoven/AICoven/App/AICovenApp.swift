@@ -88,6 +88,7 @@ struct AICovenApp: App {
             // each link.
             .onOpenURL { AppState.shared.handleDeepLink($0) }
             .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
+            .tint(PlatformCapabilities.current.followsSystemAccentColor ? nil : Color("AccentColor"))
             .onChange(of: authService.isAuthenticated) { _, authenticated in
                 // When user signs out, reset encryption so next user gets a fresh unlock.
                 if !authenticated {

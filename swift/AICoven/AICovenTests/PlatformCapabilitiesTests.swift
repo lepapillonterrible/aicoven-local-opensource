@@ -4,6 +4,25 @@ import XCTest
 
 /// Which layout a device shows, and what the stone chrome decides from it.
 final class PlatformCapabilitiesTests: XCTestCase {
+    func testTheAppsAccentIsTheTintOnTheIPhoneAndIPad_andTheSystemsOnTheMac() throws {
+        XCTAssertFalse(PlatformCapabilities(platform: .iOS).followsSystemAccentColor)
+        XCTAssertTrue(PlatformCapabilities(platform: .macOS).followsSystemAccentColor)
+
+        // The colour the project names as its accent is in the catalogue: water, as the cloud app's.
+        #if os(iOS)
+        let accent = try XCTUnwrap(UIColor(named: "AccentColor"))
+        let light = accent.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
+        let dark = accent.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
+        var (red, green, blue, alpha): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
+        light.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        XCTAssertEqual([red, green, blue].map { Int(($0 * 255).rounded()) }, [0x36, 0x62, 0x5F])
+        dark.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        XCTAssertEqual([red, green, blue].map { Int(($0 * 255).rounded()) }, [0x51, 0x7D, 0x79])
+        #else
+        XCTAssertNotNil(NSColor(named: "AccentColor"))
+        #endif
+    }
+
     func testAnIPhoneIsSplitOnlyWhenWidthAndHeightAreRegular() {
         XCTAssertTrue(PlatformCapabilities.usesSplitLayout(isPhone: true, horizontal: .regular, vertical: .regular))
         // A large iPhone in landscape.
