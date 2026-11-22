@@ -1307,8 +1307,9 @@ extension ProviderAccountService {
             guard let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) else {
                 throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing Anthropic API key for account \(account.id)"])
             }
-            // The list comes a page at a time: every page is read, so a
-            // model is not taken for missing because it is on a later one.
+            // The list comes a page at a time: every page is read (up to
+            // `mostPages`), so a model is not taken for missing because it
+            // is on a later one.
             var modelsData: [AnthropicModelsPage.Item] = []
             var after: String?
             var pages = 0
@@ -1327,6 +1328,11 @@ extension ProviderAccountService {
                 after = page.next
                 pages += 1
             } while after != nil && pages < AnthropicModelsPage.mostPages
+            // More pages than are read: the list is not known, and is not
+            // given as if it were whole.
+            if after != nil {
+                throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Anthropic's list of models is longer than is read"])
+            }
             let chatOnly = modelsData
                 .map(\.id)
                 .filter { isChatModel(provider: "anthropic", id: $0) }
