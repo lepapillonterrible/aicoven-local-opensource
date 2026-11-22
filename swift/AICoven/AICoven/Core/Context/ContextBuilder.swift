@@ -31,10 +31,12 @@ struct ContextBuilder {
     }
 
     /// Who answers a turn: an agent by its name, with the instructions the
-    /// person wrote for it.
+    /// person wrote for it, and the account whose agent it is. A turn is
+    /// told of it only while that account is the one signed in.
     struct Agent: Equatable {
         let name: String
         let instructions: String?
+        let account: String
 
         /// What the agent is told first, as the cloud app composes it: its
         /// instructions, or for none that it is a helpful assistant of
@@ -251,7 +253,8 @@ struct ContextBuilder {
     ///     instructions to include. Defaults to basic chat tools.
     ///   - agent: Who answers the turn. Its instructions are what the model
     ///     is told first; with none given (an agent run of the app's own),
-    ///     nothing is said of who answers.
+    ///     or one of an account no longer signed in, nothing is said of who
+    ///     answers.
     func buildContext(
         threadID: String?,
         userMessage: String,
@@ -270,9 +273,15 @@ struct ContextBuilder {
 
         var segments = ContextSegments()
 
+        // Whose turn it is, read once: who answers, where the thread is,
+        // what its scope's agents are told and its memory are all read as
+        // the same account.
+        let account = UserScope.currentUserID
+
         // Who answers, and how the person asked it to: before anything
-        // else the model is told.
-        if let agent {
+        // else the model is told. Not an agent of an account that is no
+        // longer the one signed in.
+        if let agent, agent.account == account {
             segments.system.append(LLMMessage(role: .system, content: agent.systemPrompt))
         }
 
@@ -306,9 +315,8 @@ struct ContextBuilder {
         }
         segments.system.append(LLMMessage(role: .system, content: systemPrompt))
 
-        // Where the thread is, and whose it is, read once: what its scope's
-        // agents are told, and its memory, are read as the same account.
-        let account = UserScope.currentUserID
+        // Where the thread is: what its scope's agents are told, and its
+        // memory, are read for it as that account.
         let scope = await scope(ofThread: threadID, for: account)
         if let knows = await covenContext(in: scope, for: account) {
             segments.system.append(LLMMessage(role: .system, content: knows))

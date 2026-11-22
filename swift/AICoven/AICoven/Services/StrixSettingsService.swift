@@ -56,10 +56,13 @@ actor StrixSettingsService {
         return settings
     }
 
-    /// The instructions the person wrote for Strix, as they are stored;
-    /// nil for none. Reading them changes nothing.
+    /// The instructions the signed-in person wrote for Strix, exactly as
+    /// they are stored (an empty text is returned as it is); nil where
+    /// none are stored or the settings cannot be read. Only read: nothing
+    /// is converted, defaulted or saved by asking.
     func instructions() -> String? {
-        loadLocalSettings().systemPrompt
+        guard let data = UserDefaults.standard.data(forKey: storageKey) else { return nil }
+        return (try? JSONDecoder().decode(LocalStrixSettings.self, from: data))?.systemPrompt
     }
 
     /// Returns the first configured provider account (if any) to use as default.
