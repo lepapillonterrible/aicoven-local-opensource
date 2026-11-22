@@ -148,7 +148,7 @@ struct AgentFormView: View {
             .task(id: loading ? [] : choices.accounts.map(\.id)) {
                 await readOtherModels()
             }
-            .onChange(of: choices.models(for: draft.accountId).map(\.id)) { _, _ in followTheModelOnThisDevice() }
+            .onChange(of: choices.models(for: draft.accountId, provider: draft.provider).map(\.id)) { _, _ in followTheModelOnThisDevice() }
             .onAppear {
                 isOnScreen = true
                 analytics.trackScreenView(
@@ -381,7 +381,7 @@ struct AgentFormView: View {
         guard !draft.provider.isEmpty else { return "No AI connection yet" }
         return AgentModelChoices.modelLine(
             model: runsItself ? "" : draft.model,
-            models: choices.models(for: draft.accountId),
+            models: choices.models(for: draft.accountId, provider: draft.provider),
             connection: choices.connectionName(accountId: draft.accountId, provider: draft.provider)
         )
     }
@@ -462,7 +462,9 @@ struct AgentFormView: View {
                             .foregroundStyle(Color.aicovenTextTertiary)
                     }
                 }
-                if !runsItself, choosesWhatItRunsOn {
+                // A model on this device is the one made active in its own
+                // settings: there is no other to name here.
+                if !runsItself, choosesWhatItRunsOn, draft.provider != "mlx" {
                     textField("Model ID", text: $draft.model, prompt: "Model ID")
                 }
             }
@@ -603,7 +605,8 @@ struct AgentFormView: View {
     /// there, whatever was stored with it: that is the one shown and
     /// saved, also when another is made active while the form is open.
     private func followTheModelOnThisDevice() {
-        guard draft.provider == "mlx", let active = choices.models(for: draft.accountId).first, draft.model != active.id else { return }
+        guard let active = choices.models(for: draft.accountId, provider: draft.provider).first,
+              draft.provider == "mlx", draft.model != active.id else { return }
         draft.model = active.id
     }
 

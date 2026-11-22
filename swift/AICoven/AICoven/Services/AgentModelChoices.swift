@@ -147,6 +147,13 @@ final class AgentModelChoices: ObservableObject {
         return shown.modelsByAccount[accountId] ?? []
     }
 
+    /// The models an agent on `provider` can be put on: for models on this
+    /// device the one that is active there, whichever connection (or none)
+    /// is stored with the agent; else its connection's.
+    func models(for accountId: String?, provider: String) -> [ProviderInitializationStatus.ModelMetadata] {
+        provider.lowercased() == "mlx" ? onDevice : models(for: accountId)
+    }
+
     /// Asks the connection's provider for its models, and returns once
     /// they are read. One read of a connection runs at a time: asked again
     /// meanwhile, this waits for the read under way, so everyone who asked

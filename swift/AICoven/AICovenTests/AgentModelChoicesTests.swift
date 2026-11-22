@@ -292,8 +292,18 @@ final class AgentModelChoicesTests: XCTestCase {
             model: "qwen-saved-earlier", provider: "mlx", providerAccountId: "device", temperature: nil, maxTokens: nil,
             settings: nil, createdAt: Date(), updatedAt: Date()
         )
-        // Until the connections are read it is not known which connection is the device's.
-        XCTAssertEqual(choices.runsOnLine(for: stored), "qwen-saved-earlier · \(providerDisplayName(slug: "mlx"))")
+        // Before the connections are read: the active model already, under the provider's name.
+        XCTAssertEqual(choices.runsOnLine(for: stored), "Llama 3.2 · \(providerDisplayName(slug: "mlx"))")
+
+        // With no connection stored with it (as the old Strix screen saved one), the active model all the same.
+        let unbound = Role(
+            id: "s", covenId: "", name: "Strix", emoji: nil, description: nil, systemPrompt: nil,
+            model: "qwen-saved-earlier", provider: "mlx", providerAccountId: nil, temperature: nil, maxTokens: nil,
+            settings: nil, createdAt: Date(), updatedAt: Date()
+        )
+        XCTAssertEqual(choices.runsOnLine(for: unbound), "Llama 3.2 · \(providerDisplayName(slug: "mlx"))")
+        XCTAssertEqual(choices.models(for: nil, provider: "MLX").map(\.id), ["llama"])
+        XCTAssertEqual(choices.models(for: nil, provider: "anthropic").count, 0)
 
         await choices.loadModelNames(for: [stored])
         XCTAssertEqual(choices.runsOnLine(for: stored), "Llama 3.2 · mlx", "The model that answers, not the one stored with it")
