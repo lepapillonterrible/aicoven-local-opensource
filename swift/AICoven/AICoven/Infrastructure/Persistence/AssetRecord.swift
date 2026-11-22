@@ -207,16 +207,45 @@ actor AssetRepository {
         try? await DataEncryptionService.shared.decrypt(sealed, purpose: purpose)
     }
 
+    /// An asset's row as it is stored: what is kept as it is, and what is sealed.
+    private struct Stored {
+        let id: String
+        let type: String
+        let status: String
+        let title: Data
+        let details: Data
+        let agentID: String?
+        let threadID: String?
+        let messageID: String?
+        let createdAt: Date
+        let updatedAt: Date
+
+        init(_ row: Row) {
+            id = row["id"]
+            type = row["type"]
+            status = row["status"]
+            title = row["title_ciphertext"]
+            details = row["details_ciphertext"]
+            agentID = row["made_by_agent_id"]
+            threadID = row["thread_id"]
+            messageID = row["source_message_id"]
+            createdAt = row["created_at"]
+            updatedAt = row["updated_at"]
+        }
+    }
+
     /// The assets kept in `account`'s coven (Strix for nil), the one last
-    /// changed first (of two changed at once, the one made later), each with what is known of its files but not their
-    /// bytes. One of which anything cannot be opened with the account's
-    /// key is listed as unreadable, with no title and no files.
+    /// changed first (of two changed at once, the one made later), each
+    /// with what is known of its files but not their bytes. One of which
+    /// anything cannot be opened with the account's key is listed as
+    /// unreadable, with no title and no files.
     func assets(inCoven covenID: String?, as account: String) async throws -> [Asset] {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         let coven = covenID ?? ""
         return try await AccountSeal.reading(as: account) {
-            let (rows, fileRows) = try await dbQueue.read { db in
-                let rows = try Row.fetchAll(
+            // Both in one read, so that an asset is listed with the files it has then.
+            let (stored, storedFiles): ([Stored], [(id: String, assetID: String, meta: Data)]) = try await dbQueue.read { db in
+                let assets = try Row.fetchAll(
                     db,
                     sql: """
                     SELECT id, type, status, title_ciphertext, details_ciphertext, made_by_agent_id, thread_id,
@@ -224,7 +253,7 @@ actor AssetRepository {
                     FROM assets WHERE user_id = ? AND coven_id = ? ORDER BY updated_at DESC, rowid DESC
                     """,
                     arguments: [account, coven]
-                )
+                ).map(Stored.init)
                 // Never the bytes: only what says what each file is.
                 let files = try Row.fetchAll(
                     db,
@@ -234,44 +263,40 @@ actor AssetRepository {
                     WHERE assets.user_id = ? AND assets.coven_id = ? ORDER BY asset_files.rowid
                     """,
                     arguments: [account, coven]
-                )
-                return (rows, files)
+                ).map { (id: $0["id"] as String, assetID: $0["asset_id"] as String, meta: $0["meta_ciphertext"] as Data) }
+                return (assets, files)
             }
             // Each asset's files, in the order they were added; nil for an
             // asset of which a file cannot be opened.
             var filesByAsset: [String: [AssetFile]?] = [:]
-            for row in fileRows {
-                let assetID: String = row["asset_id"]
-                guard let meta = await self.opened(row["meta_ciphertext"], purpose: Self.filePurpose),
+            for stored in storedFiles {
+                guard let meta = await self.opened(stored.meta, purpose: Self.filePurpose),
                       let file = try? JSONDecoder().decode(KeptFile.self, from: meta)
                 else {
-                    filesByAsset[assetID] = .some(nil)
+                    filesByAsset[stored.assetID] = .some(nil)
                     continue
                 }
-                guard let already = filesByAsset[assetID, default: []] else { continue }
-                let id: String = row["id"]
-                filesByAsset[assetID] = already + [
-                    AssetFile(id: id, name: file.name, mimeType: AttachmentImage.mimeType(forFileNamed: file.name), sizeBytes: file.size),
+                guard let already = filesByAsset[stored.assetID, default: []] else { continue }
+                filesByAsset[stored.assetID] = already + [
+                    AssetFile(id: stored.id, name: file.name, mimeType: AttachmentImage.mimeType(forFileNamed: file.name), sizeBytes: file.size),
                 ]
             }
             var assets: [Asset] = []
-            for row in rows {
-                let id: String = row["id"]
-                let title = await self.opened(row["title_ciphertext"], purpose: Self.titlePurpose)
-                let details = await self.opened(row["details_ciphertext"], purpose: Self.detailsPurpose)
-                let files = filesByAsset[id, default: []]
-                let rawType: String = row["type"], rawStatus: String = row["status"]
+            for stored in stored {
+                let title = await self.opened(stored.title, purpose: Self.titlePurpose)
+                let details = await self.opened(stored.details, purpose: Self.detailsPurpose)
+                let files = filesByAsset[stored.id, default: []]
                 let isReadable = title != nil && details != nil && files != nil
                 assets.append(Asset(
-                    id: id, covenID: covenID, type: AssetType(rawValue: rawType),
+                    id: stored.id, covenID: covenID, type: AssetType(rawValue: stored.type),
                     // A status this version does not know is read as a
                     // draft: nothing takes a draft for reviewed.
-                    status: AssetStatus(rawValue: rawStatus) ?? .draft,
+                    status: AssetStatus(rawValue: stored.status) ?? .draft,
                     title: isReadable ? String(decoding: title ?? Data(), as: UTF8.self) : "",
                     details: isReadable ? String(decoding: details ?? Data(), as: UTF8.self) : "",
-                    madeByAgentID: row["made_by_agent_id"], threadID: row["thread_id"], sourceMessageID: row["source_message_id"],
+                    madeByAgentID: stored.agentID, threadID: stored.threadID, sourceMessageID: stored.messageID,
                     files: isReadable ? files ?? [] : [], isUnreadable: !isReadable,
-                    createdAt: row["created_at"], updatedAt: row["updated_at"]
+                    createdAt: stored.createdAt, updatedAt: stored.updatedAt
                 ))
             }
             return assets
