@@ -294,21 +294,6 @@ final class ShellThreadsTests: XCTestCase {
         XCTAssertEqual(CovenAgentsView.instructionsLine(nil), "")
     }
 
-    func testAMemoryFormOpensForTheTabTheMemoryListAsksFor_eachShowingItsOwn() throws {
-        let add = try XCTUnwrap(MemoryForm(tab: .addMemory(covenId: "work")))
-        XCTAssertNil(add.memoryID, "A new memory")
-        let edit = try XCTUnwrap(MemoryForm(tab: .editMemory(memoryId: "m1", memoryTitle: "A note", covenId: nil)))
-        XCTAssertEqual(edit.memoryID, "m1")
-        XCTAssertNil(MemoryForm(tab: .memoryList(covenId: "work")), "No form")
-        XCTAssertNil(MemoryForm(tab: .memoryProposals(covenId: nil)))
-
-        // Each showing is its own: a form that saves after its sheet was cancelled and the same
-        // memory's form opened again is not the one on screen, and closes nothing.
-        let again = try XCTUnwrap(MemoryForm(tab: .editMemory(memoryId: "m1", memoryTitle: "A note", covenId: nil)))
-        XCTAssertEqual(again.memoryID, "m1")
-        XCTAssertNotEqual(edit, again)
-    }
-
     func testAnAgentIsDeleted_andAThreadOrAMemoryMade_onlyForTheAccountThatAsked() async throws {
         await DataEncryptionService.shared.unlockForTestingEphemeral()
         await MainActor.run { DatabaseManager.shared.configureIfNeeded() }

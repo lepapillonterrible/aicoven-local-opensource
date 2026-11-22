@@ -115,19 +115,10 @@ final class ShellNavigatorTests: XCTestCase {
         navigator.close(edit)
         XCTAssertEqual(navigator.place, .covenAgents(covenId: "coven_a"))
 
-        for form in [
-            WorkspaceTab.addMemory(covenId: "coven_a"),
-            .editMemory(memoryId: "m1", memoryTitle: "A note", covenId: "coven_a"),
-            .memoryProposals(covenId: "coven_a"),
-        ] {
-            navigator.open(form)
-            XCTAssertEqual(navigator.sidebarItem, .memory)
-            navigator.close(form)
-            XCTAssertEqual(navigator.place, .memoryList(covenId: "coven_a"))
-        }
-
         // Anything else closes to the Overview; a place the person has moved on from is not closed.
         let memory = WorkspaceTab.memoryList(covenId: "coven_a")
+        navigator.open(memory)
+        XCTAssertEqual(navigator.sidebarItem, .memory)
         navigator.close(add)
         XCTAssertEqual(navigator.place, memory, "Not the place on screen: nothing closes")
         navigator.close(memory)
@@ -349,13 +340,6 @@ final class ShellNavigatorTests: XCTestCase {
         navigator.openPlace(.connectedApps)
         XCTAssertEqual(navigator.phonePlaceTitle, "Connections")
         // A place's forms are named as the place is.
-        for form in [
-            WorkspaceTab.addMemory(covenId: "work"), .editMemory(memoryId: "m", memoryTitle: "A memory", covenId: "work"),
-            .memoryProposals(covenId: "work"),
-        ] {
-            navigator.open(form)
-            XCTAssertEqual(navigator.phonePlaceTitle, "Memory", form.id)
-        }
         for form in [WorkspaceTab.addRole(covenId: "work"), .editRole(roleId: "r", roleName: "Scout")] {
             navigator.open(form)
             XCTAssertEqual(navigator.phonePlaceTitle, "Agents", form.id)

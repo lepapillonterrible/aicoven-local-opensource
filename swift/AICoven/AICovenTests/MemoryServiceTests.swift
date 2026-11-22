@@ -12,6 +12,8 @@ final class MemoryServiceTests: XCTestCase {
         }
 
         private(set) var calls: [Call] = []
+        /// The account each call reached the store as.
+        private(set) var accounts: [String] = []
         var memoriesToReturn: [LocalMemoryChunk] = []
 
         func storeMemory(
@@ -22,9 +24,10 @@ final class MemoryServiceTests: XCTestCase {
             createdBy: String?,
             source: String?,
             embedding: [Float]?,
-            as _: String
+            as account: String
         ) async throws -> LocalMemoryChunk {
-            LocalMemoryChunk(
+            accounts.append(account)
+            return LocalMemoryChunk(
                 id: UUID().uuidString,
                 scope: place.scope,
                 text: text,
@@ -38,7 +41,8 @@ final class MemoryServiceTests: XCTestCase {
             )
         }
 
-        func loadMemories(in place: MemoryPlace, limit: Int, offset: Int, as _: String) async throws -> [LocalMemoryChunk] {
+        func loadMemories(in place: MemoryPlace, limit: Int, offset: Int, as account: String) async throws -> [LocalMemoryChunk] {
+            accounts.append(account)
             calls.append(Call(place: place, limit: limit, offset: offset))
             return memoriesToReturn
         }
@@ -47,15 +51,18 @@ final class MemoryServiceTests: XCTestCase {
             nil
         }
 
-        func deleteMemory(id _: String, as _: String) async throws {}
+        func deleteMemory(id _: String, as account: String) async throws {
+            accounts.append(account)
+        }
 
         func updateMemory(
             id _: String,
             newText _: String,
             newTags _: [String]?,
             newEmbedding _: [Float]?,
-            as _: String
+            as account: String
         ) async throws -> LocalMemoryChunk {
+            accounts.append(account)
             throw MemoryStoreError.noSuchMemory
         }
     }
@@ -65,25 +72,6 @@ final class MemoryServiceTests: XCTestCase {
             id: id, scope: "user", text: text, tags: [], pii: false, createdAt: Date(), createdBy: nil, source: nil, embedding: nil,
             isUnreadable: unreadable
         )
-    }
-
-    func testTheListsMemoriesAreThoseOfItsPlace() async throws {
-        let mockStore = MockMemoryStore()
-        mockStore.memoriesToReturn = [chunk("1", "Note")]
-        let service = MemoryService(memoryStore: mockStore)
-
-        // Strix's list is the person's own memory.
-        let result = try await service.searchMemory(covenId: nil, query: nil, scope: nil, tags: nil, limit: 10)
-        XCTAssertEqual(result.map(\.content), ["Note"])
-        XCTAssertEqual(mockStore.calls.last, .init(place: .aboutMe, limit: 10, offset: 0))
-
-        // A coven's list is that coven's, and no other's.
-        _ = try await service.searchMemory(covenId: "work", query: nil, scope: "all", tags: nil, limit: 10)
-        XCTAssertEqual(mockStore.calls.last?.place, .coven("work"))
-        _ = try await service.searchMemory(covenId: "work", query: nil, scope: "coven", tags: nil, limit: 10)
-        XCTAssertEqual(mockStore.calls.last?.place, .coven("work"))
-        _ = try await service.searchMemory(covenId: "work", query: nil, scope: "user", tags: nil, limit: 10)
-        XCTAssertEqual(mockStore.calls.last?.place, .aboutMe, "The person's own, wherever it is asked for")
     }
 
     func testAPageOfAPlace_isAskedOfTheStoreAsItIs_andSaysWhichEntriesCannotBeOpened() async throws {
@@ -98,15 +86,23 @@ final class MemoryServiceTests: XCTestCase {
         XCTAssertEqual(page[1].unreadable, true)
     }
 
-    func testWhereAMemoryIsKept_byItsCovenAndScope() {
-        XCTAssertEqual(MemoryPlace(covenID: nil, scope: nil), .aboutMe)
-        XCTAssertEqual(MemoryPlace(covenID: nil, scope: "user"), .aboutMe)
-        XCTAssertEqual(MemoryPlace(covenID: "work", scope: "user"), .aboutMe)
-        XCTAssertEqual(MemoryPlace(covenID: "work", scope: nil), .coven("work"))
-        XCTAssertEqual(MemoryPlace(covenID: "work", scope: "all"), .coven("work"))
-        XCTAssertEqual(MemoryPlace(covenID: "work", scope: "agent"), .coven("work"))
-        XCTAssertEqual(MemoryPlace(covenID: nil, scope: "coven"), .strix)
+    func testWhatIsAskedAsAnAccount_reachesTheStoreAsThatAccount_andNotAsWhoeverIsSignedIn() async throws {
+        let mockStore = MockMemoryStore()
+        let service = MemoryService(memoryStore: mockStore, embed: { _ in nil }, currentAccount: { "whoever-is-signed-in" })
 
+        _ = try await service.memories(in: .strix, limit: 10, offset: 0, as: "ada")
+        _ = try await service.createMemory(in: .strix, content: "Note", tags: nil, as: "ada")
+        _ = try? await service.updateMemory(memoryId: "1", content: "Note", tags: nil, as: "ada")
+        try await service.deleteMemory(memoryId: "1", as: "ada")
+        XCTAssertEqual(mockStore.accounts, ["ada", "ada", "ada", "ada"])
+
+        // With no account given, each is done as the one signed in.
+        _ = try await service.memories(in: .strix, limit: 10)
+        try await service.deleteMemory(memoryId: "1")
+        XCTAssertEqual(mockStore.accounts.suffix(2), ["whoever-is-signed-in", "whoever-is-signed-in"])
+    }
+
+    func testWhereAMemoryIsKept_andWhatAThreadReads() {
         XCTAssertEqual(MemoryPlace.aboutMe.scope, "user")
         XCTAssertEqual(MemoryPlace.strix.scope, "coven")
         XCTAssertEqual(MemoryPlace.coven("work").scope, "coven")

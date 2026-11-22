@@ -23,21 +23,6 @@ nonisolated enum MemoryPlace: Hashable {
         self == .aboutMe ? "user" : "coven"
     }
 
-    /// The place the list and its forms mean by a coven and a scope: the
-    /// person's own for "user"; with no scope, the coven's, or the
-    /// person's own where there is no coven; for any other scope the
-    /// coven's, or Strix's where there is no coven.
-    init(covenID: String?, scope: String?) {
-        let scope = scope.flatMap { $0.isEmpty || $0 == "all" ? nil : $0 }
-        if scope == "user" || (scope == nil && covenID == nil) {
-            self = .aboutMe
-        } else if let covenID {
-            self = .coven(covenID)
-        } else {
-            self = .strix
-        }
-    }
-
     /// What the turns of a thread read: in a coven, that coven's pages;
     /// in none (Strix's threads, and an agent run's own), About me and
     /// Strix's pages. The first of them is where what a model asks to keep

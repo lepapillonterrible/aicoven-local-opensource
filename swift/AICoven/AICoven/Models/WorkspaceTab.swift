@@ -20,9 +20,6 @@ enum WorkspaceTabType: Equatable {
     /// Which of the person's connections a coven's agents may use.
     case covenConnections(covenId: String)
     case memoryList(covenId: String?)
-    case memoryProposals(covenId: String?)
-    case addMemory(covenId: String?)
-    case editMemory(memoryId: String, covenId: String?)
     /// Personal Strix settings tab (personal default assistant)
     case personalStrixSettings
     /// In-app purchase store tab
@@ -48,12 +45,6 @@ enum WorkspaceTabType: Equatable {
             c1 == c2
         case let (.memoryList(c1), .memoryList(c2)):
             c1 == c2
-        case let (.memoryProposals(c1), .memoryProposals(c2)):
-            c1 == c2
-        case let (.addMemory(c1), .addMemory(c2)):
-            c1 == c2
-        case let (.editMemory(m1, c1), .editMemory(m2, c2)):
-            m1 == m2 && c1 == c2
         case (.profile, .profile),
              (.settings, .settings),
              (.providerKeys, .providerKeys),
@@ -87,9 +78,6 @@ enum WorkspaceTabType: Equatable {
         case .covenAgents: "coven_agents"
         case .covenConnections: "coven_connections"
         case .memoryList: "memory_list"
-        case .memoryProposals: "memory_proposals"
-        case .addMemory: "add_memory"
-        case .editMemory: "edit_memory"
         case .personalStrixSettings: "personal_strix_settings"
         case .store: "store"
         case .terms: "terms"
@@ -171,33 +159,6 @@ struct WorkspaceTab: Identifiable, Equatable {
             id: "memory-list-\(covenId ?? "personal")",
             type: .memoryList(covenId: covenId),
             title: covenId != nil ? "Memory" : "Personal Memory"
-        )
-    }
-
-    /// Create a tab for viewing memory proposals
-    static func memoryProposals(covenId: String?) -> WorkspaceTab {
-        WorkspaceTab(
-            id: "memory-proposals-\(covenId ?? "personal")",
-            type: .memoryProposals(covenId: covenId),
-            title: "Memory Proposals"
-        )
-    }
-
-    /// Create a tab for adding a new memory
-    static func addMemory(covenId: String?) -> WorkspaceTab {
-        WorkspaceTab(
-            id: "add-memory-\(covenId ?? "personal")",
-            type: .addMemory(covenId: covenId),
-            title: "New Memory"
-        )
-    }
-
-    /// Create a tab for editing a memory
-    static func editMemory(memoryId: String, memoryTitle: String, covenId: String?) -> WorkspaceTab {
-        WorkspaceTab(
-            id: "edit-memory-\(memoryId)",
-            type: .editMemory(memoryId: memoryId, covenId: covenId),
-            title: "Edit \(memoryTitle)"
         )
     }
 

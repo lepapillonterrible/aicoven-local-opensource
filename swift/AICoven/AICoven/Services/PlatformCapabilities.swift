@@ -27,6 +27,13 @@ nonisolated struct PlatformCapabilities: Equatable {
         #endif
     }
 
+    /// Whether a multi-line (vertical-axis) text field submits on Return, as on
+    /// the Mac. iPhone and iPad type a newline there, so a field that saves on
+    /// Return stays a single line.
+    var submitsMultilineFieldOnReturn: Bool {
+        platform == .macOS
+    }
+
     /// Whether controls take the system's accent colour. The Mac draws the
     /// app's `AccentColor` only under Multicolor and keeps an accent the
     /// person chose in System Settings. On the iPhone and iPad, controls
