@@ -40,7 +40,8 @@ nonisolated enum MemoryPlace: Hashable {
 
     /// What the turns of a thread read: in a coven, that coven's pages;
     /// in none (Strix's threads, and an agent run's own), About me and
-    /// Strix's pages.
+    /// Strix's pages. The first of them is where what a model asks to keep
+    /// in such a thread is kept (`ChatService`): the order matters.
     static func read(inCoven covenID: String?) -> [MemoryPlace] {
         if let covenID { [.coven(covenID)] } else { [.aboutMe, .strix] }
     }
