@@ -263,7 +263,7 @@ final class SkillStoreTests: XCTestCase {
         XCTAssertEqual(listed.map(\.isOn), [false])
     }
 
-    func testASkillWhoseTextWasReplacedWhileItIsAddedAgain_endsOff() async throws {
+    func testASkillKeptAgainWhileItIsAddedAgain_endsOff() async throws {
         let source = "file:///skills/style.md"
         let account = account
         let first = try await store.add(title: "Style", text: "Be brief.", source: source, as: account)
@@ -276,10 +276,11 @@ final class SkillStoreTests: XCTestCase {
             try? await SkillRepository.shared.setOn(true, id: first.id, as: account)
         }
 
-        let added = try await racing.add(title: "Style", text: "Be brief. And more.", source: source, as: account)
+        // The same text again: only that the skill is no longer what was looked at keeps it off.
+        let added = try await racing.add(title: "Style", text: "Be brief.", source: source, as: account)
 
         XCTAssertEqual(added.id, first.id)
-        XCTAssertFalse(added.isOn, "A text the person has not turned on is not followed")
+        XCTAssertFalse(added.isOn, "It is not what was looked at: it does not stay on by what was seen earlier")
         let followed = try await store.followed(as: account)
         XCTAssertEqual(followed.count, 0)
     }
