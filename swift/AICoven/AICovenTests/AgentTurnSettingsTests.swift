@@ -6,14 +6,23 @@ import XCTest
 private final class OptionsHearingModel: LLMClient, @unchecked Sendable {
     private let lock = NSLock()
     private var heard: [ChatOptions] = []
+    private let answer: @Sendable (Int) -> String
+
+    /// Answers each request with what `answer` gives for its number, from 0.
+    init(answering answer: @escaping @Sendable (Int) -> String = { _ in "Heard." }) {
+        self.answer = answer
+    }
 
     var asked: [ChatOptions] {
         lock.withLock { heard }
     }
 
     func completeChat(messages _: [LLMMessage], model: String, options: ChatOptions) async throws -> LLMChatResponse {
-        lock.withLock { heard.append(options) }
-        return LLMChatResponse(message: LLMMessage(role: .assistant, content: "Heard."), providerID: "test", modelID: model, usage: nil)
+        let number = lock.withLock {
+            heard.append(options)
+            return heard.count - 1
+        }
+        return LLMChatResponse(message: LLMMessage(role: .assistant, content: answer(number)), providerID: "test", modelID: model, usage: nil)
     }
 
     func embed(texts: [String], model _: String) async throws -> [[Float]] {
@@ -168,5 +177,66 @@ final class AgentTurnSettingsTests: XCTestCase {
         try await chat(with: strix, as: "anthropic").streamMessage(threadId: thread(inCoven: nil), message: "Hello", onStateChange: { _ in })
         XCTAssertEqual(Set(strix.asked.map(\.temperature)), [0.7])
         XCTAssertEqual(Set(strix.asked.map(\.maxTokens)), [nil])
+    }
+
+    /// What a model that asks for a tool every time it is asked is asked
+    /// with in one turn: it is asked once for each tool step it is given,
+    /// and then for its answer. Each time it asks for the time somewhere
+    /// else, so that no step is taken for a repeat of the one before.
+    private func askings(
+        ofATurnFor role: String?, inCoven coven: String?, as provider: String = "anthropic"
+    ) async throws -> [ChatOptions] {
+        let id = try await ThreadService.shared.createThread(title: "Steps \(UUID().uuidString)", covenId: coven).id
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await ThreadService.shared.deleteThread(threadId: id)
+        }
+        let places = [
+            "Asia/Tokyo", "Europe/Paris", "America/New_York", "Australia/Sydney", "Africa/Cairo", "Asia/Kolkata",
+            "America/Sao_Paulo", "Europe/London", "Asia/Bangkok", "Pacific/Auckland", "America/Chicago", "Europe/Athens",
+        ]
+        let model = OptionsHearingModel { number in
+            #"{"tool":"current_time","input":{"timezone":"\#(places[number % places.count])"},"reason":"to know the time there"}"#
+        }
+        try await chat(with: model, as: provider).streamMessage(threadId: id, message: "What time is it?", roleId: role, onStateChange: { _ in })
+        return model.asked
+    }
+
+    func testATurnTakesAsManyToolStepsAsItsAgentAllows_andAsksEachWithItsSettings() async throws {
+        let defaults = UserDefaults.standard
+        let keys = ["llm_provider", "anthropic_model", "chat_max_tool_steps"].map(UserScope.scopedKey)
+        let saved = keys.map { ($0, defaults.object(forKey: $0)) }
+        defer { saved.forEach { defaults.set($0.1, forKey: $0.0) } }
+        defaults.set("anthropic", forKey: keys[0])
+        defaults.set("model", forKey: keys[1])
+        defaults.set(3, forKey: keys[2])
+
+        let coven = try await CovenService.shared.createCoven(name: "Steps \(UUID().uuidString)")
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await CovenService.shared.deleteCoven(id: coven.id)
+        }
+        func agent(steps: Int?) async throws -> String {
+            try await RoleService.shared.createRole(
+                covenId: coven.id, name: "Scout \(steps ?? 0)", model: "model", provider: "anthropic",
+                temperature: 0.3, maxTokens: 900, autonomousMaxSteps: steps
+            ).id
+        }
+
+        // The app's own number, for a turn that is for no agent and for an agent that sets none.
+        let strix = try await askings(ofATurnFor: nil, inCoven: nil)
+        let unset = try await askings(ofATurnFor: agent(steps: nil), inCoven: coven.id)
+        // The agent's own.
+        let seven = try await askings(ofATurnFor: agent(steps: 7), inCoven: coven.id)
+        let nine = try await askings(ofATurnFor: agent(steps: 9), inCoven: coven.id)
+
+        XCTAssertEqual(unset.count, strix.count, "An agent that sets none takes the app's")
+        XCTAssertEqual(seven.count - strix.count, 4, "Seven steps where the app gives three")
+        XCTAssertEqual(nine.count - seven.count, 2)
+        // Every asking of the turn, the tool steps and the answer alike, is with the agent's settings.
+        XCTAssertEqual(Set(seven.map(\.temperature)), [0.3])
+        XCTAssertEqual(Set(seven.map(\.maxTokens)), [900])
+        XCTAssertEqual(Set(strix.map(\.temperature)), [0.7])
+        XCTAssertEqual(Set(strix.map(\.maxTokens)), [nil])
     }
 }
