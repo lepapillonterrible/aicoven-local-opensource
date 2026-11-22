@@ -57,7 +57,7 @@ final class ModelTemperatureTests: XCTestCase {
         let openAI: [(String, Bool)] = [
             ("gpt-4o", false), ("gpt-4o-mini", false), ("gpt-4.1", false), ("gpt-4.1-mini", false),
             ("gpt-5", true), ("gpt-5-mini", true), ("gpt-5-nano", true),
-            ("gpt-5.1", false), ("gpt-5.2", false), ("gpt-5.4", false), ("gpt-5.4-mini", false), ("gpt-5.4-nano", false),
+            ("gpt-5.1", false), ("gpt-5.2", false), ("gpt-5.3", false), ("gpt-5.4", false), ("gpt-5.4-mini", false), ("gpt-5.4-nano", false),
             ("gpt-5.5", true), ("gpt-5.6-sol", true), ("gpt-6-luna", true), ("gpt-6.1-terra", true), ("gpt-6.2-astra", true),
             ("o3", true), ("o1-mini", true), ("gpt-5-chat-latest", false), ("GPT-5-Mini", true),
         ]
@@ -170,6 +170,36 @@ final class ModelTemperatureTests: XCTestCase {
 
         XCTAssertEqual(reply.message.content, "ok")
         XCTAssertEqual(sent.bodies.map { $0["temperature"] as? Double }, [0.2, nil])
+    }
+
+    func testAModelThatRefusesAgainIsNotAskedAThirdTime_andTheSecondAskingIsTheSameButForTheTemperature() async throws {
+        let model = "stubborn-model-\(UUID().uuidString)"
+        let sent = Sent()
+        let client = try OpenClawLLMClient(
+            baseURL: XCTUnwrap(URL(string: "https://example.com/v1")), apiKey: "TEST_KEY",
+            urlSession: session(keeping: sent) { _ in (400, #"{"error":{"message":"Unsupported value","param":"temperature"}}"#) }
+        )
+        let tool = LLMToolDefinition(
+            name: "web_search", description: "Searches the web",
+            parameters: [LLMToolParameter(name: "query", type: "string", description: "What to look for", required: true)]
+        )
+
+        do {
+            _ = try await client.completeChat(
+                messages: question, model: model, options: ChatOptions(temperature: 0.2, maxTokens: 300, stream: false, tools: [tool])
+            )
+            XCTFail("A request refused twice is an error")
+        } catch {
+            XCTAssertEqual((error as NSError).code, 400)
+        }
+
+        XCTAssertEqual(sent.bodies.count, 2, "Asked once more, and no more")
+        var first = sent.bodies[0]
+        XCTAssertEqual(first.removeValue(forKey: "temperature") as? Double, 0.2)
+        XCTAssertNil(sent.bodies[1]["temperature"])
+        XCTAssertEqual(first as NSDictionary, sent.bodies[1] as NSDictionary, "The model, messages, tools and longest answer are as they were")
+        XCTAssertEqual(sent.bodies[1]["max_tokens"] as? Int, 300)
+        XCTAssertNotNil(sent.bodies[1]["tools"])
     }
 
     func testAnyOtherRefusalIsNotAskedAgain() async throws {

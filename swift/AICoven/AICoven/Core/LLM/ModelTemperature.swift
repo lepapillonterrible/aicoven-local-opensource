@@ -32,9 +32,9 @@ nonisolated enum ModelTemperature {
             if name.firstMatch(of: #/^o\d/#) != nil { return true }
             guard let version = name.firstMatch(of: #/^gpt-(\d+)(?:\.(\d+))?/#), let major = Int(version.1) else { return false }
             let minor = version.2.flatMap { Int($0) } ?? 0
-            // GPT-5.1, 5.2 and 5.4 take one; GPT-5, 5.5 and every later
-            // one does not.
-            if major == 5 { return ![1, 2, 4].contains(minor) }
+            // GPT-5 itself and everything from 5.5 on take none; 5.1 to
+            // 5.4 take one.
+            if major == 5 { return minor == 0 || minor >= 5 }
             return major > 5
         case "anthropic":
             // claude-<family>-<major>[-<minor>][-<date>]: from 4.7 on. An
