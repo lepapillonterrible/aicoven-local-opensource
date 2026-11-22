@@ -87,3 +87,68 @@ struct SecureFieldWithPaste: View {
         #endif
     }
 }
+
+/// Where a button that acts in place is: at rest, working, or showing how
+/// its last action went.
+enum ActionPhase: Equatable {
+    case idle
+    case working
+    case succeeded
+    case failed
+
+    /// Shows `result` for two seconds, then rest, for an action whose
+    /// working phase the caller ran itself. The button stays disabled until
+    /// the phase is back at rest, so no newer action starts while an older
+    /// one's result is showing.
+    @MainActor
+    static func settle(_ phase: Binding<ActionPhase>, to result: ActionPhase) async {
+        phase.wrappedValue = result
+        try? await Task.sleep(for: .seconds(2))
+        if phase.wrappedValue == result {
+            phase.wrappedValue = .idle
+        }
+    }
+}
+
+/// A button's label that shows its own action: `rest` at rest, a spinner
+/// while it works, then a tick or a cross. `rest` stays in place, hidden,
+/// so the button keeps its size and nothing around it moves.
+struct ActionPhaseLabel: View {
+    let title: String
+    let phase: ActionPhase
+
+    init(_ title: String, phase: ActionPhase) {
+        self.title = title
+        self.phase = phase
+    }
+
+    var body: some View {
+        ZStack {
+            Text(title)
+                .opacity(phase == .idle ? 1 : 0)
+            switch phase {
+            case .idle:
+                EmptyView()
+            case .working:
+                ProgressView()
+                    .controlSize(.small)
+            case .succeeded:
+                Image(systemName: "checkmark")
+                    .fontWeight(.semibold)
+            case .failed:
+                Image(systemName: "xmark")
+                    .fontWeight(.semibold)
+            }
+        }
+        .accessibilityValue(accessibilityValue)
+    }
+
+    private var accessibilityValue: String {
+        switch phase {
+        case .idle: ""
+        case .working: "Working"
+        case .succeeded: "Done"
+        case .failed: "Failed"
+        }
+    }
+}

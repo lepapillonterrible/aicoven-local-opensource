@@ -111,13 +111,19 @@ struct CovenAgentsView: View {
         .scrollContentBackground(.hidden)
         .background(Color.aicovenSurface)
         .sheet(item: $form) { shown in
-            ShellFormSheet(onCancel: { form = nil }) {
-                if let role = shown.role {
-                    EditRoleView(roleId: role.id, roles: roles) { completed(shown) }
-                } else {
-                    AddRoleView(covenId: coven.id, roles: roles) { completed(shown) }
-                }
-            }
+            let agentForm = AgentFormView(
+                mode: shown.role.map { .edit(roleId: $0.id) } ?? .add(covenId: coven.id),
+                covenName: coven.name,
+                onCancel: { if form == shown { form = nil } },
+                onFinished: { completed(shown) }
+            )
+            // On the Mac the form is the sheet, with its own bars; elsewhere
+            // it is a page with Cancel and Save in a navigation bar.
+            #if os(macOS)
+            agentForm
+            #else
+            NavigationStack { agentForm }
+            #endif
         }
         .confirmationDialog("Delete \(deleting?.name ?? "this agent")?", isPresented: $askingDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
@@ -293,26 +299,5 @@ enum AgentForm: Identifiable, Equatable {
 
     static func == (one: AgentForm, other: AgentForm) -> Bool {
         one.id == other.id
-    }
-}
-
-/// A form in a sheet over the shell: the form, with Cancel to leave it
-/// unsaved. The form closes the sheet itself when it has saved.
-struct ShellFormSheet<Content: View>: View {
-    let onCancel: () -> Void
-    @ViewBuilder let content: () -> Content
-
-    var body: some View {
-        NavigationStack {
-            content()
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel", action: onCancel)
-                    }
-                }
-        }
-        #if os(macOS)
-        .frame(minWidth: 620, idealWidth: 720, minHeight: 560, idealHeight: 720)
-        #endif
     }
 }
