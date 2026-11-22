@@ -236,6 +236,9 @@ final class AssetLibraryModel: ObservableObject {
             // called off, and what was made is still to be shown.
             await Task { await self.load() }.value
             guard signedIn() == account else { return nil }
+            // If the list could not be read again, what was made is shown
+            // all the same, first, as the one last changed.
+            if hasRead, !assets.contains(where: { $0.id == asset.id }) { assets.insert(asset, at: 0) }
             let shown = shown
             if !(shown.needsReview + shown.others).contains(where: { $0.id == asset.id }) { clearSearchAndFilters() }
             return .made(asset)

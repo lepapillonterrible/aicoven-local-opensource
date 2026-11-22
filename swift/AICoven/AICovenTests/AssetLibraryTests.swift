@@ -350,6 +350,27 @@ final class AssetLibraryTests: XCTestCase {
         XCTAssertFalse(model.isCreating)
     }
 
+    func testAnAssetThatWasMadeIsShownEvenIfTheListCouldNotBeReadAgain() async {
+        let stand = Stand()
+        stand.listed = [[asset("a")]]
+        let model = AssetLibraryModel(covenID: nil, source: source(stand), signedIn: { stand.account })
+        await model.load()
+
+        // It is made; the reading after it fails.
+        stand.listFails = true
+        let made = await model.create(new("Q3 chart"), as: "ada")
+        guard case let .made(asset) = made else { return XCTFail("It is made") }
+        XCTAssertTrue(model.loadFailed)
+        XCTAssertEqual(model.assets.map(\.id), [asset.id, "a"], "Shown first, though the list could not be read again")
+
+        // With nothing read yet, the one asset alone would not be the list.
+        let unread = AssetLibraryModel(covenID: nil, source: source(stand), signedIn: { stand.account })
+        let other = await unread.create(new("Q4 chart"), as: "ada")
+        XCTAssertNotNil(other)
+        XCTAssertEqual(unread.assets.count, 0)
+        XCTAssertFalse(unread.hasRead)
+    }
+
     func testASearchTheNewAssetMatchesIsKept() async {
         let stand = Stand()
         stand.listed = [[]]

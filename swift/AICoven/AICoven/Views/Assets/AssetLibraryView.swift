@@ -8,6 +8,8 @@ struct AssetLibraryView: View {
     @StateObject private var model: AssetLibraryModel
     @State private var isCreating = false
     @State private var isOnScreen = false
+    /// Whether Try Again is reading: it says so, and is not pressed twice.
+    @State private var isRetrying = false
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
@@ -53,30 +55,51 @@ struct AssetLibraryView: View {
     @ViewBuilder
     private var content: some View {
         if model.hasRead {
-            #if os(macOS)
-            table
-                .overlay { emptyState }
-                .safeAreaInset(edge: .bottom) {
-                    footer
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(Spacing.md)
-                }
-            #else
-            list
-                .overlay { emptyState }
-            #endif
+            // Drawn again each minute, so that "5m ago" does not go stale
+            // while the place stays open.
+            TimelineView(.periodic(from: .now, by: 60)) { timeline in
+                listed(now: timeline.date)
+            }
         } else if model.loadFailed {
             ContentUnavailableView {
                 Label("Couldn't Load Assets", systemImage: "exclamationmark.triangle")
             } description: {
                 Text("AICoven couldn't read the assets kept on this device.")
             } actions: {
-                Button("Try Again") { Task { await model.load() } }
+                Button("Try Again") {
+                    isRetrying = true
+                    Task {
+                        await model.load()
+                        isRetrying = false
+                    }
+                }
+                .disabled(isRetrying)
+                if isRetrying {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Reading the assets")
+                }
             }
         } else {
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    @ViewBuilder
+    private func listed(now: Date) -> some View {
+        #if os(macOS)
+        table(now: now)
+            .overlay { emptyState }
+            .safeAreaInset(edge: .bottom) {
+                footer
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(Spacing.md)
+            }
+        #else
+        list(now: now)
+            .overlay { emptyState }
+        #endif
     }
 
     /// An asset's title as a row shows it: one the key cannot open has none.
@@ -87,9 +110,8 @@ struct AssetLibraryView: View {
     // MARK: - iPhone and iPad
 
     #if os(iOS)
-    private var list: some View {
+    private func list(now: Date) -> some View {
         let shown = model.shown
-        let now = Date()
         return List {
             Section {
                 Button {
@@ -157,9 +179,8 @@ struct AssetLibraryView: View {
     // MARK: - Mac
 
     #if os(macOS)
-    private var table: some View {
+    private func table(now: Date) -> some View {
         let shown = model.shown
-        let now = Date()
         return Table(shown.needsReview + shown.others) {
             TableColumn("Asset") { asset in
                 HStack(spacing: Spacing.sm) {
@@ -434,6 +455,9 @@ private struct NewAssetSheet: View {
                     file = read
                     failure = nil
                 case let .failure(error):
+                    // A file chosen before is not kept under the failure of
+                    // the one chosen after it.
+                    file = nil
                     say(AssetLibraryModel.words(forNotCreating: error))
                 }
             }
