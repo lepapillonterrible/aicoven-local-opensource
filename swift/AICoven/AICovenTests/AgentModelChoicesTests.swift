@@ -183,31 +183,48 @@ final class AgentModelChoicesTests: XCTestCase {
         XCTAssertEqual(choices.models(for: "a").map(\.id), ["a-model"], "A read that fails keeps what was listed")
     }
 
-    func testOnlyTheNewestReadOfAConnectionsModelsApplies() async {
+    func testAConnectionsModelsAreReadOnceAtATime_andEveryoneWhoAskedFindsThem() async {
         let gate = Gate()
         var reads = 0
         let choices = choices(
             accounts: [],
-            models: { _ in
+            models: { id in
                 reads += 1
                 let read = reads
                 await gate.pass()
-                return [self.model("read-\(read)")]
+                return [self.model("\(id)-read-\(read)")]
             }
         )
 
+        // The form's own reading of every connection's models, and the person's choice of one of them.
         let first = Task { await choices.loadModels(for: "a") }
         await gate.arrived(1)
-        let second = Task { await choices.loadModels(for: "a") }
+        var secondReturned = false
+        let second = Task {
+            await choices.loadModels(for: "a")
+            secondReturned = true
+            return choices.models(for: "a").map(\.id)
+        }
+        // Another connection is read apart from it.
+        let other = Task { await choices.loadModels(for: "b") }
         await gate.arrived(2)
-        // The newer read lands, and then the older one after it.
-        await gate.openLast()
-        await second.value
-        XCTAssertEqual(choices.models(for: "a").map(\.id), ["read-2"])
+        XCTAssertEqual(reads, 2, "One read of a, one of b: the second asking for a started none")
+        XCTAssertFalse(secondReturned, "It waits for the read under way")
+
         await gate.openFirst()
         await first.value
+        let found = await second.value
+        XCTAssertEqual(found, ["a-read-1"], "Whoever asked meanwhile finds the list the read brought")
+        await gate.openFirst()
+        await other.value
+        XCTAssertEqual(choices.models(for: "b").map(\.id), ["b-read-2"])
 
-        XCTAssertEqual(choices.models(for: "a").map(\.id), ["read-2"], "The older read, landing last, changes nothing")
+        // Once a read has landed, the next asking reads again.
+        let again = Task { await choices.loadModels(for: "a") }
+        await gate.arrived(3)
+        await gate.openFirst()
+        await again.value
+        XCTAssertEqual(choices.models(for: "a").map(\.id), ["a-read-3"])
     }
 
     func testANewAgentStartsOnTheConnectionOfStrixsProvider_elseOnAHealthyOne() async throws {

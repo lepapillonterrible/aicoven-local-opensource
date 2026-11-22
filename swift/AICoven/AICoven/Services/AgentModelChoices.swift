@@ -4,7 +4,8 @@ import SwiftUI
 /// The person's AI connections and each one's models, for an agent's Runs
 /// on menu. Models are kept per connection, so a read that finishes after
 /// the person picked another connection lands under its own and never
-/// replaces the newer one's list. What it holds is one account's: a read
+/// replaces the newer one's list. A connection's models are read once at
+/// a time: whoever asks while a read is under way waits for that one. What it holds is one account's: a read
 /// that lands after another account signed in is dropped, and what was
 /// read for an account is shown only while that account is signed in.
 @MainActor
@@ -58,8 +59,9 @@ final class AgentModelChoices: ObservableObject {
         shown.withGateway
     }
 
-    /// Counts each connection's model reads, so only the newest one applies.
-    private var modelReads: [String: Int] = [:]
+    /// The reads of connections' models that are under way, by the account
+    /// they are for and the connection.
+    private var modelReads: [String: Task<Void, Never>] = [:]
     /// Counts the reads of the connections, so only the newest one applies.
     private var accountLoads = 0
     private let source: Source
@@ -106,18 +108,27 @@ final class AgentModelChoices: ObservableObject {
         return shown.modelsByAccount[accountId] ?? []
     }
 
-    /// Asks the connection's provider for its models. A read that fails or
-    /// lists nothing keeps whatever list the connection already had, and
-    /// one that finishes after a newer read of the same connection began,
-    /// or after another account signed in, leaves the list alone.
+    /// Asks the connection's provider for its models, and returns once
+    /// they are read. One read of a connection runs at a time: asked again
+    /// meanwhile, this waits for the read under way, so everyone who asked
+    /// finds the list it brought. A read that fails or lists nothing keeps
+    /// whatever list the connection already had, and one that finishes
+    /// after another account signed in leaves the list alone.
     func loadModels(for accountId: String) async {
-        modelReads[accountId, default: 0] += 1
-        let read = modelReads[accountId]
         let account = signedIn()
-        guard let models = try? await source.models(accountId), !models.isEmpty,
-              modelReads[accountId] == read, signedIn() == account else { return }
-        holdForTheSignedInAccount()
-        held.modelsByAccount[accountId] = models
+        let key = "\(account) \(accountId)"
+        if let underWay = modelReads[key] {
+            await underWay.value
+            return
+        }
+        let read = Task {
+            guard let models = try? await source.models(accountId), !models.isEmpty, signedIn() == account else { return }
+            holdForTheSignedInAccount()
+            held.modelsByAccount[accountId] = models
+        }
+        modelReads[key] = read
+        await read.value
+        modelReads[key] = nil
     }
 
     /// The connection a new agent starts on: the one of Strix's provider,
