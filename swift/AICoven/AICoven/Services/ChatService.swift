@@ -434,8 +434,8 @@ actor ChatService {
         // always gets a final answer attempt even if the budget is exhausted.
         let maxToolSteps = toolsAllowed ? Self.mostToolSteps(of: agentSettings) : 0
         var remainingToolSteps = maxToolSteps
-        // The longest an answer may be is the agent's, where the turn's
-        // client sends one.
+        // The longest an answer may be is the agent's, sent only where
+        // `usesMaxTokens` says.
         let answerLimit = AgentTurnSettings.usesMaxTokens(provider: descriptor.providerID) ? agentSettings.maxTokens : nil
         #if DEBUG
         AppErrorReporter.log(message: "streamMessage starting: provider=\(descriptor.providerID) model=\(descriptor.modelID) maxToolSteps=\(maxToolSteps) toolsAllowed=\(toolsAllowed)", context: "ChatService.streamMessage")
@@ -1861,7 +1861,8 @@ extension ChatService {
     static func currentMaxToolSteps() -> Int {
         let stored = UserDefaults.standard.integer(forKey: UserScope.scopedKey("chat_max_tool_steps"))
         // Default to 5 tool steps for chat (conservative to prevent thrash);
-        // users can raise this in Strix / agent role settings. Hard cap at 15.
+        // users can raise this in Strix's settings. Hard cap at 15. An
+        // agent's own limit is not held to this cap (`mostToolSteps`).
         if stored <= 0 { return 5 }
         return min(stored, 15)
     }

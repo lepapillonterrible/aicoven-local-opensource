@@ -17,7 +17,8 @@ nonisolated struct AgentTurnSettings: Equatable {
 
     let temperature: Double
     /// The longest answer, in tokens, where the agent sets one: sent only
-    /// by the clients that send one (`usesMaxTokens`).
+    /// where `usesMaxTokens` says, which is not every client that could
+    /// send one.
     let maxTokens: Int?
     /// The most tool steps of a turn; nil where the agent sets none, and
     /// the app's own number is used.
