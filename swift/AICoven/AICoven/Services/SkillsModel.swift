@@ -160,6 +160,9 @@ final class SkillsModel: ObservableObject {
             say(Self.changedMeanwhile, of: ask, to: account)
         } catch SkillError.noSuchSkill {
             // It was deleted meanwhile: the list, read again, shows so.
+        } catch SkillError.unreadable {
+            // Trying again would not help: the list, read again, shows it as one the key cannot open.
+            say(Self.unreadable, of: ask, to: account)
         } catch {
             AppErrorReporter.log(message: "Could not change a skill (\(type(of: error)))", context: "SkillsModel.setOn")
             say(Self.couldNotChange, of: ask, to: account)

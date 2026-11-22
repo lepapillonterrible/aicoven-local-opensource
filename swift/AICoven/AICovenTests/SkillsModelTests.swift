@@ -228,6 +228,19 @@ final class SkillsModelTests: XCTestCase {
         XCTAssertEqual(followed.count, 0, "What was listed is what the switch was pressed for")
     }
 
+    func testASkillTheKeyCanNoLongerOpen_isNotTurnedOn_andThePersonIsToldWhy() async throws {
+        let model = SkillsModel()
+        try await model.add(from: file("style.md", holding: "Be brief."), as: account)
+        let listed = try XCTUnwrap(model.skills.first)
+        // The account's key is another now.
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+
+        await model.setOn(true, listed, as: account)
+
+        XCTAssertEqual(model.failure, SkillsModel.unreadable, "Not that it should be tried again")
+        XCTAssertEqual(model.skills.map(\.isUnreadable), [true])
+    }
+
     func testDeleteIsDoneWhileTheSkillsSwitchIsOnItsWay() async throws {
         let account = account
         _ = try await SkillRepository.shared.add(title: "Style", text: "Be brief.", source: nil, as: account)
