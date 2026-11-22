@@ -1,5 +1,11 @@
 @testable import AICoven
+#if os(macOS)
+import AppKit
+#endif
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 import XCTest
 
 /// Which layout a device shows, and what the stone chrome decides from it.
