@@ -131,6 +131,7 @@ This is the local-first backbone intended to replace many backend-oriented servi
 - `Core/Context/`
   - `ContextBuilder` assembles the layered context sandwich for each chat turn.
   - Composes system contract, runtime facts, policies, retrieved memories, thread history, and current message.
+  - What a turn's model is told first is who answers (`ContextBuilder.Agent`, given by `ChatService.answeringAgent(roleId:)`): the instructions the person wrote for the coven's agent the turn is for, or for Strix where it is for none, as the cloud app composes its system prompt (the instructions, or "You are <name>, a helpful AI assistant." for none, then its Identity section unless the instructions have one). An agent that cannot be read is answered for by nobody: the turn is told nothing of who answers. An agent run of the app's own gives no agent.
   - Supports device-aware `Limits`: `.mobile` (6 recent messages, 4 memories) for iPhones running local models where RAM is shared with MLX model weights.
 
 - `Core/Routing/`

@@ -56,6 +56,12 @@ actor StrixSettingsService {
         return settings
     }
 
+    /// The instructions the person wrote for Strix, as they are stored;
+    /// nil for none. Reading them changes nothing.
+    func instructions() -> String? {
+        loadLocalSettings().systemPrompt
+    }
+
     /// Returns the first configured provider account (if any) to use as default.
     private func getFirstConfiguredProvider() async -> (provider: String, defaultModel: String?)? {
         do {

@@ -30,6 +30,34 @@ struct ContextBuilder {
         static let mobile = Limits(maxRecentMessages: 6, maxRecentMemories: 4)
     }
 
+    /// Who answers a turn: an agent by its name, with the instructions the
+    /// person wrote for it.
+    struct Agent: Equatable {
+        let name: String
+        let instructions: String?
+
+        /// What the agent is told first, as the cloud app composes it: its
+        /// instructions, or for none that it is a helpful assistant of
+        /// that name; then, unless the instructions have such a section
+        /// already, that its name is the agent's and not the model's.
+        var systemPrompt: String {
+            let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            var prompt = instructions?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if prompt.isEmpty {
+                prompt = "You are \(name.isEmpty ? "Strix" : name), a helpful AI assistant."
+            }
+            guard !prompt.contains("## Identity") else { return prompt }
+            return """
+            \(prompt)
+
+            ## Identity
+            - When asked your name, always identify yourself using the role name "\(name.isEmpty ? "Assistant" : name)" from this system prompt, not the underlying model or provider names.
+            - Never claim that your name is Claude, Gemini, GPT-4, ChatGPT, or any other provider/model name. Those are implementation details, not your identity.
+            - If the user asks which models/providers you use, you may mention them, but your name must still be given as the role name above.
+            """
+        }
+    }
+
     /// Configuration for tool-enabled prompts.
     /// Conforms to Sendable since all properties are value types.
     struct ToolConfig {
@@ -221,12 +249,16 @@ struct ContextBuilder {
     ///     few turns while dropping older context first.
     ///   - toolConfig: Configuration for which tools are enabled and what
     ///     instructions to include. Defaults to basic chat tools.
+    ///   - agent: Who answers the turn. Its instructions are what the model
+    ///     is told first; with none given (an agent run of the app's own),
+    ///     nothing is said of who answers.
     func buildContext(
         threadID: String?,
         userMessage: String,
         images: [LLMImage] = [],
         maxContextTokens: Int? = nil,
-        toolConfig: ToolConfig? = nil
+        toolConfig: ToolConfig? = nil,
+        agent: Agent? = nil
     ) async throws -> [LLMMessage] {
         let config = toolConfig ?? .default
 
@@ -237,6 +269,12 @@ struct ContextBuilder {
         let toolContext = split.toolContext
 
         var segments = ContextSegments()
+
+        // Who answers, and how the person asked it to: before anything
+        // else the model is told.
+        if let agent {
+            segments.system.append(LLMMessage(role: .system, content: agent.systemPrompt))
+        }
 
         // Layer 1: system contract (with tool documentation if tools are enabled)
         let systemPrompt: String = if !config.enabledTools.isEmpty {
