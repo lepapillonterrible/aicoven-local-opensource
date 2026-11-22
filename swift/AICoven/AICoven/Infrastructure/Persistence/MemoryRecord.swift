@@ -564,7 +564,7 @@ actor MemoryProposalRepository {
     /// coven the person's own. Optionally of one status. Newest first.
     /// Read with the account's own key in memory, and not at all while its
     /// data is locked.
-    func listProposals(covenId: String?, status: String?) async throws -> [MemoryProposalRecord] {
+    func listProposals(covenId: String?, status: String?, limit: Int? = nil) async throws -> [MemoryProposalRecord] {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
         // Get current user ID for data isolation
@@ -583,6 +583,11 @@ actor MemoryProposalRepository {
                 request = request.filter(MemoryProposalRecord.Columns.covenId == covenId)
                 if let status {
                     request = request.filter(MemoryProposalRecord.Columns.status == status)
+                }
+                // The latest only, where no more are wanted: none of the
+                // rest is read or opened.
+                if let limit {
+                    request = request.limit(limit)
                 }
 
                 return try request.fetchAll(db)

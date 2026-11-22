@@ -14,6 +14,8 @@ struct ActivityView: View {
     @ObservedObject private var activities = ThreadActivities.shared
     @ObservedObject private var engine = TurnEngine.shared
     @ObservedObject private var approvals = ToolApprovals.shared
+    @StateObject private var proposals = ActivityProposals()
+    @ObservedObject private var questions = MemoryProposalQuestions.shared
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.isPadLayout) private var isPadLayout
     @State private var isOnScreen = false
@@ -59,6 +61,11 @@ struct ActivityView: View {
         }
         .background(Color.aicovenSurface.ignoresSafeArea())
         .task { await model.load() }
+        // The proposals that wait: read again when the covens are known,
+        // and when a question about one starts or ends.
+        .task(id: ProposalReading(covens: covens.map(\.id), asking: questions.asked)) {
+            await proposals.load(covens: covens.map(\.id))
+        }
         .onAppear { isOnScreen = true }
         .onDisappear { isOnScreen = false }
         // A thread made, renamed, archived or deleted, or a message
@@ -151,15 +158,63 @@ struct ActivityView: View {
                 ApprovalSpot(approvals: approvals)
                     .frame(maxWidth: ApprovalBlock.spansTheWidth ? .infinity : 262, alignment: .leading)
             }
-            if rows.isEmpty, approvals.showing == nil {
-                Text("Nothing is waiting for you.")
-                    .font(.aicovenBodySmall)
-                    .foregroundStyle(Color.aicovenTextSecondary)
+            let waitingProposals = proposals.shown(without: questions.asked)
+            // Never "Nothing is waiting" before the proposals are read, or
+            // when they could not be.
+            if rows.isEmpty, approvals.showing == nil, waitingProposals.isEmpty {
+                if proposals.hasRead, !proposals.loadFailed {
+                    Text("Nothing is waiting for you.")
+                        .font(.aicovenBodySmall)
+                        .foregroundStyle(Color.aicovenTextSecondary)
+                }
             } else {
                 ForEach(rows) { row($0) }
+                ForEach(waitingProposals) { proposalRow($0) }
+                if proposals.hasMore(without: questions.asked) {
+                    Text(ActivityProposals.moreWait)
+                        .font(.aicovenBodySmall)
+                        .foregroundStyle(Color.aicovenTextSecondary)
+                }
+            }
+            if proposals.loadFailed {
+                HStack(spacing: Spacing.sm) {
+                    Text(ActivityProposals.couldNotLoad)
+                        .font(.aicovenBodySmall)
+                        .foregroundStyle(Color.aicovenError)
+                    Button("Try again") {
+                        Task { await proposals.load(covens: covens.map(\.id)) }
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Try loading memory proposals again")
+                    .accessibilityIdentifier("activity-proposals-try-again")
+                }
             }
         }
         .accessibilityIdentifier("activity-waiting")
+    }
+
+    /// What an agent asked to remember and nobody has answered yet, in
+    /// the approval's block, answered in place: Approve keeps it where it
+    /// was proposed, Deny does not.
+    private func proposalRow(_ proposal: MemoryProposal) -> some View {
+        let coven = proposal.covenId.flatMap { id in covens.first { $0.id == id } }
+        let approval = ActivityProposals.question(about: proposal, in: proposal.covenId == nil ? "Strix" : coven?.name ?? "a coven")
+        let covenIDs = covens.map(\.id)
+        func answer(_ approve: Bool) {
+            let account = UserScope.currentUserID
+            Task { await proposals.answer(proposal, approve: approve, covens: covenIDs, as: account) }
+        }
+        return VStack(alignment: .leading, spacing: Spacing.xxs) {
+            ApprovalBlock(approval: approval, phase: .asking, onApprove: { answer(true) }, onDeny: { answer(false) })
+                .disabled(proposals.answering.contains(proposal.id))
+            if proposals.notKept.contains(proposal.id) {
+                Text(ActivityProposals.answerNotKept)
+                    .font(.aicovenBodySmall)
+                    .foregroundStyle(Color.aicovenError)
+            }
+        }
+        .frame(maxWidth: ApprovalBlock.spansTheWidth ? .infinity : 262, alignment: .leading)
+        .accessibilityIdentifier("activity-memory-proposal:\(proposal.id)")
     }
 
     private func movingSection(_ items: [ActivityItem]) -> some View {
@@ -256,6 +311,12 @@ struct ActivityView: View {
             trailing: trailing
         )
     }
+}
+
+/// What the reading of the proposals that wait depends on.
+private struct ProposalReading: Equatable {
+    let covens: [String]
+    let asking: Set<String>
 }
 
 /// A row's card: the mark, the thread's title, where it is, and one or two
