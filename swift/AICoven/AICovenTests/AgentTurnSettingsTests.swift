@@ -72,8 +72,8 @@ final class AgentTurnSettingsTests: XCTestCase {
         // A number that is no limit is none.
         XCTAssertNil(AgentTurnSettings(of: role(temperature: nil, maxTokens: 0, steps: 0)).maxTokens)
         XCTAssertNil(AgentTurnSettings(of: role(temperature: nil, maxTokens: -5, steps: -1)).mostSteps)
-        // An agent's turn has at least five steps, as in the cloud app, and not steps without end.
-        XCTAssertEqual(AgentTurnSettings(of: role(temperature: nil, maxTokens: nil, steps: 1)).mostSteps, 5)
+        // An agent's turn takes as many steps as the agent says, and not steps without end.
+        XCTAssertEqual(AgentTurnSettings(of: role(temperature: nil, maxTokens: nil, steps: 1)).mostSteps, 1)
         XCTAssertEqual(AgentTurnSettings(of: role(temperature: nil, maxTokens: nil, steps: 30)).mostSteps, 30)
         XCTAssertEqual(AgentTurnSettings(of: role(temperature: nil, maxTokens: nil, steps: 100_000)).mostSteps, 100)
     }

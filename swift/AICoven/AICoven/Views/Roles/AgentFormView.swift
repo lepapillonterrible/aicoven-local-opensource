@@ -41,12 +41,16 @@ struct AgentFormView: View {
     /// The name the agent was saved with, which Delete names.
     @State private var savedName = ""
     @State private var showAddAccount = false
+    /// What was so when Add AI Connection… was pressed: the connections
+    /// there were, and how many choices had been made in Runs on.
+    @State private var addingFrom: (known: Set<String>, choices: Int)?
     @State private var showAdvanced = false
     @State private var confirmDelete = false
-    /// Counts changes of the chosen connection, so a connection added from
-    /// here is chosen only if nothing was chosen since.
-    @State private var accountChoices = 0
     @State private var isOnScreen = false
+    #if os(macOS)
+    /// The window the form is in, whose editing ends before it closes.
+    @State private var formWindow = FormWindow()
+    #endif
 
     private let analytics = AnalyticsService.shared
 
@@ -93,7 +97,6 @@ struct AgentFormView: View {
 
     var body: some View {
         container
-            .onChange(of: draft.accountId) { _, _ in accountChoices += 1 }
             .confirmationDialog("Delete \(savedName)?", isPresented: $confirmDelete, titleVisibility: .visible) {
                 Button("Delete", role: .destructive) {
                     // For the account that said so: read here, not when
@@ -110,9 +113,7 @@ struct AgentFormView: View {
             }
             .sheet(isPresented: $showAddAccount) {
                 // What it made is found by reading the connections again.
-                let known = Set(choices.accounts.map(\.id))
-                let choiceCount = accountChoices
-                AddProviderKeySheet { Task { await accountAdded(known: known, choiceCount: choiceCount) } }
+                AddProviderKeySheet { Task { await accountAdded() } }
             }
             .task {
                 guard !loaded else { return }
@@ -173,6 +174,7 @@ struct AgentFormView: View {
         .frame(width: 620)
         .frame(minHeight: 480, idealHeight: 768, maxHeight: 768)
         .background(Color.aicovenSurfaceElevated)
+        .background(FormWindowReader(holder: formWindow))
         .interactiveDismissDisabled(savePhase == .working || deletePhase == .working)
         #else
         content
@@ -259,7 +261,10 @@ struct AgentFormView: View {
                     choices: choices,
                     draft: draft,
                     onChoose: { account, model in choose(account, model: model) },
-                    onAdd: { showAddAccount = true }
+                    onAdd: {
+                        addingFrom = (Set(choices.accounts.map(\.id)), draft.choicesMade)
+                        showAddAccount = true
+                    }
                 )
                 .disabled(savePhase != .idle)
                 .padding(.top, Spacing.md)
@@ -465,7 +470,7 @@ struct AgentFormView: View {
             let roles = try? await RoleService.shared.loadRoles(covenId: covenId)
             guard generation == loadGeneration else { return }
             if let roles {
-                draft.iconTint = IconTint.nextUnused(worn: roles.map { $0.iconTintValue?.rawValue })
+                draft.iconTint = AgentDraft.startingTint(among: roles)
             }
         case let .edit(roleId):
             let role = try? await RoleService.shared.getRole(roleId: roleId)
@@ -500,33 +505,26 @@ struct AgentFormView: View {
     /// with its own default model until its list is read, never the old
     /// connection's.
     private func choose(_ account: ProviderAccount, model: String? = nil) {
-        if draft.accountId != account.id {
-            draft.moveToAccount(account)
-            if !choices.runsItself(accountId: account.id, provider: account.provider) {
-                Task { await loadModels(for: account.id) }
-            }
+        guard draft.choose(account, model: model),
+              !choices.runsItself(accountId: account.id, provider: account.provider) else { return }
+        // The model as it is now: the read changes it only if it is still this.
+        let chosen = draft.model
+        Task {
+            await choices.loadModels(for: account.id)
+            draft.takeModels(choices.models(for: account.id), of: account.id, readWhenModelWas: chosen)
         }
-        if let model { draft.model = model }
-    }
-
-    /// Reads the chosen connection's models and moves the model to its
-    /// first one when the current model is not among them. A read that
-    /// finishes after another connection was chosen leaves the model alone.
-    private func loadModels(for id: String) async {
-        await choices.loadModels(for: id)
-        let models = choices.models(for: id)
-        guard draft.accountId == id, !models.isEmpty, !models.contains(where: { $0.id == draft.model }) else { return }
-        draft.model = models[0].id
     }
 
     /// A connection added from the form is chosen, if it is the one new
-    /// connection and nothing was chosen in Runs on since the sheet opened.
-    private func accountAdded(known: Set<String>, choiceCount: Int) async {
+    /// connection and nothing was chosen in Runs on since Add AI
+    /// Connection… was pressed.
+    private func accountAdded() async {
+        guard let addingFrom else { return }
         let generation = loadGeneration
-        guard await (try? choices.loadAccounts()) != nil, generation == loadGeneration, accountChoices == choiceCount else { return }
-        let added = choices.accounts.filter { !known.contains($0.id) }
-        guard added.count == 1 else { return }
-        choose(added[0])
+        guard await (try? choices.loadAccounts()) != nil, generation == loadGeneration,
+              draft.choicesMade == addingFrom.choices,
+              let added = AgentDraft.added(to: addingFrom.known, in: choices.accounts) else { return }
+        choose(added)
     }
 
     // MARK: - Saving and deleting
@@ -585,12 +583,50 @@ struct AgentFormView: View {
     private func finish() {
         #if os(macOS)
         // A focused NSTextView torn down mid-update crashes AppKit; end
-        // editing before the sheet closes.
-        NSApp.keyWindow?.makeFirstResponder(nil)
+        // editing before the sheet closes. In the form's own window: by
+        // now another window may be the one in front.
+        formWindow.window?.makeFirstResponder(nil)
         #endif
         onFinished()
     }
 }
+
+#if os(macOS)
+/// The window a form is in, once the form is in one.
+private final class FormWindow {
+    weak var window: NSWindow?
+}
+
+/// Notes the window its view is put in.
+private struct FormWindowReader: NSViewRepresentable {
+    let holder: FormWindow
+
+    func makeNSView(context _: Context) -> NSView {
+        Reader(holder: holder)
+    }
+
+    func updateNSView(_: NSView, context _: Context) {}
+
+    private final class Reader: NSView {
+        let holder: FormWindow
+
+        init(holder: FormWindow) {
+            self.holder = holder
+            super.init(frame: .zero)
+        }
+
+        @available(*, unavailable)
+        required init?(coder _: NSCoder) {
+            fatalError("Not made from a coder")
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            holder.window = window
+        }
+    }
+}
+#endif
 
 /// A bordered, filled field: the page's other fill on the Mac sheet and the
 /// iPhone and iPad pages.

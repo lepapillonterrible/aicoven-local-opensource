@@ -8,11 +8,9 @@ nonisolated struct AgentTurnSettings: Equatable {
     /// What a turn takes where no agent says otherwise.
     static let standard = AgentTurnSettings(temperature: 0.7, maxTokens: nil, mostSteps: nil)
 
-    /// The fewest tool steps an agent's turn is given, as in the cloud
-    /// app: enough to call a tool, read what came of it and try again.
-    static let fewestSteps = 5
-    /// The most: a stored number far beyond any turn's need does not keep
-    /// a turn calling tools without end.
+    /// The most tool steps an agent's turn is given: a stored number far
+    /// beyond any turn's need does not keep a turn calling tools without
+    /// end. The agent form saves no more than this.
     static let mostStepsAllowed = 100
 
     let temperature: Double
@@ -36,7 +34,7 @@ nonisolated struct AgentTurnSettings: Equatable {
         temperature = min(max(role.temperature ?? Self.standard.temperature, 0), 2)
         maxTokens = role.maxTokens.flatMap { $0 > 0 ? $0 : nil }
         mostSteps = (role.settings?.autonomousMaxSteps).flatMap { steps in
-            steps > 0 ? min(max(steps, Self.fewestSteps), Self.mostStepsAllowed) : nil
+            steps > 0 ? min(steps, Self.mostStepsAllowed) : nil
         }
     }
 

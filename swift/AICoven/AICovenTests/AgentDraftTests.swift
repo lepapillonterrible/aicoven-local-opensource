@@ -34,6 +34,99 @@ final class AgentDraftTests: XCTestCase {
         XCTAssertFalse(draft.hasAccountAndModel())
     }
 
+    func testChoosingInRunsOn_takesTheConnectionAndTheModel_andIsCounted() {
+        var draft = AgentDraft()
+        let anthropic = account(id: "a", provider: "anthropic", defaultModel: "claude-default")
+        XCTAssertEqual(draft.choicesMade, 0)
+
+        XCTAssertTrue(draft.choose(anthropic), "The connection changed: its models are to be read")
+        XCTAssertEqual([draft.accountId, draft.provider, draft.model], ["a", "anthropic", "claude-default"])
+        XCTAssertEqual(draft.choicesMade, 1)
+
+        // Another model of the same connection is a choice too.
+        XCTAssertFalse(draft.choose(anthropic, model: "claude-other"))
+        XCTAssertEqual(draft.model, "claude-other")
+        XCTAssertEqual(draft.choicesMade, 2)
+
+        // Another connection never keeps the old one's model.
+        XCTAssertTrue(draft.choose(account(id: "g", provider: "google", defaultModel: nil)))
+        XCTAssertEqual(draft.model, "")
+        XCTAssertTrue(draft.choose(anthropic, model: "claude-other"))
+        XCTAssertEqual([draft.accountId, draft.model], ["a", "claude-other"])
+        XCTAssertEqual(draft.choicesMade, 4)
+    }
+
+    func testAModelListThatLandsLate_changesNothingThePersonHasChangedSince() {
+        let listed = [model("listed-first"), model("listed-second")]
+        var draft = AgentDraft()
+        draft.choose(account(id: "a", provider: "anthropic", defaultModel: "default"))
+
+        // The list lands with the model as it was when the read began: the first listed takes its place.
+        var landed = draft
+        landed.takeModels(listed, of: "a", readWhenModelWas: "default")
+        XCTAssertEqual(landed.model, "listed-first")
+
+        // A model that is listed stays.
+        landed = draft
+        landed.model = "listed-second"
+        landed.takeModels(listed, of: "a", readWhenModelWas: "listed-second")
+        XCTAssertEqual(landed.model, "listed-second")
+
+        // The person typed a model's id under Advanced while the list was read: it stays.
+        landed = draft
+        landed.model = "typed-by-hand"
+        landed.takeModels(listed, of: "a", readWhenModelWas: "default")
+        XCTAssertEqual(landed.model, "typed-by-hand")
+
+        // Another connection was chosen meanwhile: its model is not touched.
+        landed = draft
+        landed.choose(account(id: "g", provider: "google", defaultModel: "default"))
+        landed.takeModels(listed, of: "a", readWhenModelWas: "default")
+        XCTAssertEqual([landed.accountId, landed.model], ["g", "default"])
+
+        // Nothing listed changes nothing.
+        landed = draft
+        landed.takeModels([], of: "a", readWhenModelWas: "default")
+        XCTAssertEqual(landed.model, "default")
+    }
+
+    func testANewAgentStartsOnTheFirstTintNoAgentShows_sandForOneWithNoTintOfItsOwn() {
+        func agent(tint: String?) -> Role {
+            Role(
+                id: UUID().uuidString, covenId: "c", name: "Agent", emoji: nil, description: nil, systemPrompt: nil,
+                model: nil, provider: nil, providerAccountId: nil, temperature: nil, maxTokens: nil,
+                settings: tint.map {
+                    RoleSettings(
+                        toolConfig: nil, allowedTools: nil, collaboratorRoleIds: nil, autonomousMode: nil, autonomousMaxSteps: nil,
+                        plannerMaxTasks: nil, plannerMaxSeconds: nil, iconSymbol: nil, iconTint: $0
+                    )
+                },
+                createdAt: Date(), updatedAt: Date()
+            )
+        }
+        let first = IconTint.allCases[0], second = IconTint.allCases[1], third = IconTint.allCases[2]
+        XCTAssertEqual(first, .warm, "Sand is the first tint, and what an agent with none shows")
+
+        XCTAssertEqual(AgentDraft.startingTint(among: []), first)
+        XCTAssertEqual(AgentDraft.startingTint(among: [agent(tint: nil)]), second, "An agent made before agents had tints shows sand")
+        XCTAssertEqual(AgentDraft.startingTint(among: [agent(tint: "not-a-tint")]), second)
+        XCTAssertEqual(AgentDraft.startingTint(among: [agent(tint: second.rawValue)]), first)
+        XCTAssertEqual(AgentDraft.startingTint(among: [agent(tint: nil), agent(tint: second.rawValue)]), third)
+    }
+
+    func testAConnectionAddedFromTheFormIsTheOneThatIsNew() {
+        let before: Set = ["a", "b"]
+        let a = account(id: "a", provider: "anthropic", defaultModel: nil)
+        let b = account(id: "b", provider: "openai", defaultModel: nil)
+        let c = account(id: "c", provider: "google", defaultModel: nil)
+        let d = account(id: "d", provider: "ollama", defaultModel: nil)
+
+        XCTAssertEqual(AgentDraft.added(to: before, in: [a, b, c])?.id, "c")
+        XCTAssertNil(AgentDraft.added(to: before, in: [a, b]), "Nothing was added")
+        XCTAssertNil(AgentDraft.added(to: before, in: [a, b, c, d]), "Two are new: which was meant is not known")
+        XCTAssertEqual(AgentDraft.added(to: before, in: [b, c])?.id, "c", "One removed meanwhile is no matter")
+    }
+
     func testASavedAgentKeepsAModelItsAccountNoLongerLists() {
         let listed = [model("gemini-3.8-flash"), model("gemini-3.5-flash")]
         var draft = AgentDraft()
@@ -125,6 +218,11 @@ final class AgentDraftTests: XCTestCase {
         draft.maxSteps = "0"
         XCTAssertNil(draft.saving(usesTemperature: true, usesMaxTokens: true, usesSteps: true))
         XCTAssertNotNil(draft.saving(usesTemperature: true, usesMaxTokens: true, usesSteps: false))
+        // The most steps are what a turn takes: 1 to 100, and no more is saved.
+        for (steps, saves) in [("1", true), ("100", true), ("101", false), ("-3", false)] {
+            draft.maxSteps = steps
+            XCTAssertEqual(draft.saving(usesTemperature: true, usesMaxTokens: true, usesSteps: true)?.mostSteps, saves ? Int(steps) : nil, steps)
+        }
     }
 
     func testAnAgentIsSavedOnlyWithANameAndWhatItRunsOn() {

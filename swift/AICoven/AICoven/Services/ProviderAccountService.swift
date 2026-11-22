@@ -23,6 +23,34 @@ struct LocalProviderAccount: Codable {
     var gatewayURL: String?
 }
 
+/// One page of Anthropic's list of models (`GET /v1/models`).
+nonisolated struct AnthropicModelsPage: Decodable {
+    struct Item: Decodable {
+        let id: String
+        let display_name: String?
+    }
+
+    let data: [Item]?
+    let has_more: Bool?
+    let last_id: String?
+
+    /// The most pages read of one list: at 1,000 models a page, far more
+    /// than there are models.
+    static let mostPages = 20
+
+    /// The id the next page is asked for after; nil on the last page.
+    var next: String? {
+        has_more == true ? last_id : nil
+    }
+
+    /// The address of a page: the first, or the one after the model `after`.
+    static func address(after: String?) -> URL {
+        var address = URLComponents(string: "https://api.anthropic.com/v1/models")!
+        address.queryItems = [URLQueryItem(name: "limit", value: "1000")] + (after.map { [URLQueryItem(name: "after_id", value: $0)] } ?? [])
+        return address.url!
+    }
+}
+
 extension ProviderAccount {
     /// Initialize a UI-facing ProviderAccount from a locally stored account.
     init(from local: LocalProviderAccount) {
@@ -1205,8 +1233,9 @@ extension ProviderAccountService {
                 )
             }
         case "mlx":
-            // MLX: return curated catalog models as static metadata.
-            return MLXModelManager.defaultCatalog.map { info in
+            // MLX: the curated catalog, as this device can run it (an
+            // iPhone is not offered a model it has no memory to load).
+            return await MainActor.run { MLXModelManager.shared.deviceFilteredCatalog }.map { info in
                 ProviderInitializationStatus.ModelMetadata(
                     id: info.id,
                     name: info.displayName,
@@ -1278,24 +1307,26 @@ extension ProviderAccountService {
             guard let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) else {
                 throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing Anthropic API key for account \(account.id)"])
             }
-            struct AnthropicListResponse: Decodable {
-                struct Item: Decodable { let id: String
-                    let display_name: String?
+            // The list comes a page at a time: every page is read, so a
+            // model is not taken for missing because it is on a later one.
+            var modelsData: [AnthropicModelsPage.Item] = []
+            var after: String?
+            var pages = 0
+            repeat {
+                var request = URLRequest(url: AnthropicModelsPage.address(after: after))
+                request.httpMethod = "GET"
+                request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+                request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+                request.setValue("application/json", forHTTPHeaderField: "Accept")
+                let (data, response) = try await URLSession.shared.data(for: request)
+                if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
+                    throw Self.sanitizedHTTPError(provider: "Anthropic", statusCode: http.statusCode)
                 }
-
-                let data: [Item]?
-            }
-            var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/models")!)
-            request.httpMethod = "GET"
-            request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-            request.setValue("application/json", forHTTPHeaderField: "Accept")
-            let (data, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-                throw Self.sanitizedHTTPError(provider: "Anthropic", statusCode: http.statusCode)
-            }
-            let decoded = try JSONDecoder().decode(AnthropicListResponse.self, from: data)
-            let modelsData = decoded.data ?? []
+                let page = try JSONDecoder().decode(AnthropicModelsPage.self, from: data)
+                modelsData += page.data ?? []
+                after = page.next
+                pages += 1
+            } while after != nil && pages < AnthropicModelsPage.mostPages
             let chatOnly = modelsData
                 .map(\.id)
                 .filter { isChatModel(provider: "anthropic", id: $0) }

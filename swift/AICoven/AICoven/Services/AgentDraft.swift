@@ -24,12 +24,16 @@ nonisolated struct AgentSaving: Equatable {
     var needsModel = true
 
     static let longestName = 100
+    /// The most tool steps an agent can be given: a turn takes as many as
+    /// the agent says, up to this (`AgentTurnSettings`).
+    static let mostStepsAllowed = AgentTurnSettings.mostStepsAllowed
 
     /// The agent as it is stored, by the cloud app's rules: its name
     /// without the space around it, 1 to 100 characters; a provider and,
     /// where a model answers for it, a model; a temperature from 0 to 2;
-    /// limits of at least 1. Nil for an agent that is not one of these,
-    /// which is not saved.
+    /// a longest answer of at least 1. Its tool steps are 1 to 100: what
+    /// a turn takes is what is stored. Nil for an agent that is not one
+    /// of these, which is not saved.
     var storable: AgentSaving? {
         var stored = self
         stored.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -39,7 +43,7 @@ nonisolated struct AgentSaving: Equatable {
               !stored.provider.isEmpty, !stored.model.isEmpty || !needsModel,
               temperature.map({ (0 ... 2).contains($0) }) ?? true,
               maxTokens.map({ $0 >= 1 }) ?? true,
-              mostSteps.map({ $0 >= 1 }) ?? true else { return nil }
+              mostSteps.map({ (1 ... Self.mostStepsAllowed).contains($0) }) ?? true else { return nil }
         return stored
     }
 }
@@ -59,6 +63,9 @@ nonisolated struct AgentDraft: Equatable {
     var temperature = 0.7
     var maxTokens = "2000"
     var maxSteps = "30"
+    /// How many times something was chosen in Runs on. A connection added
+    /// from the form is chosen only if this has not moved meanwhile.
+    private(set) var choicesMade = 0
 
     init() {}
 
@@ -92,6 +99,45 @@ nonisolated struct AgentDraft: Equatable {
         accountId = account.id
         provider = account.provider.lowercased()
         model = account.defaultModel ?? ""
+    }
+
+    /// Chooses a Runs on item: the connection and, when the item was one of
+    /// its models, that model. Another connection takes the agent over with
+    /// its own default model, never the old connection's. Says whether the
+    /// connection changed (its models are then to be read).
+    @discardableResult
+    mutating func choose(_ account: ProviderAccount, model chosen: String? = nil) -> Bool {
+        choicesMade += 1
+        let moved = accountId != account.id
+        if moved { moveToAccount(account) }
+        if let chosen { model = chosen }
+        return moved
+    }
+
+    /// The model once the models of a connection chosen in the form are
+    /// read: the first listed, where the model is not among them. `model`
+    /// is what the model was when the read began: a read that lands after
+    /// another connection was chosen, or after the model was changed (by
+    /// choosing one, or typing its id under Advanced), changes nothing.
+    mutating func takeModels(
+        _ models: [ProviderInitializationStatus.ModelMetadata], of account: String, readWhenModelWas model: String
+    ) {
+        guard accountId == account, self.model == model,
+              let first = models.first, !models.contains(where: { $0.id == model }) else { return }
+        self.model = first.id
+    }
+
+    /// The tint a new agent starts with: the first that none of the
+    /// coven's agents shows. An agent with no tint of its own shows sand.
+    static func startingTint(among agents: [Role]) -> IconTint {
+        IconTint.nextUnused(worn: agents.map { ($0.iconTintValue ?? .warm).rawValue })
+    }
+
+    /// The connection that is new among `accounts` since `known` were the
+    /// person's connections: nil where none is, or more than one.
+    static func added(to known: Set<String>, in accounts: [ProviderAccount]) -> ProviderAccount? {
+        let new = accounts.filter { !known.contains($0.id) }
+        return new.count == 1 ? new[0] : nil
     }
 
     /// The model once the form's account's list loads. A new agent starts on
