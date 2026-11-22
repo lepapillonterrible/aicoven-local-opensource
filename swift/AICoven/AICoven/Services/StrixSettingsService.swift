@@ -124,7 +124,8 @@ actor StrixSettingsService {
         guard let strix = strix.storable else { throw CovenRepositoryError.agentIncomplete }
         guard await signedIn() == account else { throw RepositoryError.accountChanged }
         var settings = loadLocalSettings(of: account)
-        settings.systemPrompt = strix.instructions.isEmpty ? nil : strix.instructions
+        // Instructions that say nothing are none.
+        settings.systemPrompt = strix.instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : strix.instructions
         if !strix.provider.isEmpty {
             settings.provider = strix.provider
             settings.model = strix.model.isEmpty ? nil : strix.model

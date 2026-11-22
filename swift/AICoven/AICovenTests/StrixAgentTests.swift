@@ -78,6 +78,17 @@ final class StrixAgentTests: XCTestCase {
         }
     }
 
+    func testStrixIsSavedOnThisDeviceWithNoModelActiveThere() async throws {
+        let saved = try await StrixSettingsService.shared.save(strix(provider: "mlx", model: ""), as: account)
+        XCTAssertEqual(saved.provider, "mlx")
+        XCTAssertNil(saved.model, "None is kept: the model active on this device answers")
+        XCTAssertEqual(defaults.string(forKey: key("llm_provider")), "mlx")
+
+        // Instructions that say nothing are none.
+        let blank = try await StrixSettingsService.shared.save(strix(instructions: " \n\n "), as: account)
+        XCTAssertNil(blank.systemPrompt)
+    }
+
     func testEmptiedInstructionsAreCleared_andASettingTheFormDidNotShowStaysAsStored() async throws {
         _ = try await StrixSettingsService.shared.save(strix(), as: account)
 
@@ -155,6 +166,13 @@ final class StrixAgentTests: XCTestCase {
         draft.accountId = "acct"
         draft.provider = "anthropic"
         XCTAssertNil(draft.saving(usesTemperature: true, usesMaxTokens: true, usesSteps: true, needsConnection: false))
+        // A connection to models on this device needs none named: the one active there answers.
+        draft.provider = "mlx"
+        let onDevice = try XCTUnwrap(
+            draft.saving(usesTemperature: false, usesMaxTokens: true, usesSteps: true, needsModel: false, needsConnection: false)
+        )
+        XCTAssertEqual([onDevice.provider, onDevice.model, onDevice.providerAccountId], ["mlx", "", "acct"])
+        draft.provider = "anthropic"
         draft.model = "claude-sonnet-4-6"
         let chosen = try XCTUnwrap(draft.saving(usesTemperature: true, usesMaxTokens: true, usesSteps: true, needsConnection: false))
         XCTAssertEqual([chosen.provider, chosen.model, chosen.providerAccountId], ["anthropic", "claude-sonnet-4-6", "acct"])

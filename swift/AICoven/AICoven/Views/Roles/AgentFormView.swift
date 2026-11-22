@@ -104,6 +104,14 @@ struct AgentFormView: View {
         choices.usesSteps(accountId: draft.accountId, provider: draft.provider)
     }
 
+    /// Whether a model must be named for what the agent runs on. Not for
+    /// an agent of the person's own, nor for a model on this device: the
+    /// one that is active there answers, and with none active yet there
+    /// is none to name.
+    private var needsModel: Bool {
+        !(runsItself || draft.provider == "mlx")
+    }
+
     /// What Save would store; nil where the form cannot be saved as it is.
     /// Where what Strix runs on is not the person's to choose, it is left
     /// exactly as stored: the rest of the form saves whatever it runs on,
@@ -113,7 +121,7 @@ struct AgentFormView: View {
         if !choosesWhatItRunsOn { draft.accountId = nil }
         return draft.saving(
             usesTemperature: usesTemperature, usesMaxTokens: usesMaxTokens, usesSteps: usesSteps,
-            needsModel: !runsItself, needsConnection: !isStrix
+            needsModel: needsModel, needsConnection: !isStrix
         )
     }
 
@@ -471,9 +479,11 @@ struct AgentFormView: View {
                             .foregroundStyle(Color.aicovenTextTertiary)
                     }
                 }
-                // A model on this device is the one made active in its own
-                // settings: there is no other to name here.
-                if !runsItself, choosesWhatItRunsOn, draft.provider != "mlx" {
+                // The id of the model of the connection chosen: none to
+                // name with no connection chosen (it would be kept with
+                // nothing), nor for a model on this device, which is the
+                // one made active in its own settings.
+                if !runsItself, choosesWhatItRunsOn, draft.accountId != nil, draft.provider != "mlx" {
                     textField("Model ID", text: $draft.model, prompt: "Model ID")
                 }
             }

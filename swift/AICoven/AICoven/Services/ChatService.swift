@@ -1884,9 +1884,10 @@ extension ChatService {
     /// "chat_max_tool_steps"; values <= 0 fall back to a sane default.
     static func currentMaxToolSteps() -> Int {
         let stored = UserDefaults.standard.integer(forKey: UserScope.scopedKey("chat_max_tool_steps"))
-        // Default to 5 tool steps for chat (conservative to prevent thrash);
-        // users can raise this in Strix's settings. Hard cap at 15. An
-        // agent's own limit is not held to this cap (`mostToolSteps`).
+        // Default to 5 tool steps for chat (conservative to prevent thrash),
+        // 15 at most. It is what a turn takes where whoever answers sets
+        // no limit of its own: Strix's and an agent's "Most steps" are
+        // not held to this cap (`mostToolSteps`).
         if stored <= 0 { return 5 }
         return min(stored, 15)
     }
