@@ -31,6 +31,9 @@ final class NotificationSource {
         /// A reply finished: the line that offers notifications may be
         /// due.
         var replyFinished: @MainActor (_ thread: Thread, _ account: String) async -> Void
+        /// Has the app kept at its work until a telling is done: it is
+        /// made after its turn has ended, when nothing else keeps the app.
+        var keepWorking: @MainActor (_ until: Task<Void, Never>) -> Void = { _ in }
 
         static let live = Dependencies(
             account: { UserScope.currentUserID },
@@ -46,7 +49,8 @@ final class NotificationSource {
             },
             replyFinished: { thread, account in
                 await LocalNotifications.shared.offerIfUseful(agentName: thread.agentName, as: account)
-            }
+            },
+            keepWorking: { TurnKeepAlive.shared.keep(until: $0) }
         )
     }
 
@@ -70,8 +74,9 @@ final class NotificationSource {
     private var last: Task<Void, Never>?
     private var followed: Set<AnyCancellable> = []
 
-    init(dependencies: Dependencies = .live) {
-        self.dependencies = dependencies
+    /// The app's own unless a test gives others.
+    init(dependencies: Dependencies? = nil) {
+        self.dependencies = dependencies ?? .live
     }
 
     func follow(_ engine: TurnEngine, _ approvals: ToolApprovals) {
@@ -159,6 +164,7 @@ final class NotificationSource {
             }
         }
         last = telling
+        dependencies.keepWorking(telling)
         return telling
     }
 }

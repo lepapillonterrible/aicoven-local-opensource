@@ -11,12 +11,15 @@ final class TurnKeepAliveTests: XCTestCase {
         var expire: (@MainActor () -> Void)?
         /// Whether the system says the time is up while it is being asked.
         var expiresAsItIsAsked = false
+        /// Whether the system refuses what it is asked.
+        var refuses = false
 
         var system: TurnKeepAlive.System {
             TurnKeepAlive.System { [self] expired in
                 begun += 1
                 expire = expired
                 if expiresAsItIsAsked { expired() }
+                if refuses { return nil }
                 return { [self] in ended += 1 }
             }
         }
@@ -70,5 +73,53 @@ final class TurnKeepAliveTests: XCTestCase {
 
         keeping.turnsChanged(areRunning: false)
         XCTAssertEqual(system.ended, 1, "And it is ended once")
+    }
+
+    func testItIsHeldUntilWhatTellsOfTheEndingIsDoneToo() async {
+        let system = System()
+        let keeping = TurnKeepAlive(system: system.system)
+        let (waits, done) = AsyncStream<Void>.makeStream()
+        let telling = Task { for await _ in waits {
+            break
+        } }
+
+        keeping.turnsChanged(areRunning: true)
+        let kept = keeping.keep(until: telling)
+        keeping.turnsChanged(areRunning: false)
+        XCTAssertEqual(system.begun, 1, "The one asking goes on")
+        XCTAssertEqual(system.ended, 0, "The turn has ended; the person has not been told yet")
+
+        done.yield()
+        await kept.value
+        XCTAssertEqual(system.ended, 1)
+    }
+
+    func testWhatTellsOfAnEndingIsKeptForByItself() async {
+        let system = System()
+        let keeping = TurnKeepAlive(system: system.system)
+        let (waits, done) = AsyncStream<Void>.makeStream()
+        let telling = Task { for await _ in waits {
+            break
+        } }
+
+        let kept = keeping.keep(until: telling)
+        XCTAssertEqual(system.begun, 1, "With no turn running any more")
+        done.yield()
+        await kept.value
+        XCTAssertEqual(system.ended, 1)
+    }
+
+    func testAnAskingTheSystemRefusesIsNotTakenForHeld_andIsMadeAgain() {
+        let system = System()
+        system.refuses = true
+        let keeping = TurnKeepAlive(system: system.system)
+
+        keeping.turnsChanged(areRunning: true)
+        XCTAssertEqual(system.begun, 1)
+        system.refuses = false
+        keeping.appCameToFront()
+        XCTAssertEqual(system.begun, 2, "Asked again, with the turn still running")
+        keeping.turnsChanged(areRunning: false)
+        XCTAssertEqual(system.ended, 1, "Only what was given is ended")
     }
 }

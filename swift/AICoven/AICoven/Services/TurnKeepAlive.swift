@@ -13,7 +13,8 @@ import UIKit
 /// promised, after which the system may suspend the app or end it. A turn
 /// of the app's own that was cut off says so when the app is opened again;
 /// an agent of the person's own goes on by itself and is followed again.
-/// While no turn runs, nothing is held.
+/// It is held from the first turn that runs until the last has ended and
+/// what tells of the endings has been told; otherwise nothing is held.
 @MainActor
 final class TurnKeepAlive {
     static let shared: TurnKeepAlive = {
@@ -23,10 +24,10 @@ final class TurnKeepAlive {
     }()
 
     /// The system's side, which a test replaces: `begin` asks to be kept
-    /// at work and gives what ends the asking; `expired` is called if the
-    /// system says the time is up.
+    /// at work and gives what ends the asking, or nil if the system
+    /// refused; `expired` is called if the system says the time is up.
     struct System {
-        var begin: @MainActor (_ expired: @escaping @MainActor () -> Void) -> (@MainActor () -> Void)
+        var begin: @MainActor (_ expired: @escaping @MainActor () -> Void) -> (@MainActor () -> Void)?
 
         static let live = System { expired in
             #if os(macOS)
@@ -38,7 +39,9 @@ final class TurnKeepAlive {
             let task = UIApplication.shared.beginBackgroundTask(withName: "A turn is running") {
                 MainActor.assumeIsolated { expired() }
             }
-            return { if task != .invalid { UIApplication.shared.endBackgroundTask(task) } }
+            // Refused: nothing is held, and nothing is to be ended.
+            guard task != .invalid else { return nil }
+            return { UIApplication.shared.endBackgroundTask(task) }
             #endif
         }
     }
@@ -47,6 +50,8 @@ final class TurnKeepAlive {
     /// What ends the asking that is under way; nil while nothing is held.
     private var end: (@MainActor () -> Void)?
     private var turnsAreRunning = false
+    /// How much of what finishes a turn is still under way (`keep(until:)`).
+    private var finishing = 0
     /// The system said the time was up: it is not asked again until the
     /// app has been in front.
     private var timeWasUp = false
@@ -70,6 +75,21 @@ final class TurnKeepAlive {
         hold()
     }
 
+    /// Keeps the app at its work until `work` is done too: what tells the
+    /// person that a turn ended is made after the turn has ended, and is
+    /// what they walked away to be told. Answers with what is done once
+    /// `work` no longer counts.
+    @discardableResult
+    func keep(until work: Task<Void, Never>) -> Task<Void, Never> {
+        finishing += 1
+        hold()
+        return Task {
+            await work.value
+            finishing -= 1
+            hold()
+        }
+    }
+
     /// The app is in front again: the system may be asked anew.
     func appCameToFront() {
         timeWasUp = false
@@ -77,11 +97,12 @@ final class TurnKeepAlive {
     }
 
     private func hold() {
-        guard turnsAreRunning else {
+        guard turnsAreRunning || finishing > 0 else {
             release()
             return
         }
         guard end == nil, !timeWasUp else { return }
+        // Refused, nothing is held: it is asked again when something next changes.
         end = system.begin { [weak self] in
             // The system's time is up: the asking must end at once.
             self?.timeWasUp = true
