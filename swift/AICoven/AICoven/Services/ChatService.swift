@@ -1514,12 +1514,18 @@ actor ChatService {
     /// them (an agent of a coven; one on Hermes or on OpenClaw through its
     /// Gateway has a provider and no model), else the person's choice in
     /// Settings.
-    /// With them, what the turn takes from the agent's settings: the
-    /// app's own for a turn that is for no agent, or whose agent cannot
-    /// be read.
+    /// With them, what the turn takes from the settings of whoever
+    /// answers: the agent's, Strix's for a turn that is for no agent, and
+    /// the app's own where the agent cannot be read.
     private func preferredProviderAndModel(roleId: String?) async -> (provider: String, model: String, settings: AgentTurnSettings) {
         let role: Role? = if let roleId { try? await RoleService.shared.getRole(roleId: roleId) } else { nil }
-        let settings = role.map(AgentTurnSettings.init(of:)) ?? .standard
+        // A turn for no agent is Strix's, and takes Strix's own settings;
+        // one whose agent cannot be read takes the app's.
+        let settings: AgentTurnSettings = if roleId == nil {
+            await AgentTurnSettings(ofStrix: StrixSettingsService.stored(of: UserScope.currentUserID))
+        } else {
+            role.map(AgentTurnSettings.init(of:)) ?? .standard
+        }
         // An agent runs on its own provider and model. One on Hermes, or
         // on OpenClaw through its Gateway, names no model: the agent there
         // runs the turn itself. Where that agent is not connected, the
@@ -1527,7 +1533,11 @@ actor ChatService {
         // person's choice in Settings.
         if let role,
            let roleProvider = role.provider?.lowercased(), !roleProvider.isEmpty {
-            let roleModel = role.model ?? ""
+            // On this device a turn is answered by the model that is
+            // active there, whichever was stored with the agent (as for
+            // Strix): no other is loaded to answer.
+            let onDevice = roleProvider == "mlx" ? UserDefaults.standard.string(forKey: "MLXModelManager.activeModelID") : nil
+            let roleModel = onDevice ?? role.model ?? ""
             let runsItself = switch roleProvider {
             case "hermes": hermesAgent() != nil
             case "openclaw": openClawTurn("") != nil
@@ -1874,9 +1884,10 @@ extension ChatService {
     /// "chat_max_tool_steps"; values <= 0 fall back to a sane default.
     static func currentMaxToolSteps() -> Int {
         let stored = UserDefaults.standard.integer(forKey: UserScope.scopedKey("chat_max_tool_steps"))
-        // Default to 5 tool steps for chat (conservative to prevent thrash);
-        // users can raise this in Strix's settings. Hard cap at 15. An
-        // agent's own limit is not held to this cap (`mostToolSteps`).
+        // Default to 5 tool steps for chat (conservative to prevent thrash),
+        // 15 at most. It is what a turn takes where whoever answers sets
+        // no limit of its own: Strix's and an agent's "Most steps" are
+        // not held to this cap (`mostToolSteps`).
         if stored <= 0 { return 5 }
         return min(stored, 15)
     }

@@ -135,9 +135,19 @@ extension AgentModelChoices {
     /// stored with it: the connection alone.
     func runsOnLine(for role: Role) -> String {
         let provider = role.provider ?? ""
+        let models = models(for: role.providerAccountId, provider: provider)
+        let model: String = if runsItself(accountId: role.providerAccountId, provider: provider) {
+            ""
+        } else if provider.lowercased() == "mlx", let active = models.first {
+            // On this device the model that is active answers, whichever
+            // was stored with the agent.
+            active.id
+        } else {
+            role.model ?? ""
+        }
         return Self.modelLine(
-            model: runsItself(accountId: role.providerAccountId, provider: provider) ? "" : role.model ?? "",
-            models: models(for: role.providerAccountId),
+            model: model,
+            models: models,
             connection: connectionName(accountId: role.providerAccountId, provider: provider)
         )
     }

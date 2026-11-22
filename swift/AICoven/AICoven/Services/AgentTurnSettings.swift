@@ -2,8 +2,8 @@ import Foundation
 
 /// What a turn takes from the settings of the agent it is for: how freely
 /// it answers, how long an answer may be, and how many tool steps it may
-/// take. A turn for no agent (Strix's), and an agent that says nothing of
-/// one of them, takes the app's own.
+/// take. A turn for no agent is Strix's, and takes Strix's settings the
+/// same way. Whoever says nothing of one of them takes the app's own.
 nonisolated struct AgentTurnSettings: Equatable {
     /// What a turn takes where no agent says otherwise.
     static let standard = AgentTurnSettings(temperature: 0.7, maxTokens: nil, mostSteps: nil)
@@ -28,14 +28,24 @@ nonisolated struct AgentTurnSettings: Equatable {
         self.mostSteps = mostSteps
     }
 
-    /// An agent's settings as its turns take them: a temperature from 0
-    /// to 2, and numbers that are no limit (zero or less) taken as none.
+    /// Stored settings as a turn takes them: a temperature from 0 to 2
+    /// (the app's own where none is stored), and limits that are no limit
+    /// (zero or less) taken as none.
+    private init(stored temperature: Double?, maxTokens: Int?, steps: Int?) {
+        self.temperature = min(max(temperature ?? Self.standard.temperature, 0), 2)
+        self.maxTokens = maxTokens.flatMap { $0 > 0 ? $0 : nil }
+        mostSteps = steps.flatMap { $0 > 0 ? min($0, Self.mostStepsAllowed) : nil }
+    }
+
+    /// What a turn takes from the settings of the agent it is for.
     init(of role: Role) {
-        temperature = min(max(role.temperature ?? Self.standard.temperature, 0), 2)
-        maxTokens = role.maxTokens.flatMap { $0 > 0 ? $0 : nil }
-        mostSteps = (role.settings?.autonomousMaxSteps).flatMap { steps in
-            steps > 0 ? min(steps, Self.mostStepsAllowed) : nil
-        }
+        self.init(stored: role.temperature, maxTokens: role.maxTokens, steps: role.settings?.autonomousMaxSteps)
+    }
+
+    /// What one of Strix's turns takes from Strix's settings: as an
+    /// agent's, with the app's own where Strix has none stored.
+    init(ofStrix strix: LocalStrixSettings?) {
+        self.init(stored: strix?.temperature, maxTokens: strix?.maxTokens, steps: strix?.autonomousMaxSteps)
     }
 
     // MARK: - Which settings a turn uses, by what answers it

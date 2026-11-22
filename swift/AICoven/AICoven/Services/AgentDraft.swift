@@ -22,6 +22,9 @@ nonisolated struct AgentSaving: Equatable {
     /// named: not one on Hermes or on OpenClaw through its Gateway, which
     /// are agents of the person's own and run their turns themselves.
     var needsModel = true
+    /// Whether it must run on something to be saved. Strix need not: its
+    /// instructions can be written before any connection is added.
+    var needsConnection = true
 
     static let longestName = 100
     /// The most tool steps an agent can be given: a turn takes as many as
@@ -40,7 +43,8 @@ nonisolated struct AgentSaving: Equatable {
         stored.provider = provider.trimmingCharacters(in: .whitespaces).lowercased()
         stored.model = model.trimmingCharacters(in: .whitespaces)
         guard !stored.name.isEmpty, stored.name.count <= Self.longestName,
-              !stored.provider.isEmpty, !stored.model.isEmpty || !needsModel,
+              !stored.provider.isEmpty || !needsConnection,
+              !stored.model.isEmpty || !needsModel || stored.provider.isEmpty,
               temperature.map({ (0 ... 2).contains($0) }) ?? true,
               maxTokens.map({ $0 >= 1 }) ?? true,
               mostSteps.map({ (1 ... Self.mostStepsAllowed).contains($0) }) ?? true else { return nil }
@@ -85,6 +89,22 @@ nonisolated struct AgentDraft: Equatable {
         if let steps = role.settings?.autonomousMaxSteps {
             maxSteps = String(min(steps, AgentSaving.mostStepsAllowed))
         }
+    }
+
+    /// Strix's draft, from its settings: its name and face are its own.
+    /// Where none is stored, its longest answer shows as 4096 (what a
+    /// turn answered by Anthropic has been given so far; a model on this
+    /// device was given less), and its steps as the app's own number.
+    init(strix: LocalStrixSettings, appSteps: Int) {
+        name = "Strix"
+        iconSymbol = "sparkles"
+        instructions = strix.systemPrompt ?? ""
+        accountId = strix.providerAccountId
+        provider = (strix.provider ?? "").lowercased()
+        model = strix.model ?? ""
+        temperature = strix.temperature ?? 0.7
+        maxTokens = String(strix.maxTokens ?? 4096)
+        maxSteps = String(max(1, min(strix.autonomousMaxSteps ?? appSteps, AgentSaving.mostStepsAllowed)))
     }
 
     /// An agent runs on one account and one model, so it saves only with
@@ -158,9 +178,14 @@ nonisolated struct AgentDraft: Equatable {
     /// What saving the form stores. The settings under Advanced are saved
     /// only where the form shows them (`uses`): the others stay as stored.
     /// Nil where the form cannot be saved: no name, no account or model,
-    /// or a limit shown that is not a number of at least 1.
-    func saving(usesTemperature: Bool, usesMaxTokens: Bool, usesSteps: Bool, needsModel: Bool = true) -> AgentSaving? {
-        guard hasAccountAndModel(needsModel: needsModel) else { return nil }
+    /// or a limit shown that is not a number of at least 1. Strix needs no
+    /// connection (`needsConnection` false): with none chosen, what it
+    /// runs on is left as stored.
+    func saving(
+        usesTemperature: Bool, usesMaxTokens: Bool, usesSteps: Bool, needsModel: Bool = true, needsConnection: Bool = true
+    ) -> AgentSaving? {
+        let runsOnNothing = accountId == nil && !needsConnection
+        guard runsOnNothing || hasAccountAndModel(needsModel: needsModel) else { return nil }
         let tokens = Int(maxTokens.trimmingCharacters(in: .whitespaces))
         let steps = Int(maxSteps.trimmingCharacters(in: .whitespaces))
         if usesMaxTokens, tokens == nil { return nil }
@@ -171,13 +196,14 @@ nonisolated struct AgentDraft: Equatable {
             iconTint: iconTint,
             description: description,
             instructions: instructions,
-            provider: provider,
-            model: model,
+            provider: runsOnNothing ? "" : provider,
+            model: runsOnNothing ? "" : model,
             providerAccountId: accountId,
             temperature: usesTemperature ? temperature : nil,
             maxTokens: usesMaxTokens ? tokens : nil,
             mostSteps: usesSteps ? steps : nil,
-            needsModel: needsModel
+            needsModel: needsModel,
+            needsConnection: needsConnection
         ).storable
     }
 }

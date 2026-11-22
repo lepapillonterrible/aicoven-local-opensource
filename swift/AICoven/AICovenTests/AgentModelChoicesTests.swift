@@ -1,4 +1,5 @@
 @testable import AICoven
+internal import Combine
 import XCTest
 
 /// The connections and models an agent's Runs on menu offers.
@@ -242,6 +243,72 @@ final class AgentModelChoicesTests: XCTestCase {
         let none = self.choices(accounts: [])
         try await none.loadAccounts()
         XCTAssertNil(none.newAgentDefault(strixProvider: "openai"))
+    }
+
+    func testAConnectionToModelsOnThisDeviceOffersTheOneThatIsActive_asItChanges() async throws {
+        let active = CurrentValueSubject<ProviderInitializationStatus.ModelMetadata?, Never>(model("qwen"))
+        var asked: [String] = []
+        let choices = AgentModelChoices(
+            source: .init(
+                accounts: { [self.account("device", "mlx"), self.account("a", "anthropic")] },
+                models: { id in
+                    asked.append(id)
+                    return [self.model("\(id)-catalog-one"), self.model("\(id)-catalog-two")]
+                },
+                hasGateway: { _ in false },
+                onDeviceModel: active.eraseToAnyPublisher()
+            ),
+            signedIn: { "ada" }
+        )
+        try await choices.loadAccounts()
+
+        await choices.loadModels(for: "device")
+        await choices.loadModels(for: "a")
+        XCTAssertEqual(asked, ["a"], "Nothing is asked for the device: its model is known as it changes")
+        XCTAssertEqual(choices.models(for: "device").map(\.id), ["qwen"], "Only the model that answers there")
+        XCTAssertEqual(choices.models(for: "a").count, 2)
+
+        // Another model is made active while the form is open.
+        active.send(model("llama"))
+        XCTAssertEqual(choices.models(for: "device").map(\.id), ["llama"])
+        // And none.
+        active.send(nil)
+        XCTAssertEqual(choices.models(for: "device").count, 0, "Not the one that was active before")
+    }
+
+    func testAnAgentOnThisDeviceIsListedWithTheModelThatIsActive() async {
+        let active = CurrentValueSubject<ProviderInitializationStatus.ModelMetadata?, Never>(
+            ProviderInitializationStatus.ModelMetadata(id: "llama", name: "Llama 3.2", provider: "mlx", contextLength: nil)
+        )
+        let choices = AgentModelChoices(
+            source: .init(
+                accounts: { [self.account("device", "mlx")] }, models: { _ in [] }, hasGateway: { _ in false },
+                onDeviceModel: active.eraseToAnyPublisher()
+            ),
+            signedIn: { "ada" }
+        )
+        let stored = Role(
+            id: "r", covenId: "c", name: "Scout", emoji: nil, description: nil, systemPrompt: nil,
+            model: "qwen-saved-earlier", provider: "mlx", providerAccountId: "device", temperature: nil, maxTokens: nil,
+            settings: nil, createdAt: Date(), updatedAt: Date()
+        )
+        // Before the connections are read: the active model already, under the provider's name.
+        XCTAssertEqual(choices.runsOnLine(for: stored), "Llama 3.2 · \(providerDisplayName(slug: "mlx"))")
+
+        // With no connection stored with it (as the old Strix screen saved one), the active model all the same.
+        let unbound = Role(
+            id: "s", covenId: "", name: "Strix", emoji: nil, description: nil, systemPrompt: nil,
+            model: "qwen-saved-earlier", provider: "mlx", providerAccountId: nil, temperature: nil, maxTokens: nil,
+            settings: nil, createdAt: Date(), updatedAt: Date()
+        )
+        XCTAssertEqual(choices.runsOnLine(for: unbound), "Llama 3.2 · \(providerDisplayName(slug: "mlx"))")
+        XCTAssertEqual(choices.models(for: nil, provider: "MLX").map(\.id), ["llama"])
+        XCTAssertEqual(choices.models(for: nil, provider: "anthropic").count, 0)
+
+        await choices.loadModelNames(for: [stored])
+        XCTAssertEqual(choices.runsOnLine(for: stored), "Llama 3.2 · mlx", "The model that answers, not the one stored with it")
+        active.send(nil)
+        XCTAssertEqual(choices.runsOnLine(for: stored), "qwen-saved-earlier · mlx")
     }
 
     func testWhichSettingsAnAgentUses_byWhatItRunsOn() async throws {
