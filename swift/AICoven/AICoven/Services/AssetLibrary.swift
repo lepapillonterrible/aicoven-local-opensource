@@ -55,8 +55,8 @@ nonisolated enum AssetLibraryRules {
     /// The answers an asset's review takes, by where it stands, as the
     /// cloud app offers them: a draft with a file is proposed; what is
     /// proposed is approved or sent back; what is archived is taken out
-    /// again. An asset the key cannot open is not reviewed: nobody has
-    /// seen it.
+    /// again. An asset the key cannot open is not reviewed: it cannot be
+    /// looked at now.
     static func reviewActions(_ asset: Asset) -> [AssetAction] {
         switch asset.status {
         case .archived: [.unarchive]

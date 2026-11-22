@@ -33,6 +33,14 @@ nonisolated struct AssetExportDocument: FileDocument {
 final class AssetFiles: ObservableObject {
     typealias Load = @Sendable (_ fileID: String, _ account: String) async throws -> Data
 
+    /// Whose turn it is among the presenters of one place: the library's
+    /// and its pages' share one, so that the download asked for last,
+    /// wherever it was asked, is the only one offered.
+    @MainActor
+    final class Turn {
+        fileprivate var asked: UUID?
+    }
+
     /// Quick Look, with the file it shows.
     let preview: AttachmentPreviewPresenter
     /// Whether the exporter is up. When it goes, so do the bytes it held.
@@ -53,16 +61,23 @@ final class AssetFiles: ObservableObject {
     static let cannotOpen = "This file could not be opened."
     static let cannotSave = "The file couldn't be saved."
 
+    /// The download last asked for in this place: a later one, asked of
+    /// this presenter or of another that shares the turn, takes its place.
+    let turn: Turn
     private let load: Load
     private let signedIn: @MainActor @Sendable () -> String
-    /// The download last asked for: a later one takes its place.
-    private var asked: UUID?
+    /// The download this presenter is reading.
+    private var reading: UUID?
+    /// The account the exporter was put up for; nil once this is torn down.
+    private var offeredTo: String?
     private var followed: AnyCancellable?
 
-    /// The app's own store and account unless a test gives others.
-    init(load: Load? = nil, signedIn: (@MainActor @Sendable () -> String)? = nil, previewRoot: URL? = nil) {
+    /// The app's own store and account unless a test gives others; a turn
+    /// of its own unless it shares one.
+    init(turn: Turn? = nil, load: Load? = nil, signedIn: (@MainActor @Sendable () -> String)? = nil, previewRoot: URL? = nil) {
         let load = load ?? { try await AssetRepository.shared.data(ofFile: $0, as: $1) }
         let signedIn = signedIn ?? { UserScope.currentUserID }
+        self.turn = turn ?? Turn()
         self.load = load
         self.signedIn = signedIn
         preview = AttachmentPreviewPresenter(
@@ -86,40 +101,52 @@ final class AssetFiles: ObservableObject {
     }
 
     /// Reads a file and puts up the exporter for it. If another is asked
-    /// for before this one is read, this one is not offered.
+    /// for before this one is read, here or of another presenter of the
+    /// same place, this one is not offered.
     func download(_ file: AssetFile) async {
         let request = UUID()
         let account = signedIn()
-        asked = request
+        turn.asked = request
+        reading = request
         preparing = file.id
         failure = nil
         defer {
-            if asked == request { preparing = nil }
+            if reading == request {
+                reading = nil
+                preparing = nil
+            }
         }
         do {
             let data = try await load(file.id, account)
-            guard asked == request, signedIn() == account else { return }
+            guard turn.asked == request, reading == request, signedIn() == account else { return }
             document = AssetExportDocument(data: data)
             exportName = file.name
+            offeredTo = account
             isExporting = true
         } catch {
-            guard asked == request, signedIn() == account else { return }
+            guard turn.asked == request, reading == request, signedIn() == account else { return }
             say(Self.cannotOpen)
         }
     }
 
-    /// The exporter is done: closing it is no failure; anything else is said.
+    /// The exporter is done: closing it is no failure; anything else is
+    /// said, to the account it was put up for and only while this is
+    /// still in use. The bytes go when the exporter does (`isExporting`),
+    /// not here: a result that comes late clears nothing newer.
     func exported(_ result: Result<URL, Error>) {
-        document = nil
+        guard let account = offeredTo, signedIn() == account else { return }
         if case let .failure(error) = result, (error as? CocoaError)?.code != .userCancelled {
             say(Self.cannotSave)
         }
     }
 
-    /// The view is going: nothing is left open, in memory or on disk.
+    /// The view is going: nothing is left open, in memory or on disk, and
+    /// nothing that comes in afterwards is said.
     func teardown() {
-        asked = nil
+        if turn.asked == reading { turn.asked = nil }
+        reading = nil
         preparing = nil
+        offeredTo = nil
         isExporting = false
         failure = nil
         preview.teardown()

@@ -1,21 +1,21 @@
 import SwiftUI
 
 /// An asset's page, as the cloud app's: what it is, what can be done with
-/// it, and its files. Full size it is pushed on the iPhone and iPad and a
-/// sheet on the Mac; the Mac also shows it beside the table, in the
-/// inspector.
+/// it, and its files. It is pushed on the iPhone and iPad and a sheet on
+/// the Mac; the Mac also shows it beside the table, in the inspector.
 struct AssetDetailView: View {
-    enum Style {
-        case full
-        case inspector
-    }
-
     let asset: Asset
     @ObservedObject var model: AssetLibraryModel
-    var style: Style = .full
 
-    /// This page's own Quick Look and exporter.
-    @StateObject private var files = AssetFiles()
+    /// This page's own Quick Look and exporter, taking turns with the
+    /// library's and the other pages'.
+    @StateObject private var files: AssetFiles
+
+    init(asset: Asset, model: AssetLibraryModel, sharing turn: AssetFiles.Turn) {
+        self.asset = asset
+        self.model = model
+        _files = StateObject(wrappedValue: AssetFiles(turn: turn))
+    }
 
     static let proposedNote = "Proposed for review."
     static let noFiles = "No files."

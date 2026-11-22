@@ -56,8 +56,9 @@ final class AssetFilesTests: XCTestCase {
         try await super.tearDown()
     }
 
-    private func files(_ stand: Stand, readingWaits gate: Gate? = nil) -> AssetFiles {
+    private func files(_ stand: Stand, readingWaits gate: Gate? = nil, sharing turn: AssetFiles.Turn? = nil) -> AssetFiles {
         AssetFiles(
+            turn: turn,
             load: { fileID, account in
                 await MainActor.run { stand.asked.append((fileID, account)) }
                 await gate?.wait()
@@ -98,7 +99,8 @@ final class AssetFilesTests: XCTestCase {
         let files = files(stand)
         await files.download(file("f1"))
         files.exported(.success(URL(fileURLWithPath: "/tmp/elsewhere.csv")))
-        XCTAssertNil(files.document)
+        files.isExporting = false
+        XCTAssertNil(files.document, "The bytes go when the exporter does")
         XCTAssertNil(files.said)
 
         await files.download(file("f1"))
@@ -131,6 +133,55 @@ final class AssetFilesTests: XCTestCase {
         XCTAssertEqual(files.exportName, "two.csv")
         XCTAssertEqual(files.document?.data, Data("bytes of f2".utf8))
         XCTAssertNil(files.preparing)
+    }
+
+    func testTheLatestDownloadOfAPlaceIsTheOnlyOneOffered_whicheverPresenterWasAsked() async {
+        let stand = Stand()
+        let gate = Gate()
+        // The library's presenter and a page's, taking turns.
+        let library = files(stand, readingWaits: gate)
+        let page = files(stand, readingWaits: gate, sharing: library.turn)
+
+        let fromARow = Task { await library.download(self.file("f1", "one.csv")) }
+        await gate.arrived(1)
+        let fromThePage = Task { await page.download(self.file("f2", "two.csv")) }
+        await gate.arrived(2)
+        // The earlier one is read last: it is not offered after the later one was asked.
+        await gate.letNewestThrough()
+        await fromThePage.value
+        XCTAssertTrue(page.isExporting)
+        await gate.letOneThrough()
+        await fromARow.value
+        XCTAssertFalse(library.isExporting, "Asked before the page's: not offered")
+        XCTAssertNil(library.document)
+        XCTAssertNil(library.preparing, "And no longer shown as being read")
+        XCTAssertEqual(page.exportName, "two.csv")
+
+        // A presenter with a turn of its own is another place's: it is not put off by these.
+        let elsewhere = files(stand)
+        await elsewhere.download(file("f3", "three.csv"))
+        XCTAssertTrue(elsewhere.isExporting)
+        XCTAssertTrue(page.isExporting)
+    }
+
+    func testAnExportersResultThatComesLateSaysNothing_andClearsNothingNewer() async {
+        let stand = Stand()
+        let files = files(stand)
+        await files.download(file("f1", "one.csv"))
+        // A second export is up by the time the first one's result comes.
+        files.isExporting = false
+        await files.download(file("f2", "two.csv"))
+        files.exported(.success(URL(fileURLWithPath: "/tmp/one.csv")))
+        XCTAssertEqual(files.document?.data, Data("bytes of f2".utf8), "The newer export keeps its bytes")
+
+        // After another account signed in, or the view has gone, a failed save is not said.
+        stand.account = "grace"
+        files.exported(.failure(CocoaError(.fileWriteNoPermission)))
+        XCTAssertNil(files.said, "Not to another account")
+        stand.account = "ada"
+        files.teardown()
+        files.exported(.failure(CocoaError(.fileWriteNoPermission)))
+        XCTAssertNil(files.said, "Not once its view has gone")
     }
 
     func testNothingReadForOneAccountIsOfferedToAnother_norItsFailure() async {

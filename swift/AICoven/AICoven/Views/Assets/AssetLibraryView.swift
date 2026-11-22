@@ -49,7 +49,7 @@ struct AssetLibraryView: View {
         #if os(macOS)
             .sheet(item: Binding(get: { openID.map(OpenAsset.init) }, set: { openID = $0?.id })) { open in
                 NavigationStack {
-                    page(of: open.id, style: .full)
+                    page(of: open.id)
                         .navigationTitle("Asset")
                         .toolbar {
                             ToolbarItem(placement: .confirmationAction) {
@@ -61,7 +61,7 @@ struct AssetLibraryView: View {
             }
         #else
             .navigationDestination(item: $openID) { id in
-                page(of: id, style: .full)
+                page(of: id)
                     .navigationTitle("Asset")
                     .navigationBarTitleDisplayMode(.inline)
             }
@@ -149,7 +149,7 @@ struct AssetLibraryView: View {
             }
             .inspector(isPresented: Binding(get: { selected != nil }, set: { if !$0 { selectedID = nil } })) {
                 if let selected {
-                    AssetDetailView(asset: selected, model: model, style: .inspector)
+                    AssetDetailView(asset: selected, model: model, sharing: files.turn)
                         .id(selected.id)
                         .inspectorColumnWidth(min: 260, ideal: 300, max: 420)
                 }
@@ -162,9 +162,9 @@ struct AssetLibraryView: View {
 
     /// An asset's page; one that is gone says so.
     @ViewBuilder
-    private func page(of id: Asset.ID, style: AssetDetailView.Style) -> some View {
+    private func page(of id: Asset.ID) -> some View {
         if let asset = model.assets.first(where: { $0.id == id }) {
-            AssetDetailView(asset: asset, model: model, style: style)
+            AssetDetailView(asset: asset, model: model, sharing: files.turn)
         } else {
             ContentUnavailableView("This asset is no longer here", systemImage: "tray")
         }
@@ -482,7 +482,7 @@ struct AssetThumbnail: View {
 /// and no "Who can read": nothing leaves this device.
 private struct NewAssetSheet: View {
     @ObservedObject var model: AssetLibraryModel
-    /// Told of the asset that was made, once the sheet has closed on it.
+    /// Told of the asset that was made, as the sheet is asked to close on it.
     let onMade: (Asset) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -493,6 +493,8 @@ private struct NewAssetSheet: View {
     @State private var isChoosingFile = false
     /// Whether the chosen file is being read: Create waits for it.
     @State private var isReadingFile = false
+    /// Whether the sheet is up: a file read after it has gone says nothing.
+    @State private var isShown = false
     @State private var failure: String?
 
     #if os(iOS)
@@ -566,6 +568,8 @@ private struct NewAssetSheet: View {
         .frame(minWidth: 480, idealWidth: 520, minHeight: 360)
         #endif
         .interactiveDismissDisabled(model.isCreating)
+        .onAppear { isShown = true }
+        .onDisappear { isShown = false }
     }
 
     /// Takes the file the person chose, or says why it was not taken.
@@ -576,9 +580,13 @@ private struct NewAssetSheet: View {
             // Read away from the main actor: a large file, or one a file
             // provider has to fetch, does not hold the sheet up.
             isReadingFile = true
+            let account = UserScope.currentUserID
             Task {
                 let read = await Task.detached { Result { try AssetFileChoice.read(chosen) } }.value
                 isReadingFile = false
+                // Read for whoever chose it, in the sheet they chose it in:
+                // nothing of it is kept or said once either has gone.
+                guard isShown, UserScope.currentUserID == account else { return }
                 switch read {
                 case let .success(read):
                     file = read
