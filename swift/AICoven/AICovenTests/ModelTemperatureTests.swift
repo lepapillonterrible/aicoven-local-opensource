@@ -127,6 +127,22 @@ final class ModelTemperatureTests: XCTestCase {
         XCTAssertEqual(sent.bodies[1]["max_tokens"] as? Int, 4096, "The rest of the request is as it was")
     }
 
+    func testAnthropicIsSentATemperatureOfOneAtMost() async throws {
+        let sent = Sent()
+        let answer = anthropicAnswer
+        let client = try AnthropicLLMClient(
+            apiKey: "TEST_KEY", baseURL: XCTUnwrap(URL(string: "https://example.com/v1")),
+            urlSession: session(keeping: sent) { _ in (200, answer) }
+        )
+
+        _ = try await client.completeChat(
+            messages: question, model: "claude-sonnet-4-6", options: ChatOptions(temperature: 1.6, maxTokens: 900, stream: false)
+        )
+
+        XCTAssertEqual(sent.bodies.first?["temperature"] as? Double, 1, "An agent's may be up to 2; Anthropic takes 0 to 1")
+        XCTAssertEqual(sent.bodies.first?["max_tokens"] as? Int, 900)
+    }
+
     func testAModelThatRefusesATemperatureIsAskedAgainWithoutOne_andWithoutOneFromThenOn() async throws {
         // A name the rules do not know, of this test's own.
         let model = "new-model-\(UUID().uuidString)"
