@@ -144,6 +144,13 @@ actor ThreadService {
         return includeArchived ? filtered : filtered.filter { !$0.isArchived }
     }
 
+    /// The account's threads that are not archived, across Strix and
+    /// every coven.
+    func threadsNotArchived() async throws -> [Thread] {
+        try await ensureLoaded()
+        return personalThreads.filter { !$0.isArchived }
+    }
+
     /// Where each of the account's threads that is not archived belongs
     /// (Strix, or its coven), by thread id.
     func scopesOfThreads() async throws -> [String: ShellScope] {

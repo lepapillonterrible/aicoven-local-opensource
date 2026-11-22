@@ -462,9 +462,50 @@ struct ShellSidebar: View {
 
     // MARK: - Bottom: the person
 
+    /// Activity's row: drawn by hand like the Overview's, and selected as
+    /// the list draws a selected row, with the waiting mark while
+    /// anything waits for the person, else the dot while a reply is not
+    /// yet seen.
+    private var activityRow: some View {
+        let isSelected = navigator.sidebarItem == .activity
+        let isWaiting = ActivityGroups.isAnythingWaiting(in: activities.activity)
+        let hasUnread = !activities.scopesWithUnread.isEmpty
+        return Button {
+            navigate(to: .activity)
+        } label: {
+            HStack(spacing: Spacing.xs) {
+                Label {
+                    Text("Activity")
+                        .foregroundStyle(SidebarSelection.ink(.aicovenTextPrimary, selected: isSelected, isKey: isKeyWindow))
+                } icon: {
+                    Image(systemName: "bell")
+                        .foregroundStyle(SidebarSelection.ink(.accentColor, selected: isSelected, isKey: isKeyWindow))
+                }
+                .lineLimit(1)
+                Spacer(minLength: 0)
+                ActivityRowMark(isWaiting: isWaiting, hasUnread: hasUnread)
+                    .environment(\.backgroundProminence, isSelected && isKeyWindow ? .increased : .standard)
+            }
+            .frame(maxWidth: .infinity, minHeight: pinnedRowHeight, alignment: .leading)
+            .padding(.horizontal, Spacing.xs)
+            .background(
+                RoundedRectangle(cornerRadius: BorderRadius.sm)
+                    .fill(SidebarSelection.fill(isSelected, isKey: isKeyWindow))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityValue(ActivityRowMark.words(isWaiting: isWaiting, hasUnread: hasUnread))
+        .accessibilityIdentifier("sidebar-activity")
+    }
+
     private var personZone: some View {
         VStack(spacing: 0) {
             Divider()
+            activityRow
+                .padding(.horizontal, Spacing.sm)
+                .padding(.top, Spacing.xxs)
             // Settings has no sidebar item, so this row opens it without
             // being selectable.
             Button {

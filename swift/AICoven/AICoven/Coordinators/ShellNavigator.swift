@@ -26,6 +26,8 @@ nonisolated enum ShellSidebarItem: Hashable {
     case memory
     case agents
     case connectedApps
+    /// Activity: the person's own, across every scope.
+    case activity
 
     /// A scope's places as a row of buttons shows them, in the sidebar and
     /// on a phone's Overview: each with its name and its symbol.
@@ -54,6 +56,9 @@ final class ShellNavigator: ObservableObject {
         /// Settings, opened at `pane` where a request names one (Provider
         /// Keys, Connected Apps, …).
         case settings(pane: WorkspaceTabType?)
+        /// Activity: what waits for the person, moves, and has finished,
+        /// across Strix and every coven.
+        case activity
     }
 
     /// The person's place on screen, over the scope's; nil for none.
@@ -162,7 +167,9 @@ final class ShellNavigator: ObservableObject {
     /// Agents for the agents and their forms, Memory for the memory and its
     /// forms, the Overview for none. Nil for a place that has no row.
     var sidebarItem: ShellSidebarItem? {
-        // The person's own place belongs to no row of the scope's.
+        // The person's own place belongs to no row of the scope's:
+        // Activity has its own, Settings has none.
+        if personPlace == .activity { return .activity }
         guard personPlace == nil else { return nil }
         guard let place else { return .overview }
         return Self.row(of: place)
@@ -184,7 +191,11 @@ final class ShellNavigator: ObservableObject {
     /// ("Untitled" for none), any other place's own; nil on the Overview.
     /// Settings', while it covers the scope's place.
     var placeTitle: String? {
-        if case .settings = personPlace { return "Settings" }
+        switch personPlace {
+        case .settings: return "Settings"
+        case .activity: return "Activity"
+        case nil: break
+        }
         guard let place else { return nil }
         return place.threadValue.map(ThreadListRules.title(of:)) ?? place.title
     }
@@ -285,6 +296,7 @@ final class ShellNavigator: ObservableObject {
         case let (.agents, .coven(covenID)): open(.covenAgents(covenId: covenID))
         case (.agents, .strix): open(.personalStrix)
         case let (.connectedApps, .coven(covenID)): open(.covenConnections(covenId: covenID))
+        case (.activity, _): openPersonPlace(.activity)
         case (.connectedApps, .strix), (.thread, _): break
         }
     }
@@ -394,6 +406,10 @@ nonisolated func shellWindowTitle(
     covenName: String?, personPlace: ShellNavigator.PersonPlace? = nil, covenPlaceTitle: String?
 ) -> String {
     guard let covenName else { return "AICoven" }
-    if case .settings = personPlace { return "\(covenName) — Settings" }
-    return "\(covenName) — \(covenPlaceTitle ?? "Overview")"
+    let place = switch personPlace {
+    case .settings: "Settings"
+    case .activity: "Activity"
+    case nil: covenPlaceTitle ?? "Overview"
+    }
+    return "\(covenName) — \(place)"
 }

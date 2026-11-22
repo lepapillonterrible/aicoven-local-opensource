@@ -258,6 +258,41 @@ final class ShellNavigatorTests: XCTestCase {
     }
 
     @MainActor
+    func testActivityIsThePersonsOwnPlace_withARowOfItsOwn() {
+        let navigator = ShellNavigator()
+        navigator.select(.coven("work"))
+        navigator.open(.thread(thread("t1", covenID: "work")))
+
+        // Its row and the Go menu open it as a place is opened.
+        let before = navigator.placeGeneration
+        navigator.openPlace(.activity)
+        XCTAssertEqual(navigator.personPlace, .activity)
+        XCTAssertGreaterThan(navigator.placeGeneration, before, "The person has moved")
+        XCTAssertEqual(navigator.sidebarItem, .activity, "Its own row is the one selected")
+        XCTAssertEqual(navigator.placeTitle, "Activity")
+        XCTAssertEqual(shellWindowTitle(covenName: "Work", personPlace: navigator.personPlace, covenPlaceTitle: "A thread"), "Work — Activity")
+        XCTAssertEqual(navigator.place?.id, "t1", "The scope's place waits underneath")
+        XCTAssertEqual(navigator.phonePath, [.place, .personPlace])
+
+        // A row of Activity opens its thread where it belongs, which leaves Activity.
+        navigator.open(thread("s1", covenID: nil))
+        XCTAssertNil(navigator.personPlace)
+        XCTAssertEqual(navigator.selected, .strix)
+        XCTAssertEqual(navigator.place?.id, "s1")
+        XCTAssertEqual(navigator.sidebarItem, .thread("s1"))
+        XCTAssertEqual(navigator.phonePath, [.place])
+
+        // The scope on screen, chosen again, leaves it too; so does going back on a phone.
+        navigator.openPlace(.activity)
+        navigator.select(.strix)
+        XCTAssertNil(navigator.personPlace)
+        navigator.openPlace(.activity)
+        navigator.leavePhoneRoutes(notIn: [.place])
+        XCTAssertNil(navigator.personPlace)
+        XCTAssertEqual(navigator.place?.id, "s1")
+    }
+
+    @MainActor
     func testAThreadMadeWhileSettingsIsOpen_doesNotTakeItsPlace() {
         // Asked for from an Overview, then Settings: the thread waits in its list.
         let navigator = ShellNavigator()

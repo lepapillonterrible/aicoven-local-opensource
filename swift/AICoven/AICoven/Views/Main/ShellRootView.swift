@@ -68,6 +68,7 @@ struct ShellRootView: View {
     private enum SwitcherFollowUp {
         case createCoven
         case settings
+        case activity
     }
 
     /// The covens in the person's order.
@@ -242,7 +243,7 @@ struct ShellRootView: View {
                 .navigationDestination(for: ShellNavigator.PhoneRoute.self) { route in
                     switch route {
                     case .place: phonePlace
-                    case .personPlace: phoneSettings
+                    case .personPlace: phonePersonPlace
                     }
                 }
         }
@@ -271,6 +272,7 @@ struct ShellRootView: View {
             threadActions: threadActions,
             drafts: drafts,
             coven: selectedCoven,
+            covens: orderedCovens,
             onNewThreadWithAgent: newThread(with:),
             onThreadCreated: threadCreated,
             onThreadAsked: threadMade,
@@ -284,11 +286,13 @@ struct ShellRootView: View {
             .stoneBackButton()
     }
 
-    /// Settings, pushed: the list, or the pane a request named. The list's
-    /// rows push their panes on this same stack.
+    /// The person's own place, pushed. Settings: the list, or the pane a
+    /// request named (the list's rows push their panes on this same
+    /// stack). Activity: its page.
     @ViewBuilder
-    private var phoneSettings: some View {
-        if case let .settings(request) = navigator.personPlace {
+    private var phonePersonPlace: some View {
+        switch navigator.personPlace {
+        case let .settings(request):
             Group {
                 if let request, let pane = SettingsPane(request) {
                     SettingsPaneView(pane: pane, request: request)
@@ -299,6 +303,15 @@ struct ShellRootView: View {
             }
             // Made anew for each ask, so it shows the pane now asked for.
             .id(navigator.personPlaceRequest)
+        case .activity:
+            ActivityView(navigator: navigator, covens: orderedCovens)
+                .navigationTitle("Activity")
+            #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+            #endif
+                .stoneBackButton()
+        case nil:
+            EmptyView()
         }
     }
 
@@ -319,6 +332,10 @@ struct ShellRootView: View {
                 switcherFollowUp = .settings
                 showSwitcher = false
             },
+            onOpenActivity: {
+                switcherFollowUp = .activity
+                showSwitcher = false
+            },
             onMoveCoven: moveCoven
         )
     }
@@ -330,6 +347,7 @@ struct ShellRootView: View {
         switch followUp {
         case .createCoven: showCreateCoven = true
         case .settings: openSettings(.settings)
+        case .activity: navigator.openPersonPlace(.activity)
         case nil: break
         }
     }
@@ -359,6 +377,7 @@ struct ShellRootView: View {
                 threadActions: threadActions,
                 drafts: drafts,
                 coven: selectedCoven,
+                covens: orderedCovens,
                 onNewThreadWithAgent: newThread(with:),
                 onThreadCreated: threadCreated,
                 onThreadAsked: threadMade,
@@ -536,6 +555,7 @@ private struct PhoneSwitcherSheet: View {
     let onSelect: (ShellScope) -> Void
     let onCreateCoven: () -> Void
     let onOpenSettings: () -> Void
+    let onOpenActivity: () -> Void
     let onMoveCoven: (_ covenID: String, _ index: Int) -> Void
     @ObservedObject private var activities = ThreadActivities.shared
 
@@ -551,6 +571,12 @@ private struct PhoneSwitcherSheet: View {
             onSelect: onSelect,
             onCreateCoven: onCreateCoven,
             onOpenSettings: onOpenSettings,
+            // The phone has no sidebar: Activity's row is here.
+            activity: (
+                isWaiting: ActivityGroups.isAnythingWaiting(in: activities.activity),
+                hasUnread: !activities.scopesWithUnread.isEmpty,
+                open: onOpenActivity
+            ),
             onMoveCoven: onMoveCoven
         )
         .padding(.top, Spacing.md)
