@@ -29,9 +29,10 @@ struct AssetLibraryView: View {
             .task { await model.load() }
             .onAppear { isOnScreen = true }
             .onDisappear { isOnScreen = false }
-            .onChange(of: model.loadFailed) { _, failed in
-                // Said to VoiceOver too, while the place is on screen.
-                if failed, isOnScreen {
+            .onChange(of: model.loadFailures) {
+                // Said to VoiceOver too, while the place is on screen: each
+                // failed reading, also one that fails after another did.
+                if isOnScreen {
                     AccessibilityNotification.Announcement(model.hasRead ? AssetLibraryModel.couldNotRefresh : "Couldn't load assets.").post()
                 }
             }
@@ -340,6 +341,8 @@ private struct NewAssetSheet: View {
     @State private var details = ""
     @State private var file: AssetRepository.NewFile?
     @State private var isChoosingFile = false
+    /// Whether the chosen file is being read: Create waits for it.
+    @State private var isReadingFile = false
     @State private var failure: String?
 
     #if os(iOS)
@@ -349,7 +352,7 @@ private struct NewAssetSheet: View {
     #endif
 
     private var canCreate: Bool {
-        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && file != nil && !model.isCreating
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && file != nil && !model.isCreating && !isReadingFile
     }
 
     var body: some View {
@@ -374,7 +377,7 @@ private struct NewAssetSheet: View {
                     } label: {
                         Label(file.map { AssetFile.keptName($0.name) } ?? "Choose File…", systemImage: "plus.square.fill")
                     }
-                    .disabled(model.isCreating)
+                    .disabled(model.isCreating || isReadingFile)
                 } footer: {
                     Group {
                         if let failure {
@@ -420,11 +423,19 @@ private struct NewAssetSheet: View {
         switch result {
         case let .success(files):
             guard let chosen = files.first else { return }
-            do {
-                file = try AssetFileChoice.read(chosen)
-                failure = nil
-            } catch {
-                say(AssetLibraryModel.words(forNotCreating: error))
+            // Read away from the main actor: a large file, or one a file
+            // provider has to fetch, does not hold the sheet up.
+            isReadingFile = true
+            Task {
+                let read = await Task.detached { Result { try AssetFileChoice.read(chosen) } }.value
+                isReadingFile = false
+                switch read {
+                case let .success(read):
+                    file = read
+                    failure = nil
+                case let .failure(error):
+                    say(AssetLibraryModel.words(forNotCreating: error))
+                }
             }
         case let .failure(error):
             // Closing the chooser is no failure; anything else is said.

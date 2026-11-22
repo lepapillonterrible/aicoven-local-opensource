@@ -23,7 +23,9 @@ nonisolated enum AssetLibraryRules {
 
     /// When something was last changed, shortly, as the cloud app says it:
     /// "Just now", "12m ago", "5h ago", "Yesterday", "3 days", then the day
-    /// and month. A time ahead of now is said as its day.
+    /// and month. A time ahead of now is said as its day. Days are counted
+    /// on the calendar, not in hours gone by: the day before yesterday is
+    /// "2 days" from its first minute to its last.
     static func shortTime(_ date: Date, now: Date, calendar: Calendar = .current) -> String {
         let day = Date.FormatStyle().month(.abbreviated).day()
         guard date <= now else { return date.formatted(day) }
@@ -33,11 +35,9 @@ nonisolated enum AssetLibraryRules {
             if let minutes = since.minute, minutes > 0 { return "\(minutes)m ago" }
             return "Just now"
         }
-        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) {
-            return "Yesterday"
-        }
-        let days = calendar.dateComponents([.day], from: date, to: now).day ?? 0
-        return days < 7 ? "\(days) days" : date.formatted(day)
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day ?? 0
+        if days == 1 { return "Yesterday" }
+        return (2 ..< 7).contains(days) ? "\(days) days" : date.formatted(day)
     }
 
     /// The quiet line under an asset's title: "status · type · who made it
@@ -139,6 +139,9 @@ final class AssetLibraryModel: ObservableObject {
     /// place says so in place of the list; otherwise the list stays and a
     /// line says it could not be refreshed.
     @Published private(set) var loadFailed = false
+    /// How many readings have failed: each is its own to tell of, also one
+    /// that fails after another did.
+    @Published private(set) var loadFailures = 0
     @Published var search = ""
     @Published var typeFilter: AssetType?
     @Published var statusFilter: AssetStatus?
@@ -157,8 +160,11 @@ final class AssetLibraryModel: ObservableObject {
     let covenID: String?
     private let source: Source
     private let signedIn: () -> String
-    /// Counts the readings, so that only the latest is shown.
+    /// Counts the readings, and remembers the latest that landed: one
+    /// that lands after a later one did is not shown over it. A reading
+    /// that was called off lands nothing, so one asked before it still can.
     private var readings = 0
+    private var landed = 0
 
     /// The app's own store and account unless a test gives others.
     init(covenID: String?, source: Source? = nil, signedIn: (() -> String)? = nil) {
@@ -190,17 +196,20 @@ final class AssetLibraryModel: ObservableObject {
         let account = signedIn()
         do {
             let read = try await source.assets(covenID, account)
-            guard reading == readings, signedIn() == account else { return }
+            guard reading > landed, signedIn() == account else { return }
+            landed = reading
             assets = read
             hasRead = true
             loadFailed = false
         } catch is CancellationError {
             // Whoever asked was called off: nothing was read, and what is shown stays.
         } catch {
-            guard reading == readings, signedIn() == account else { return }
+            guard reading > landed, signedIn() == account else { return }
+            landed = reading
             // The kind of failure only.
             AppErrorReporter.log(message: "Could not read the assets (\(type(of: error)))", context: "AssetLibraryModel.load")
             loadFailed = true
+            loadFailures += 1
         }
     }
 
@@ -223,7 +232,9 @@ final class AssetLibraryModel: ObservableObject {
         do {
             let asset = try await source.create(new, covenID, account)
             guard signedIn() == account else { return nil }
-            await load()
+            // Read in a task of its own: whoever pressed Create may be
+            // called off, and what was made is still to be shown.
+            await Task { await self.load() }.value
             guard signedIn() == account else { return nil }
             let shown = shown
             if !(shown.needsReview + shown.others).contains(where: { $0.id == asset.id }) { clearSearchAndFilters() }

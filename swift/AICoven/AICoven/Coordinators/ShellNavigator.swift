@@ -379,7 +379,7 @@ final class ShellNavigator: ObservableObject {
 
     /// What the phone's bar calls the scope's place while it is pushed: a
     /// thread's title, "New Thread", or the place's name as its button
-    /// names it (Memory, Agents, Connections).
+    /// names it (Memory, Agents, Assets, Connections).
     var phonePlaceTitle: String {
         guard let place = places[selected] else { return "" }
         if let thread = place.threadValue { return ThreadListRules.title(of: thread) }

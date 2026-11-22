@@ -96,9 +96,20 @@ final class AssetLibraryTests: XCTestCase {
         XCTAssertEqual(said(3600), "1h ago")
         XCTAssertEqual(said(7 * 3600 + 59 * 60), "7h ago", "Still today")
         XCTAssertEqual(said(8 * 3600 + 60), "Yesterday", "Before midnight")
-        XCTAssertEqual(said(32 * 3600), "Yesterday")
+        XCTAssertEqual(said(32 * 3600), "Yesterday", "At its first minute")
+        // Days are counted on the calendar: the day before yesterday is "2 days" from its last minute to its first, never "1 days".
+        XCTAssertEqual(said(32 * 3600 + 60), "2 days")
+        XCTAssertEqual(said(33 * 3600), "2 days")
+        XCTAssertEqual(said(47 * 3600), "2 days")
+        XCTAssertEqual(said(56 * 3600), "2 days")
         XCTAssertEqual(said(3 * 86400), "3 days")
         XCTAssertEqual(said(6 * 86400), "6 days")
+        XCTAssertEqual(said(6 * 86400 + 8 * 3600), "6 days", "Its first minute")
+        XCTAssertFalse(said(6 * 86400 + 8 * 3600 + 60).contains("days"), "A week back is its day")
+        for hours in 0 ..< 200 {
+            XCTAssertFalse(said(TimeInterval(hours) * 3600).hasPrefix("1 days"), "\(hours) hours ago")
+            XCTAssertFalse(said(TimeInterval(hours) * 3600).hasPrefix("0 days"), "\(hours) hours ago")
+        }
         let older = AssetLibraryRules.shortTime(now.addingTimeInterval(-9 * 86400), now: now, calendar: utc)
         XCTAssertFalse(older.contains("days"), "Then its day")
         XCTAssertFalse(older.contains("ago"))
@@ -216,6 +227,9 @@ final class AssetLibraryTests: XCTestCase {
         await model.load()
         XCTAssertTrue(model.loadFailed)
         XCTAssertEqual(model.assets.map(\.id), ["a", "b"], "The list stays as it was read before")
+        XCTAssertEqual(model.loadFailures, 1)
+        await model.load()
+        XCTAssertEqual(model.loadFailures, 2, "A reading that fails after another did is its own to tell of")
 
         stand.listFails = false
         await model.load()
@@ -264,6 +278,44 @@ final class AssetLibraryTests: XCTestCase {
         await reading.value
         XCTAssertEqual(model.assets.count, 0)
         XCTAssertFalse(model.hasRead)
+        XCTAssertFalse(model.loadFailed)
+    }
+
+    func testAReadingAskedBeforeOneThatWasCalledOffIsStillShown() async {
+        let stand = Stand()
+        stand.listed = [[asset("first")]]
+        let gate = Gate()
+        let calledOff = Gate()
+        // The second reading is called off; the first is still on its way.
+        let model = AssetLibraryModel(
+            covenID: nil,
+            source: AssetLibraryModel.Source(
+                assets: { _, _ in
+                    let reading = await MainActor.run { () -> Int in
+                        stand.readings += 1
+                        return stand.readings
+                    }
+                    if reading == 2 {
+                        await calledOff.wait()
+                        throw CancellationError()
+                    }
+                    await gate.wait()
+                    return await MainActor.run { stand.listed[0] }
+                },
+                create: { _, _, _ in throw CancellationError() }
+            ),
+            signedIn: { stand.account }
+        )
+        let first = Task { await model.load() }
+        await gate.arrived(1)
+        let second = Task { await model.load() }
+        await calledOff.arrived(1)
+        await calledOff.letOneThrough()
+        await second.value
+        XCTAssertFalse(model.hasRead)
+        await gate.letOneThrough()
+        await first.value
+        XCTAssertEqual(model.assets.map(\.id), ["first"], "Nothing newer landed: the reading asked before it is shown")
         XCTAssertFalse(model.loadFailed)
     }
 
