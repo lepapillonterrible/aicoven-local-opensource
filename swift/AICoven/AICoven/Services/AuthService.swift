@@ -384,6 +384,12 @@ class AuthService: ObservableObject {
                     arguments: [userId]
                 )
 
+                // What every agent of the user's covens, and of Strix, is told
+                try db.execute(
+                    sql: "DELETE FROM coven_context WHERE user_id = ?",
+                    arguments: [userId]
+                )
+
                 // Delete user's memory proposals
                 try db.execute(
                     sql: "DELETE FROM memory_proposals WHERE user_id = ?",

@@ -163,24 +163,46 @@ struct ContextBuilder {
         self.limits = limits
     }
 
-    /// The memory the turns of a thread of `account`'s read
-    /// (`MemoryPlace.read(inCoven:)`), by the coven the thread is stored
-    /// in. None where the thread is not that account's, where it cannot be
-    /// read, or where the account changes while it is: what cannot be
-    /// placed is not read. The coven itself is not read here: the store
-    /// reads and keeps a coven's memory only as the account whose coven it
-    /// is, so a coven that is gone, or is not that account's, has none.
-    func memoryPlaces(ofThread threadID: String?, for account: String) async -> [MemoryPlace] {
-        guard UserScope.currentUserID == account else { return [] }
-        guard let threadID else { return MemoryPlace.read(inCoven: nil) }
+    /// Where a thread of `account`'s is: the coven it is stored in, or
+    /// Strix for one in none (and for no thread). Nil where the thread is
+    /// not that account's, where it cannot be read, or where the account
+    /// changes while it is: what cannot be placed is told and reads
+    /// nothing of any place. The coven itself is not read here: the stores
+    /// read and keep what is a coven's only as the account whose coven it
+    /// is, so a coven that is gone, or is not that account's, has nothing.
+    func scope(ofThread threadID: String?, for account: String) async -> ShellScope? {
+        guard UserScope.currentUserID == account else { return nil }
+        guard let threadID else { return .strix }
         do {
             let covenID = try await threadRepository.covenID(ofThread: threadID, for: account)
-            guard UserScope.currentUserID == account else { return [] }
-            return MemoryPlace.read(inCoven: covenID)
+            guard UserScope.currentUserID == account else { return nil }
+            return ShellScope(covenID: covenID)
         } catch {
             // The kind of failure only.
-            AppErrorReporter.log(message: "A thread's memory could not be placed (\(type(of: error)))", context: "ContextBuilder.memoryPlaces")
-            return []
+            AppErrorReporter.log(message: "A thread could not be placed (\(type(of: error)))", context: "ContextBuilder.scope")
+            return nil
+        }
+    }
+
+    /// The memory the turns of a thread of `account`'s read
+    /// (`MemoryPlace.read(inCoven:)`), by where the thread is
+    /// (`scope(ofThread:for:)`); none where that cannot be told.
+    func memoryPlaces(ofThread threadID: String?, for account: String) async -> [MemoryPlace] {
+        await scope(ofThread: threadID, for: account).map { MemoryPlace.read(inCoven: $0.covenID) } ?? []
+    }
+
+    /// What every agent where the thread is is told ("Every agent here
+    /// knows…"), as a part of the agent's instructions under the cloud
+    /// app's heading; nil where there is none, or it cannot be read.
+    private func covenContext(in scope: ShellScope?, for account: String) async -> String? {
+        guard let scope else { return nil }
+        do {
+            let knows = try await CovenContextRepository.shared.context(ofCoven: scope.covenID, as: account)
+            return knows.isEmpty ? nil : "## Coven Context\n\(knows)"
+        } catch {
+            // The kind of failure only.
+            AppErrorReporter.log(message: "What a scope's agents are told could not be read (\(type(of: error)))", context: "ContextBuilder.covenContext")
+            return nil
         }
     }
 
@@ -246,6 +268,14 @@ struct ContextBuilder {
         }
         segments.system.append(LLMMessage(role: .system, content: systemPrompt))
 
+        // Where the thread is, and whose it is, read once: what its scope's
+        // agents are told, and its memory, are read as the same account.
+        let account = UserScope.currentUserID
+        let scope = await scope(ofThread: threadID, for: account)
+        if let knows = await covenContext(in: scope, for: account) {
+            segments.system.append(LLMMessage(role: .system, content: knows))
+        }
+
         // Layer 2: runtime info (timezone-aware via ToolService)
         let time = toolService.currentTime(timezone: .current)
         let timeInfo = "Current time: \(time.localISO8601) (timezone: \(time.timezoneIdentifier), UTC: \(time.utcISO8601))"
@@ -259,10 +289,7 @@ struct ContextBuilder {
         // Layer 4: memories – embedding-based when possible. A thread's
         // turns read the memory of where the thread is: its coven's pages,
         // or in no coven the person's own memory and Strix's pages.
-        // Whose they are is read once: the thread is placed, and its
-        // memory read, as the same account.
-        let account = UserScope.currentUserID
-        let places = await memoryPlaces(ofThread: threadID, for: account)
+        let places = scope.map { MemoryPlace.read(inCoven: $0.covenID) } ?? []
         let allMemories = places.isEmpty ? [] : try await embeddingService.searchRelevantMemories(
             query: question,
             in: places,

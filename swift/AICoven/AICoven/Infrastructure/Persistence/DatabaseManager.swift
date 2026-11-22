@@ -464,6 +464,49 @@ final class DatabaseManager {
                 """)
             }
 
+            // v15: what every agent of a scope is told ("Every agent here
+            // knows…"), one text for each coven of an account and one for
+            // Strix, kept under an empty coven id. Encrypted. A coven's
+            // text is kept only for a coven of the same account, and goes
+            // with its coven.
+            migrator.registerMigration("v15_coven_context") { db in
+                try db.create(table: "coven_context") { t in
+                    t.column("user_id", .text).notNull()
+                    t.column("coven_id", .text).notNull().defaults(to: "")
+                    t.column("text_ciphertext", .blob).notNull()
+                    t.column("updated_at", .datetime).notNull()
+                    t.primaryKey(["user_id", "coven_id"])
+                }
+                for (event, name) in [("INSERT", "insert"), ("UPDATE OF user_id, coven_id", "update")] {
+                    try db.execute(sql: """
+                    CREATE TRIGGER coven_context_require_user_id_\(name)
+                    BEFORE \(event) ON coven_context
+                    WHEN length(trim(NEW.user_id)) = 0
+                    BEGIN
+                        SELECT RAISE(ABORT, 'coven_context.user_id is required');
+                    END;
+                    """)
+                    try db.execute(sql: """
+                    CREATE TRIGGER coven_context_match_coven_user_\(name)
+                    BEFORE \(event) ON coven_context
+                    WHEN NEW.coven_id <> '' AND NOT EXISTS (
+                        SELECT 1 FROM covens
+                        WHERE covens.id = NEW.coven_id AND covens.user_id = NEW.user_id
+                    )
+                    BEGIN
+                        SELECT RAISE(ABORT, 'coven_context.coven_id must reference a coven owned by the same user');
+                    END;
+                    """)
+                }
+                try db.execute(sql: """
+                CREATE TRIGGER covens_take_their_context
+                AFTER DELETE ON covens
+                BEGIN
+                    DELETE FROM coven_context WHERE coven_id = OLD.id;
+                END;
+                """)
+            }
+
             try migrator.migrate(queue)
             dbQueue = queue
         } catch {
