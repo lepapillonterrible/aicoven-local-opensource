@@ -155,6 +155,10 @@ struct ShellRootView: View {
                 // leave is told of then.
                 let source = NotificationSource.shared
                 if phase != .active { source.wentAway() }
+                // A turn that runs keeps the app at its work behind other
+                // apps, as far as the system lets it.
+                let keeping = TurnKeepAlive.shared
+                if phase == .active { keeping.appCameToFront() }
             }
             // A thread was used, or made: the list follows it.
             .onReceive(NotificationCenter.default.publisher(for: ThreadService.threadUsed)) { _ in
