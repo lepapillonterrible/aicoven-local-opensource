@@ -169,6 +169,8 @@ final class SkillsModel: ObservableObject {
         case notListed
         /// The folder holds more files than GitHub lists of one.
         case notAllListed
+        /// GitHub could not be reached at all.
+        case notReached
         /// No Markdown file is directly there.
         case nothingThere
     }
@@ -201,9 +203,12 @@ final class SkillsModel: ObservableObject {
         } catch SkillsOnGitHub.Failure.notAllListed {
             return .notAllListed
         } catch {
-            // The kind of failure only.
-            AppErrorReporter.log(message: "GitHub did not list a place (\(type(of: error)))", context: "SkillsModel.addFromGitHub")
-            return .notListed
+            // The kind of failure only; none of an asking that was called off.
+            if !Task.isCancelled {
+                AppErrorReporter.log(message: "GitHub did not list a place (\(type(of: error)))", context: "SkillsModel.addFromGitHub")
+            }
+            // No answer at all is not a wrong address.
+            return error is URLError ? .notReached : .notListed
         }
         guard !listed.files.isEmpty || listed.leftOut > 0 else { return .nothingThere }
         var added = 0
@@ -244,6 +249,7 @@ final class SkillsModel: ObservableObject {
         case let .added(0, notAdded): return "\(files(notAdded)) there couldn't be added."
         case let .added(added, notAdded): return "Added \(skills(added)). \(files(notAdded)) couldn't be added."
         case .notListed: return "The skills couldn't be added. Check the address."
+        case .notReached: return "Couldn't reach GitHub. Check your connection and try again."
         case .notAllListed: return "That folder holds more files than GitHub lists at once, so nothing was added. Name a smaller folder."
         case .nothingThere: return "No Markdown files were found there."
         }

@@ -219,6 +219,14 @@ final class SkillsFromGitHubTests: XCTestCase {
             XCTAssertEqual(outcome, .notListed, "\(status)")
         }
 
+        // No answer at all is not a wrong address.
+        let offline = URLSessionConfiguration.ephemeral
+        offline.protocolClasses = [MockURLProtocol.self]
+        MockURLProtocol.handler = { _ in throw URLError(.notConnectedToInternet) }
+        let notReached = await SkillsModel(session: URLSession(configuration: offline)).addFromGitHub("github.com/ada/agent-skills", as: account)
+        XCTAssertEqual(notReached, .notReached)
+        XCTAssertEqual(SkillsModel.words(for: .notReached), "Couldn't reach GitHub. Check your connection and try again.")
+
         // A folder with no Markdown file directly in it.
         let (session, _) = try gitHub(listing: (200, listing([entry("README.txt"), entry("skills", type: "dir")])))
         let nothing = await SkillsModel(session: session).addFromGitHub("github.com/ada/agent-skills", as: account)
