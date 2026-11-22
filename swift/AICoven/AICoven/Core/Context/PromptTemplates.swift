@@ -69,6 +69,29 @@ enum PromptTemplates {
             ]
         ),
 
+        // Asset tools: the Assets library of the place the thread is in.
+        ToolDefinition(
+            name: "asset.search",
+            description: "Search the assets kept where this thread is (its coven's Assets, or the personal ones): work kept on purpose, such as mockups, charts, datasets and briefs. Matches titles, descriptions and file names. Archived assets are left out unless status is 'archived'.",
+            parameters: [
+                ToolParameter(name: "query", type: "string", description: "Optional words to look for", required: false),
+                ToolParameter(name: "type", type: "string", description: "Optional asset type, such as 'chart', 'dataset', 'design_mockup' or 'implementation_brief'", required: false),
+                ToolParameter(name: "status", type: "string", description: "Optional: 'draft', 'proposed', 'approved' or 'archived'", required: false),
+                ToolParameter(name: "approved_only", type: "boolean", description: "Optional: only assets a person has approved", required: false),
+                ToolParameter(name: "current_thread_only", type: "boolean", description: "Optional: only assets made in this thread", required: false),
+            ],
+            example: #"{"tool": "asset.search", "input": {"query": "revenue", "approved_only": true}, "reason": "Find the approved chart the user means"}"#
+        ),
+        ToolDefinition(
+            name: "asset.get",
+            description: "Read one asset by its id (from asset.search): its title, type, status, description, its files, and the text of its latest file where that is text.",
+            parameters: [
+                ToolParameter(name: "asset_id", type: "string", description: "The asset's id", required: true),
+                ToolParameter(name: "include_source", type: "boolean", description: "Optional: include the text of its latest file (default true)", required: false),
+            ],
+            example: #"{"tool": "asset.get", "input": {"asset_id": "6F1C2B0E-5A3D-4E9B-8C7A-1D2E3F4A5B6C"}, "reason": "Read the brief before answering"}"#
+        ),
+
         // File tools
         ToolDefinition(
             name: "file.read",
@@ -838,6 +861,7 @@ enum PromptTemplates {
 
     /// All tools combined.
     static let allTools: Set<String> = basicChatTools
+        .union(AssetTools.reading)
         .union(fileTools)
         .union(shellTools)
         .union(githubTools)
