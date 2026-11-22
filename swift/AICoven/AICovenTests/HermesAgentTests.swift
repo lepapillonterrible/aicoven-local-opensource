@@ -694,6 +694,12 @@ final class HermesAgentTests: XCTestCase {
         let start = try XCTUnwrap(HermesStub.requests.first)
         let sent = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(start.body.utf8)) as? [String: Any])
         XCTAssertEqual(sent["input"] as? String, "Sum this up\n\n[Attachment: notes.txt]\n```\nFor Hermes.\n```\n")
+        // Before the conversation it is told who answers, as the system's: Strix, where the turn is
+        // for no agent of a coven.
+        let history = try XCTUnwrap(sent["conversation_history"] as? [[String: String]])
+        XCTAssertEqual(history.first?["role"], "system")
+        XCTAssertEqual(history.first?["content"]?.hasPrefix("You are Strix, a helpful AI assistant.\n\n## Identity\n"), true)
+        XCTAssertEqual(history.count { $0["role"] == "system" }, 1)
         await DataEncryptionService.shared.lock()
     }
 

@@ -675,7 +675,10 @@ final class OpenClawTurnTests: XCTestCase {
         XCTAssertEqual(reports.all.last?.answer, "From OpenClaw.")
         XCTAssertEqual(model.calls, 0, "The turn went to OpenClaw, not to a model")
         let send = try XCTUnwrap(socket.sent.first { $0["method"] as? String == "chat.send" }?["params"] as? [String: Any])
-        XCTAssertEqual(send["message"] as? String, "user:\nEarlier\n\nassistant:\nNoted\n\nuser:\nAnd now?", "OpenClaw is given the thread so far")
+        let message = try XCTUnwrap(send["message"] as? String)
+        XCTAssertTrue(message.hasSuffix("\n\nuser:\nEarlier\n\nassistant:\nNoted\n\nuser:\nAnd now?"), "OpenClaw is given the thread so far")
+        XCTAssertTrue(message.hasPrefix("system:\nYou are Strix, a helpful AI assistant."), "After who answers")
+        XCTAssertEqual(message.components(separatedBy: "system:\n").count, 2, "Told once")
         let ids = await kept.ids
         XCTAssertEqual(ids, [send["idempotencyKey"] as? String ?? ""], "The run is kept with its turn")
 
@@ -741,7 +744,10 @@ final class OpenClawTurnTests: XCTestCase {
         try await chat.streamMessage(threadId: threadID, message: "Sum this up", attachments: [notes], onStateChange: { _ in })
 
         let send = try XCTUnwrap(socket.sent.first { $0["method"] as? String == "chat.send" }?["params"] as? [String: Any])
-        XCTAssertEqual(send["message"] as? String, "Sum this up\n\n[Attachment: notes.txt]\n```\nFor OpenClaw.\n```\n")
+        let message = try XCTUnwrap(send["message"] as? String)
+        XCTAssertTrue(message.hasSuffix("user:\nSum this up\n\n[Attachment: notes.txt]\n```\nFor OpenClaw.\n```\n"), message)
+        // And, first of all, who answers: Strix, where the turn is for no agent of a coven.
+        XCTAssertTrue(message.hasPrefix("system:\nYou are Strix, a helpful AI assistant.\n\n## Identity\n"), message)
         await DataEncryptionService.shared.lock()
     }
 
@@ -849,6 +855,23 @@ final class OpenClawTurnTests: XCTestCase {
         XCTAssertTrue(alone.hasPrefix("user:\nSum this up"))
         XCTAssertEqual(alone.count, OpenClawTurn.longestMessage)
         XCTAssertEqual(OpenClawTurn.message(tooLong, after: []), String(tooLong.prefix(OpenClawTurn.longestMessage)))
+
+        // What the agent is told first comes first, as the system's; and the message is then the person's.
+        XCTAssertEqual(OpenClawTurn.message("Hello", after: [], toldFirst: "You are Scout."), "system:\nYou are Scout.\n\nuser:\nHello")
+        XCTAssertEqual(
+            OpenClawTurn.message("And now?", after: [("user", "Hello"), ("assistant", "Hi")], toldFirst: "You are Scout."),
+            "system:\nYou are Scout.\n\nuser:\nHello\n\nassistant:\nHi\n\nuser:\nAnd now?"
+        )
+        XCTAssertEqual(OpenClawTurn.message("Hello", after: [], toldFirst: ""), "Hello", "Nothing to tell first")
+        // Too long: the oldest of the thread goes before what is told first does.
+        let keptLead = OpenClawTurn.message("And now?", after: [("user", "Oldest"), ("assistant", long)], toldFirst: "You are Scout.")
+        XCTAssertTrue(keptLead.hasPrefix("system:\nYou are Scout.\n\n"))
+        XCTAssertFalse(keptLead.contains("Oldest"))
+        XCTAssertTrue(keptLead.hasSuffix("user:\nAnd now?"))
+        // With no room for both, what is told first goes, and the message is as it would be alone.
+        XCTAssertEqual(OpenClawTurn.message(tooLong, after: [], toldFirst: "You are Scout."), String(tooLong.prefix(OpenClawTurn.longestMessage)))
+        let longLead = String(repeating: "c", count: OpenClawTurn.longestMessage)
+        XCTAssertEqual(OpenClawTurn.message("Hello", after: [("user", "Earlier")], toldFirst: longLead), "user:\nHello")
 
         XCTAssertEqual(OpenClawTurn.finalText(in: ["message": ["content": [["type": "text", "text": "From "], ["type": "text", "text": "parts"]]]]), "From parts")
         XCTAssertEqual(OpenClawTurn.finalText(in: ["text": "Plain"]), "Plain")

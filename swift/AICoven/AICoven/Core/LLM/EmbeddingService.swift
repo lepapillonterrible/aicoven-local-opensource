@@ -16,9 +16,12 @@ final class EmbeddingService {
     private let modelRouter: ModelRouter
     private let llmClients: [String: LLMClient]
 
-    init(memoryRepository: MemoryRepository = .shared) {
+    init(
+        memoryRepository: MemoryRepository = .shared,
+        environment: (models: [ModelDescriptor], clients: [String: LLMClient])? = nil
+    ) {
         self.memoryRepository = memoryRepository
-        let env = LLMConfiguration.makeEnvironment()
+        let env = environment ?? LLMConfiguration.makeEnvironment()
         modelRouter = HeuristicModelRouter(availableModels: env.models)
         llmClients = env.clients
     }
@@ -58,6 +61,9 @@ final class EmbeddingService {
     /// They are `account`'s where the caller has read whose they are (the
     /// account signed in now otherwise), and are not read if another is
     /// signed in by then.
+    ///
+    /// With `onDeviceOnly` the query is not sent to a provider to be
+    /// embedded: memories are matched by their words alone.
     func searchRelevantMemories(
         query: String,
         in places: [MemoryPlace],
@@ -65,12 +71,13 @@ final class EmbeddingService {
         topK: Int = 16,
         candidateLimit: Int = 200,
         includePII: Bool = false,
-        similarityThreshold: Float = 0.15
+        similarityThreshold: Float = 0.15,
+        onDeviceOnly: Bool = false
     ) async throws -> [LocalMemoryChunk] {
         let lowercasedQuery = query.lowercased()
         let queryTokens = tokenize(lowercasedQuery)
 
-        let queryEmbedding = try await embedText(query)
+        let queryEmbedding = onDeviceOnly ? nil : try await embedText(query)
         var allCandidates: [LocalMemoryChunk] = []
         let account = account ?? UserScope.currentUserID
         for place in places {
