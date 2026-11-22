@@ -11,7 +11,7 @@ struct ActivityView: View {
     /// they have been read: until then it is not known where proposals
     /// may wait.
     let covens: [Coven]
-    var covensAreKnown = true
+    let covensAreKnown: Bool
 
     @StateObject private var model = ActivityModel()
     @ObservedObject private var activities = ThreadActivities.shared

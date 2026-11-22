@@ -108,14 +108,6 @@ final class ActivityProposals: ObservableObject {
         return (Array(waiting.prefix(Self.most)), waiting.count > Self.most)
     }
 
-    func shown(without asked: Set<String>) -> [MemoryProposal] {
-        listing(without: asked).shown
-    }
-
-    func hasMore(without asked: Set<String>) -> Bool {
-        listing(without: asked).hasMore
-    }
-
     /// Whether everything that could hold a proposal of the signed-in
     /// account's has been read: only then can it be said that none
     /// waits. Not while the covens are not known.

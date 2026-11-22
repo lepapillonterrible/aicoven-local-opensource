@@ -576,7 +576,9 @@ actor MemoryProposalRepository {
                 // Only fetch proposals belonging to the current user
                 var request = MemoryProposalRecord
                     .filter(MemoryProposalRecord.Columns.userId == currentUserId)
-                    .order(MemoryProposalRecord.Columns.createdAt.desc)
+                    // Those made at the same moment in a fixed order, so
+                    // that a limit always leaves the same ones out.
+                    .order(MemoryProposalRecord.Columns.createdAt.desc, MemoryProposalRecord.Columns.id)
 
                 // One scope's proposals: a coven's, or, for none, the person's
                 // own (those made in no coven), never every coven's together.
