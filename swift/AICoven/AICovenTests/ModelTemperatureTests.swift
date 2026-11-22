@@ -200,6 +200,7 @@ final class ModelTemperatureTests: XCTestCase {
         XCTAssertEqual(first as NSDictionary, sent.bodies[1] as NSDictionary, "The model, messages, tools and longest answer are as they were")
         XCTAssertEqual(sent.bodies[1]["max_tokens"] as? Int, 300)
         XCTAssertNotNil(sent.bodies[1]["tools"])
+        XCTAssertTrue(ModelTemperature.isSent(provider: "openclaw", model: model), "It never answered without one: nothing is learned of it")
     }
 
     func testAnyOtherRefusalIsNotAskedAgain() async throws {

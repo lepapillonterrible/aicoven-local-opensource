@@ -3,8 +3,8 @@ import os
 
 /// Which models are asked with a temperature. Some refuse a request that
 /// carries one, whatever its value: OpenAI's reasoning models, and
-/// Anthropic's from Opus 4.7 on. Such a model is asked without one and
-/// answers at its own default.
+/// Anthropic's from 4.7 on, of any family. Such a model is asked without
+/// one and answers at its own default.
 nonisolated enum ModelTemperature {
     /// The models that refused a temperature while the app ran, as
     /// "provider model".
@@ -63,7 +63,8 @@ nonisolated enum ModelTemperature {
     /// Sends a chat request whose body is made by `body`: with
     /// `temperature` where the model takes one, with none where it does
     /// not. A model that refuses the temperature is asked once more
-    /// without it, and is asked without one for the rest of the app's run.
+    /// without it; if it then answers, it is asked without one for the
+    /// rest of the app's run.
     static func send(
         _ request: URLRequest,
         to model: String,
@@ -82,10 +83,15 @@ nonisolated enum ModelTemperature {
         guard let http = response as? HTTPURLResponse, isRefusal(status: http.statusCode, body: data) else {
             return (data, response)
         }
-        let key = key(provider, model)
-        refused.withLock { _ = $0.insert(key) }
         request.httpBody = try body(nil)
-        return try await session.data(for: request)
+        let again = try await session.data(for: request)
+        // Remembered only once the model has answered without one: a
+        // request refused for something else is no sign of what it takes.
+        if let http = again.1 as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) {
+            let key = key(provider, model)
+            refused.withLock { _ = $0.insert(key) }
+        }
+        return again
     }
 
     private static func key(_ provider: String, _ model: String) -> String {
