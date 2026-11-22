@@ -261,9 +261,15 @@ struct ContextBuilder {
         if let knows = await covenContext(in: scope, for: account) {
             parts.append(knows)
         }
-        let memories = try await memoryLines(in: scope, about: question, for: account)
-        if !memories.isEmpty {
-            parts.append(memories.joined(separator: "\n"))
+        do {
+            let memories = try await memoryLines(in: scope, about: question, for: account)
+            if !memories.isEmpty {
+                parts.append(memories.joined(separator: "\n"))
+            }
+        } catch RepositoryError.accountChanged {
+            // Another account signed in while the memory was read: there
+            // is nothing of the first's to tell.
+            return nil
         }
         guard UserScope.currentUserID == account else { return nil }
         if let agent, agent.account == account {
