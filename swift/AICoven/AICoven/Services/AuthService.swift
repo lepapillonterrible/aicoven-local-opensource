@@ -87,7 +87,6 @@ class AuthService: ObservableObject {
                     // Read again now that the threads are this account's.
                     ThreadActivities.shared.accountChanged()
                     MemoryProposalQuestions.shared.accountChanged()
-                    ToolApprovals.shared.accountChanged()
 
                     // One-time cleanup: clear stale test purchases that were cached
                     // during automated testing. This runs once per user.

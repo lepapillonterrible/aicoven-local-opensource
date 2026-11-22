@@ -102,7 +102,10 @@ nonisolated struct ActivityGroups: Equatable {
     /// approval the block above them shows, with the thread's name.
     static func waitingRows(_ waiting: [ActivityItem], asking approval: ToolApproval?) -> [ActivityItem] {
         guard let approval, approval.isOfATurn else { return waiting }
-        return waiting.filter { $0 != .approval($0.thread) || $0.thread.id != approval.threadID }
+        return waiting.filter { item in
+            if case .approval = item { return item.thread.id != approval.threadID }
+            return true
+        }
     }
 
     /// Whether anything waits for the person.
