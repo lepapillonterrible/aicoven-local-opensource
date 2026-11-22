@@ -60,7 +60,7 @@ final class MemoryProposalQuestions {
     /// being reviewed elsewhere just then) and the proposal still waits,
     /// the question is asked once more, saying so.
     func ask(_ proposal: MemoryProposalRecord, inThread threadID: String, as account: String) {
-        guard questions[proposal.id] == nil, !proposal.isUnreadable else { return }
+        guard questions[proposal.id] == nil else { return }
         questions[proposal.id] = Task { [weak self] in
             guard let self else { return }
             defer { questions[proposal.id] = nil }

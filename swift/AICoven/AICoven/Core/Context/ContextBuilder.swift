@@ -184,13 +184,6 @@ struct ContextBuilder {
         }
     }
 
-    /// The memory the turns of a thread of `account`'s read
-    /// (`MemoryPlace.read(inCoven:)`), by where the thread is
-    /// (`scope(ofThread:for:)`); none where that cannot be told.
-    func memoryPlaces(ofThread threadID: String?, for account: String) async -> [MemoryPlace] {
-        await scope(ofThread: threadID, for: account).map { MemoryPlace.read(inCoven: $0.covenID) } ?? []
-    }
-
     /// What every agent where the thread is is told ("Every agent here
     /// knows…"), as a part of the agent's instructions under the cloud
     /// app's heading; nil where there is none, or it cannot be read.
