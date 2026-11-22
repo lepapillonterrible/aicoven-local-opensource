@@ -40,7 +40,6 @@ final class DatabaseManager {
         databaseURL = dirURL.appendingPathComponent("aicoven.sqlite")
     }
 
-    /// Call this early in app startup (e.g., in AICovenApp) to open the DB and run migrations.
     /// Gives each memory that was written for a coven, by an account that
     /// has exactly one coven, to that coven (the v14 migration's rule).
     static let givingMemoriesToAnOnlyCoven = """
@@ -50,6 +49,7 @@ final class DatabaseManager {
       AND (SELECT COUNT(*) FROM covens WHERE covens.user_id = memory_chunks.user_id) = 1
     """
 
+    /// Call this early in app startup (e.g., in AICovenApp) to open the DB and run migrations.
     func configureIfNeeded() {
         guard dbQueue == nil else { return }
 

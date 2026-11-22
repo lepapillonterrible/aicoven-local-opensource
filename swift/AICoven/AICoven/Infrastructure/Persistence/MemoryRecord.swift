@@ -136,7 +136,10 @@ actor MemoryRepository {
         case .aboutMe:
             return own.filter(MemoryChunkRecord.Columns.covenId == nil).filter(MemoryChunkRecord.Columns.scope == "user")
         case .strix:
-            return own.filter(MemoryChunkRecord.Columns.covenId == nil).filter(MemoryChunkRecord.Columns.scope != "user")
+            // Not what a model once asked to keep for one conversation
+            // (scope "thread"): no turn read those, and none reads them now.
+            return own.filter(MemoryChunkRecord.Columns.covenId == nil)
+                .filter(!["user", "thread"].contains(MemoryChunkRecord.Columns.scope))
         case let .coven(id):
             return own.filter(MemoryChunkRecord.Columns.covenId == id)
         }

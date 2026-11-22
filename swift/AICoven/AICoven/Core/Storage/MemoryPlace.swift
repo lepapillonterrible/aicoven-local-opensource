@@ -6,7 +6,9 @@ nonisolated enum MemoryPlace: Hashable {
     /// scope "user". Strix's agents read it.
     case aboutMe
     /// Strix's own pages. Strix is no stored coven here, so its pages are
-    /// the memories kept in no coven that are not the person's own.
+    /// the memories kept in no coven that are not the person's own (nor
+    /// what a model once asked to keep for one conversation, scope
+    /// "thread", which is read nowhere).
     case strix
     /// A coven's pages.
     case coven(String)

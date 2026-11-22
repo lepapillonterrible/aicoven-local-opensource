@@ -83,6 +83,24 @@ final class MemoryPlacesTests: XCTestCase {
         XCTAssertEqual(own, ["About me \(mark)"])
         let strixs = try await texts(in: .strix).filter { $0.hasSuffix(mark) }
         XCTAssertEqual(strixs, ["Strix's \(mark)"])
+
+        // What a model once asked to keep for one conversation was stored in no coven, with the
+        // scope "thread". No turn read it then, and it is in no place now.
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        let old = "old-thread-note-\(UUID().uuidString)"
+        let account = account
+        let sealed = try await DataEncryptionService.shared.encrypt(Data("For one conversation \(mark)".utf8), purpose: "memory_chunk")
+        try await queue.write { db in
+            try db.execute(
+                sql: "INSERT INTO memory_chunks (id, scope, pii_flag, created_at, text_ciphertext, user_id) VALUES (?, 'thread', 0, ?, ?, ?)",
+                arguments: [old, Date(), sealed, account]
+            )
+        }
+        addTeardownBlock { try? await MemoryRepository.shared.deleteMemory(id: old, as: account) }
+        for place in [MemoryPlace.aboutMe, .strix, .coven(work)] {
+            let read = try await texts(in: place)
+            XCTAssertFalse(read.contains("For one conversation \(mark)"), "\(place)")
+        }
     }
 
     func testAPlaceIsReadAPageAtATime_newestFirst() async throws {
