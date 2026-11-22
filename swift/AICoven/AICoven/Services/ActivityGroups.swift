@@ -79,10 +79,12 @@ nonisolated struct ActivityGroups: Equatable {
     /// screen: each thread that newly waits for the person, and each reply
     /// that newly finished, in one announcement (several at once would
     /// cut each other off). What a turn under way says is not told as it
-    /// changes: its card reads it. Nil where nothing is new.
-    static func announcement(from old: ActivityGroups, to new: ActivityGroups) -> String? {
+    /// changes: its card reads it. Nor the thread whose approval is being
+    /// asked on the page (`asking`): the approvals' spot says that one
+    /// itself, once. Nil where nothing is new.
+    static func announcement(from old: ActivityGroups, to new: ActivityGroups, asking: ToolApproval? = nil) -> String? {
         let before = Set((old.waiting + old.finished).map(\.id))
-        let said = (new.waiting + new.finished).filter { !before.contains($0.id) }.compactMap { item -> String? in
+        let said = (waitingRows(new.waiting, asking: asking) + new.finished).filter { !before.contains($0.id) }.compactMap { item -> String? in
             let title = ThreadListRules.title(of: item.thread)
             return switch item {
             case .approval: "\(ConversationActivity.needsOKWords): \(title)"
@@ -93,6 +95,17 @@ nonisolated struct ActivityGroups: Equatable {
             }
         }
         return said.isEmpty ? nil : said.joined(separator: ". ")
+    }
+
+    /// Waiting for you's rows while an approval is being asked on the
+    /// page itself: without the row of the thread that asked it, whose
+    /// approval the block above them shows, with the thread's name.
+    static func waitingRows(_ waiting: [ActivityItem], asking approval: ToolApproval?) -> [ActivityItem] {
+        guard let approval, approval.isOfATurn else { return waiting }
+        return waiting.filter { item in
+            if case .approval = item { return item.thread.id != approval.threadID }
+            return true
+        }
     }
 
     /// Whether anything waits for the person.

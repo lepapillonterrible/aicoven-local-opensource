@@ -13,11 +13,17 @@ struct ActivityView: View {
     @StateObject private var model = ActivityModel()
     @ObservedObject private var activities = ThreadActivities.shared
     @ObservedObject private var engine = TurnEngine.shared
+    @ObservedObject private var approvals = ToolApprovals.shared
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.isPadLayout) private var isPadLayout
     @State private var isOnScreen = false
 
     static let loadFailure = "Couldn't load Activity."
+
+    /// The approval the spot on this page is asking now.
+    private var asking: ToolApproval? {
+        approvals.showing.flatMap { $0.phase == .asking ? $0.approval : nil }
+    }
 
     /// The groups, once the threads are read.
     private var groups: ActivityGroups? {
@@ -64,7 +70,9 @@ struct ActivityView: View {
         // Said to VoiceOver while the page is on screen: what newly waits
         // for the person, and each reply that newly finished.
         .onChange(of: groups) { old, new in
-            guard isOnScreen, let old, let new, let words = ActivityGroups.announcement(from: old, to: new) else { return }
+            // Not the approval the spot is asking: the spot says it itself.
+            guard isOnScreen, let old, let new,
+                  let words = ActivityGroups.announcement(from: old, to: new, asking: asking) else { return }
             AccessibilityNotification.Announcement(words).post()
         }
         .onChange(of: model.loadFailed) { _, failed in
@@ -129,8 +137,29 @@ struct ActivityView: View {
         .accessibilityIdentifier(identifier)
     }
 
+    /// Waiting for you: what is being asked of the person, answered here
+    /// as beside a thread (the approvals' one spot: one at a time, the
+    /// rest behind it), then the threads that wait.
     private func waitingSection(_ items: [ActivityItem]) -> some View {
-        section("Waiting for you", empty: "Nothing is waiting for you.", items: items, identifier: "activity-waiting")
+        let rows = ActivityGroups.waitingRows(items, asking: asking)
+        return VStack(alignment: .leading, spacing: Spacing.sm) {
+            Text("Waiting for you")
+                .font(.aicovenH2)
+                .foregroundStyle(Color.aicovenTextPrimary)
+                .accessibilityAddTraits(.isHeader)
+            if approvals.showing != nil {
+                ApprovalSpot(approvals: approvals)
+                    .frame(maxWidth: ApprovalBlock.spansTheWidth ? .infinity : 262, alignment: .leading)
+            }
+            if rows.isEmpty, approvals.showing == nil {
+                Text("Nothing is waiting for you.")
+                    .font(.aicovenBodySmall)
+                    .foregroundStyle(Color.aicovenTextSecondary)
+            } else {
+                ForEach(rows) { row($0) }
+            }
+        }
+        .accessibilityIdentifier("activity-waiting")
     }
 
     private func movingSection(_ items: [ActivityItem]) -> some View {
