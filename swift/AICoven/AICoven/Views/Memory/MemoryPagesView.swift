@@ -51,8 +51,9 @@ struct MemoryPagesView: View {
     @State private var knows: String?
     @State private var knowsReadFailed = false
     @State private var knowsFailure: String?
-    /// Counts the reads and the saves of the text: a read is applied only
-    /// if nothing has been read or saved since it began.
+    /// Counts the reads of the text, and the saves as each begins and
+    /// ends: a read is applied only if nothing has been read or saved
+    /// since it began.
     @State private var knowsRequests = 0
 
     /// A section of the page; `page` is `nil` for About me.
@@ -350,7 +351,12 @@ struct MemoryPagesView: View {
         isSavingKnows = true
         knowsFailure = nil
         Task {
-            defer { isSavingKnows = false }
+            defer {
+                isSavingKnows = false
+                // A read that began while this was saving read what was
+                // there before it: it is not applied now.
+                knowsRequests += 1
+            }
             do {
                 let kept = try await CovenContextRepository.shared.setContext(text, forCoven: scope.covenID, as: account)
                 guard UserScope.currentUserID == account else { return }

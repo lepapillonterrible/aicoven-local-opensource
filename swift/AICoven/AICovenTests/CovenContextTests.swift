@@ -218,10 +218,28 @@ final class CovenContextTests: XCTestCase {
         let toldNothing = try await told(inCoven)
         XCTAssertFalse(toldNothing.contains { $0.contains("## Coven Context") })
 
-        // Nor where what is kept cannot be opened: the turn goes on without it.
-        try await store.setContext("Written under another key.", forCoven: coven, as: account)
-        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        // Nor where what is kept cannot be opened, in a thread that can still be placed: the turn
+        // goes on without it. (Only the kept text is made unreadable: it is sealed for another use.)
+        try await store.setContext("Kept.", forCoven: coven, as: account)
+        let unopenable = try await DataEncryptionService.shared.encrypt(Data("Kept.".utf8), purpose: "something-else")
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        let account = account
+        try await queue.write { db in
+            try db.execute(
+                sql: "UPDATE coven_context SET text_ciphertext = ? WHERE user_id = ? AND coven_id = ?",
+                arguments: [unopenable, account, coven]
+            )
+        }
+        do {
+            _ = try await store.context(ofCoven: coven, as: account)
+            XCTFail("Read what the key cannot open")
+        } catch {
+            guard case CovenContextError.unreadable = error else { return XCTFail("\(type(of: error))") }
+        }
+        let placed = await builder.scope(ofThread: inCoven, for: account)
+        XCTAssertEqual(placed, .coven(coven), "The thread itself is still placed")
         let toldUnreadable = try await told(inCoven)
         XCTAssertFalse(toldUnreadable.contains { $0.contains("## Coven Context") })
+        XCTAssertFalse(toldUnreadable.isEmpty, "The turn is still told the rest")
     }
 }
