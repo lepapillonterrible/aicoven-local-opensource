@@ -85,6 +85,23 @@ final class ToolApprovalsTests: XCTestCase {
         XCTAssertEqual(approvals.answered, [:])
     }
 
+    func testAnAnswerGivenJustBeforeAnotherAccountSignsIn_isNotTaken_norKept() async {
+        let approvals = makeApprovals()
+        let first = approval(in: "thread-1")
+        let asking = Task { await approvals.ask(first) }
+        await asked(approvals, 1)
+
+        // Approve is pressed, and the account changes before the turn that asked has heard of it.
+        approvals.answer(first.id, approve: true)
+        approvals.accountChanged()
+        let answer = await asking.value
+
+        XCTAssertEqual(answer, .withdrawn, "What was approved is not done for an account that is gone")
+        XCTAssertEqual(approvals.answered, [:], "Nor is a line of it kept among the next account's")
+        XCTAssertNil(approvals.showing)
+        XCTAssertEqual(approvals.askingThreadIDs, [])
+    }
+
     // MARK: - Not while typing
 
     func testAnApprovalAskedWhileThePersonIsTyping_isHeldUntilTheyPause() async {

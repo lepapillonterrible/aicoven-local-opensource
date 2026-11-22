@@ -116,6 +116,9 @@ final class ToolApprovals: ObservableObject {
     static let answeredDuration: TimeInterval = 1.3
     static let leavingDuration: TimeInterval = 0.9
 
+    /// Counts the changes of account, so that what was asked of one is
+    /// not answered, or recorded, under the next.
+    private var accountChanges = 0
     /// The turns waiting, by approval id.
     private var asked: [String: CheckedContinuation<ApprovalAnswer, Never>] = [:]
     /// The approvals a screen has shown and VoiceOver has been told of.
@@ -170,6 +173,7 @@ final class ToolApprovals: ObservableObject {
     /// is stopped does not go on to do what it was asking about, even if
     /// Approve was pressed as it stopped.
     func ask(_ approval: ToolApproval) async -> ApprovalAnswer {
+        let account = accountChanges
         let answer = await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<ApprovalAnswer, Never>) in
                 guard !Task.isCancelled else {
@@ -197,6 +201,10 @@ final class ToolApprovals: ObservableObject {
             sayNoLongerWaiting(approval.id)
             return .withdrawn
         }
+        // Another account signed in since this was asked, perhaps just
+        // after it was answered: the answer is not taken, and nothing of
+        // it is kept among the next account's.
+        guard account == accountChanges else { return .withdrawn }
         if approval.isOfATurn, answer == .approved || answer == .denied {
             answered[approval.threadID, default: []].append(
                 WorkTrace.Approval(id: approval.id, subject: approval.subject, approved: answer == .approved)
@@ -242,6 +250,7 @@ final class ToolApprovals: ObservableObject {
     /// that asked are told it was withdrawn. Whoever is signed in next
     /// is shown nothing of it and cannot answer it.
     func accountChanged() {
+        accountChanges += 1
         for approvalID in Array(asked.keys) {
             settle(approvalID, with: .withdrawn)
         }
