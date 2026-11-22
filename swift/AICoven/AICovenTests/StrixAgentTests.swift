@@ -227,6 +227,18 @@ final class StrixAgentTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: UserScope.scopedKey("anthropic_model", for: ada)), "claude-sonnet-4-6")
         XCTAssertNil(StrixSettingsService.stored(of: grace))
 
+        // A model is looked up only for a provider that names one, and only from a connection of that provider.
+        let hermesKey = UserScope.scopedKey("strix_settings.v1", for: ada)
+        try defaults.set(JSONEncoder().encode(LocalStrixSettings(provider: "hermes")), forKey: hermesKey)
+        let onHermes = try await calm.loadPersonalStrix()
+        XCTAssertNil(onHermes.model, "Hermes names no model: none of another provider's is put beside it")
+        try defaults.set(JSONEncoder().encode(LocalStrixSettings(provider: "openai")), forKey: hermesKey)
+        let onOpenAI = try await calm.loadPersonalStrix()
+        XCTAssertNil(onOpenAI.model, "The first connection is Anthropic's: its model is not OpenAI's")
+        try defaults.set(JSONEncoder().encode(LocalStrixSettings(provider: "Anthropic")), forKey: hermesKey)
+        let onAnthropic = try await calm.loadPersonalStrix()
+        XCTAssertEqual(onAnthropic.model, "claude-sonnet-4-6")
+
         // A save is that account's too, whoever is signed in by the time it is written.
         signedIn.now = grace
         do {

@@ -56,7 +56,7 @@ actor StrixSettingsService {
     }
 
     /// Load the current personal Strix config, creating a default if needed.
-    /// Returns the normalized local settings used by StrixSettingsView.
+    /// Returns the settings as the agent form and Strix's Agents page show them.
     /// Note: Does NOT set hardcoded defaults - provider/model are derived from
     /// configured provider accounts or left nil if none are configured.
     ///
@@ -71,7 +71,10 @@ actor StrixSettingsService {
         // Only apply defaults if provider/model are not set AND user has
         // configured provider accounts. This avoids showing "gpt-4o" when
         // the user only has a Gemini key configured.
-        if settings.provider == nil || settings.model == nil {
+        // Hermes, and a model on this device, name no model here: there
+        // is none to look up for them.
+        let namesNoModel = ["hermes", "mlx"].contains(settings.provider?.lowercased() ?? "")
+        if settings.provider == nil || (settings.model == nil && !namesNoModel) {
             let defaultProvider = await firstConnection()
             // The connections looked up are those of whoever is signed in
             // now: they are not one account's to keep for another.
@@ -80,7 +83,9 @@ actor StrixSettingsService {
                 if settings.provider == nil {
                     settings.provider = defaultProvider.provider
                 }
-                if settings.model == nil {
+                // A model is taken only from a connection of the provider
+                // Strix runs on: another provider's model is not its model.
+                if settings.model == nil, defaultProvider.provider.lowercased() == settings.provider?.lowercased() {
                     settings.model = defaultProvider.defaultModel
                 }
                 // Persist any backfilled defaults
@@ -137,7 +142,7 @@ actor StrixSettingsService {
     }
 
     /// Update the current personal Strix configuration and return the
-    /// normalized local settings used by StrixSettingsView.
+    /// settings as they are then stored.
     func updatePersonalStrix(
         systemPrompt: String?,
         model: String?,

@@ -162,12 +162,12 @@ struct WorkspaceTab: Identifiable, Equatable {
         )
     }
 
-    /// Tab for personal Strix (default assistant) settings in the personal workspace
+    /// Strix's Agents place: Strix itself, listed as an agent is.
     static var personalStrix: WorkspaceTab {
         WorkspaceTab(
             id: "personal-strix",
             type: .personalStrixSettings,
-            title: "Strix Settings"
+            title: "Agents"
         )
     }
 

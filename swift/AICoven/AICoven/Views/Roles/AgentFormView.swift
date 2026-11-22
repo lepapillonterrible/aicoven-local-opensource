@@ -150,7 +150,9 @@ struct AgentFormView: View {
             }
             // The other connections' model lists fill the Runs on menu; the
             // chosen one's is read by `load()` and `choose`.
-            .task(id: loading ? [] : choices.accounts.map(\.id)) {
+            // Read again when the Runs on menu comes to be shown (the
+            // upgrade bought from this form, or known only after it opened).
+            .task(id: loading || !choosesWhatItRunsOn ? [] : choices.accounts.map(\.id)) {
                 await readOtherModels()
             }
             .onChange(of: choices.models(for: draft.accountId, provider: draft.provider).map(\.id)) { _, _ in followTheModelOnThisDevice() }
