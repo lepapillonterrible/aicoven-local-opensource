@@ -121,12 +121,12 @@ final class FigmaRenderTests: XCTestCase {
     }
 
     func testWhatFetchesARenderedPictureKeepsNothingOfIt() {
-        let configuration = FigmaToolService.unkeptSession.configuration
+        let configuration = UnkeptFetch.session.configuration
         XCTAssertNil(configuration.urlCache, "No cache, on disk or in memory")
         XCTAssertEqual(configuration.requestCachePolicy, .reloadIgnoringLocalAndRemoteCacheData)
         XCTAssertNil(configuration.httpCookieStorage)
         XCTAssertFalse(configuration.httpShouldSetCookies)
-        XCTAssertFalse(FigmaToolService.unkeptSession === URLSession.shared)
+        XCTAssertFalse(UnkeptFetch.session === URLSession.shared)
     }
 
     func testATurnsPictures_areKeptInOrder_andItsRendersAreCounted() {
