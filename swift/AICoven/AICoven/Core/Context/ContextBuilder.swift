@@ -30,6 +30,36 @@ struct ContextBuilder {
         static let mobile = Limits(maxRecentMessages: 6, maxRecentMemories: 4)
     }
 
+    /// Who answers a turn: an agent by its name, with the instructions the
+    /// person wrote for it, and the account whose agent it is. A turn is
+    /// told of it only while that account is the one signed in.
+    struct Agent: Equatable {
+        let name: String
+        let instructions: String?
+        let account: String
+
+        /// What the agent is told first, as the cloud app composes it: its
+        /// instructions, or for none that it is a helpful assistant of
+        /// that name; then, unless the instructions have such a section
+        /// already, that its name is the agent's and not the model's.
+        var systemPrompt: String {
+            let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            var prompt = instructions?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if prompt.isEmpty {
+                prompt = "You are \(name.isEmpty ? "Strix" : name), a helpful AI assistant."
+            }
+            guard !prompt.contains("## Identity") else { return prompt }
+            return """
+            \(prompt)
+
+            ## Identity
+            - When asked your name, always identify yourself using the role name "\(name.isEmpty ? "Assistant" : name)" from this system prompt, not the underlying model or provider names.
+            - Never claim that your name is Claude, Gemini, GPT-4, ChatGPT, or any other provider/model name. Those are implementation details, not your identity.
+            - If the user asks which models/providers you use, you may mention them, but your name must still be given as the role name above.
+            """
+        }
+    }
+
     /// Configuration for tool-enabled prompts.
     /// Conforms to Sendable since all properties are value types.
     struct ToolConfig {
@@ -214,12 +244,17 @@ struct ContextBuilder {
     ///     few turns while dropping older context first.
     ///   - toolConfig: Configuration for which tools are enabled and what
     ///     instructions to include. Defaults to basic chat tools.
+    ///   - agent: Who answers the turn. Its instructions are what the model
+    ///     is told first; with none given (an agent run of the app's own),
+    ///     or one of an account no longer signed in, nothing is said of who
+    ///     answers.
     func buildContext(
         threadID: String?,
         userMessage: String,
         images: [LLMImage] = [],
         maxContextTokens: Int? = nil,
-        toolConfig: ToolConfig? = nil
+        toolConfig: ToolConfig? = nil,
+        agent: Agent? = nil
     ) async throws -> [LLMMessage] {
         let config = toolConfig ?? .default
 
@@ -230,6 +265,11 @@ struct ContextBuilder {
         let toolContext = split.toolContext
 
         var segments = ContextSegments()
+
+        // Whose turn it is, read once: who answers, where the thread is,
+        // what its scope's agents are told and its memory are all read as
+        // the same account.
+        let account = UserScope.currentUserID
 
         // Layer 1: system contract (with tool documentation if tools are enabled)
         let systemPrompt: String = if !config.enabledTools.isEmpty {
@@ -261,9 +301,8 @@ struct ContextBuilder {
         }
         segments.system.append(LLMMessage(role: .system, content: systemPrompt))
 
-        // Where the thread is, and whose it is, read once: what its scope's
-        // agents are told, and its memory, are read as the same account.
-        let account = UserScope.currentUserID
+        // Where the thread is: what its scope's agents are told, and its
+        // memory, are read for it as that account.
         let scope = await scope(ofThread: threadID, for: account)
         if let knows = await covenContext(in: scope, for: account) {
             segments.system.append(LLMMessage(role: .system, content: knows))
@@ -351,6 +390,14 @@ struct ContextBuilder {
         // conversational so models do not echo it verbatim.
         let checklist = "Reply concisely. Ground your answer in the provided memories and conversation context—do not invent facts. If you used tools (web search, files), mention it naturally. Ask clarifying questions when details are ambiguous."
         segments.checklist.append(LLMMessage(role: .system, content: checklist))
+
+        // Who answers, and how the person asked it to: before anything
+        // else the model is told. Decided last, once everything that was
+        // waited for is in: not an agent of an account that is not the
+        // one this context was read as, nor once another is signed in.
+        if let agent, agent.account == account, UserScope.currentUserID == account {
+            segments.system.insert(LLMMessage(role: .system, content: agent.systemPrompt), at: 0)
+        }
 
         // If we have a token budget, apply truncation rules before returning.
         if let maxContextTokens {

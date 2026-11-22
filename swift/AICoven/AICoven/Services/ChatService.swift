@@ -364,6 +364,9 @@ actor ChatService {
         }
         threadsLastAnsweredByAnAgent.remove(threadId)
 
+        // Who answers, with its instructions: read once for the turn.
+        let agent = await answeringAgent(roleId: roleId)
+
         let descriptor: ModelDescriptor
         let client: LLMClient
 
@@ -701,7 +704,8 @@ actor ChatService {
                 userMessage: composedUserMessage,
                 images: attached.pictures + (turnPictures?.images ?? []),
                 maxContextTokens: promptBudget,
-                toolConfig: toolConfig
+                toolConfig: toolConfig,
+                agent: agent
             )
 
             do {
@@ -1078,7 +1082,8 @@ actor ChatService {
                 userMessage: composedUserMessage,
                 images: attached.pictures + (turnPictures?.images ?? []),
                 maxContextTokens: promptBudget,
-                toolConfig: finalToolConfig
+                toolConfig: finalToolConfig,
+                agent: agent
             )
 
             // A stopped turn does not ask for its answer.
@@ -1414,16 +1419,33 @@ actor ChatService {
         }
     }
 
-    /// Fetch the current Strix system prompt, if any, from local settings.
-    /// Errors are treated as "no system prompt" so chat continues gracefully.
-    private func currentSystemPrompt() async -> String? {
-        do {
-            let role = try await StrixSettingsService.shared.loadPersonalStrix()
-            return role.systemPrompt
-        } catch {
-            AppErrorReporter.log(error: error, context: "ChatService.currentSystemPrompt.loadPersonalStrix")
-            return nil
+    /// Who answers a turn, for what the model is told first: the coven's
+    /// agent the turn is for, with the instructions the person wrote for
+    /// it, or with no agent Strix with its own. It is read as the account
+    /// signed in when it is asked for (both reads are given that account,
+    /// and read nothing of another's), and is that account's: nil if
+    /// another is signed in by the time it has been read, and nil for an
+    /// agent that cannot be read (it is gone, or is not that account's).
+    /// The turn is then told nothing of who answers.
+    func answeringAgent(roleId: String?) async -> ContextBuilder.Agent? {
+        let account = await UserScope.currentUserID
+        let agent: ContextBuilder.Agent
+        if let roleId {
+            do {
+                let role = try await RoleService.shared.getRole(roleId: roleId, for: account)
+                agent = ContextBuilder.Agent(name: role.name, instructions: role.systemPrompt, account: account)
+            } catch {
+                // The kind of failure only.
+                AppErrorReporter.log(message: "A turn's agent could not be read (\(type(of: error)))", context: "ChatService.answeringAgent")
+                return nil
+            }
+        } else {
+            agent = await ContextBuilder.Agent(name: "Strix", instructions: StrixSettingsService.shared.instructions(of: account), account: account)
         }
+        // What was read is the account's that asked: not another's that
+        // signed in while it was read.
+        guard await UserScope.currentUserID == account else { return nil }
+        return agent
     }
 
     // MARK: - Deployment helpers

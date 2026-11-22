@@ -150,7 +150,7 @@ actor RoleService {
     /// Get a specific role by ID
     /// - Parameter roleId: The role ID
     /// - Returns: The role
-    func getRole(roleId: String) async throws -> Role {
-        try await CovenRepository.shared.getRole(roleId: roleId)
+    func getRole(roleId: String, for account: String? = nil) async throws -> Role {
+        try await CovenRepository.shared.getRole(roleId: roleId, for: account)
     }
 }

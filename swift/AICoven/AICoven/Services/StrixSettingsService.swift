@@ -56,6 +56,15 @@ actor StrixSettingsService {
         return settings
     }
 
+    /// The instructions `account` wrote for Strix, exactly as they are
+    /// stored (an empty text is returned as it is); nil where none are
+    /// stored or the settings cannot be read. Only read: nothing is
+    /// converted, defaulted or saved by asking.
+    func instructions(of account: String) -> String? {
+        guard let data = UserDefaults.standard.data(forKey: UserScope.scopedKey("strix_settings.v1", for: account)) else { return nil }
+        return (try? JSONDecoder().decode(LocalStrixSettings.self, from: data))?.systemPrompt
+    }
+
     /// Returns the first configured provider account (if any) to use as default.
     private func getFirstConfiguredProvider() async -> (provider: String, defaultModel: String?)? {
         do {
