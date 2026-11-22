@@ -315,7 +315,9 @@ final class ShellNavigatorTests: XCTestCase {
         XCTAssertEqual(navigator.place?.id, "s1")
     }
 
-    /// Holds each lookup of a thread until the test lets it go, and tells when it has begun.
+    /// Holds each lookup of a thread until the test lets it go, and tells when it has begun. Each
+    /// lookup is its own: letting one go forgets that it began, so the next of the same thread is
+    /// waited for anew.
     private actor Lookups {
         private var held: [String: CheckedContinuation<Void, Never>] = [:]
         private var begun: Set<String> = []
@@ -332,6 +334,7 @@ final class ShellNavigatorTests: XCTestCase {
         }
 
         func release(_ id: String) {
+            begun.remove(id)
             held.removeValue(forKey: id)?.resume()
         }
     }
