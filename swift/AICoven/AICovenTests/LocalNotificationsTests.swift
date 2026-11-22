@@ -138,6 +138,16 @@ final class LocalNotificationsTests: XCTestCase {
         XCTAssertTrue(long.hasSuffix("…"))
     }
 
+    // MARK: - A tap
+
+    func testATappedNotificationsIdSaysWhichThreadItIsAbout_andNothingElseDoes() {
+        XCTAssertEqual(LocalNotifications.threadID(ofNotification: LocalNotifications.id(forThread: "t1")), "t1")
+        XCTAssertEqual(LocalNotifications.threadID(ofNotification: "thread-A1B2-C3"), "A1B2-C3")
+        for other in ["", "thread-", "t1", "reminder-t1", "Thread-t1"] {
+            XCTAssertNil(LocalNotifications.threadID(ofNotification: other), other)
+        }
+    }
+
     // MARK: - When one is made
 
     func testOneIsMadeOnlyWhileTheAppIsNotInFront_allowed_wanted_andForTheAccountSignedIn() async {

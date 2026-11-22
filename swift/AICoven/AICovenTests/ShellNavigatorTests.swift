@@ -315,6 +315,110 @@ final class ShellNavigatorTests: XCTestCase {
         XCTAssertEqual(navigator.place?.id, "s1")
     }
 
+    /// Holds each lookup of a thread until the test lets it go, and tells when it has begun. Each
+    /// lookup is its own: letting one go forgets that it began, so the next of the same thread is
+    /// waited for anew.
+    private actor Lookups {
+        private var held: [String: CheckedContinuation<Void, Never>] = [:]
+        private var begun: Set<String> = []
+        private var hearing: [String: CheckedContinuation<Void, Never>] = [:]
+
+        func wait(for id: String) async {
+            begun.insert(id)
+            hearing.removeValue(forKey: id)?.resume()
+            await withCheckedContinuation { held[id] = $0 }
+        }
+
+        func began(_ id: String) async {
+            if !begun.contains(id) { await withCheckedContinuation { hearing[id] = $0 } }
+        }
+
+        func release(_ id: String) {
+            begun.remove(id)
+            held.removeValue(forKey: id)?.resume()
+        }
+    }
+
+    @MainActor
+    func testAThreadAskedForByATappedNotification_isOpenedWhereItBelongs_forItsAccountOnly() async {
+        let navigator = ShellNavigator()
+        let threads = ["mine": thread("mine", covenID: "work"), "hers": Thread(
+            id: "hers", userId: "grace", covenId: nil, title: "Hers",
+            createdAt: Date(timeIntervalSince1970: 0), updatedAt: nil, lastMessageAt: nil
+        )]
+        var signedIn = "ada"
+        let lookups = Lookups()
+        func ask(_ id: String, as account: String = "ada") -> Task<Void, Never> {
+            Task {
+                await navigator.openThread(askedFor: id, as: account, signedIn: { signedIn }) { id in
+                    await lookups.wait(for: id)
+                    return threads[id]
+                }
+            }
+        }
+        func found(_ id: String, for asking: Task<Void, Never>) async {
+            await lookups.began(id)
+            await lookups.release(id)
+            await asking.value
+        }
+
+        // Her own thread opens in its coven.
+        await found("mine", for: ask("mine"))
+        XCTAssertEqual(navigator.place?.id, "mine")
+        XCTAssertEqual(navigator.selected, .coven("work"))
+
+        // Another account's thread, or one that is gone, opens nothing.
+        navigator.showOverview()
+        await found("hers", for: ask("hers"))
+        await found("gone", for: ask("gone"))
+        XCTAssertNil(navigator.place)
+
+        // Another account signs in while the thread is looked up.
+        var asking = ask("mine")
+        await lookups.began("mine")
+        signedIn = "grace"
+        await lookups.release("mine")
+        await asking.value
+        XCTAssertNil(navigator.place, "Not opened for whoever is signed in by then")
+        signedIn = "ada"
+
+        // The person goes somewhere else while it is looked up.
+        asking = ask("mine")
+        await lookups.began("mine")
+        navigator.openPlace(.memory)
+        await lookups.release("mine")
+        await asking.value
+        XCTAssertEqual(navigator.sidebarItem, .memory, "Not over where they went")
+    }
+
+    @MainActor
+    func testOfTwoThreadsAskedForOnlyTheLaterIsOpened_whicheverIsFoundFirst() async {
+        let threads = ["a": thread("a", covenID: nil), "b": thread("b", covenID: nil)]
+        for firstFound in ["a", "b"] {
+            let navigator = ShellNavigator()
+            let lookups = Lookups()
+            func ask(_ id: String) -> Task<Void, Never> {
+                Task {
+                    await navigator.openThread(askedFor: id, as: "ada", signedIn: { "ada" }) { id in
+                        await lookups.wait(for: id)
+                        return threads[id]
+                    }
+                }
+            }
+            let first = ask("a")
+            await lookups.began("a")
+            let second = ask("b")
+            await lookups.began("b")
+            let lastFound = firstFound == "a" ? "b" : "a"
+            await lookups.release(firstFound)
+            await (firstFound == "a" ? first : second).value
+            await lookups.release(lastFound)
+            await (firstFound == "a" ? second : first).value
+
+            XCTAssertEqual(navigator.place?.id, "b", "The later tap, with \(firstFound) found first")
+        }
+    }
+
     @MainActor
     func testAThreadMadeWhileSettingsIsOpen_doesNotTakeItsPlace() {
         // Asked for from an Overview, then Settings: the thread waits in its list.
