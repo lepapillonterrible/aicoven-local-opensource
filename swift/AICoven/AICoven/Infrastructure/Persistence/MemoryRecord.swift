@@ -595,9 +595,12 @@ actor MemoryProposalRepository {
         }
     }
 
-    /// A proposal of `userID`'s; nil if there is none with that id.
+    /// A proposal of `userID`'s; nil if there is none with that id. Read
+    /// as the account's proposals are listed: with its own key, and after
+    /// any of them still stored as text is sealed.
     func loadProposal(id: String, for userID: String) async throws -> MemoryProposalRecord? {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        try await sealPlainText(of: userID, in: dbQueue)
         return try await AccountSeal.reading(as: userID) {
             let record = try await dbQueue.read { db in
                 try MemoryProposalRecord
@@ -675,6 +678,11 @@ actor MemoryProposalRepository {
     /// then nothing is changed. Throws `accountChanged` unless `userID` is
     /// the account signed in: a review is one account's, and is dropped if
     /// another is signed in by the time it lands.
+    ///
+    /// What is returned is the row as it is stored, its text not opened
+    /// (whoever settles it read the proposal first, and has its text):
+    /// nothing is waited for once it is settled, so nothing can fail
+    /// between its being settled and its being answered for.
     func settlePending(
         id: String,
         as status: String,
@@ -685,7 +693,7 @@ actor MemoryProposalRepository {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         guard await MainActor.run(body: { UserScope.currentUserID }) == userID else { throw RepositoryError.accountChanged }
         let now = Date()
-        let settled: MemoryProposalRecord? = try await dbQueue.write { db in
+        return try await dbQueue.write { db in
             guard var record = try MemoryProposalRecord
                 .filter(MemoryProposalRecord.Columns.id == id)
                 .filter(MemoryProposalRecord.Columns.userId == userID)
@@ -700,8 +708,6 @@ actor MemoryProposalRepository {
             try record.update(db)
             return record
         }
-        guard let settled else { return nil }
-        return try await opened(settled)
     }
 
     /// Makes a proposal of `userID`'s pending again: it was settled a

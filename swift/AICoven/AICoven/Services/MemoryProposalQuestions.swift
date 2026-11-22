@@ -1,3 +1,4 @@
+internal import Combine
 import Foundation
 
 /// Asks the person, beside the thread, whether to remember what an agent
@@ -14,9 +15,15 @@ final class MemoryProposalQuestions {
 
     typealias Asking = (ToolApproval) async -> ApprovalAnswer
     typealias Reviewing = (_ proposalID: String, _ approve: Bool) async throws -> Void
+    /// Whether a proposal of an account's is still waiting for an answer.
+    typealias Waiting = (_ proposalID: String, _ account: String) async -> Bool
+    /// Returns once no turn runs in a thread.
+    typealias TurnEnding = (_ threadID: String) async -> Void
 
     private let asking: Asking
     private let reviewing: Reviewing
+    private let isWaiting: Waiting
+    private let turnEnding: TurnEnding
     private let signedIn: () -> String
     /// The questions waiting for an answer, by proposal.
     private var questions: [String: Task<Void, Never>] = [:]
@@ -26,39 +33,52 @@ final class MemoryProposalQuestions {
         reviewing: @escaping Reviewing = { proposalID, approve in
             _ = try await MemoryService.shared.reviewProposal(proposalId: proposalID, action: approve ? "approve" : "reject")
         },
+        isWaiting: @escaping Waiting = { proposalID, account in
+            await (try? MemoryProposalRepository.shared.loadProposal(id: proposalID, for: account))?.status == "pending"
+        },
+        turnEnding: @escaping TurnEnding = { threadID in
+            for await running in TurnEngine.shared.$running.values where running[threadID] == nil {
+                break
+            }
+        },
         signedIn: @escaping () -> String = { UserScope.currentUserID }
     ) {
         self.asking = asking
         self.reviewing = reviewing
+        self.isWaiting = isWaiting
+        self.turnEnding = turnEnding
         self.signedIn = signedIn
     }
 
     /// Asks about a proposal of `account`'s made in `threadID`, without
-    /// waiting for the answer. An answer is taken only while that account
-    /// is still the one signed in. If the answer cannot be kept, the
-    /// question is asked once more, saying so.
+    /// waiting for the answer: once no turn runs in that thread, so the
+    /// question never comes up under the reply that proposed it. An
+    /// answer is taken only while that account is still the one signed
+    /// in. If the answer cannot be kept (it failed, or the proposal was
+    /// being reviewed elsewhere just then) and the proposal still waits,
+    /// the question is asked once more, saying so.
     func ask(_ proposal: MemoryProposalRecord, inThread threadID: String, as account: String) {
         guard questions[proposal.id] == nil, !proposal.isUnreadable else { return }
         questions[proposal.id] = Task { [weak self] in
             guard let self else { return }
             defer { questions[proposal.id] = nil }
-            var question = ToolApproval.memory(proposal.proposedContent, forACoven: proposal.covenId != nil, threadID: threadID)
+            await turnEnding(threadID)
             for attempt in 1 ... 2 {
+                guard !Task.isCancelled, signedIn() == account else { return }
+                let question = ToolApproval.memory(
+                    proposal.proposedContent, forACoven: proposal.covenId != nil, threadID: threadID, afterAFailedAnswer: attempt > 1
+                )
                 let answer = await asking(question)
                 guard answer == .approved || answer == .denied, signedIn() == account else { return }
                 do {
                     try await reviewing(proposal.id, answer == .approved)
                     return
-                } catch is ProposalReviewError {
-                    // Reviewed elsewhere meanwhile: there is nothing to ask again.
-                    return
                 } catch {
                     // The kind of failure only.
                     AppErrorReporter.log(message: "An answer about a memory could not be kept (\(type(of: error)))", context: "MemoryProposalQuestions.ask")
-                    guard attempt == 1, signedIn() == account else { return }
-                    question = ToolApproval.memory(
-                        proposal.proposedContent, forACoven: proposal.covenId != nil, threadID: threadID, afterAFailedAnswer: true
-                    )
+                    // Asked again only if it still waits: one reviewed
+                    // elsewhere meanwhile has had its answer.
+                    guard signedIn() == account, await isWaiting(proposal.id, account) else { return }
                 }
             }
         }

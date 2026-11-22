@@ -120,6 +120,24 @@ final class MemoryProposalQuestionsTests: XCTestCase {
         _ = try await MemoryService(memoryStore: MemoryRepository.shared).reviewProposal(proposalId: id, action: "approve")
         let memories = try await kept(in: coven)
         XCTAssertEqual(memories, ["Stored as text"])
+
+        // One read on its own, not through the list, is sealed the same, and reviewing it leaves no text behind.
+        let alone = "old-proposal-\(UUID().uuidString)"
+        try await queue.write { db in
+            try db.execute(
+                sql: """
+                INSERT INTO memory_proposals (id, user_id, coven_id, proposed_content, scope, status, created_at)
+                VALUES (?, ?, ?, 'Also stored as text', 'coven', 'pending', ?)
+                """,
+                arguments: [alone, account, coven, Date()]
+            )
+        }
+        let reviewedAlone = try await MemoryService(memoryStore: MemoryRepository.shared).reviewProposal(proposalId: alone, action: "reject")
+        XCTAssertEqual(reviewedAlone.proposedContent, "Also stored as text", "The answer still carries its words")
+        let left = try await queue.read { db in
+            try String.fetchOne(db, sql: "SELECT proposed_content FROM memory_proposals WHERE id = ?", arguments: [alone])
+        }
+        XCTAssertEqual(left, "")
     }
 
     func testAProposalTheKeyCannotOpen_saysSo_andIsNotApprovedAsItIs() async throws {
@@ -153,10 +171,13 @@ final class MemoryProposalQuestionsTests: XCTestCase {
 
     /// Asks through `answering`, and reviews with the real service.
     private func questions(answering: @escaping MemoryProposalQuestions.Asking) -> MemoryProposalQuestions {
-        MemoryProposalQuestions(asking: answering, reviewing: { id, approve in
-            _ = try await MemoryService(memoryStore: MemoryRepository.shared, embed: { _ in nil })
-                .reviewProposal(proposalId: id, action: approve ? "approve" : "reject")
-        })
+        MemoryProposalQuestions(asking: answering, reviewing: Self.review, turnEnding: { _ in })
+    }
+
+    /// Reviews as the app does, with no embedding to wait for.
+    private static let review: MemoryProposalQuestions.Reviewing = { id, approve in
+        _ = try await MemoryService(memoryStore: MemoryRepository.shared, embed: { _ in nil })
+            .reviewProposal(proposalId: id, action: approve ? "approve" : "reject")
     }
 
     func testApproveKeepsItWhereItWasProposed_denyDoesNot_andUnansweredItWaits() async throws {
@@ -212,9 +233,9 @@ final class MemoryProposalQuestionsTests: XCTestCase {
             reviewing: { id, approve in
                 reviews += 1
                 if reviews == 1 { throw RepositoryError.databaseUnavailable }
-                _ = try await MemoryService(memoryStore: MemoryRepository.shared, embed: { _ in nil })
-                    .reviewProposal(proposalId: id, action: approve ? "approve" : "reject")
-            }
+                try await Self.review(id, approve)
+            },
+            turnEnding: { _ in }
         )
         failingOnce.ask(proposal, inThread: "thread-1", as: account)
         await failingOnce.settled(proposal.id)
@@ -230,13 +251,124 @@ final class MemoryProposalQuestionsTests: XCTestCase {
                 asked.append(question.question)
                 return .approved
             },
-            reviewing: { _, _ in throw RepositoryError.databaseUnavailable }
+            reviewing: { _, _ in throw RepositoryError.databaseUnavailable },
+            turnEnding: { _ in }
         )
         alwaysFailing.ask(again, inThread: "thread-1", as: account)
         await alwaysFailing.settled(again.id)
         XCTAssertEqual(asked.count, 2)
         let still = try await status(of: again.id)
         XCTAssertEqual(still, "pending")
+    }
+
+    func testAnAnswerGivenWhileItIsReviewedElsewhere_isAskedForAgainOnlyIfTheProposalStillWaits() async throws {
+        let coven = try await newCoven()
+
+        // Reviewed in Memory's list just then, and that review went through: there is nothing to ask again.
+        let reviewed = try await propose("Ships on Fridays", in: coven)
+        var asked = 0
+        let reviewedElsewhere = MemoryProposalQuestions(
+            asking: { _ in
+                asked += 1
+                return .approved
+            },
+            reviewing: { id, _ in
+                try await Self.review(id, false)
+                throw ProposalReviewError.underWay
+            },
+            turnEnding: { _ in }
+        )
+        reviewedElsewhere.ask(reviewed, inThread: "thread-1", as: account)
+        await reviewedElsewhere.settled(reviewed.id)
+        XCTAssertEqual(asked, 1, "It has had its answer")
+        let memories = try await kept(in: coven)
+        XCTAssertEqual(memories, [])
+
+        // Under review elsewhere, and that review came to nothing: it still waits, so it is asked once more.
+        let stillWaiting = try await propose("Ships on Mondays", in: coven)
+        asked = 0
+        var reviews = 0
+        let underWayThenFree = MemoryProposalQuestions(
+            asking: { _ in
+                asked += 1
+                return .approved
+            },
+            reviewing: { id, approve in
+                reviews += 1
+                if reviews == 1 { throw ProposalReviewError.underWay }
+                try await Self.review(id, approve)
+            },
+            turnEnding: { _ in }
+        )
+        underWayThenFree.ask(stillWaiting, inThread: "thread-1", as: account)
+        await underWayThenFree.settled(stillWaiting.id)
+        XCTAssertEqual(asked, 2)
+        let kept = try await kept(in: coven)
+        XCTAssertEqual(kept, ["Ships on Mondays"])
+    }
+
+    func testTheQuestionIsAskedOnlyOnceNoTurnRunsInItsThread() async throws {
+        let coven = try await newCoven()
+        let proposal = try await propose("Ships on Fridays", in: coven)
+        let (ended, end) = AsyncStream<Void>.makeStream()
+        let (waited, wait) = AsyncStream<Void>.makeStream()
+        var asked = 0
+        let afterTheTurn = MemoryProposalQuestions(
+            asking: { _ in
+                asked += 1
+                return .denied
+            },
+            reviewing: Self.review,
+            turnEnding: { _ in
+                wait.yield()
+                for await _ in ended {
+                    break
+                }
+            }
+        )
+        afterTheTurn.ask(proposal, inThread: "thread-1", as: account)
+        for await _ in waited {
+            break
+        }
+        XCTAssertEqual(asked, 0, "Not under the reply that proposed it")
+        end.yield()
+        await afterTheTurn.settled(proposal.id)
+        XCTAssertEqual(asked, 1)
+    }
+
+    func testAProposalIsStoredOnlyForACovenOfTheSameAccount() async throws {
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        let theirs = "their-coven-\(UUID().uuidString)"
+        try await queue.write { db in
+            try db.execute(
+                sql: "INSERT INTO covens (id, name, created_at, updated_at, user_id) VALUES (?, ?, ?, ?, ?)",
+                arguments: [theirs, "Theirs", Date(), Date(), "someone-else"]
+            )
+        }
+        addTeardownBlock {
+            try? await queue.write { db in try db.execute(sql: "DELETE FROM covens WHERE id = ?", arguments: [theirs]) }
+        }
+        for coven in [theirs, "no-such-coven-\(UUID().uuidString)"] {
+            do {
+                _ = try await propose("For a coven that is not the account's", in: coven)
+                XCTFail("Stored a proposal for \(coven)")
+            } catch {}
+        }
+        // Nor is one of the account's own moved there.
+        let mine = try await newCoven()
+        let own = try await propose("Mine", in: mine)
+        do {
+            try await queue.write { db in
+                try db.execute(sql: "UPDATE memory_proposals SET coven_id = ? WHERE id = ?", arguments: [theirs, own.id])
+            }
+            XCTFail("Moved a proposal to another account's coven")
+        } catch {}
+        // One proposed in no coven is stored.
+        let personal = try await proposals.insertProposal(
+            eventId: nil, covenId: nil, proposedContent: "About the person", proposedTags: nil, scope: "user", reason: nil,
+            sourceMessageId: nil, proposedBy: "agent", title: nil, as: account
+        )
+        _ = try await proposals.settlePending(id: personal.id, as: "rejected", reviewedBy: nil, reviewFeedback: nil, for: account)
     }
 
     func testWhenAnotherAccountSignsIn_theQuestionLeavesUnanswered_andAnAnswerForTheFirstIsNotTaken() async throws {
@@ -256,7 +388,8 @@ final class MemoryProposalQuestionsTests: XCTestCase {
                 }
                 return .withdrawn
             },
-            reviewing: { _, _ in reviewed += 1 }
+            reviewing: { _, _ in reviewed += 1 },
+            turnEnding: { _ in }
         )
         asking.ask(waiting, inThread: "thread-1", as: me)
         for await _ in reached {
@@ -276,6 +409,7 @@ final class MemoryProposalQuestionsTests: XCTestCase {
                 return .approved
             },
             reviewing: { _, _ in reviewed += 1 },
+            turnEnding: { _ in },
             signedIn: { signedIn }
         )
         answeredLate.ask(waiting, inThread: "thread-1", as: me)

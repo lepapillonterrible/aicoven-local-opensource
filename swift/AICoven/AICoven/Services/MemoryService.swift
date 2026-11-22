@@ -51,7 +51,7 @@ nonisolated enum ProposalReviewError: LocalizedError, Equatable {
         switch self {
         case .underWay: "This proposal is already being reviewed."
         case .alreadyReviewed: "This proposal was already reviewed."
-        case .unreadable: "This proposal's text can't be opened, so it can only be rejected."
+        case .unreadable: "This proposal's text can't be opened, so it can't be approved as it is."
         }
     }
 }
@@ -266,7 +266,7 @@ actor MemoryService {
         guard existing.status == "pending" else { throw ProposalReviewError.alreadyReviewed }
 
         guard let storing else {
-            return try await mark(proposalId, as: status, feedback: feedback, for: account)
+            return try await mark(existing, as: status, feedback: feedback, for: account)
         }
         let text: String
         switch storing {
@@ -298,7 +298,7 @@ actor MemoryService {
         // Marked first, in one write that only a pending proposal passes:
         // the memory is then stored for a proposal no other review can
         // settle. If it cannot be stored, the proposal is pending again.
-        let settled = try await mark(proposalId, as: status, feedback: feedback, for: account)
+        let settled = try await mark(existing, as: status, feedback: feedback, for: account)
         do {
             try await memoryStore.storeMemory(
                 in: place,
@@ -326,13 +326,16 @@ actor MemoryService {
     }
 
     /// Marks a pending proposal of `account`'s as reviewed; throws
-    /// `.alreadyReviewed` if it is no longer pending.
-    private func mark(_ proposalId: String, as status: String, feedback: String?, for account: String) async throws -> MemoryProposal {
-        guard let updated = try await MemoryProposalRepository.shared.settlePending(
-            id: proposalId, as: status, reviewedBy: "local-user", reviewFeedback: feedback, for: account
+    /// `.alreadyReviewed` if it is no longer pending. The answer carries
+    /// the proposal's text as it was read before it was settled.
+    private func mark(_ proposal: MemoryProposalRecord, as status: String, feedback: String?, for account: String) async throws -> MemoryProposal {
+        guard var settled = try await MemoryProposalRepository.shared.settlePending(
+            id: proposal.id, as: status, reviewedBy: "local-user", reviewFeedback: feedback, for: account
         ) else {
             throw ProposalReviewError.alreadyReviewed
         }
-        return mapRecordToProposal(updated)
+        settled.proposedContent = proposal.proposedContent
+        settled.isUnreadable = proposal.isUnreadable
+        return mapRecordToProposal(settled)
     }
 }
