@@ -168,6 +168,65 @@ final class StrixAgentTests: XCTestCase {
         XCTAssertEqual(choices.runsOnLine(for: StrixAgentsView.row(for: LocalStrixSettings())), "")
     }
 
+    /// Who is signed in, for a service of the test's own. Sendable by hand: read and written under its lock.
+    private final class SignedIn: @unchecked Sendable {
+        private let lock = NSLock()
+        private var account: String
+
+        init(_ account: String) {
+            self.account = account
+        }
+
+        var now: String {
+            get { lock.withLock { account } }
+            set { lock.withLock { account = newValue } }
+        }
+    }
+
+    func testStrixsSettingsAreNotKeptForAnotherAccountThatSignsInWhileTheConnectionsAreLookedUp() async throws {
+        let ada = "strix-test-ada-\(UUID().uuidString)", grace = "strix-test-grace-\(UUID().uuidString)"
+        let keys = [ada, grace].flatMap { account in ["strix_settings.v1", "llm_provider", "anthropic_model"].map { UserScope.scopedKey($0, for: account) } }
+        addTeardownBlock { keys.forEach { UserDefaults.standard.removeObject(forKey: $0) } }
+        // Ada has instructions and nothing to run on yet, so her connections are looked up.
+        try defaults.set(JSONEncoder().encode(LocalStrixSettings(systemPrompt: "Ada's own instructions.")), forKey: keys[0])
+        let signedIn = SignedIn(ada)
+        let service = StrixSettingsService(
+            signedIn: { signedIn.now },
+            firstConnection: {
+                // Grace signs in while they are looked up.
+                signedIn.now = grace
+                return (provider: "anthropic", defaultModel: "claude-sonnet-4-6")
+            }
+        )
+
+        do {
+            _ = try await service.loadPersonalStrix()
+            XCTFail("Nothing is given once another account is signed in")
+        } catch RepositoryError.accountChanged {}
+
+        XCTAssertNil(StrixSettingsService.stored(of: grace), "Nothing of Ada's is kept as Grace's")
+        XCTAssertNil(defaults.string(forKey: UserScope.scopedKey("llm_provider", for: grace)))
+        XCTAssertNil(StrixSettingsService.stored(of: ada)?.provider, "Nor are Grace's connections kept as Ada's")
+        XCTAssertEqual(StrixSettingsService.stored(of: ada)?.systemPrompt, "Ada's own instructions.")
+
+        // With nobody else signing in, what Strix runs on is taken from the first connection, for the account that asked.
+        signedIn.now = ada
+        let calm = StrixSettingsService(signedIn: { signedIn.now }, firstConnection: { (provider: "anthropic", defaultModel: "claude-sonnet-4-6") })
+        let loaded = try await calm.loadPersonalStrix()
+        XCTAssertEqual([loaded.systemPrompt, loaded.provider, loaded.model], ["Ada's own instructions.", "anthropic", "claude-sonnet-4-6"])
+        XCTAssertEqual(StrixSettingsService.stored(of: ada)?.provider, "anthropic")
+        XCTAssertEqual(defaults.string(forKey: UserScope.scopedKey("anthropic_model", for: ada)), "claude-sonnet-4-6")
+        XCTAssertNil(StrixSettingsService.stored(of: grace))
+
+        // A save is that account's too, whoever is signed in by the time it is written.
+        signedIn.now = grace
+        do {
+            _ = try await calm.save(strix(), as: ada)
+            XCTFail("Nothing is saved as an account that is no longer signed in")
+        } catch RepositoryError.accountChanged {}
+        XCTAssertNil(StrixSettingsService.stored(of: grace))
+    }
+
     func testNothingIsSavedAsAnotherAccount_orOfWhatIsNotSomethingToSave() async throws {
         _ = try await StrixSettingsService.shared.save(strix(), as: account)
 

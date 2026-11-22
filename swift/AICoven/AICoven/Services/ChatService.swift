@@ -1533,7 +1533,11 @@ actor ChatService {
         // person's choice in Settings.
         if let role,
            let roleProvider = role.provider?.lowercased(), !roleProvider.isEmpty {
-            let roleModel = role.model ?? ""
+            // On this device a turn is answered by the model that is
+            // active there, whichever was stored with the agent (as for
+            // Strix): no other is loaded to answer.
+            let onDevice = roleProvider == "mlx" ? UserDefaults.standard.string(forKey: "MLXModelManager.activeModelID") : nil
+            let roleModel = onDevice ?? role.model ?? ""
             let runsItself = switch roleProvider {
             case "hermes": hermesAgent() != nil
             case "openclaw": openClawTurn("") != nil

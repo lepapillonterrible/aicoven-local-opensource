@@ -139,6 +139,63 @@ final class AgentTurnSettingsTests: XCTestCase {
         )
     }
 
+    /// Which model a turn's client was asked for.
+    private final class ModelHearingModel: LLMClient, @unchecked Sendable {
+        private let lock = NSLock()
+        private var heard: [String] = []
+
+        var asked: [String] {
+            lock.withLock { heard }
+        }
+
+        func completeChat(messages _: [LLMMessage], model: String, options _: ChatOptions) async throws -> LLMChatResponse {
+            lock.withLock { heard.append(model) }
+            return LLMChatResponse(message: LLMMessage(role: .assistant, content: "Heard."), providerID: "mlx", modelID: model, usage: nil)
+        }
+
+        func embed(texts: [String], model _: String) async throws -> [[Float]] {
+            Array(repeating: [0, 1], count: texts.count)
+        }
+    }
+
+    func testATurnForAnAgentOnThisDeviceIsAnsweredByTheModelThatIsActiveThere() async throws {
+        let defaults = UserDefaults.standard
+        let activeKey = "MLXModelManager.activeModelID"
+        let was = defaults.object(forKey: activeKey)
+        defer { defaults.set(was, forKey: activeKey) }
+        defaults.set("active-now", forKey: activeKey)
+
+        let coven = try await CovenService.shared.createCoven(name: "Device \(UUID().uuidString)")
+        let thread = try await ThreadService.shared.createThread(title: "Device \(UUID().uuidString)", covenId: coven.id).id
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await ThreadService.shared.deleteThread(threadId: thread)
+            try? await CovenService.shared.deleteCoven(id: coven.id)
+        }
+        // Saved while another model was the active one.
+        let agent = try await RoleService.shared.createRole(covenId: coven.id, name: "Scout", model: "saved-earlier", provider: "mlx")
+        let model = ModelHearingModel()
+        let chat = ChatService(
+            contextBuilder: ContextBuilder(limits: .init(maxRecentMessages: 4, maxRecentMemories: 4)),
+            modelRouter: HeuristicModelRouter(availableModels: [
+                // The router knows the model that is active on the device, and one elsewhere.
+                ModelDescriptor(providerID: "mlx", modelID: "active-now", maxContextTokens: 4096, supportsTools: false, supportsEmbeddings: false, costClass: .free),
+                ModelDescriptor(providerID: "other", modelID: "elsewhere", maxContextTokens: 200_000, supportsTools: true, supportsEmbeddings: false, costClass: .expensive),
+            ]),
+            llmClients: ["mlx": model, "other": ModelHearingModel()],
+            threadStore: ThreadRepository.shared,
+            toolService: ToolService.shared,
+            shouldAutoRefreshEnvironment: false,
+            hermesAgent: { nil },
+            openClawTurn: { _ in nil }
+        )
+
+        try await chat.streamMessage(threadId: thread, message: "Hello", roleId: agent.id, onStateChange: { _ in })
+
+        XCTAssertFalse(model.asked.isEmpty, "The model on this device answers, not one elsewhere")
+        XCTAssertEqual(Set(model.asked), ["active-now"], "The one that is active, whichever was stored with the agent")
+    }
+
     func testATurnAsksWithItsAgentsTemperatureAndLongestAnswer_andWithTheAppsOwnForNoAgent() async throws {
         let defaults = UserDefaults.standard
         let keys = ["llm_provider", "anthropic_model", "openai_model", "strix_settings.v1"].map(UserScope.scopedKey)

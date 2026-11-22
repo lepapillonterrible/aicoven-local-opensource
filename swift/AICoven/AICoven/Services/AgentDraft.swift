@@ -92,8 +92,9 @@ nonisolated struct AgentDraft: Equatable {
     }
 
     /// Strix's draft, from its settings: its name and face are its own.
-    /// Where none is stored, its longest answer shows as what its turns
-    /// have been given so far, and its steps as the app's own number.
+    /// Where none is stored, its longest answer shows as 4096 (what a
+    /// turn answered by Anthropic has been given so far; a model on this
+    /// device was given less), and its steps as the app's own number.
     init(strix: LocalStrixSettings, appSteps: Int) {
         name = "Strix"
         iconSymbol = "sparkles"

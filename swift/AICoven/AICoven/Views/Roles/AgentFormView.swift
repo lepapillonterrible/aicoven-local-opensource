@@ -148,6 +148,7 @@ struct AgentFormView: View {
             .task(id: loading ? [] : choices.accounts.map(\.id)) {
                 await readOtherModels()
             }
+            .onChange(of: choices.models(for: draft.accountId).map(\.id)) { _, _ in followTheModelOnThisDevice() }
             .onAppear {
                 isOnScreen = true
                 analytics.trackScreenView(
@@ -594,12 +595,16 @@ struct AgentFormView: View {
             await choices.loadModels(for: accountId)
             guard generation == loadGeneration, draft.accountId == accountId else { return }
             draft.takeLoadedModels(choices.models(for: accountId), isNewAgent: isAdd)
-            // On this device Strix answers with the model that is active
-            // there, whatever was stored: that is the one shown.
-            if isStrix, draft.provider == "mlx", let active = choices.models(for: accountId).first {
-                draft.model = active.id
-            }
+            followTheModelOnThisDevice()
         }
+    }
+
+    /// On this device an agent answers with the model that is active
+    /// there, whatever was stored with it: that is the one shown and
+    /// saved, also when another is made active while the form is open.
+    private func followTheModelOnThisDevice() {
+        guard draft.provider == "mlx", let active = choices.models(for: draft.accountId).first, draft.model != active.id else { return }
+        draft.model = active.id
     }
 
     /// Chooses the Runs on item: the connection and, when the item was one

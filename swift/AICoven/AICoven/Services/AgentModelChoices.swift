@@ -17,22 +17,35 @@ final class AgentModelChoices: ObservableObject {
         var models: (_ accountId: String) async throws -> [ProviderInitializationStatus.ModelMetadata]
         /// Whether a connection names an OpenClaw Gateway.
         var hasGateway: (_ accountId: String) async -> Bool
+        /// The model that is active on this device, now and each time
+        /// another is made active; nil while none is.
+        var onDeviceModel: AnyPublisher<ProviderInitializationStatus.ModelMetadata?, Never>
+
+        init(
+            accounts: @escaping () async throws -> [ProviderAccount],
+            models: @escaping (_ accountId: String) async throws -> [ProviderInitializationStatus.ModelMetadata],
+            hasGateway: @escaping (_ accountId: String) async -> Bool,
+            onDeviceModel: AnyPublisher<ProviderInitializationStatus.ModelMetadata?, Never> = Just(nil).eraseToAnyPublisher()
+        ) {
+            self.accounts = accounts
+            self.models = models
+            self.hasGateway = hasGateway
+            self.onDeviceModel = onDeviceModel
+        }
 
         static let stored = Source(
             accounts: { try await ProviderAccountService.shared.loadProviderAccounts() },
-            models: { id in
-                let service = ProviderAccountService.shared
-                let models = try await service.getInitializationStatus(accountId: id).modelMetadata
-                guard try await service.loadProviderAccounts().first(where: { $0.id == id })?.provider.lowercased() == "mlx" else {
-                    return models
+            models: { try await ProviderAccountService.shared.getInitializationStatus(accountId: $0).modelMetadata },
+            hasGateway: { await (try? ProviderAccountService.shared.gatewayAddress(forAccount: $0)) != nil },
+            onDeviceModel: MLXModelManager.shared.$activeModelID
+                .map { active in
+                    active.map { id in
+                        ProviderInitializationStatus.ModelMetadata(
+                            id: id, name: MLXModelManager.shared.catalog.first { $0.id == id }?.displayName, provider: "mlx", contextLength: nil
+                        )
+                    }
                 }
-                // On this device a turn is answered by the model made
-                // active in its settings, and by no other: that is the one
-                // an agent can be put on.
-                let active = await MainActor.run { MLXModelManager.shared.activeModelID }
-                return models.filter { $0.id == active }
-            },
-            hasGateway: { await (try? ProviderAccountService.shared.gatewayAddress(forAccount: $0)) != nil }
+                .eraseToAnyPublisher()
         )
     }
 
@@ -46,6 +59,12 @@ final class AgentModelChoices: ObservableObject {
     }
 
     @Published private var held: Held
+    /// The model that is active on this device, kept current: on this
+    /// device a turn is answered by the model made active in its settings
+    /// and by no other, so it is the one model a connection to on-device
+    /// models offers.
+    @Published private var onDevice: [ProviderInitializationStatus.ModelMetadata] = []
+    private var watchingOnDevice: AnyCancellable?
 
     /// What is held, while the account it was read for is the one signed
     /// in: nothing of it once another is.
@@ -82,6 +101,14 @@ final class AgentModelChoices: ObservableObject {
         self.source = source
         self.signedIn = signedIn
         held = Held(account: signedIn())
+        watchingOnDevice = source.onDeviceModel.sink { [weak self] active in
+            self?.onDevice = active.map { [$0] } ?? []
+        }
+    }
+
+    /// Whether a connection is to models on this device.
+    private func isOnDevice(_ accountId: String) -> Bool {
+        account(accountId)?.provider.lowercased() == "mlx"
     }
 
     /// Makes what is held the signed-in account's: what was read for
@@ -116,6 +143,7 @@ final class AgentModelChoices: ObservableObject {
 
     func models(for accountId: String?) -> [ProviderInitializationStatus.ModelMetadata] {
         guard let accountId else { return [] }
+        if isOnDevice(accountId) { return onDevice }
         return shown.modelsByAccount[accountId] ?? []
     }
 
@@ -126,6 +154,8 @@ final class AgentModelChoices: ObservableObject {
     /// whatever list the connection already had, and one that finishes
     /// after another account signed in leaves the list alone.
     func loadModels(for accountId: String) async {
+        // The model on this device is known as it changes: nothing to ask.
+        guard !isOnDevice(accountId) else { return }
         let account = signedIn()
         let key = "\(account) \(accountId)"
         if let underWay = modelReads[key] {
