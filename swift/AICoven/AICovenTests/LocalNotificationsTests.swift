@@ -26,21 +26,55 @@ final class LocalNotificationsTests: XCTestCase {
         )
     }
 
+    /// Holds whoever waits at it until the test opens it, and tells when someone has come.
+    private actor Gate {
+        private var isOpen = false
+        private var held: [CheckedContinuation<Void, Never>] = []
+        private var arrivals = 0
+        private var hearing: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+
+        func wait() async {
+            arrivals += 1
+            let due = hearing.filter { $0.count <= arrivals }
+            hearing.removeAll { $0.count <= arrivals }
+            due.forEach { $0.continuation.resume() }
+            if !isOpen { await withCheckedContinuation { held.append($0) } }
+        }
+
+        /// Returns once `count` have come to wait here.
+        func arrived(_ count: Int = 1) async {
+            if arrivals < count { await withCheckedContinuation { hearing.append((count, $0)) } }
+        }
+
+        func open() {
+            isOpen = true
+            held.forEach { $0.resume() }
+            held = []
+        }
+    }
+
     /// The system's side, as the test stands in for it. Sendable by hand: read and written on the main actor only.
     private final class System: @unchecked Sendable {
         var permission = LocalNotifications.Permission.allowed
         /// What the person answers when the system asks.
         var allows = true
         var asked = 0
+        /// Where reading the permission, and the system's question, wait, if anywhere.
+        var readingWaits: Gate?
+        var askingWaits: Gate?
         var shown: [(id: String, notification: ComposedNotification)] = []
         var withdrawn: [String] = []
         var withdrewAll = 0
 
         var center: LocalNotifications.Center {
             LocalNotifications.Center(
-                permission: { [self] in permission },
+                permission: { [self] in
+                    await readingWaits?.wait()
+                    return permission
+                },
                 ask: { [self] in
                     asked += 1
+                    await askingWaits?.wait()
                     permission = allows ? .allowed : .denied
                     return allows
                 },
@@ -162,17 +196,60 @@ final class LocalNotificationsTests: XCTestCase {
 
     func testWhatWasNotifiedLeavesWhenItsThreadIsShown_andAllOfItWhenTheAccountChanges() async {
         let system = System()
+        system.permission = .notAsked
         let notifications = notifications(system)
         notifications.threadShown("t1")
         XCTAssertEqual(system.withdrawn, ["thread-t1"])
 
         await notifications.offerIfUseful(agentName: "Scout", as: "ada")
+        XCTAssertNotNil(notifications.offer)
         notifications.accountChanged()
         XCTAssertEqual(system.withdrewAll, 1, "Nothing notified to the first stays on the screen")
         XCTAssertNil(notifications.offer)
     }
 
+    func testNotificationsTurnedOffWhileOneIsOnItsWay_isNotMade() async {
+        let system = System()
+        system.readingWaits = Gate()
+        let notifications = notifications(system)
+        // The permission has not been read yet: making one waits for it.
+        let making = Task { await notifications.notify(.finished(reply: "Done."), in: self.thread(), placeName: "Client work", as: "ada") }
+        await system.readingWaits?.arrived()
+        notifications.setOn(false, for: "ada")
+        await system.readingWaits?.open()
+
+        let made = await making.value
+        XCTAssertFalse(made)
+        XCTAssertEqual(system.shown.count, 0, "Nothing is shown after the person turned them off")
+    }
+
     // MARK: - Asking for the permission
+
+    func testWhileTheSystemIsAskingNothingElseAsksOrIsOffered_andTheLineIsGoneOnceItHasAnswered() async {
+        let system = System()
+        system.permission = .notAsked
+        system.askingWaits = Gate()
+        let notifications = notifications(system)
+        await notifications.refreshPermission()
+
+        let turningOn = Task { await notifications.turnOn() }
+        await system.askingWaits?.arrived()
+        XCTAssertTrue(notifications.isAsking)
+        // A second press, and a reply that finishes meanwhile.
+        await notifications.turnOn()
+        await notifications.offerIfUseful(agentName: "Scout", as: "ada")
+        XCTAssertEqual(system.asked, 1, "The system asks once")
+        XCTAssertNil(notifications.offer)
+
+        await system.askingWaits?.open()
+        await turningOn.value
+        XCTAssertFalse(notifications.isAsking)
+        XCTAssertNil(notifications.offer)
+        XCTAssertEqual(notifications.permission, .allowed)
+        // What Settings says then is true of the account's own switch.
+        XCTAssertEqual(NotificationsSettingsView.wordsWhenAllowed(isOn: true), "Notifications are on.")
+        XCTAssertEqual(NotificationsSettingsView.wordsWhenAllowed(isOn: false), "This device allows notifications. They are turned off for your account.")
+    }
 
     func testTheLineIsOfferedWhereThePermissionWasNeverAskedFor_andNotForAWeekAfterNotNow() async {
         let system = System()
@@ -224,10 +301,15 @@ final class LocalNotificationsTests: XCTestCase {
         var finished: [String] = []
     }
 
-    private func source(_ told: Told, threads: [AICoven.Thread], account: @escaping @MainActor () -> String = { "ada" }) -> NotificationSource {
+    private func source(
+        _ told: Told, threads: [AICoven.Thread], lookingUpWaits: Gate? = nil, account: @escaping @MainActor () -> String = { "ada" }
+    ) -> NotificationSource {
         NotificationSource(dependencies: .init(
             account: account,
-            thread: { id in threads.first { $0.id == id } },
+            thread: { id in
+                await lookingUpWaits?.wait()
+                return threads.first { $0.id == id }
+            },
             placeName: { _ in "Client work" },
             notify: { event, thread, place, account in told.events.append((event, thread.id, place, account)) },
             replyFinished: { thread, _ in told.finished.append(thread.id) }
@@ -287,6 +369,44 @@ final class LocalNotificationsTests: XCTestCase {
         }
         XCTAssertEqual(told.events.map(\.event), [.needsOK(question: "Run this command?")])
         XCTAssertEqual(told.finished, [])
+    }
+
+    func testAnApprovalIsToldOnceHoweverItMovesThroughTheQueue() async {
+        let told = Told()
+        let source = source(told, threads: [thread("t1")])
+        let approval = ToolApproval(threadID: "t1", question: "Run this command?", details: "ls", toolName: "shell.execute")
+        // Held while the person composes; let in (for a moment it is in none of the three); waiting; showing.
+        for step in [[approval], [], [approval], [], [approval]] {
+            for task in source.asked(step) {
+                await task.value
+            }
+        }
+        XCTAssertEqual(told.events.count, 1)
+    }
+
+    func testWhatNoLongerStandsOnceItsThreadIsLookedUpIsNotTold_andTheRestIsToldInOrder() async {
+        let told = Told()
+        let gate = Gate()
+        let source = source(told, threads: [thread("t1"), thread("t2")], lookingUpWaits: gate)
+        let approval = ToolApproval(threadID: "t1", question: "Run this command?", details: "ls", toolName: "shell.execute")
+
+        // An approval is asked; while its thread is looked up it is answered, and the turn goes on to
+        // fail; then that thread's next turn ends with a reply, and another thread's turn ends too.
+        var telling = source.asked([approval])
+        await gate.arrived()
+        telling += source.asked([])
+        telling += source.ended(["t1": ending("turn-1", .failed, saying: "The key was refused.")])
+        telling += source.ended(["t1": ending("turn-2", .completed, saying: "It worked this time."), "t2": ending("turn-3", .completed, saying: "Hers too.")])
+        await gate.open()
+        for task in telling {
+            await task.value
+        }
+
+        XCTAssertEqual(
+            told.events.map(\.event), [.finished(reply: "It worked this time."), .finished(reply: "Hers too.")],
+            "Not the approval that was answered, nor the failure the thread has moved on from; the rest in the order it happened"
+        )
+        XCTAssertEqual(told.events.map(\.thread), ["t1", "t2"])
     }
 
     func testNothingIsToldOfAThreadThatIsNotTheSignedInAccounts() async {

@@ -355,6 +355,10 @@ struct PersonalChatView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase != .active {
                 Task { await ComposerDrafts.shared.saveNow() }
+            } else {
+                // Back in front with this thread still open: what was
+                // notified of it meanwhile is seen.
+                LocalNotifications.shared.threadShown(thread.id)
             }
         }
         // On screen, the thread is read as replies arrive; what its

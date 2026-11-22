@@ -26,6 +26,7 @@ struct NotificationAskLine: View {
                 }
                 .buttonStyle(.textLink)
                 .fontWeight(.semibold)
+                .disabled(notifications.isAsking)
             }
             .padding(Spacing.md)
             .frame(maxWidth: .infinity, alignment: .leading)

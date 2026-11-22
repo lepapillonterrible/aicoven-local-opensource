@@ -11,7 +11,16 @@ struct NotificationsSettingsView: View {
 
     static let whatTheyTell = "Notifications tell you when an agent finishes, needs your OK, or stops on a problem, while AICoven is not in front."
     static let whatDetailsAre = "With details off, a notification says only which agent it is about. With details on, it also names the thread "
-        + "and shows the start of the reply, which then appear on your Lock Screen and in Notification Center."
+        + "and shows the start of what was said: the reply, what you are asked to allow, or what went wrong. "
+        + "These then appear on your Lock Screen and in Notification Center."
+    static let allowedAndOn = "Notifications are on."
+    static let allowedButOff = "This device allows notifications. They are turned off for your account."
+
+    /// What is said when the device comes to allow notifications: not
+    /// that they are on where the account has turned them off.
+    static func wordsWhenAllowed(isOn: Bool) -> String {
+        isOn ? allowedAndOn : allowedButOff
+    }
 
     private var account: String {
         UserScope.currentUserID
@@ -43,6 +52,7 @@ struct NotificationsSettingsView: View {
                     Button("Turn on notifications") {
                         Task { await notifications.turnOn() }
                     }
+                    .disabled(notifications.isAsking)
                 } footer: {
                     Text("You will be asked to allow notifications from AICoven on \(thisDevice).")
                         .font(.aicovenBodySmall)
@@ -87,7 +97,7 @@ struct NotificationsSettingsView: View {
             guard old != nil else { return }
             switch new {
             case .denied: AccessibilityNotification.Announcement("Notifications are off. \(openSettingsTitle) is available.").post()
-            case .allowed: AccessibilityNotification.Announcement("Notifications are on.").post()
+            case .allowed: AccessibilityNotification.Announcement(Self.wordsWhenAllowed(isOn: notifications.isOn(for: account))).post()
             case .notAsked, nil: break
             }
         }

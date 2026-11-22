@@ -46,8 +46,19 @@ final class NotificationSource {
     private let dependencies: Dependencies
     /// The turn each thread's ending was told of, by thread id.
     private var toldEndings: [String: String] = [:]
-    /// The approvals told of, by id.
-    private var toldApprovals: Set<String> = []
+    /// The approvals told of, the latest last: each is told once, however
+    /// it moves through the queue (held, waiting, showing). No more than
+    /// `mostRemembered` are remembered.
+    private var toldApprovals: [String] = []
+    static let mostRemembered = 500
+    /// What stands now: the endings as last published, and the approvals
+    /// being asked. An event is told only if it still stands once its
+    /// thread has been looked up.
+    private var endings: [String: TurnEngine.Ending] = [:]
+    private var asking: Set<String> = []
+    /// The last event's telling: each waits for the one before, so that
+    /// the latest thing that happened in a thread is the last one told.
+    private var last: Task<Void, Never>?
     private var followed: Set<AnyCancellable> = []
 
     init(dependencies: Dependencies = .live) {
@@ -69,8 +80,9 @@ final class NotificationSource {
     /// of once, a reply as finished and a failure as a problem.
     @discardableResult
     func ended(_ endings: [String: TurnEngine.Ending]) -> [Task<Void, Never>] {
+        self.endings = endings
         var telling: [Task<Void, Never>] = []
-        for (threadID, ending) in endings where toldEndings[threadID] != ending.turnID {
+        for (threadID, ending) in endings.sorted(by: { $0.key < $1.key }) where toldEndings[threadID] != ending.turnID {
             toldEndings[threadID] = ending.turnID
             let said = ending.messages.first?.content ?? ""
             let event: NotificationEvent
@@ -79,7 +91,8 @@ final class NotificationSource {
             case .failed: event = .problem(reason: said)
             case .cancelled, .interrupted, .running: continue
             }
-            telling.append(tell(event, ofThread: threadID))
+            let turnID = ending.turnID
+            telling.append(tell(event, ofThread: threadID) { [weak self] in self?.endings[threadID]?.turnID == turnID })
         }
         toldEndings = toldEndings.filter { endings[$0.key] != nil }
         return telling
@@ -90,28 +103,39 @@ final class NotificationSource {
     /// remember something) is not.
     @discardableResult
     func asked(_ approvals: [ToolApproval]) -> [Task<Void, Never>] {
+        asking = Set(approvals.map(\.id))
         var telling: [Task<Void, Never>] = []
         for approval in approvals where approval.isOfATurn && !toldApprovals.contains(approval.id) {
-            toldApprovals.insert(approval.id)
-            telling.append(tell(.needsOK(question: approval.question), ofThread: approval.threadID))
+            toldApprovals.append(approval.id)
+            let id = approval.id
+            telling.append(tell(.needsOK(question: approval.question), ofThread: approval.threadID) { [weak self] in
+                self?.asking.contains(id) == true
+            })
         }
-        toldApprovals.formIntersection(approvals.map(\.id))
+        toldApprovals.removeFirst(max(0, toldApprovals.count - Self.mostRemembered))
         return telling
     }
 
     /// Tells of `event` in a thread, as the account signed in when it
-    /// happened: nothing if the thread is not theirs, or another account
-    /// is signed in by the time the thread has been looked up.
-    private func tell(_ event: NotificationEvent, ofThread threadID: String) -> Task<Void, Never> {
+    /// happened, after whatever was told before it. Nothing if the thread
+    /// is not theirs, if another account is signed in by the time the
+    /// thread has been looked up, or if the event no longer stands by
+    /// then (the approval was answered or withdrawn; the thread's turn
+    /// has ended again since).
+    private func tell(_ event: NotificationEvent, ofThread threadID: String, ifStill stands: @escaping @MainActor () -> Bool) -> Task<Void, Never> {
         let account = dependencies.account()
-        return Task { [dependencies] in
+        let before = last
+        let telling = Task { [dependencies] in
+            await before?.value
             guard let thread = await dependencies.thread(threadID), thread.userId == account, dependencies.account() == account else { return }
             let placeName = await dependencies.placeName(thread)
-            guard dependencies.account() == account else { return }
+            guard dependencies.account() == account, stands() else { return }
             await dependencies.notify(event, thread, placeName, account)
             if case .finished = event {
                 await dependencies.replyFinished(thread, account)
             }
         }
+        last = telling
+        return telling
     }
 }

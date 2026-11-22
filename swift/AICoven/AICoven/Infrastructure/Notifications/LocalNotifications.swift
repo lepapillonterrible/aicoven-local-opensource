@@ -78,6 +78,9 @@ final class LocalNotifications: ObservableObject {
     /// This device's permission; nil until it has been read.
     @Published private(set) var permission: Permission?
     @Published private(set) var offer: Offer?
+    /// Whether the system is asking the person just now: nothing else
+    /// asks, and nothing is offered, until they have answered.
+    @Published private(set) var isAsking = false
     /// Whether the app is in front: nothing is notified of while it is.
     var appIsInFront = true
 
@@ -132,9 +135,14 @@ final class LocalNotifications: ObservableObject {
     /// Turn on, from the line or from Settings: the system asks the
     /// person, and the line goes whatever they answer.
     func turnOn() async {
+        guard !isAsking else { return }
+        isAsking = true
         offer = nil
         _ = await center.ask()
         await refreshPermission()
+        // Whatever was offered while the system was asking goes too.
+        offer = nil
+        isAsking = false
     }
 
     /// Not now: the line goes, and is not offered again for a week.
@@ -148,9 +156,9 @@ final class LocalNotifications: ObservableObject {
     /// they said "Not now" within the last week or turned notifications
     /// off.
     func offerIfUseful(agentName: String?, as account: String) async {
-        guard signedIn() == account, isOn(for: account) else { return }
+        guard !isAsking, signedIn() == account, isOn(for: account) else { return }
         if permission == nil { await refreshPermission() }
-        guard permission == .notAsked, signedIn() == account else { return }
+        guard permission == .notAsked, !isAsking, signedIn() == account, isOn(for: account) else { return }
         let declinedAt = defaults.object(forKey: UserScope.scopedKey("notifications_offer_declined_at", for: account)) as? Date
         if let declinedAt, now().timeIntervalSince(declinedAt) < Self.quietAfterDeclining { return }
         let named = agentName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -174,8 +182,9 @@ final class LocalNotifications: ObservableObject {
         guard !appIsInFront, signedIn() == account, thread.userId == account, isOn(for: account) else { return false }
         if permission == nil { await refreshPermission() }
         // Asked again: the wait above may have been long enough for the
-        // person to come back, or for another account to sign in.
-        guard permission == .allowed, !appIsInFront, signedIn() == account else { return false }
+        // person to come back, to turn notifications off, or for another
+        // account to sign in.
+        guard permission == .allowed, !appIsInFront, signedIn() == account, isOn(for: account) else { return false }
         let composed = NotificationComposer.compose(
             event, agentName: thread.agentName, threadTitle: ThreadListRules.title(of: thread), placeName: placeName,
             showsDetails: showsDetails(for: account)
