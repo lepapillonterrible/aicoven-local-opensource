@@ -1,0 +1,494 @@
+import SwiftUI
+import UniformTypeIdentifiers
+
+/// A scope's assets, as the cloud app's library. On the iPhone and iPad: a
+/// list with the system search field, a Filter menu, and what is proposed
+/// first under "Needs review". On the Mac: a table.
+struct AssetLibraryView: View {
+    @StateObject private var model: AssetLibraryModel
+    @State private var isCreating = false
+    @State private var isOnScreen = false
+    /// Whether Try Again is reading: it says so, and is not pressed twice.
+    @State private var isRetrying = false
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
+
+    /// What the search reads, said before a search starts.
+    static let searchScope = "Search runs on this device. It reads titles, descriptions, and file names."
+
+    init(covenID: String?) {
+        _model = StateObject(wrappedValue: AssetLibraryModel(covenID: covenID))
+    }
+
+    var body: some View {
+        content
+            .searchable(text: $model.search, placement: searchPlacement, prompt: "Search assets")
+            .toolbar { toolbarContent }
+            .sheet(isPresented: $isCreating) {
+                NewAssetSheet(model: model)
+            }
+            .task { await model.load() }
+            .onAppear { isOnScreen = true }
+            .onDisappear { isOnScreen = false }
+            .onChange(of: model.loadFailures) {
+                // Said to VoiceOver too, while the place is on screen: each
+                // failed reading, also one that fails after another did.
+                if isOnScreen {
+                    AccessibilityNotification.Announcement(model.hasRead ? AssetLibraryModel.couldNotRefresh : "Couldn't load assets.").post()
+                }
+            }
+    }
+
+    #if os(iOS)
+    /// On a compact screen the field is pinned under the navigation bar, so
+    /// it shows without pulling the list down.
+    private var searchPlacement: SearchFieldPlacement {
+        horizontalSizeClass == .compact ? .navigationBarDrawer(displayMode: .always) : .automatic
+    }
+    #else
+    private var searchPlacement: SearchFieldPlacement {
+        .automatic
+    }
+    #endif
+
+    @ViewBuilder
+    private var content: some View {
+        if model.hasRead {
+            // Drawn again each minute, so that "5m ago" does not go stale
+            // while the place stays open.
+            TimelineView(.periodic(from: .now, by: 60)) { timeline in
+                listed(now: timeline.date)
+            }
+        } else if model.loadFailed {
+            ContentUnavailableView {
+                Label("Couldn't Load Assets", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text("AICoven couldn't read the assets kept on this device.")
+            } actions: {
+                Button("Try Again") {
+                    isRetrying = true
+                    Task {
+                        await model.load()
+                        isRetrying = false
+                    }
+                }
+                .disabled(isRetrying)
+                if isRetrying {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Reading the assets")
+                }
+            }
+        } else {
+            ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder
+    private func listed(now: Date) -> some View {
+        #if os(macOS)
+        table(now: now)
+            .overlay { emptyState }
+            .safeAreaInset(edge: .bottom) {
+                footer
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(Spacing.md)
+            }
+        #else
+        list(now: now)
+            .overlay { emptyState }
+        #endif
+    }
+
+    /// An asset's title as a row shows it: one the key cannot open has none.
+    private func title(_ asset: Asset) -> String {
+        asset.isUnreadable ? AssetLibraryRules.unreadable : asset.title
+    }
+
+    // MARK: - iPhone and iPad
+
+    #if os(iOS)
+    private func list(now: Date) -> some View {
+        let shown = model.shown
+        return List {
+            Section {
+                Button {
+                    isCreating = true
+                } label: {
+                    Label("New Asset…", systemImage: "plus.square.fill")
+                }
+            }
+            .listRowBackground(Color.aicovenSurfaceElevated)
+
+            if let summary = AssetLibraryRules.filterSummary(type: model.typeFilter, status: model.statusFilter) {
+                Section {
+                    HStack {
+                        Text(summary)
+                            .foregroundStyle(Color.aicovenTextSecondary)
+                        Spacer()
+                        Button("Clear") {
+                            model.typeFilter = nil
+                            model.statusFilter = nil
+                        }
+                    }
+                }
+                .listRowBackground(Color.aicovenSurfaceElevated)
+            }
+
+            if !shown.needsReview.isEmpty {
+                Section("Needs review · \(shown.needsReview.count)") {
+                    ForEach(shown.needsReview) { row($0, now: now) }
+                }
+                .listRowBackground(Color.aicovenSurfaceElevated)
+            }
+
+            Section {
+                ForEach(shown.others) { row($0, now: now) }
+            } header: {
+                if !shown.needsReview.isEmpty, !shown.others.isEmpty {
+                    Text("Everything else")
+                }
+            } footer: {
+                footer
+            }
+            .listRowBackground(Color.aicovenSurfaceElevated)
+        }
+        .scrollContentBackground(.hidden)
+        .background(Color.aicovenSurface)
+        .refreshable { await model.load() }
+    }
+
+    private func row(_ asset: Asset, now: Date) -> some View {
+        HStack(spacing: Spacing.sm) {
+            AssetThumbnail(type: asset.type, isLocked: asset.isUnreadable, width: 40, height: 40)
+            VStack(alignment: .leading, spacing: Spacing.xxxs) {
+                Text(title(asset))
+                    .foregroundStyle(Color.aicovenTextPrimary)
+                Text(AssetLibraryRules.quietLine(asset, now: now))
+                    .font(.aicovenBodySmall)
+                    .foregroundStyle(Color.aicovenTextSecondary)
+            }
+        }
+        .opacity(asset.status == .archived ? 0.75 : 1)
+        .accessibilityElement(children: .combine)
+    }
+    #endif
+
+    // MARK: - Mac
+
+    #if os(macOS)
+    private func table(now: Date) -> some View {
+        let shown = model.shown
+        return Table(shown.needsReview + shown.others) {
+            TableColumn("Asset") { asset in
+                HStack(spacing: Spacing.sm) {
+                    AssetThumbnail(type: asset.type, isLocked: asset.isUnreadable, width: 28, height: 21)
+                    Text(title(asset))
+                }
+            }
+            .width(min: 180, ideal: 280)
+            TableColumn("Type") { asset in
+                Text(asset.type.displayName)
+                    .foregroundStyle(Color.aicovenTextSecondary)
+            }
+            .width(min: 90, ideal: 120)
+            TableColumn("Made by") { asset in
+                Text(AssetLibraryRules.madeBy(asset))
+                    .foregroundStyle(Color.aicovenTextSecondary)
+            }
+            .width(min: 80, ideal: 110)
+            TableColumn("Status") { asset in
+                Text(AssetLibraryRules.statusLabel(asset))
+                    .foregroundStyle(asset.status == .proposed && !asset.isUnreadable ? Color.aicovenTextPrimary : Color.aicovenTextSecondary)
+            }
+            .width(min: 70, ideal: 90)
+            TableColumn("Updated") { asset in
+                Text(AssetLibraryRules.shortTime(asset.updatedAt, now: now))
+                    .foregroundStyle(Color.aicovenTextSecondary)
+            }
+            .width(min: 60, ideal: 80)
+        }
+        .alternatingRowBackgrounds(.disabled)
+        .scrollContentBackground(.hidden)
+        .background(Color.aicovenSurface)
+    }
+    #endif
+
+    // MARK: - Shared pieces
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        StoneToolbarItem(placement: .primaryAction) {
+            filterMenu
+                .stoneToolbarMenu()
+        }
+        #if os(macOS)
+        StoneToolbarItem(placement: .primaryAction) {
+            Button("New Asset…") { isCreating = true }
+        }
+        #endif
+    }
+
+    /// Type and Status, each applying when picked.
+    private var filterMenu: some View {
+        Menu {
+            Picker("Type", selection: $model.typeFilter) {
+                Text("All Types").tag(AssetType?.none)
+                ForEach(AssetType.offered, id: \.rawValue) { type in
+                    Text(type.displayName).tag(AssetType?.some(type))
+                }
+            }
+            Picker("Status", selection: $model.statusFilter) {
+                // With no status chosen, what is archived is left out: the
+                // choice is named for what it shows.
+                Text(AssetLibraryRules.noStatusChosen).tag(AssetStatus?.none)
+                ForEach(AssetStatus.allCases, id: \.rawValue) { status in
+                    Text(status.displayName).tag(AssetStatus?.some(status))
+                }
+            }
+        } label: {
+            Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
+        }
+    }
+
+    @ViewBuilder
+    private var footer: some View {
+        if model.loadFailed {
+            // The list stays as it was read before.
+            Text(AssetLibraryModel.couldNotRefresh)
+                .font(.aicovenBodySmall)
+                .foregroundStyle(Color.aicovenError)
+        } else {
+            #if os(macOS)
+            HStack(spacing: Spacing.sm) {
+                Text(Self.searchScope)
+                    .font(.aicovenBodySmall)
+                    .foregroundStyle(Color.aicovenTextSecondary)
+                if let summary = AssetLibraryRules.filterSummary(type: model.typeFilter, status: model.statusFilter) {
+                    Spacer()
+                    Text(summary)
+                        .font(.aicovenBodySmall)
+                        .foregroundStyle(Color.aicovenTextSecondary)
+                    Button("Clear") {
+                        model.typeFilter = nil
+                        model.statusFilter = nil
+                    }
+                    .buttonStyle(.link)
+                }
+            }
+            #else
+            Text(Self.searchScope)
+                .font(.aicovenBodySmall)
+            #endif
+        }
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+        let shown = model.shown
+        if shown.needsReview.isEmpty, shown.others.isEmpty {
+            if model.isNarrowed {
+                ContentUnavailableView {
+                    Label("No Matching Assets", systemImage: "line.3.horizontal.decrease.circle")
+                } description: {
+                    Text("Nothing matches the search and filters.")
+                } actions: {
+                    Button("Clear Search and Filters") { model.clearSearchAndFilters() }
+                }
+            } else {
+                ContentUnavailableView {
+                    Label("No Assets Yet", systemImage: "photo.on.rectangle")
+                } description: {
+                    Text("Mockups, charts, datasets, and briefs your agents make land here, so they aren't lost in a thread.")
+                }
+            }
+        }
+    }
+}
+
+/// The well an asset's thumbnail sits in, as the cloud app draws it before
+/// there is a picture: the type's symbol, or its short tag where the well
+/// is small; a lock for an asset the key cannot open.
+struct AssetThumbnail: View {
+    let type: AssetType
+    let isLocked: Bool
+    let width: CGFloat
+    let height: CGFloat
+
+    var body: some View {
+        Color.aicovenSurfaceElevated
+            .frame(width: width, height: height)
+            .overlay {
+                if isLocked {
+                    Image(systemName: "lock")
+                        .font(.system(size: glyphSize, weight: .semibold))
+                        .foregroundStyle(Color.aicovenTextSecondary)
+                } else if height >= 40 {
+                    Image(systemName: type.iconSystemName)
+                        .font(.system(size: glyphSize))
+                        .foregroundStyle(Color.aicovenTextTertiary)
+                } else {
+                    Text(type.thumbnailTag)
+                        .font(.aicovenCaption.weight(.semibold))
+                        .minimumScaleFactor(0.6)
+                        .lineLimit(1)
+                        .foregroundStyle(Color.aicovenTextTertiary)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: BorderRadius.xs))
+            .overlay(
+                RoundedRectangle(cornerRadius: BorderRadius.xs)
+                    .strokeBorder(Color.aicovenBorder, lineWidth: 1)
+            )
+            .accessibilityHidden(true)
+    }
+
+    private var glyphSize: CGFloat {
+        min(width, height) * 0.42
+    }
+}
+
+/// New Asset, as the cloud app's sheet with what a device alone needs: a
+/// title, a type, a description and one file. There is no thread to choose
+/// and no "Who can read": nothing leaves this device.
+private struct NewAssetSheet: View {
+    @ObservedObject var model: AssetLibraryModel
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var title = ""
+    @State private var type: AssetType = .image
+    @State private var details = ""
+    @State private var file: AssetRepository.NewFile?
+    @State private var isChoosingFile = false
+    /// Whether the chosen file is being read: Create waits for it.
+    @State private var isReadingFile = false
+    @State private var failure: String?
+
+    #if os(iOS)
+    private static let descriptionPrompt = "Description (optional)"
+    #else
+    private static let descriptionPrompt = "Optional"
+    #endif
+
+    private var canCreate: Bool {
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && file != nil && !model.isCreating && !isReadingFile
+    }
+
+    var body: some View {
+        NavigationStack {
+            SettingsForm {
+                Section {
+                    FormTextField(label: "Title", text: $title, prompt: "Required")
+                    Picker("Type", selection: $type) {
+                        ForEach(AssetType.offered, id: \.rawValue) { type in
+                            Text(type.displayName).tag(type)
+                        }
+                    }
+                    // iOS forms show only a field's prompt, so there it names the field too.
+                    TextField("Description", text: $details, prompt: Text(Self.descriptionPrompt), axis: .vertical)
+                        .lineLimit(3 ... 8)
+                }
+                .disabled(model.isCreating)
+
+                Section {
+                    Button {
+                        isChoosingFile = true
+                    } label: {
+                        Label(file.map { AssetFile.keptName($0.name) } ?? "Choose File…", systemImage: "plus.square.fill")
+                    }
+                    .disabled(model.isCreating || isReadingFile)
+                } footer: {
+                    Group {
+                        if let failure {
+                            Text(failure)
+                                .foregroundStyle(Color.aicovenError)
+                        } else {
+                            Text("Up to 10 MB.")
+                        }
+                    }
+                    .font(.aicovenBodySmall)
+                }
+            }
+            .navigationTitle("New Asset")
+            #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+            #endif
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
+                            .disabled(model.isCreating)
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        if model.isCreating {
+                            ProgressView()
+                                .controlSize(.small)
+                                .accessibilityLabel("Creating the asset")
+                        } else {
+                            Button("Create", action: create)
+                                .disabled(!canCreate)
+                        }
+                    }
+                }
+                .fileImporter(isPresented: $isChoosingFile, allowedContentTypes: [.data], allowsMultipleSelection: false, onCompletion: receive)
+        }
+        #if os(macOS)
+        .frame(minWidth: 480, idealWidth: 520, minHeight: 360)
+        #endif
+        .interactiveDismissDisabled(model.isCreating)
+    }
+
+    /// Takes the file the person chose, or says why it was not taken.
+    private func receive(_ result: Result<[URL], Error>) {
+        switch result {
+        case let .success(files):
+            guard let chosen = files.first else { return }
+            // Read away from the main actor: a large file, or one a file
+            // provider has to fetch, does not hold the sheet up.
+            isReadingFile = true
+            Task {
+                let read = await Task.detached { Result { try AssetFileChoice.read(chosen) } }.value
+                isReadingFile = false
+                switch read {
+                case let .success(read):
+                    file = read
+                    failure = nil
+                case let .failure(error):
+                    // A file chosen before is not kept under the failure of
+                    // the one chosen after it.
+                    file = nil
+                    say(AssetLibraryModel.words(forNotCreating: error))
+                }
+            }
+        case let .failure(error):
+            // Closing the chooser is no failure; anything else is said.
+            if (error as? CocoaError)?.code != .userCancelled { say(AssetLibraryModel.couldNotOpenFile) }
+        }
+    }
+
+    /// Makes the asset for the account that pressed Create.
+    private func create() {
+        guard canCreate, let file else { return }
+        failure = nil
+        let account = UserScope.currentUserID
+        let new = AssetLibraryModel.NewAsset(type: type, title: title, details: details, file: file)
+        Task {
+            switch await model.create(new, as: account) {
+            case .made:
+                AccessibilityNotification.Announcement("Asset created").post()
+                dismiss()
+            case let .failed(words):
+                say(words)
+            case nil:
+                // Another account is signed in, or one was being made already.
+                break
+            }
+        }
+    }
+
+    private func say(_ words: String) {
+        failure = words
+        AccessibilityNotification.Announcement(words).post()
+    }
+}

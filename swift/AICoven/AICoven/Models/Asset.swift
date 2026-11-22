@@ -14,6 +14,41 @@ nonisolated struct AssetType: RawRepresentable, Hashable {
     static let deck = AssetType(rawValue: "deck")
     static let report = AssetType(rawValue: "report")
 
+    /// The types a person is offered for a new asset and to filter by, in
+    /// the cloud app's order.
+    static let offered: [AssetType] = [.image, .designMockup, .chart, .dataset, .implementationBrief, .socialCreative, .deck]
+
+    /// The type in words: "Design Mockup" for `design_mockup`.
+    var displayName: String {
+        rawValue.split(separator: "_").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
+    }
+
+    /// The type's symbol; a type the app has none for has the general one.
+    var iconSystemName: String {
+        switch self {
+        case .image: "photo"
+        case .designMockup: "rectangle.3.group"
+        case .chart: "chart.xyaxis.line"
+        case .dataset: "tablecells"
+        case .implementationBrief: "doc.text"
+        case .socialCreative: "megaphone"
+        case .deck: "rectangle.on.rectangle.angled"
+        case .report: "doc.richtext"
+        default: "shippingbox"
+        }
+    }
+
+    /// The few letters that stand for the type where there is no room for
+    /// its symbol, as the cloud app writes them.
+    var thumbnailTag: String {
+        switch self {
+        case .implementationBrief: "MD"
+        case .dataset: "CSV"
+        case .report: "DOC"
+        default: String(rawValue.prefix(3)).uppercased()
+        }
+    }
+
     /// Whether `rawValue` reads as a type's name: lowercase letters, digits
     /// and underscores, starting with a letter, 64 at most.
     var isName: Bool {
@@ -30,6 +65,15 @@ nonisolated enum AssetStatus: String, CaseIterable {
     case proposed
     case approved
     case archived
+
+    var displayName: String {
+        switch self {
+        case .draft: "Draft"
+        case .proposed: "Proposed"
+        case .approved: "Approved"
+        case .archived: "Archived"
+        }
+    }
 
     /// Whether the person may move an asset from this status to `next`, as
     /// the cloud app has it: a draft is proposed; what is proposed is

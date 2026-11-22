@@ -94,6 +94,15 @@ struct ShellContentView: View {
                 } else {
                     overview
                 }
+            case let .assets(covenID):
+                // Strix's, or the coven's on screen; while that coven is
+                // not in, or it is another's, the Overview.
+                if covenID == nil || coven?.id == covenID {
+                    AssetLibraryView(covenID: covenID)
+                        .id(covenID)
+                } else {
+                    overview
+                }
             case let .covenAgents(covenID):
                 // Only for the coven on screen; while it is not in, or it is
                 // another's, the Overview.

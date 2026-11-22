@@ -14,7 +14,7 @@ struct ShellSidebar: View {
     let personName: String
     let onOpenSettings: () -> Void
     let onCreateCoven: () -> Void
-    /// Opens a place of the scope on screen (Memory, Agents, Connections),
+    /// Opens a place of the scope on screen (Memory, Agents, Assets, Connections),
     /// as the menu bar's Go menu does: the shell says where each leads.
     let onOpenPlace: (ShellSidebarItem) -> Void
     /// Moves a coven to a place in the person's order.
