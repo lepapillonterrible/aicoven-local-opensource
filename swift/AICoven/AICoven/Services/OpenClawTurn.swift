@@ -464,18 +464,29 @@ nonisolated struct OpenClawTurn {
         return why.isEmpty ? notFinished : "\(notFinished) \(why)"
     }
 
-    /// What a run is started with: the thread so far and the message, each
-    /// under who said it, as the Gateway takes no history apart. If that is
-    /// longer than a run takes, the oldest of the thread is left out; if
-    /// the message alone is, its end is (what was typed comes first, and
-    /// what was read from its attachments after it).
-    static func message(_ message: String, after earlier: [(role: String, content: String)]) -> String {
-        var parts = earlier.filter { !$0.content.isEmpty }.map { "\($0.role):\n\($0.content)" }
-        parts.append(earlier.isEmpty ? message : "user:\n\(message)")
-        while parts.count > 1, parts.joined(separator: "\n\n").count > longestMessage {
-            parts.removeFirst()
+    /// The text a run is started with: the person's message, after what
+    /// was said before in the thread, and, first of all, what the agent is
+    /// told before the conversation (`toldFirst`: who answers, what every
+    /// agent there knows, the memories that bear on the question), each
+    /// under who said it. Alone, the message is sent as it is. When it is
+    /// all too long, the oldest of what was said goes first; then what the
+    /// agent is told first; and the message itself is cut last, at its end
+    /// (what was typed comes first, and what was read from its attachments
+    /// after it).
+    static func message(_ message: String, after earlier: [(role: String, content: String)], toldFirst: String? = nil) -> String {
+        var turns = earlier.filter { !$0.content.isEmpty }.map { "\($0.role):\n\($0.content)" }
+        var lead = toldFirst.flatMap { $0.isEmpty ? nil : ["system:\n\($0)"] } ?? []
+        func whole() -> String {
+            let last = lead.isEmpty && earlier.isEmpty ? message : "user:\n\(message)"
+            return (lead + turns + [last]).joined(separator: "\n\n")
         }
-        return String(parts.joined(separator: "\n\n").prefix(longestMessage))
+        while !turns.isEmpty, whole().count > longestMessage {
+            turns.removeFirst()
+        }
+        if whole().count > longestMessage {
+            lead = []
+        }
+        return String(whole().prefix(longestMessage))
     }
 
     private static func object(_ data: Data) throws -> [String: Any] {

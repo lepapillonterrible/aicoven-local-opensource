@@ -229,6 +229,49 @@ struct ContextBuilder {
         }
     }
 
+    /// The memories of where a thread is that bear on a question, as a
+    /// turn is told them: a heading, then a line for each; none where
+    /// there are none, or the thread could not be placed.
+    private func memoryLines(in scope: ShellScope?, about question: String, for account: String) async throws -> [String] {
+        guard let scope else { return [] }
+        let memories = try await embeddingService.searchRelevantMemories(
+            query: question,
+            in: MemoryPlace.read(inCoven: scope.covenID),
+            of: account,
+            topK: limits.maxRecentMemories,
+            candidateLimit: limits.maxRecentMemories * 8
+        )
+        guard !memories.isEmpty else { return [] }
+        return ["Relevant memories (for your reasoning; avoid reciting private details verbatim):"]
+            + memories.map { "- [scope=\($0.scope)] \($0.text)" }
+    }
+
+    /// What a turn handed to an agent of the person's own (Hermes, an
+    /// OpenClaw Gateway) is told before the conversation, as the cloud
+    /// app gives such a run its system messages: who answers and how,
+    /// what every agent where the thread is knows, and the memories that
+    /// bear on the question. The agent runs the turn itself, with its own
+    /// tools and loop, so nothing of this app's tools or policies is said.
+    /// Nil where there is nothing to say, or another account is signed in
+    /// by the time it has been read.
+    func preface(threadID: String?, question: String, agent: Agent?) async throws -> String? {
+        let account = UserScope.currentUserID
+        let scope = await scope(ofThread: threadID, for: account)
+        var parts: [String] = []
+        if let knows = await covenContext(in: scope, for: account) {
+            parts.append(knows)
+        }
+        let memories = try await memoryLines(in: scope, about: question, for: account)
+        if !memories.isEmpty {
+            parts.append(memories.joined(separator: "\n"))
+        }
+        guard UserScope.currentUserID == account else { return nil }
+        if let agent, agent.account == account {
+            parts.insert(agent.systemPrompt, at: 0)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+    }
+
     /// Builds a basic context sandwich for a chat turn.
     /// - Parameters:
     ///   - threadID: Optional existing thread to pull history from.
@@ -321,22 +364,8 @@ struct ContextBuilder {
         // Layer 4: memories – embedding-based when possible. A thread's
         // turns read the memory of where the thread is: its coven's pages,
         // or in no coven the person's own memory and Strix's pages.
-        let places = scope.map { MemoryPlace.read(inCoven: $0.covenID) } ?? []
-        let allMemories = places.isEmpty ? [] : try await embeddingService.searchRelevantMemories(
-            query: question,
-            in: places,
-            of: account,
-            topK: limits.maxRecentMemories,
-            candidateLimit: limits.maxRecentMemories * 8
-        )
-
-        if !allMemories.isEmpty {
-            let header = "Relevant memories (for your reasoning; avoid reciting private details verbatim):"
-            segments.memories.append(LLMMessage(role: .system, content: header))
-            for memory in allMemories {
-                let line = "- [scope=\(memory.scope)] \(memory.text)"
-                segments.memories.append(LLMMessage(role: .system, content: line))
-            }
+        segments.memories = try await memoryLines(in: scope, about: question, for: account).map {
+            LLMMessage(role: .system, content: $0)
         }
 
         // Layer 5: thread summary – if we have a stored summary, include it

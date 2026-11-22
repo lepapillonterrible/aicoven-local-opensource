@@ -335,15 +335,21 @@ actor ChatService {
         // the user's global preference from UserDefaults.
         let (prefProvider, prefModel) = await preferredProviderAndModel(roleId: roleId)
 
+        // Who answers, with its instructions: read once for the turn.
+        let agent = await answeringAgent(roleId: roleId)
+
         // Hermes is an agent, not a model: it runs the turn itself, with its
-        // own tools and memory, and this app follows the run.
-        if prefProvider == "hermes", let agent = hermesAgent() {
+        // own tools and memory, and this app follows the run. It is told
+        // first what a model's turn is told of who answers and of where
+        // the thread is (`ContextBuilder.preface`).
+        if prefProvider == "hermes", let hermes = hermesAgent() {
             threadsLastAnsweredByAnAgent.insert(threadId)
             let earlier = try await loadMessages(threadId: threadId, limit: Self.hermesHistoryLimit)
             let said = await message + AttachmentContext.block(for: attachments ?? [])
-            try await HermesTurn(client: agent, threadID: threadId).run(
+            let toldFirst = try await contextBuilder.preface(threadID: threadId, question: message, agent: agent)
+            try await HermesTurn(client: hermes, threadID: threadId).run(
                 input: said,
-                history: Self.hermesHistory(from: earlier),
+                history: Self.hermesHistory(from: earlier, toldFirst: toldFirst),
                 started: { await onAgentRun?(AgentRun(provider: AgentRun.hermes, runID: $0)) },
                 report: onStateChange
             )
@@ -355,17 +361,17 @@ actor ChatService {
             threadsLastAnsweredByAnAgent.insert(threadId)
             let earlier = try await loadMessages(threadId: threadId, limit: Self.hermesHistoryLimit)
             let said = await message + AttachmentContext.block(for: attachments ?? [])
+            let toldFirst = try await contextBuilder.preface(threadID: threadId, question: message, agent: agent)
             try await turn.run(
-                message: OpenClawTurn.message(said, after: Self.hermesHistory(from: earlier).map { ($0.role, $0.content) }),
+                message: OpenClawTurn.message(
+                    said, after: Self.hermesHistory(from: earlier).map { ($0.role, $0.content) }, toldFirst: toldFirst
+                ),
                 started: { await onAgentRun?(AgentRun(provider: AgentRun.openClaw, runID: $0, origin: turn.address.absoluteString)) },
                 report: onStateChange
             )
             return
         }
         threadsLastAnsweredByAnAgent.remove(threadId)
-
-        // Who answers, with its instructions: read once for the turn.
-        let agent = await answeringAgent(roleId: roleId)
 
         let descriptor: ModelDescriptor
         let client: LLMClient
@@ -1488,12 +1494,15 @@ actor ChatService {
     /// run, or an OpenClaw run through its Gateway). The message
     /// itself is stored before the turn starts, so it is the last one
     /// loaded, and is left out: the run is given it as its input.
-    static func hermesHistory(from stored: [ChatMessage]) -> [HermesAgentClient.Message] {
+    static func hermesHistory(from stored: [ChatMessage], toldFirst: String? = nil) -> [HermesAgentClient.Message] {
         var earlier = stored
         if earlier.last?.role == "user" {
             earlier.removeLast()
         }
-        return earlier
+        // What the agent is told before the conversation comes first, as
+        // the system's.
+        let lead = toldFirst.flatMap { $0.isEmpty ? nil : [HermesAgentClient.Message(role: "system", content: $0)] } ?? []
+        return lead + earlier
             .filter { ["user", "assistant"].contains($0.role) && !$0.content.isEmpty }
             .map { HermesAgentClient.Message(role: $0.role, content: $0.content) }
     }
