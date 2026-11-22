@@ -1185,22 +1185,23 @@ actor ChatService {
         let parseResult = ToolCallParser.parse(dedupedAnswer)
         let answer = parseResult.strippedText.isEmpty ? rawAnswer : parseResult.strippedText
 
-        // Process any memory proposals from the LLM
-        if !parseResult.memoryProposals.isEmpty {
-            for proposal in parseResult.memoryProposals {
-                // Auto-save memory proposals (scope can be "user" or "thread")
-                let effectiveScope = proposal.scope == "thread" ? "thread" : "user"
+        // What the model asked to keep for every conversation is kept
+        // where the thread is: in its coven's pages, or in no coven as the
+        // person's own. Nothing is kept where the thread cannot be placed.
+        // What it asked to keep for this conversation alone is not kept:
+        // no turn has ever read such a memory, and no page shows one.
+        // Whose it is is read once: the thread is placed, and the memory
+        // kept, as the same account.
+        let asked = parseResult.memoryProposals.filter { $0.scope != "thread" }
+        let keeper = await UserScope.currentUserID
+        if !asked.isEmpty, let place = await contextBuilder.memoryPlaces(ofThread: threadId, for: keeper).first {
+            for proposal in asked {
                 do {
                     _ = try await MemoryService.shared.createMemory(
-                        covenId: nil,
-                        scope: effectiveScope,
-                        title: nil,
-                        content: proposal.content,
-                        tags: proposal.category.map { [$0] },
-                        isPinned: false
+                        in: place, content: proposal.content, tags: proposal.category.map { [$0] }, as: keeper
                     )
-                    // That one was saved, and for which scope: never its words.
-                    AppErrorReporter.log(message: "Saved a memory the model asked to keep (scope \(effectiveScope))", context: "ChatService.streamMessage.memoryWrite")
+                    // That one was saved: never its words.
+                    AppErrorReporter.log(message: "Saved a memory the model asked to keep", context: "ChatService.streamMessage.memoryWrite")
                 } catch {
                     AppErrorReporter.log(error: error, context: "ChatService.streamMessage.memoryWrite")
                 }

@@ -40,6 +40,15 @@ final class DatabaseManager {
         databaseURL = dirURL.appendingPathComponent("aicoven.sqlite")
     }
 
+    /// Gives each memory that was written for a coven, by an account that
+    /// has exactly one coven, to that coven (the v14 migration's rule).
+    static let givingMemoriesToAnOnlyCoven = """
+    UPDATE memory_chunks
+    SET coven_id = (SELECT id FROM covens WHERE covens.user_id = memory_chunks.user_id)
+    WHERE scope IN ('coven', 'agent')
+      AND (SELECT COUNT(*) FROM covens WHERE covens.user_id = memory_chunks.user_id) = 1
+    """
+
     /// Call this early in app startup (e.g., in AICovenApp) to open the DB and run migrations.
     func configureIfNeeded() {
         guard dbQueue == nil else { return }
@@ -416,6 +425,43 @@ final class DatabaseManager {
                     t.add(column: "read_at", .datetime)
                 }
                 try db.execute(sql: "UPDATE threads SET read_at = ?", arguments: [Date()])
+            }
+
+            // v14: a memory is one coven's, or kept in no coven (the
+            // person's own, and Strix's). Until now a coven's memories were
+            // stored without their coven, so the coven of one written
+            // before this is not known: where its account has exactly one
+            // coven it is that coven's, and otherwise it stays in no coven,
+            // where Strix's pages show it. A coven's memory is stored only
+            // in a coven of the same account, and a coven that is deleted
+            // takes its memories, and the proposals made in it, with it.
+            migrator.registerMigration("v14_memory_coven") { db in
+                try db.alter(table: "memory_chunks") { t in
+                    t.add(column: "coven_id", .text)
+                }
+                try db.create(index: "memory_chunks_user_coven", on: "memory_chunks", columns: ["user_id", "coven_id"])
+                try db.execute(sql: Self.givingMemoriesToAnOnlyCoven)
+                for (event, name) in [("INSERT", "insert"), ("UPDATE OF user_id, coven_id", "update")] {
+                    try db.execute(sql: """
+                    CREATE TRIGGER memory_chunks_match_coven_user_\(name)
+                    BEFORE \(event) ON memory_chunks
+                    WHEN NEW.coven_id IS NOT NULL AND NOT EXISTS (
+                        SELECT 1 FROM covens
+                        WHERE covens.id = NEW.coven_id AND covens.user_id = NEW.user_id
+                    )
+                    BEGIN
+                        SELECT RAISE(ABORT, 'memory_chunks.coven_id must reference a coven owned by the same user');
+                    END;
+                    """)
+                }
+                try db.execute(sql: """
+                CREATE TRIGGER covens_take_their_memory
+                AFTER DELETE ON covens
+                BEGIN
+                    DELETE FROM memory_chunks WHERE coven_id = OLD.id;
+                    DELETE FROM memory_proposals WHERE coven_id = OLD.id;
+                END;
+                """)
             }
 
             try migrator.migrate(queue)

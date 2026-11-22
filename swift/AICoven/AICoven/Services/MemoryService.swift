@@ -133,68 +133,11 @@ actor MemoryService {
 
     // MARK: - Memory Search and Retrieval (Local-only)
 
-    /// Search memory chunks using the local SQLite store and embeddings. This
-    /// replaces the original backend search API in the open-source client.
-    func searchMemory(
-        covenId: String?,
-        query: String? = nil,
-        scope: String? = nil,
-        tags: [String]? = nil,
-        limit: Int = 20
-    ) async throws -> [Memory] {
-        // Determine the effective scope for local storage. For personal
-        // memories we default to "user"; for coven contexts we default to
-        // "coven". The legacy "all" scope is approximated by using the
-        // default scope.
-        let effectiveScope: String = {
-            if let scope, !scope.isEmpty, scope != "all" {
-                return scope
-            }
-            return covenId == nil ? "user" : "coven"
-        }()
-
-        let chunks: [LocalMemoryChunk] = if let queryText = query, !queryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            // Use embedding+lexical hybrid search for text queries.
-            try await EmbeddingService.shared.searchRelevantMemories(
-                query: queryText,
-                scope: effectiveScope,
-                topK: limit,
-                candidateLimit: limit * 4,
-                includePII: false
-            )
-        } else {
-            // Fallback: most recent memories for the scope.
-            try await memoryStore.loadMemories(scope: effectiveScope, limit: limit)
-        }
-
-        // Local store does not yet support tag- or pin-based filtering beyond
-        // what is stored in `tags`; we ignore the `tags` parameter for now.
-        return chunks.map { chunk in
-            Memory(
-                id: chunk.id,
-                covenId: covenId,
-                userId: nil,
-                roleId: nil,
-                scope: MemoryScope(rawValue: chunk.scope) ?? .user,
-                title: nil,
-                content: chunk.text,
-                tags: chunk.tags.isEmpty ? nil : chunk.tags,
-                isPinned: false,
-                isApproved: true,
-                createdAt: chunk.createdAt,
-                updatedAt: nil
-            )
-        }
-    }
-
-    /// Get a specific memory chunk by ID from the local store.
-    func getMemory(memoryId: String) async throws -> Memory {
-        guard let chunk = try await memoryStore.loadMemory(id: memoryId) else {
-            throw APIError.backendUnavailable // reuse error for "not found" in this build
-        }
-        return Memory(
+    /// A memory as the views have it.
+    private static func memory(from chunk: LocalMemoryChunk) -> Memory {
+        Memory(
             id: chunk.id,
-            covenId: nil,
+            covenId: chunk.covenID,
             userId: nil,
             roleId: nil,
             scope: MemoryScope(rawValue: chunk.scope) ?? .user,
@@ -204,28 +147,76 @@ actor MemoryService {
             isPinned: false,
             isApproved: true,
             createdAt: chunk.createdAt,
-            updatedAt: nil
+            updatedAt: nil,
+            unreadable: chunk.isUnreadable ? true : nil
         )
+    }
+
+    /// A page of the memories kept in one place, newest first: `limit` of
+    /// them after the first `offset`.
+    func memories(in place: MemoryPlace, limit: Int, offset: Int = 0) async throws -> [Memory] {
+        try await memoryStore.loadMemories(in: place, limit: limit, offset: offset, as: currentAccount()).map(Self.memory)
+    }
+
+    /// The memories of one place (`MemoryPlace.init(covenID:scope:)`): the
+    /// newest, or with a query those among the newest that match it best.
+    func searchMemory(
+        covenId: String?,
+        query: String? = nil,
+        scope: String? = nil,
+        tags _: [String]? = nil,
+        limit: Int = 20
+    ) async throws -> [Memory] {
+        let place = MemoryPlace(covenID: covenId, scope: scope)
+        let chunks: [LocalMemoryChunk] = if let queryText = query, !queryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // Use embedding+lexical hybrid search for text queries.
+            try await EmbeddingService.shared.searchRelevantMemories(
+                query: queryText,
+                in: [place],
+                topK: limit,
+                candidateLimit: limit * 4,
+                includePII: false
+            )
+        } else {
+            try await memoryStore.loadMemories(in: place, limit: limit, offset: 0, as: currentAccount())
+        }
+        return chunks.map(Self.memory)
+    }
+
+    /// Get a specific memory chunk by ID from the local store.
+    func getMemory(memoryId: String) async throws -> Memory {
+        guard let chunk = try await memoryStore.loadMemory(id: memoryId) else {
+            throw MemoryStoreError.noSuchMemory
+        }
+        return Self.memory(from: chunk)
     }
 
     // MARK: - Memory Creation and Updates (Local-only)
 
-    /// Create a new memory chunk in the local encrypted store.
+    /// Stores a new memory, encrypted, where its coven and scope say
+    /// (`MemoryPlace.init(covenID:scope:)`).
     func createMemory(
         covenId: String?,
         scope: String,
-        title: String?,
+        title _: String?,
         content: String,
         tags: [String]?,
-        isPinned: Bool = false
+        isPinned _: Bool = false
     ) async throws -> Memory {
+        try await createMemory(in: MemoryPlace(covenID: covenId, scope: scope), content: content, tags: tags)
+    }
+
+    /// Stores a new memory, encrypted, in `place`, as `account` where the
+    /// caller has read whose it is already (the account signed in now
+    /// otherwise).
+    func createMemory(in place: MemoryPlace, content: String, tags: [String]?, as asked: String? = nil) async throws -> Memory {
         // Whose memory it is, read before the embedding is waited for: it
         // is stored as theirs, or not at all if another account is signed
         // in by then.
-        let account = await MainActor.run { UserScope.currentUserID }
-        let embedding = try await EmbeddingService.shared.embedText(content)
+        let account = if let asked { asked } else { await currentAccount() }
+        let embedding = try await embed(content)
         let chunk = try await memoryStore.storeMemory(
-            scope: scope,
+            in: place,
             text: content,
             tags: tags ?? [],
             pii: false,
@@ -234,90 +225,32 @@ actor MemoryService {
             embedding: embedding,
             as: account
         )
-
-        return Memory(
-            id: chunk.id,
-            covenId: covenId,
-            userId: nil,
-            roleId: nil,
-            scope: MemoryScope(rawValue: chunk.scope) ?? .user,
-            title: title,
-            content: chunk.text,
-            tags: chunk.tags.isEmpty ? nil : chunk.tags,
-            isPinned: isPinned,
-            isApproved: true,
-            createdAt: chunk.createdAt,
-            updatedAt: nil
-        )
+        return Self.memory(from: chunk)
     }
 
-    /// Update an existing memory chunk in the local store.
+    /// Gives a memory new text, and new tags where some are given (nil
+    /// keeps its tags). It is changed as the account that asked, read
+    /// before the embedding is waited for, and not at all if another is
+    /// signed in by then. Throws `MemoryStoreError.noSuchMemory` if that
+    /// account has no such memory. A memory has no title, pin or scope of
+    /// its own to change: it stays where it is kept.
     func updateMemory(
         memoryId: String,
-        title: String?,
-        content: String?,
+        title _: String? = nil,
+        content: String,
         tags: [String]?,
-        scope: String?,
-        isPinned: Bool?
+        scope _: String? = nil,
+        isPinned _: Bool? = nil
     ) async throws -> Memory {
-        // For now we ignore title/scope/isPinned in the underlying store and
-        // simply update the plaintext + tags + embedding.
-        let newText: String
-        let newTags: [String]
-
-        if let content {
-            newText = content
-        } else if let existing = try await memoryStore.loadMemory(id: memoryId) {
-            newText = existing.text
-        } else {
-            newText = content ?? ""
-        }
-
-        if let tags {
-            newTags = tags
-        } else if let existing = try await memoryStore.loadMemory(id: memoryId) {
-            newTags = existing.tags
-        } else {
-            newTags = []
-        }
-
-        let embedding = try await EmbeddingService.shared.embedText(newText)
-        let updatedChunk = try await memoryStore.updateMemory(
-            id: memoryId,
-            newText: newText,
-            newTags: newTags,
-            newEmbedding: embedding
-        ) ?? LocalMemoryChunk(
-            id: memoryId,
-            scope: scope ?? "user",
-            text: newText,
-            tags: newTags,
-            pii: false,
-            createdAt: Date(),
-            createdBy: nil,
-            source: nil,
-            embedding: embedding
-        )
-
-        return Memory(
-            id: updatedChunk.id,
-            covenId: nil,
-            userId: nil,
-            roleId: nil,
-            scope: MemoryScope(rawValue: updatedChunk.scope) ?? .user,
-            title: title,
-            content: updatedChunk.text,
-            tags: updatedChunk.tags.isEmpty ? nil : updatedChunk.tags,
-            isPinned: isPinned ?? false,
-            isApproved: true,
-            createdAt: updatedChunk.createdAt,
-            updatedAt: Date()
-        )
+        let account = await currentAccount()
+        let embedding = try await embed(content)
+        let chunk = try await memoryStore.updateMemory(id: memoryId, newText: content, newTags: tags, newEmbedding: embedding, as: account)
+        return Self.memory(from: chunk)
     }
 
-    /// Delete a memory chunk from the local store.
+    /// Removes a memory of the signed-in account's.
     func deleteMemory(memoryId: String) async throws {
-        try await memoryStore.deleteMemory(id: memoryId)
+        try await memoryStore.deleteMemory(id: memoryId, as: currentAccount())
     }
 
     /// Pin or unpin a memory chunk. In the local-only client we treat this as
@@ -452,7 +385,9 @@ actor MemoryService {
         case .itsContent: existing.proposedContent
         case let .text(edited): edited
         }
-        let scope = existing.scope ?? (existing.covenId == nil ? "user" : "coven")
+        // Kept where it was proposed: in its coven's pages, or for one
+        // proposed in no coven as the person's own.
+        let place = existing.covenId.map(MemoryPlace.coven) ?? .aboutMe
         let tags: [String]
         if let tagsString = existing.proposedTags,
            let data = tagsString.data(using: .utf8) {
@@ -475,7 +410,7 @@ actor MemoryService {
         let settled = try await mark(proposalId, as: status, feedback: feedback, for: account)
         do {
             try await memoryStore.storeMemory(
-                scope: scope,
+                in: place,
                 text: text,
                 tags: tags,
                 pii: false,

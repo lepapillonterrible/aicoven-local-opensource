@@ -53,41 +53,44 @@ final class PersistenceIntegrationTests: XCTestCase {
 
     func testMemoryRepository_storeAndLoad_roundtrip() async throws {
         let repo = MemoryRepository.shared
+        let account = UserScope.currentUserID
+        let coven = try await CovenService.shared.createCoven(name: "Memory \(UUID().uuidString)")
+        addTeardownBlock { try? await CovenService.shared.deleteCoven(id: coven.id) }
 
-        let scope = "test_scope_" + UUID().uuidString
         let text = "Persisted memory from integration test"
         let tags = ["integration", "test"]
         let createdBy = "tester"
         let source = "unit-test"
 
         let stored = try await repo.storeMemory(
-            scope: scope,
+            in: .coven(coven.id),
             text: text,
             tags: tags,
             pii: false,
             createdBy: createdBy,
             source: source,
-            embedding: [0.1, 0.2, 0.3]
+            embedding: [0.1, 0.2, 0.3],
+            as: account
         )
 
-        XCTAssertEqual(stored.scope, scope)
+        XCTAssertEqual(stored.scope, "coven")
+        XCTAssertEqual(stored.covenID, coven.id)
         XCTAssertEqual(stored.text, text)
         XCTAssertEqual(stored.tags, tags)
         XCTAssertEqual(stored.createdBy, createdBy)
         XCTAssertEqual(stored.source, source)
 
-        let loaded = try await repo.loadMemories(scope: scope, limit: 10)
-        XCTAssertFalse(loaded.isEmpty)
-
-        guard let roundTripped = loaded.first(where: { $0.id == stored.id }) else {
-            XCTFail("Expected to find stored memory chunk in loadMemories result")
-            return
-        }
-
-        XCTAssertEqual(roundTripped.scope, scope)
+        let loaded = try await repo.loadMemories(in: .coven(coven.id), limit: 10)
+        XCTAssertEqual(loaded.count, 1)
+        let roundTripped = try XCTUnwrap(loaded.first)
+        XCTAssertEqual(roundTripped.id, stored.id)
+        XCTAssertEqual(roundTripped.scope, "coven")
+        XCTAssertEqual(roundTripped.covenID, coven.id)
         XCTAssertEqual(roundTripped.text, text)
         XCTAssertEqual(roundTripped.tags, tags)
         XCTAssertEqual(roundTripped.createdBy, createdBy)
         XCTAssertEqual(roundTripped.source, source)
+        XCTAssertEqual(roundTripped.embedding, [0.1, 0.2, 0.3])
+        XCTAssertFalse(roundTripped.isUnreadable)
     }
 }

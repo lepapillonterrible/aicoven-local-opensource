@@ -14,6 +14,9 @@ struct Memory: Codable, Identifiable {
     let isApproved: Bool
     let createdAt: Date
     let updatedAt: Date?
+    /// True for an entry whose text the account's key could not open: its
+    /// content is then empty.
+    var unreadable: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -25,6 +28,7 @@ struct Memory: Codable, Identifiable {
         case isApproved = "approved"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case unreadable
     }
 }
 
