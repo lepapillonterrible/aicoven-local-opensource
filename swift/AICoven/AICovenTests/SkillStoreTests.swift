@@ -159,10 +159,12 @@ final class SkillStoreTests: XCTestCase {
             _ = try await store.skills(as: "someone-else")
             XCTFail("Nothing is read as an account that is not signed in")
         } catch RepositoryError.accountChanged {}
-        do {
-            _ = try await store.add(title: "Theirs", text: "x", source: nil, as: "someone-else")
-            XCTFail("Nothing is added as an account that is not signed in")
-        } catch RepositoryError.accountChanged {}
+        for text in ["x", ""] {
+            do {
+                _ = try await store.add(title: "Theirs", text: text, source: nil, as: "someone-else")
+                XCTFail("Nothing is added as an account that is not signed in, and nothing is said of what it gave")
+            } catch RepositoryError.accountChanged {}
+        }
         do {
             try await store.delete(id: added.id, as: "someone-else")
             XCTFail("Nothing is deleted as an account that is not signed in")
@@ -177,7 +179,11 @@ final class SkillStoreTests: XCTestCase {
         XCTAssertEqual(listed.count, 0)
         let followed = try await store.followed(as: account)
         XCTAssertEqual(followed.count, 0)
-        for change in [{ try await self.store.setOn(false, id: added.id, as: self.account) }, { try await self.store.delete(id: added.id, as: self.account) }] {
+        for change in [
+            { try await self.store.setOn(false, id: added.id, as: self.account) },
+            { try await self.store.setOn(true, id: added.id, as: self.account) },
+            { try await self.store.delete(id: added.id, as: self.account) },
+        ] {
             do {
                 try await change()
                 XCTFail("Another account's skill is not this one's to change")
@@ -200,6 +206,32 @@ final class SkillStoreTests: XCTestCase {
             _ = try await store.followed(as: account)
             XCTFail("No agent follows what cannot be read")
         } catch RepositoryError.dataLocked {}
+    }
+
+    func testNothingIsAddedChangedOrDeletedWhileTheDataIsLocked() async throws {
+        let added = try await store.add(title: "Style", text: "Be brief.", source: nil, as: account)
+        await DataEncryptionService.shared.lock()
+
+        for change in [
+            { _ = try await self.store.add(title: "More", text: "Be kind.", source: nil, as: self.account) },
+            { try await self.store.setOn(true, id: added.id, as: self.account) },
+            { try await self.store.setOn(false, id: added.id, as: self.account) },
+            { try await self.store.delete(id: added.id, as: self.account) },
+        ] {
+            do {
+                try await change()
+                XCTFail("Nothing is done while the account's data is locked")
+            } catch RepositoryError.dataLocked {}
+        }
+
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        let account = account
+        let kept = try await queue.read { db in
+            try Row.fetchAll(db, sql: "SELECT id, is_on FROM skills WHERE user_id = ?", arguments: [account])
+        }
+        XCTAssertEqual(kept.map { $0["id"] as String }, [added.id], "As it was")
+        XCTAssertEqual(kept.map { $0["is_on"] as Bool }, [false])
     }
 
     func testASkillTheKeyCannotOpen_isListedAsOne_isNotFollowedOrTurnedOn_andCanBeDeleted() async throws {

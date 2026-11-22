@@ -6,7 +6,8 @@ import GRDB
 /// from a file of theirs. A skill is followed only while it is on.
 nonisolated struct Skill: Identifiable, Equatable {
     let id: String
-    /// Its title; empty where it could not be opened.
+    /// Its title; empty for a skill that is unreadable (its title, or
+    /// its text, could not be opened).
     var title: String
     var isOn: Bool
     /// Whether its title or its text cannot be opened with the account's
@@ -33,10 +34,11 @@ enum SkillError: Error, Equatable {
 }
 
 /// The account's skills, kept on the device. A skill's title and text are
-/// encrypted with the account's key; nothing of a skill is kept in the
-/// clear but whether it is on and when it was last changed. A skill is
-/// read, added, changed and deleted only as the account signed in, with
-/// its own key in memory.
+/// encrypted with the account's key. Nothing they say is kept in the
+/// clear: beside them a skill has its id, whose it is, whether it is on,
+/// when it was added and last changed, and a digest that tells its source
+/// from another. A skill is read, added, changed and deleted only as the
+/// account signed in, with its own key in memory.
 actor SkillRepository {
     static let shared = SkillRepository()
 
@@ -125,6 +127,9 @@ actor SkillRepository {
     /// changed, turned off or added since it was looked at ends off.
     @discardableResult
     func add(title: String, text: String, source: String?, as account: String) async throws -> Skill {
+        // Whoever asks is the account signed in, before anything is said
+        // of what was given.
+        try await AccountSeal.requireKey(of: account, since: DataEncryptionService.shared.keyEpoch)
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw SkillError.empty }
         guard text.count <= Self.longestText else { throw SkillError.tooLong }
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
