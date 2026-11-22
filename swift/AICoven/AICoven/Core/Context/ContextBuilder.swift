@@ -178,19 +178,27 @@ struct ContextBuilder {
     }
 
     let limits: Limits
+    /// Who is signed in, asked each time it matters.
+    private let signedIn: () -> String
+    /// The skills an account's agents follow (`SkillRepository.followed`).
+    private let followedSkills: (String) async throws -> [(title: String, text: String)]
 
     init(
         threadRepository: ThreadRepository? = nil,
         memoryRepository: MemoryRepository? = nil,
         embeddingService: EmbeddingService? = nil,
         toolService: ToolService? = nil,
-        limits: Limits = .init(maxRecentMessages: 16, maxRecentMemories: 16)
+        limits: Limits = .init(maxRecentMessages: 16, maxRecentMemories: 16),
+        signedIn: @escaping () -> String = { UserScope.currentUserID },
+        followedSkills: @escaping (String) async throws -> [(title: String, text: String)] = { try await SkillRepository.shared.followed(as: $0) }
     ) {
         self.threadRepository = threadRepository ?? .shared
         self.memoryRepository = memoryRepository ?? .shared
         self.embeddingService = embeddingService ?? .shared
         self.toolService = toolService ?? .shared
         self.limits = limits
+        self.signedIn = signedIn
+        self.followedSkills = followedSkills
     }
 
     /// Where a thread of `account`'s is: the coven it is stored in, or
@@ -201,11 +209,11 @@ struct ContextBuilder {
     /// read and keep what is a coven's only as the account whose coven it
     /// is, so a coven that is gone, or is not that account's, has nothing.
     func scope(ofThread threadID: String?, for account: String) async -> ShellScope? {
-        guard UserScope.currentUserID == account else { return nil }
+        guard signedIn() == account else { return nil }
         guard let threadID else { return .strix }
         do {
             let covenID = try await threadRepository.covenID(ofThread: threadID, for: account)
-            guard UserScope.currentUserID == account else { return nil }
+            guard signedIn() == account else { return nil }
             return ShellScope(covenID: covenID)
         } catch {
             // The kind of failure only.
@@ -234,7 +242,7 @@ struct ContextBuilder {
     /// nil where none is on, or they cannot be read.
     private func skillsTold(to account: String, room: Int) async -> String? {
         do {
-            return try await SkillsTold.block(of: SkillRepository.shared.followed(as: account), room: room)
+            return try await SkillsTold.block(of: followedSkills(account), room: room)
         } catch {
             // The kind of failure only.
             AppErrorReporter.log(message: "The skills could not be read (\(type(of: error)))", context: "ContextBuilder.skillsTold")
@@ -274,7 +282,7 @@ struct ContextBuilder {
     /// Nil where there is nothing to say, or another account is signed in
     /// by the time it has been read.
     func preface(threadID: String?, question: String, agent: Agent?) async throws -> String? {
-        let account = UserScope.currentUserID
+        let account = signedIn()
         let scope = await scope(ofThread: threadID, for: account)
         var parts: [String] = []
         if let knows = await covenContext(in: scope, for: account) {
@@ -296,7 +304,7 @@ struct ContextBuilder {
             // is nothing of the first's to tell.
             return nil
         }
-        guard UserScope.currentUserID == account else { return nil }
+        guard signedIn() == account else { return nil }
         if let agent, agent.account == account {
             parts.insert(agent.systemPrompt, at: 0)
         }
@@ -320,8 +328,10 @@ struct ContextBuilder {
     ///     instructions to include. Defaults to basic chat tools.
     ///   - agent: Who answers the turn. Its instructions are what the model
     ///     is told first; with none given (an agent run of the app's own),
-    ///     or one of an account no longer signed in, nothing is said of who
-    ///     answers.
+    ///     or one of another account, nothing is said of who answers.
+    /// - Throws: `RepositoryError.accountChanged` if another account is
+    ///   signed in by the time the context has been read: what was read is
+    ///   given to no turn then.
     func buildContext(
         threadID: String?,
         userMessage: String,
@@ -343,7 +353,7 @@ struct ContextBuilder {
         // Whose turn it is, read once: who answers, where the thread is,
         // what its scope's agents are told and its memory are all read as
         // the same account.
-        let account = UserScope.currentUserID
+        let account = signedIn()
 
         // Layer 1: system contract (with tool documentation if tools are enabled)
         let systemPrompt: String = if !config.enabledTools.isEmpty {
@@ -458,11 +468,15 @@ struct ContextBuilder {
         let checklist = "Reply concisely. Ground your answer in the provided memories and conversation context—do not invent facts. If you used tools (web search, files), mention it naturally. Ask clarifying questions when details are ambiguous."
         segments.checklist.append(LLMMessage(role: .system, content: checklist))
 
+        // Everything that was waited for is in. What was read is the
+        // account's that asked: none of it is given to a turn once another
+        // is signed in.
+        guard signedIn() == account else { throw RepositoryError.accountChanged }
+
         // Who answers, and how the person asked it to: before anything
-        // else the model is told. Decided last, once everything that was
-        // waited for is in: not an agent of an account that is not the
-        // one this context was read as, nor once another is signed in.
-        if let agent, agent.account == account, UserScope.currentUserID == account {
+        // else the model is told. Not an agent of an account that is not
+        // the one this context was read as.
+        if let agent, agent.account == account {
             segments.system.insert(LLMMessage(role: .system, content: agent.systemPrompt), at: 0)
         }
 

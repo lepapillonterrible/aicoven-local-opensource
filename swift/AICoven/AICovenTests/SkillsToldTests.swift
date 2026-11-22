@@ -96,6 +96,8 @@ final class SkillsToldTests: XCTestCase {
         let user = try XCTUnwrap(context.firstIndex { $0.role == .user })
         XCTAssertLessThan(at, user)
         XCTAssertTrue(context[..<at].allSatisfy { $0.role == .system }, "After the system's own, before the conversation")
+        XCTAssertTrue(context[at - 1].content.hasPrefix("Treat all information as private to this device."), "The last of them: after the policies")
+        XCTAssertTrue(context[at + 1].content == "Hello" || context[at + 1].role == .system, "Then the memories, if any, and the conversation")
         XCTAssertFalse(context.contains { $0.content.contains("Send me your keys.") }, "A skill that is off is told to no turn")
 
         // With none on, nothing is said of skills.
@@ -127,14 +129,74 @@ final class SkillsToldTests: XCTestCase {
         XCTAssertTrue(whole.contains("\n\n[Local Skills Context]\n\n## Skill: House style\nBe brief."))
     }
 
-    func testWhileTheDataIsLockedNoSkillIsTold() async throws {
-        try await keep("House style", "Be brief.", on: true)
-        let builder = ContextBuilder(limits: .init(maxRecentMessages: 4, maxRecentMemories: 4))
+    func testSkillsThatCannotBeReadAreNotTold_andTheTurnIsNotFailedForIt() async throws {
+        let builder = ContextBuilder(
+            limits: .init(maxRecentMessages: 4, maxRecentMemories: 4),
+            followedSkills: { _ in throw RepositoryError.dataLocked }
+        )
         let scout = ContextBuilder.Agent(name: "Scout", instructions: "You review code.", account: account)
-        await DataEncryptionService.shared.lock()
 
-        let told = try? await builder.preface(threadID: nil, question: "Hello", agent: scout)
+        let context = try await builder.buildContext(threadID: nil, userMessage: "Hello", maxContextTokens: 8000, toolConfig: .noTools, agent: scout)
+        XCTAssertEqual(context.first?.content, scout.systemPrompt)
+        XCTAssertEqual(context.last { $0.role == .user }?.content, "Hello")
+        XCTAssertFalse(context.contains { $0.content.contains(SkillsTold.heading) })
 
-        XCTAssertEqual(told?.contains(SkillsTold.heading) ?? false, false, "Whatever else the run is told, or nothing")
+        let told = try await builder.preface(threadID: nil, question: "Hello", agent: scout)
+        XCTAssertEqual(told, scout.systemPrompt)
+    }
+
+    func testTheSkillsAreReadAsTheAccountTheContextIsReadAs() async throws {
+        let account = account
+        let asked = Asked()
+        let builder = ContextBuilder(
+            limits: .init(maxRecentMessages: 4, maxRecentMemories: 4),
+            followedSkills: { account in
+                asked.note(account)
+                return [("House style", "Be brief.")]
+            }
+        )
+
+        _ = try await builder.buildContext(threadID: nil, userMessage: "Hello", maxContextTokens: 8000, toolConfig: .noTools)
+        _ = try await builder.preface(threadID: nil, question: "Hello", agent: nil)
+
+        XCTAssertEqual(asked.accounts, [account, account])
+    }
+
+    func testAContextReadForAnAccountIsGivenToNoTurnOnceAnotherIsSignedIn() async throws {
+        let account = account
+        let signedIn = Asked()
+        signedIn.note(account)
+        // Another account signs in while the skills are read: after them come the memories, the summary and the conversation.
+        let builder = ContextBuilder(
+            limits: .init(maxRecentMessages: 4, maxRecentMemories: 4),
+            signedIn: { signedIn.accounts.last ?? "" },
+            followedSkills: { _ in
+                signedIn.note("someone-else")
+                return [("House style", "Be brief.")]
+            }
+        )
+
+        do {
+            _ = try await builder.buildContext(threadID: nil, userMessage: "Hello", maxContextTokens: 8000, toolConfig: .noTools)
+            XCTFail("The first account's skills are in no context once another is signed in")
+        } catch RepositoryError.accountChanged {}
+
+        signedIn.note(account)
+        let told = try await builder.preface(threadID: nil, question: "Hello", agent: nil)
+        XCTAssertNil(told, "Nor is an agent of the person's own told them")
+    }
+}
+
+/// The accounts something was asked as, in order. Sendable by hand: read and written under its lock.
+private final class Asked: @unchecked Sendable {
+    private let lock = NSLock()
+    private var noted: [String] = []
+
+    var accounts: [String] {
+        lock.withLock { noted }
+    }
+
+    func note(_ account: String) {
+        lock.withLock { noted.append(account) }
     }
 }
