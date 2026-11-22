@@ -182,6 +182,12 @@ struct ShellRootView: View {
                 openSettings(place)
                 #endif
             }
+            // A notification about a thread was tapped, also one tapped
+            // before this came up: its thread is opened where it belongs.
+            .onChange(of: appState.pendingThreadID, initial: true) { _, threadID in
+                guard threadID != nil, let asked = appState.consumeThreadAsk() else { return }
+                openThread(askedFor: asked)
+            }
             // A thread was deleted, by whatever did it (a new thread whose
             // files could not go into it is deleted again, with no list's
             // action behind it): it is no longer listed, open or marked.
@@ -478,6 +484,20 @@ struct ShellRootView: View {
             openSettings(.connectedApps)
         } else {
             navigator.openPlace(item)
+        }
+    }
+
+    /// Opens the thread a tapped notification is about: only one of the
+    /// account signed in when it was tapped, and not over where the
+    /// person went while it was looked up.
+    private func openThread(askedFor threadID: String) {
+        let account = UserScope.currentUserID
+        let asked = navigator.personMoves
+        Task {
+            guard let thread = try? await ThreadService.shared.getThread(threadId: threadID) else { return }
+            guard ShellNavigator.opensThread(thread, askedBy: account, signedIn: UserScope.currentUserID),
+                  navigator.isStill(at: asked) else { return }
+            navigator.open(thread)
         }
     }
 

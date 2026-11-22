@@ -251,6 +251,13 @@ final class ShellNavigator: ObservableObject {
     /// a thread made, renamed or deleted, a coven that is gone.
     private(set) var personMoves = 0
 
+    /// Whether a thread asked for from outside the shell (a notification
+    /// that was tapped) is opened: only one of the account that was
+    /// signed in when it was asked for, while that account still is.
+    nonisolated static func opensThread(_ thread: Thread, askedBy account: String, signedIn: String) -> Bool {
+        thread.userId == account && signedIn == account
+    }
+
     /// Whether the person has done nothing in the shell since it counted
     /// `moves`: for what is asked for in a sheet and opened once the sheet
     /// has gone, which must not cover what the person did meanwhile.

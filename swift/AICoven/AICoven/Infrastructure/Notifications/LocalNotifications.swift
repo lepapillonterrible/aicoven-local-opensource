@@ -216,7 +216,16 @@ final class LocalNotifications: ObservableObject {
     /// The id of a thread's notification: one for a thread at a time, the
     /// latest in the earlier one's place.
     static func id(forThread threadID: String) -> String {
-        "thread-\(threadID)"
+        "\(idPrefix)\(threadID)"
+    }
+
+    private nonisolated static let idPrefix = "thread-"
+
+    /// The thread a notification with this id is about; nil for an id
+    /// that is not one of a thread's.
+    nonisolated static func threadID(ofNotification id: String) -> String? {
+        guard id.hasPrefix(idPrefix), id.count > idPrefix.count else { return nil }
+        return String(id.dropFirst(idPrefix.count))
     }
 
     /// Notifies of something in `thread`, which is `account`'s, in the
@@ -270,5 +279,24 @@ final class LocalNotifications: ObservableObject {
         guard offer != nil, !offerWasAnnounced else { return false }
         offerWasAnnounced = true
         return true
+    }
+}
+
+/// Hears that a notification was tapped, and hands its thread to the app:
+/// the id alone says which thread, and the shell opens it only if it is
+/// the signed-in account's. Nothing else is read from a notification.
+final class NotificationTaps: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = NotificationTaps()
+
+    /// Starts hearing taps. Called once, as the app starts.
+    @MainActor
+    func start() {
+        UNUserNotificationCenter.current().delegate = self
+    }
+
+    nonisolated func userNotificationCenter(_: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier,
+              let threadID = LocalNotifications.threadID(ofNotification: response.notification.request.identifier) else { return }
+        await MainActor.run { AppState.shared.notificationTapped(forThread: threadID) }
     }
 }

@@ -23,6 +23,9 @@ class AppState: ObservableObject {
     @Published var selectedThread: Thread?
     @Published var threads: [Thread] = []
     @Published var pendingDeepLink: DeepLinkTarget?
+    /// The thread a notification that was tapped is about: held until
+    /// the shell takes it, as a link is, and for the same account only.
+    @Published private(set) var pendingThreadID: String?
     /// The place in Settings a request names. The Settings window shows it
     /// and clears this.
     @Published var requestedSettingsPane: WorkspaceTabType?
@@ -62,8 +65,24 @@ class AppState: ObservableObject {
     /// takes its place. Nobody being signed in when the app starts is no
     /// account leaving, so a link the app was opened with stays.
     func accountReported(_ account: String?) {
-        if let was = reportedAccount, was != account { pendingDeepLink = nil }
+        if let was = reportedAccount, was != account {
+            pendingDeepLink = nil
+            pendingThreadID = nil
+        }
         reportedAccount = account
+    }
+
+    /// A notification about a thread was tapped: the shell opens the
+    /// thread, if it is the signed-in account's.
+    func notificationTapped(forThread threadID: String) {
+        pendingThreadID = threadID
+    }
+
+    /// Takes the thread a tapped notification is about, once.
+    func consumeThreadAsk() -> String? {
+        let threadID = pendingThreadID
+        pendingThreadID = nil
+        return threadID
     }
 
     /// Consume and clear pending deep link target.

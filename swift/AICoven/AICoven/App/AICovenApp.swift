@@ -41,6 +41,8 @@ struct AICovenApp: App {
 
         // Register accessibility fonts at process boot
         FontRegistration.register()
+        // A notification that is tapped hands its thread to the app.
+        NotificationTaps.shared.start()
     }
 
     var body: some Scene {

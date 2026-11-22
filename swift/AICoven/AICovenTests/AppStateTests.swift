@@ -61,6 +61,30 @@ final class AppStateTests: XCTestCase {
         XCTAssertNil(state.pendingDeepLink)
     }
 
+    func testTheThreadOfATappedNotification_isHeldForTheShell_once_andNotForAnotherAccount() {
+        let state = AppState.shared
+        addTeardownBlock { await MainActor.run {
+            _ = state.consumeThreadAsk()
+            state.accountReported(nil)
+        } }
+
+        // Tapped before anyone is known to be signed in (the app was opened by the tap): it waits through signing in.
+        state.accountReported(nil)
+        state.notificationTapped(forThread: "t1")
+        state.accountReported("ada")
+        XCTAssertEqual(state.pendingThreadID, "t1")
+        XCTAssertEqual(state.consumeThreadAsk(), "t1")
+        XCTAssertNil(state.consumeThreadAsk(), "Taken once")
+
+        // Still waiting when the account leaves, or another takes its place: the next is not led to it.
+        state.notificationTapped(forThread: "t2")
+        state.accountReported("grace")
+        XCTAssertNil(state.pendingThreadID)
+        state.notificationTapped(forThread: "t3")
+        state.accountReported(nil)
+        XCTAssertNil(state.pendingThreadID)
+    }
+
     func testOnlyALinkIntoSettingsNamesAPlaceInSettings() {
         XCTAssertEqual(HomeView.settingsPlace(for: .connectedApps), .connectedApps)
         XCTAssertEqual(HomeView.settingsPlace(for: .budgets), .budget)
