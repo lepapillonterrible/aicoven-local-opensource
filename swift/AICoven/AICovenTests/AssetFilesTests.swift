@@ -266,5 +266,11 @@ final class AssetFilesTests: XCTestCase {
         XCTAssertNil(files.preview.previewURL)
         XCTAssertEqual(files.said, AttachmentPreviewPresenter.cannotOpen)
         XCTAssertEqual(staged(), [])
+
+        // A download asked for afterwards is not left under what Quick Look said.
+        stand.fails = false
+        await files.download(file("f2"))
+        XCTAssertNil(files.said)
+        XCTAssertTrue(files.isExporting)
     }
 }

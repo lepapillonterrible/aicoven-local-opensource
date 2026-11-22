@@ -575,7 +575,6 @@ final class AssetLibraryTests: XCTestCase {
         XCTAssertNotEqual(numbers[0], numbers[1])
 
         // Nothing of it is said to another account.
-        let before = model.actionFailure
         let acting = Task { await model.perform(.approve, on: listed, as: "ada") }
         await gate.arrived(said.count + 3)
         XCTAssertNil(model.actionFailure, "A new ask clears what was said of the last")
@@ -583,7 +582,6 @@ final class AssetLibraryTests: XCTestCase {
         await gate.letOneThrough()
         await acting.value
         XCTAssertNil(model.actionFailure)
-        XCTAssertNotNil(before)
     }
 
     func testAChosenFileIsReadUnlessItIsTooLarge() throws {

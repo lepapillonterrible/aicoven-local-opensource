@@ -61,7 +61,7 @@ final class AssetFiles: ObservableObject {
     /// What went wrong with the last file asked for, in words.
     @Published private(set) var failure: String?
 
-    static let cannotOpen = "This file could not be opened."
+    static let cannotOpen = AttachmentPreviewPresenter.cannotOpen
     static let cannotSave = "The file couldn't be saved."
 
     /// The download last asked for in this place: a later one, asked of
@@ -92,14 +92,20 @@ final class AssetFiles: ObservableObject {
         followed = preview.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
     }
 
-    /// What is said under the files: the last failure of either kind.
+    /// What is said under the files: what went wrong with the last file
+    /// asked for, whichever way it was asked for.
     var said: String? {
-        failure ?? preview.errorMessage
+        failure ?? (lastWasALook ? preview.errorMessage : nil)
     }
+
+    /// Whether the last file asked for was to be looked at: what Quick
+    /// Look said of an earlier one is not said under a later download.
+    private var lastWasALook = false
 
     /// Shows a file in Quick Look.
     func look(at file: AssetFile) async {
         failure = nil
+        lastWasALook = true
         await preview.open(attachmentID: file.id, filename: file.name)
     }
 
@@ -113,6 +119,7 @@ final class AssetFiles: ObservableObject {
         reading = request
         preparing = file.id
         failure = nil
+        lastWasALook = false
         defer {
             if reading == request {
                 reading = nil
