@@ -10,6 +10,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
     case subscription
     case thisMac
     case appearance
+    case notifications
     case account
     case about
 
@@ -26,6 +27,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .subscription: "Subscription"
         case .thisMac: "This Mac"
         case .appearance: "Appearance"
+        case .notifications: "Notifications"
         case .account: "Profile and account"
         case .about: "About"
         }
@@ -42,6 +44,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .subscription: "Subscription"
         case .thisMac: "This Mac"
         case .appearance: "Appearance"
+        case .notifications: "Notifications"
         case .account: "Account"
         case .about: "About"
         }
@@ -66,6 +69,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .subscription: "creditcard"
         case .thisMac: "laptopcomputer"
         case .appearance: "paintbrush"
+        case .notifications: "bell"
         case .account: "person.crop.circle"
         case .about: "info.circle"
         }
@@ -119,7 +123,7 @@ struct SettingsPaneView: View {
         case .connectedApps: AnalyticsService.shared.trackConnectedAppsOpened()
         case .usage: AnalyticsService.shared.trackUsageViewed()
         case .account: AnalyticsService.shared.trackProfileOpened()
-        case .aiConnections, .learning, .subscription, .thisMac, .appearance, .about: break
+        case .aiConnections, .learning, .subscription, .thisMac, .appearance, .notifications, .about: break
         }
     }
 
@@ -148,6 +152,8 @@ struct SettingsPaneView: View {
             #endif
         case .appearance:
             AppearanceSettingsPane()
+        case .notifications:
+            NotificationsSettingsView()
         case .account:
             EnhancedProfileView()
         case .about:
@@ -169,7 +175,7 @@ struct SettingsList: View {
                     rows(.usage, .subscription)
                 }
                 Section {
-                    rows(.appearance)
+                    rows(.appearance, .notifications)
                 }
                 Section {
                     rows(.account, .about)

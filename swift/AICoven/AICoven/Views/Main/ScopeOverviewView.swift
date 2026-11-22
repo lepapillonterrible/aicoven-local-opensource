@@ -44,6 +44,7 @@ struct ScopeOverviewView: View {
     @State private var lacksProvider = false
     /// What each thread is doing, for its row and which section it is in.
     @ObservedObject private var activities = ThreadActivities.shared
+    @ObservedObject private var notifications = LocalNotifications.shared
     /// The latest ask from here: the thread it starts opens only if the
     /// person is still here and has asked nothing since.
     @State private var ask: UUID?
@@ -123,6 +124,7 @@ struct ScopeOverviewView: View {
         let lists = ThreadListRules.overview(listed) { activities.activity[$0.id]?.isStillOpen == true }
         return ScrollView {
             VStack(alignment: .leading, spacing: Spacing.lg) {
+                NotificationAskLine()
                 // Strix says how to get an answer where none can be had yet.
                 if scope == .strix {
                     AddProviderKeysCard(onOpenProviderKeys: onOpenProviderKeys)
@@ -170,6 +172,10 @@ struct ScopeOverviewView: View {
         let searchHasThePage = isSearchFieldActive || isSearching
         return List {
             if !searchHasThePage {
+                // A list makes no row for a line with nothing to show.
+                if notifications.offer != nil {
+                    blockRow { NotificationAskLine() }
+                }
                 if let lastVisit = navigator.previousVisit(in: scope) {
                     blockRow {
                         Text(VisitWords.lastHere(lastVisit))

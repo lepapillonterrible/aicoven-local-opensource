@@ -74,6 +74,7 @@ class AuthService: ObservableObject {
                 ThreadActivities.shared.accountChanged()
                 MemoryProposalQuestions.shared.accountChanged()
                 ToolApprovals.shared.accountChanged()
+                LocalNotifications.shared.accountChanged()
                 if let firebaseUser {
                     print("✅ Firebase user signed in: \(firebaseUser.email ?? "unknown")")
                     // Clear any previous user's data first
@@ -202,6 +203,7 @@ class AuthService: ObservableObject {
         ThreadActivities.shared.accountChanged()
         MemoryProposalQuestions.shared.accountChanged()
         ToolApprovals.shared.accountChanged()
+        LocalNotifications.shared.accountChanged()
         currentUser = nil
         isAuthenticated = false
     }
@@ -357,6 +359,7 @@ class AuthService: ObservableObject {
         ThreadActivities.shared.accountChanged()
         MemoryProposalQuestions.shared.accountChanged()
         ToolApprovals.shared.accountChanged()
+        LocalNotifications.shared.accountChanged()
 
         print("✅ Account deleted successfully")
 
