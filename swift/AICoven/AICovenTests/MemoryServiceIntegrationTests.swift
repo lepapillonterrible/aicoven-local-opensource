@@ -51,37 +51,35 @@ final class MemoryServiceIntegrationTests: XCTestCase {
         XCTAssertEqual(chunks.first?.text, content)
     }
 
-    func testUpdatingAMemory_keepsWhatIsNotGiven_andItStaysWhereItIsKept() async throws {
+    func testUpdatingAMemory_keepsItsTagsWhereNoneAreGiven_andItStaysWhereItIsKept() async throws {
         let service = MemoryService(memoryStore: MemoryRepository.shared)
         let coven = try await newCoven()
         let created = try await service.createMemory(in: .coven(coven), content: "Original text", tags: ["alpha"])
 
-        // New tags alone: the text stays.
-        let retagged = try await service.updateMemory(memoryId: created.id, content: nil, tags: ["beta"])
-        XCTAssertEqual(retagged.id, created.id)
-        XCTAssertEqual(retagged.content, "Original text")
-        XCTAssertEqual(retagged.tags ?? [], ["beta"])
-
         // New text alone: the tags stay.
         let rewritten = try await service.updateMemory(memoryId: created.id, content: "New text", tags: nil)
+        XCTAssertEqual(rewritten.id, created.id)
         XCTAssertEqual(rewritten.content, "New text")
-        XCTAssertEqual(rewritten.tags ?? [], ["beta"])
+        XCTAssertEqual(rewritten.tags ?? [], ["alpha"])
         XCTAssertEqual(rewritten.covenId, coven)
 
+        // New tags with it: both are as given.
+        let retagged = try await service.updateMemory(memoryId: created.id, content: "Newer text", tags: ["beta"])
+        XCTAssertEqual(retagged.content, "Newer text")
+        XCTAssertEqual(retagged.tags ?? [], ["beta"])
+
         let stored = try await MemoryRepository.shared.loadMemories(in: .coven(coven), limit: 10)
-        XCTAssertEqual(stored.map(\.text), ["New text"])
+        XCTAssertEqual(stored.map(\.text), ["Newer text"])
         XCTAssertEqual(stored.map(\.id), [created.id], "It is the same entry, where it was")
     }
 
     func testAMemoryThatIsNotThere_isNotChanged_andNoneIsMadeUp() async throws {
         let service = MemoryService(memoryStore: MemoryRepository.shared)
-        for content in ["New text", nil] {
-            do {
-                _ = try await service.updateMemory(memoryId: "no-such-memory-\(UUID().uuidString)", content: content, tags: nil)
-                XCTFail("Reported a change to a memory that is not there")
-            } catch {
-                guard case MemoryStoreError.noSuchMemory = error else { return XCTFail("\(type(of: error))") }
-            }
+        do {
+            _ = try await service.updateMemory(memoryId: "no-such-memory-\(UUID().uuidString)", content: "New text", tags: nil)
+            XCTFail("Reported a change to a memory that is not there")
+        } catch {
+            guard case MemoryStoreError.noSuchMemory = error else { return XCTFail("\(type(of: error))") }
         }
     }
 
@@ -146,6 +144,31 @@ final class MemoryServiceIntegrationTests: XCTestCase {
         let chunks = try await MemoryRepository.shared.loadMemories(in: .coven(coven), limit: 10)
         XCTAssertEqual(chunks.map(\.text), [proposedContent], "Expected a memory matching the approved proposal")
         XCTAssertEqual(chunks.first?.tags, proposedTags)
+    }
+
+    func testAProposalIsKeptWhereItWasMade_whateverItsScopeSays() async throws {
+        let service = MemoryService(memoryStore: MemoryRepository.shared)
+        let coven = try await newCoven()
+        // Made in a coven, about the person: it is the coven's.
+        let inCoven = try await MemoryProposalRepository.shared.insertProposal(
+            eventId: nil, covenId: coven, proposedContent: "Proposed in the coven", proposedTags: nil, scope: "user", reason: nil,
+            sourceMessageId: nil, proposedBy: "tester", title: nil
+        )
+        _ = try await service.reviewProposal(proposalId: inCoven.id, action: "approve")
+        let covens = try await memories(in: coven)
+        XCTAssertEqual(covens.map(\.text), ["Proposed in the coven"])
+
+        // Made in no coven, with a coven's scope: it is the person's own.
+        let content = "Proposed in no coven \(UUID().uuidString)"
+        let inNone = try await MemoryProposalRepository.shared.insertProposal(
+            eventId: nil, covenId: nil, proposedContent: content, proposedTags: nil, scope: "coven", reason: nil,
+            sourceMessageId: nil, proposedBy: "tester", title: nil
+        )
+        _ = try await service.reviewProposal(proposalId: inNone.id, action: "approve")
+        let own = try await MemoryRepository.shared.loadMemories(in: .aboutMe, limit: 5)
+        let made = try XCTUnwrap(own.first { $0.text == content })
+        addTeardownBlock { try? await MemoryRepository.shared.deleteMemory(id: made.id, as: UserScope.currentUserID) }
+        XCTAssertEqual(made.scope, "user")
     }
 
     func testAProposalMadeInNoCoven_isKeptAsThePersonsOwn() async throws {

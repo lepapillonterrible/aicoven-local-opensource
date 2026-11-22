@@ -103,8 +103,8 @@ struct LocalMemoryChunk: Identifiable, Equatable {
     let embedding: [Float]?
     /// The coven whose memory it is; nil for one kept in no coven.
     var covenID: String?
-    /// Its text could not be opened with the account's key. It reads as
-    /// empty, is read by no turn, and can only be removed.
+    /// Its text could not be opened with the account's key: it reads as
+    /// empty, and no turn reads it.
     var isUnreadable = false
 }
 
@@ -142,18 +142,45 @@ actor MemoryRepository {
         }
     }
 
-    /// The text of a memory, encrypted for `account`: the account that
-    /// wrote it must be the one signed in, under the same data key, from
-    /// before the text is encrypted until after. It is then stored as that
-    /// account's, encrypted for it.
-    private func sealed(_ text: String, for account: String) async throws -> Data {
-        let keyEpoch = await DataEncryptionService.shared.keyEpoch
+    /// Throws unless `account` is the one signed in and the data key in
+    /// memory is its own, the same one as when `epoch` was read: after a
+    /// switch to another account the first one's key can stay in memory
+    /// for a moment, and it neither opens nor seals the second's memory.
+    private func requireKey(of account: String, since epoch: Int) async throws {
         guard await signedInAccount() == account else { throw RepositoryError.accountChanged }
+        guard await DataEncryptionService.shared.isUnlocked(for: account) else { throw RepositoryError.dataLocked }
+        guard await DataEncryptionService.shared.keyEpoch == epoch else { throw RepositoryError.accountChanged }
+    }
+
+    /// The text of a memory, encrypted for `account`: the account that
+    /// wrote it must be the one signed in, with its own data key in
+    /// memory, from before the text is encrypted until after. It is then
+    /// stored as that account's, encrypted for it.
+    private func sealed(_ text: String, for account: String) async throws -> Data {
+        let epoch = await DataEncryptionService.shared.keyEpoch
+        try await requireKey(of: account, since: epoch)
         let ciphertext = try await DataEncryptionService.shared.encrypt(Data(text.utf8), purpose: "memory_chunk")
-        guard await signedInAccount() == account,
-              await DataEncryptionService.shared.keyEpoch == keyEpoch
-        else { throw RepositoryError.accountChanged }
+        try await requireKey(of: account, since: epoch)
         return ciphertext
+    }
+
+    /// Reads something of `account`'s memory, with its own key in memory
+    /// from before the reading until after. Nothing is read, not even that
+    /// there is nothing, while its data is locked; and a key locked or
+    /// changed under way is told as that, whatever failed for it.
+    private func reading<Read>(as account: String, _ read: (DatabaseQueue) async throws -> Read) async throws -> Read {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let epoch = await DataEncryptionService.shared.keyEpoch
+        try await requireKey(of: account, since: epoch)
+        let result: Read
+        do {
+            result = try await read(dbQueue)
+        } catch {
+            try await requireKey(of: account, since: epoch)
+            throw error
+        }
+        try await requireKey(of: account, since: epoch)
+        return result
     }
 
     private static func stored(_ tags: [String]) throws -> String? {
@@ -227,52 +254,41 @@ actor MemoryRepository {
     /// one signed in, with its own data key in memory, from before the
     /// page is read until after.
     func loadMemories(in place: MemoryPlace, limit: Int, offset: Int, as account: String) async throws -> [LocalMemoryChunk] {
-        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-
-        guard await signedInAccount() == account else { throw RepositoryError.accountChanged }
-        let keyEpoch = await DataEncryptionService.shared.keyEpoch
-        // Nothing is read, not even that there is nothing, while the
-        // account's data is locked.
-        guard await DataEncryptionService.shared.isUnlocked(for: account) else { throw RepositoryError.dataLocked }
-        let records: [MemoryChunkRecord] = try await dbQueue.read { db in
-            try Self.rows(of: account, in: place)
-                .order(MemoryChunkRecord.Columns.createdAt.desc, MemoryChunkRecord.Columns.id.desc)
-                .limit(limit, offset: offset)
-                .fetchAll(db)
+        try await reading(as: account) { dbQueue in
+            let records: [MemoryChunkRecord] = try await dbQueue.read { db in
+                try Self.rows(of: account, in: place)
+                    .order(MemoryChunkRecord.Columns.createdAt.desc, MemoryChunkRecord.Columns.id.desc)
+                    .limit(limit, offset: offset)
+                    .fetchAll(db)
+            }
+            var result: [LocalMemoryChunk] = []
+            result.reserveCapacity(records.count)
+            for record in records {
+                try await result.append(self.chunk(from: record))
+            }
+            return result
         }
-
-        var result: [LocalMemoryChunk] = []
-        result.reserveCapacity(records.count)
-        for record in records {
-            try await result.append(chunk(from: record))
-        }
-        // What was opened was opened with that account's key: not with
-        // another's that took its place while the page was read.
-        guard await signedInAccount() == account,
-              await DataEncryptionService.shared.keyEpoch == keyEpoch
-        else { throw RepositoryError.accountChanged }
-        return result
     }
 
-    /// Load a single memory chunk by ID. Only returns if it belongs to the current user.
+    /// One memory of the signed-in account's, by its id, read as a page
+    /// is; nil if that account has none with that id.
     func loadMemory(id: String) async throws -> LocalMemoryChunk? {
-        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-
         let account = await signedInAccount()
-        guard await DataEncryptionService.shared.isUnlocked(for: account) else { throw RepositoryError.dataLocked }
-        let record: MemoryChunkRecord? = try await dbQueue.read { db in
-            try MemoryChunkRecord
-                .filter(MemoryChunkRecord.Columns.id == id)
-                .filter(MemoryChunkRecord.Columns.userId == account)
-                .fetchOne(db)
+        return try await reading(as: account) { dbQueue in
+            let record: MemoryChunkRecord? = try await dbQueue.read { db in
+                try MemoryChunkRecord
+                    .filter(MemoryChunkRecord.Columns.id == id)
+                    .filter(MemoryChunkRecord.Columns.userId == account)
+                    .fetchOne(db)
+            }
+            guard let record else { return nil }
+            return try await self.chunk(from: record)
         }
-
-        guard let record else { return nil }
-        return try await chunk(from: record)
     }
 
-    /// Removes a memory of `account`'s. One that is not there, or is
-    /// another account's, is left as it is.
+    /// Removes a memory of `account`'s, the account signed in. One that is
+    /// not there, or is another account's, is left as it is. It needs no
+    /// key: an entry the key cannot open is removed like any other.
     func deleteMemory(id: String, as account: String) async throws {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         guard await signedInAccount() == account else { throw RepositoryError.accountChanged }
@@ -286,10 +302,11 @@ actor MemoryRepository {
     }
 
     /// Gives a memory of `account`'s new text, with its embedding, and new
-    /// tags where some are given (nil keeps its tags). It stays where it
-    /// is kept. Throws `MemoryStoreError.noSuchMemory` if the account has
-    /// no such memory, and, as `storeMemory` does, if another account is
-    /// signed in by the time it is written.
+    /// tags where some are given (nil keeps its tags, read in the same
+    /// write). It stays where it is kept. Throws
+    /// `MemoryStoreError.noSuchMemory` if the account has no such memory,
+    /// and, as `storeMemory` does, unless the account is signed in with its
+    /// own key while the text is encrypted.
     func updateMemory(
         id: String,
         newText: String,
@@ -345,7 +362,8 @@ actor MemoryRepository {
 
     /// A stored memory, opened. A memory whose text the key in memory
     /// cannot open is given as unreadable, so that the rest of its page is
-    /// still read and it can be removed. A key locked meanwhile is thrown.
+    /// still read and it can be removed. A key locked meanwhile is thrown
+    /// (`reading(as:)` tells it as locked data).
     private func chunk(from record: MemoryChunkRecord) async throws -> LocalMemoryChunk {
         var text = ""
         var isUnreadable = false

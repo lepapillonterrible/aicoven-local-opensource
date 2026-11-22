@@ -165,9 +165,11 @@ struct ContextBuilder {
 
     /// The memory the turns of a thread of `account`'s read
     /// (`MemoryPlace.read(inCoven:)`), by the coven the thread is stored
-    /// in. None where the thread is not that account's, where it or its
-    /// coven cannot be read, or where the account changes while they are:
-    /// what cannot be placed is not read.
+    /// in. None where the thread is not that account's, where it cannot be
+    /// read, or where the account changes while it is: what cannot be
+    /// placed is not read. The coven itself is not read here: the store
+    /// reads and keeps a coven's memory only as the account whose coven it
+    /// is, so a coven that is gone, or is not that account's, has none.
     func memoryPlaces(ofThread threadID: String?, for account: String) async -> [MemoryPlace] {
         guard UserScope.currentUserID == account else { return [] }
         guard let threadID else { return MemoryPlace.read(inCoven: nil) }

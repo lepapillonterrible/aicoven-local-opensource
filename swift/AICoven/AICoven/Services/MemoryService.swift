@@ -228,32 +228,23 @@ actor MemoryService {
         return Self.memory(from: chunk)
     }
 
-    /// Gives a memory new text, or new tags, or both; what is not given
-    /// stays. It is changed as the account that asked, read before the
-    /// embedding is waited for, and not at all if another is signed in by
-    /// then. Throws `MemoryStoreError.noSuchMemory` if that account has no
-    /// such memory. A memory has no title, pin or scope of its own to
-    /// change: it stays where it is kept.
+    /// Gives a memory new text, and new tags where some are given (nil
+    /// keeps its tags). It is changed as the account that asked, read
+    /// before the embedding is waited for, and not at all if another is
+    /// signed in by then. Throws `MemoryStoreError.noSuchMemory` if that
+    /// account has no such memory. A memory has no title, pin or scope of
+    /// its own to change: it stays where it is kept.
     func updateMemory(
         memoryId: String,
         title _: String? = nil,
-        content: String?,
+        content: String,
         tags: [String]?,
         scope _: String? = nil,
         isPinned _: Bool? = nil
     ) async throws -> Memory {
         let account = await currentAccount()
-        let text: String
-        if let content {
-            text = content
-        } else {
-            guard let existing = try await memoryStore.loadMemory(id: memoryId), !existing.isUnreadable else {
-                throw MemoryStoreError.noSuchMemory
-            }
-            text = existing.text
-        }
-        let embedding = try await embed(text)
-        let chunk = try await memoryStore.updateMemory(id: memoryId, newText: text, newTags: tags, newEmbedding: embedding, as: account)
+        let embedding = try await embed(content)
+        let chunk = try await memoryStore.updateMemory(id: memoryId, newText: content, newTags: tags, newEmbedding: embedding, as: account)
         return Self.memory(from: chunk)
     }
 
@@ -394,7 +385,9 @@ actor MemoryService {
         case .itsContent: existing.proposedContent
         case let .text(edited): edited
         }
-        let place = MemoryPlace(covenID: existing.covenId, scope: existing.scope)
+        // Kept where it was proposed: in its coven's pages, or for one
+        // proposed in no coven as the person's own.
+        let place = existing.covenId.map(MemoryPlace.coven) ?? .aboutMe
         let tags: [String]
         if let tagsString = existing.proposedTags,
            let data = tagsString.data(using: .utf8) {

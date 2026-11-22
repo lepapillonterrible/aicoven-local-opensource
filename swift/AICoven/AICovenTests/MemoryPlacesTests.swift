@@ -220,6 +220,36 @@ final class MemoryPlacesTests: XCTestCase {
         }
     }
 
+    func testWithAnotherAccountsKeyInMemory_nothingIsReadOrWritten() async throws {
+        let coven = try await newCoven()
+        let mine = try await keep("Mine", in: .coven(coven))
+        // What is in memory for a moment after a switch from another account: that account's key.
+        await DataEncryptionService.shared.unlockForTestingEphemeral(ownedBy: "someone-who-signed-out")
+
+        func refused(_ what: String, _ body: () async throws -> Void) async {
+            do {
+                try await body()
+                XCTFail("\(what) with another account's key")
+            } catch {
+                XCTAssertEqual(error as? RepositoryError, .dataLocked, what)
+            }
+        }
+        await refused("Read a page") { _ = try await self.store.loadMemories(in: .coven(coven), limit: 10) }
+        await refused("Read a memory") { _ = try await self.store.loadMemory(id: mine.id) }
+        await refused("Stored a memory") {
+            _ = try await self.store.storeMemory(
+                in: .coven(coven), text: "Sealed with another's key", tags: [], pii: false, createdBy: nil, source: nil, embedding: nil, as: self.account
+            )
+        }
+        await refused("Changed a memory") {
+            _ = try await self.store.updateMemory(id: mine.id, newText: "Sealed with another's key", newTags: nil, newEmbedding: nil, as: self.account)
+        }
+
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        let count = try await store.loadMemories(in: .coven(coven), limit: 10).count
+        XCTAssertEqual(count, 1, "Nothing was added")
+    }
+
     // MARK: - What a thread's turns read
 
     private func thread(inCoven coven: String?) async throws -> String {
@@ -331,5 +361,18 @@ final class MemoryPlacesTests: XCTestCase {
         XCTAssertEqual(strixs, [], "What was for one conversation is kept nowhere")
         let covensAfter = try await texts(in: .coven(coven))
         XCTAssertEqual(covensAfter.count, 1)
+
+        // In a thread whose coven is gone, it is kept nowhere: not as the person's own either.
+        let gone = try await newCoven()
+        let orphan = try await thread(inCoven: gone)
+        try await CovenService.shared.deleteCoven(id: gone)
+        let builder = ContextBuilder(limits: .init(maxRecentMessages: 4, maxRecentMemories: 4))
+        let told = try await builder.buildContext(threadID: orphan, userMessage: "What do you know of \(mark)?", maxContextTokens: 8000, toolConfig: .noTools)
+        XCTAssertFalse(told.contains { $0.content.contains("Ships on Fridays") }, "Nor is it told any other place's memory")
+        try await chat(answering: answer).streamMessage(threadId: orphan, message: "Remember when we ship.", onStateChange: { _ in })
+        own = try await texts(in: .aboutMe).filter { $0.hasSuffix(mark) }
+        XCTAssertEqual(own.count, 1, "Only what the personal thread kept")
+        let strixsAfter = try await texts(in: .strix).filter { $0.hasSuffix(mark) }
+        XCTAssertEqual(strixsAfter, [])
     }
 }
