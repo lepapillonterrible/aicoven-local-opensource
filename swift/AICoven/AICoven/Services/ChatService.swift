@@ -333,7 +333,7 @@ actor ChatService {
         // Resolve provider + model: prefer role-specific settings when a
         // roleId is provided (coven agent threads), otherwise fall back to
         // the user's global preference from UserDefaults.
-        let (prefProvider, prefModel) = await preferredProviderAndModel(roleId: roleId)
+        let (prefProvider, prefModel, agentSettings) = await preferredProviderAndModel(roleId: roleId)
 
         // Who answers, with its instructions: read once for the turn.
         let agent = await answeringAgent(roleId: roleId)
@@ -429,11 +429,14 @@ actor ChatService {
 
         // Simple tool loop: allow the model a configurable number of tool
         // invocations before we require a natural-language answer. The
-        // `chat_max_tool_steps` budget controls how many *tool calls* are
-        // allowed; the user always gets a final answer attempt even if the
-        // budget is exhausted.
-        let maxToolSteps = toolsAllowed ? max(0, Self.currentMaxToolSteps()) : 0
+        // budget controls how many *tool calls* are allowed (the agent's own
+        // where it sets one, else the app's `chat_max_tool_steps`); the user
+        // always gets a final answer attempt even if the budget is exhausted.
+        let maxToolSteps = toolsAllowed ? Self.mostToolSteps(of: agentSettings) : 0
         var remainingToolSteps = maxToolSteps
+        // The longest an answer may be is the agent's, where the turn's
+        // client sends one.
+        let answerLimit = AgentTurnSettings.usesMaxTokens(provider: descriptor.providerID) ? agentSettings.maxTokens : nil
         #if DEBUG
         AppErrorReporter.log(message: "streamMessage starting: provider=\(descriptor.providerID) model=\(descriptor.modelID) maxToolSteps=\(maxToolSteps) toolsAllowed=\(toolsAllowed)", context: "ChatService.streamMessage")
         #endif
@@ -726,8 +729,8 @@ actor ChatService {
                         userMessage: message
                     )
                 let options = ChatOptions(
-                    temperature: 0.7,
-                    maxTokens: nil,
+                    temperature: agentSettings.temperature,
+                    maxTokens: answerLimit,
                     stream: false,
                     tools: nativeTools
                 )
@@ -1098,7 +1101,7 @@ actor ChatService {
                 // If the client supports streaming, use token-by-token delivery
                 // for the final answer so the user sees text appear in real time.
                 if let streamingClient = client as? StreamingLLMClient {
-                    let options = ChatOptions(temperature: 0.7, maxTokens: nil, stream: true)
+                    let options = ChatOptions(temperature: agentSettings.temperature, maxTokens: answerLimit, stream: true)
                     state.phase = .answering
                     state.bumpVersion()
                     onStateChange(state)
@@ -1137,7 +1140,7 @@ actor ChatService {
                     finalText = accumulated
                     streamedAnswer = true
                 } else {
-                    let options = ChatOptions(temperature: 0.7, maxTokens: nil, stream: false)
+                    let options = ChatOptions(temperature: agentSettings.temperature, maxTokens: answerLimit, stream: false)
                     let response = try await client.completeChat(
                         messages: contextMessages,
                         model: descriptor.modelID,
@@ -1509,21 +1512,25 @@ actor ChatService {
 
     /// The provider and model a turn is for: the role's own where it has
     /// them (an agent of a coven), else the person's choice in Settings.
-    private func preferredProviderAndModel(roleId: String?) async -> (provider: String, model: String) {
-        if let roleId,
-           let role = try? await RoleService.shared.getRole(roleId: roleId),
+    /// With them, what the turn takes from the agent's settings: the
+    /// app's own for a turn that is for no agent, or whose agent cannot
+    /// be read.
+    private func preferredProviderAndModel(roleId: String?) async -> (provider: String, model: String, settings: AgentTurnSettings) {
+        let role: Role? = if let roleId { try? await RoleService.shared.getRole(roleId: roleId) } else { nil }
+        let settings = role.map(AgentTurnSettings.init(of:)) ?? .standard
+        if let role,
            let roleProvider = role.provider, !roleProvider.isEmpty,
            let roleModel = role.model, !roleModel.isEmpty {
             #if DEBUG
             AppErrorReporter.log(message: "Role resolved provider=\(roleProvider.lowercased()) model=\(roleModel)", context: "ChatService.streamMessage.roleResolution")
             #endif
-            return (roleProvider.lowercased(), roleModel)
+            return (roleProvider.lowercased(), roleModel, settings)
         }
         let (globalProvider, globalModel) = resolveProviderAndModel()
         #if DEBUG
         AppErrorReporter.log(message: "No role override (roleId=\(roleId ?? "nil")); using global provider=\(globalProvider) model=\(globalModel)", context: "ChatService.streamMessage.roleResolution")
         #endif
-        return (globalProvider, globalModel)
+        return (globalProvider, globalModel, settings)
     }
 
     /// How a voice message for a turn of this role is put into words: the
@@ -1841,6 +1848,12 @@ extension ChatService {
 
     /// Legacy static instruction for backward compatibility.
     static let chatToolInstruction: String = generateChatToolInstruction(enabledTools: PromptTemplates.allTools)
+
+    /// The most tool steps of a turn: its agent's own where it sets one,
+    /// else the app's.
+    static func mostToolSteps(of agent: AgentTurnSettings) -> Int {
+        agent.mostSteps ?? currentMaxToolSteps()
+    }
 
     /// Resolve the maximum number of tool steps to allow in a single chat
     /// turn. This is configurable via UserDefaults under the key

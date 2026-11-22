@@ -139,8 +139,10 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
             )
         } : nil
 
+        // Anthropic takes a temperature from 0 to 1; an agent's may be up
+        // to 2, as other providers take.
         let (data, response) = try await ModelTemperature.send(
-            request, to: model, of: "anthropic", temperature: options.temperature, with: urlSession
+            request, to: model, of: "anthropic", temperature: min(options.temperature, 1), with: urlSession
         ) { temperature in
             try JSONEncoder().encode(RequestBody(
                 model: model,
