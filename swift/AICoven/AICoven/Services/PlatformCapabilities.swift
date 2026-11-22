@@ -27,6 +27,15 @@ nonisolated struct PlatformCapabilities: Equatable {
         #endif
     }
 
+    /// Whether controls take the system's accent colour. The Mac draws the
+    /// app's `AccentColor` only under Multicolor and keeps an accent the
+    /// person chose in System Settings. On the iPhone and iPad, controls
+    /// without a colour of their own draw the system blue in place of the
+    /// declared accent, so the app sets it as the tint there.
+    var followsSystemAccentColor: Bool {
+        platform == .macOS
+    }
+
     /// The iPad. It shares iOS with the iPhone, but some layouts differ
     /// between them in the same size class.
     @MainActor static var isPad: Bool {
