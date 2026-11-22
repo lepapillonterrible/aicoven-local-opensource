@@ -99,7 +99,7 @@ struct CovenAgentsView: View {
                 ForEach(roles) { role in
                     row {
                         // The form records the view of the agent itself.
-                        AgentListRow(role: role, modelLine: modelLine(for: role), layout: layout) {
+                        AgentListRow(role: role, modelLine: choices.runsOnLine(for: role), layout: layout) {
                             form = .edit(role, showing: UUID())
                         }
                     }
@@ -196,30 +196,6 @@ struct CovenAgentsView: View {
         askingDelete = true
     }
 
-    /// "Claude Sonnet 4.6 · Anthropic": the agent's model, by its plain
-    /// name once its connection's models are read and by its id until
-    /// then, and its connection, by the provider's name where the
-    /// connection is not among the person's.
-    private func modelLine(for role: Role) -> String {
-        let provider = role.provider ?? ""
-        return AgentModelChoices.modelLine(
-            model: role.model ?? "",
-            models: choices.models(for: role.providerAccountId),
-            connection: choices.account(role.providerAccountId)?.displayName ?? (provider.isEmpty ? "" : providerDisplayName(slug: provider))
-        )
-    }
-
-    /// Reads the person's connections and, for those the agents run on,
-    /// their models, which name the models in the rows. What cannot be
-    /// read leaves the rows with the models' ids.
-    private func loadModelNames() async {
-        guard await (try? choices.loadAccounts()) != nil else { return }
-        for id in Set(roles.compactMap(\.providerAccountId)) where choices.models(for: id).isEmpty {
-            guard let account = choices.account(id), !choices.runsItself(accountId: id, provider: account.provider) else { continue }
-            await choices.loadModels(for: id)
-        }
-    }
-
     /// Reads the coven's agents. The page is one coven's (it is made anew
     /// for another), so what is read is this coven's.
     private func load() async {
@@ -232,7 +208,7 @@ struct CovenAgentsView: View {
             guard reading == readings else { return }
             roles = loaded
             loadFailed = false
-            await loadModelNames()
+            await choices.loadModelNames(for: loaded)
         } catch {
             guard reading == readings else { return }
             // The kind of failure only.
@@ -394,7 +370,6 @@ private struct AgentListRow: View {
 
     @ViewBuilder
     private var instructionsText: some View {
-        // Worked out once for the row, not for each place it is used.
         let line = CovenAgentsView.instructionsLine(role.systemPrompt)
         if !line.isEmpty {
             Text(line)

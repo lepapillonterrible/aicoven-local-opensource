@@ -85,6 +85,51 @@ final class AgentRunsOnTests: XCTestCase {
         } catch is Unreachable {}
     }
 
+    @MainActor
+    func testWhatAListSaysAnAgentRunsOn() async {
+        func agent(provider: String?, model: String?, account: String?) -> Role {
+            Role(
+                id: UUID().uuidString, covenId: "c", name: "Agent", emoji: nil, description: nil, systemPrompt: nil,
+                model: model, provider: provider, providerAccountId: account, temperature: nil, maxTokens: nil,
+                settings: nil, createdAt: Date(), updatedAt: Date()
+            )
+        }
+        func connection(_ id: String, _ provider: String, named name: String) -> ProviderAccount {
+            ProviderAccount(
+                id: id, userId: nil, provider: provider, accountName: nil, displayName: name, status: "healthy", scopes: [],
+                defaultModel: nil, baseURL: nil, isHealthy: true, lastHealthCheck: nil, lastHealthCheckAt: nil, quotaHint: nil, createdAt: nil
+            )
+        }
+        var modelsRead: [String] = []
+        let choices = AgentModelChoices(
+            source: .init(
+                accounts: { [connection("a", "anthropic", named: "Work key"), connection("claw", "openclaw", named: "My Claw"), connection("h", "hermes", named: "Hermes")] },
+                models: { id in
+                    modelsRead.append(id)
+                    return [self.model("claude-sonnet-4-6", name: "Claude Sonnet 4.6")]
+                },
+                hasGateway: { $0 == "claw" }
+            ),
+            signedIn: { "ada" }
+        )
+        let scout = agent(provider: "anthropic", model: "claude-sonnet-4-6", account: "a")
+        let throughAGateway = agent(provider: "openclaw", model: "an-old-model", account: "claw")
+        let onHermes = agent(provider: "hermes", model: "hermes", account: "h")
+
+        // Before anything is read: the model's id and the provider's name.
+        XCTAssertEqual(choices.runsOnLine(for: scout), "claude-sonnet-4-6 · Anthropic")
+
+        await choices.loadModelNames(for: [scout, throughAGateway, onHermes])
+
+        XCTAssertEqual(choices.runsOnLine(for: scout), "Claude Sonnet 4.6 · Work key", "The model's plain name and the connection's own")
+        XCTAssertEqual(choices.runsOnLine(for: throughAGateway), "My Claw", "It runs its turns itself, whatever model is stored with it")
+        XCTAssertEqual(choices.runsOnLine(for: onHermes), "Hermes")
+        XCTAssertEqual(modelsRead, ["a"], "Only the models of connections a model answers through are read")
+        // A connection that is gone, and an agent with nothing stored.
+        XCTAssertEqual(choices.runsOnLine(for: agent(provider: "openai", model: "gpt-4o", account: "gone")), "gpt-4o · OpenAI")
+        XCTAssertEqual(choices.runsOnLine(for: agent(provider: nil, model: nil, account: nil)), "")
+    }
+
     private func model(_ id: String, name: String? = nil) -> ProviderInitializationStatus.ModelMetadata {
         ProviderInitializationStatus.ModelMetadata(id: id, name: name, provider: nil, contextLength: nil)
     }

@@ -127,6 +127,32 @@ extension AgentModelChoices {
         return !models.contains { $0.id == model }
     }
 
+    /// What a list says an agent runs on: its model, by its plain name once
+    /// its connection's models are read and by its id until then, and its
+    /// connection, by the provider's name where the connection is not
+    /// among the person's. An agent of the person's own (Hermes, OpenClaw
+    /// through its Gateway) runs its turns itself, whatever model is
+    /// stored with it: the connection alone.
+    func runsOnLine(for role: Role) -> String {
+        let provider = role.provider ?? ""
+        return Self.modelLine(
+            model: runsItself(accountId: role.providerAccountId, provider: provider) ? "" : role.model ?? "",
+            models: models(for: role.providerAccountId),
+            connection: account(role.providerAccountId)?.displayName ?? (provider.isEmpty ? "" : providerDisplayName(slug: provider))
+        )
+    }
+
+    /// Reads the connections and, for those `agents` run on, their models,
+    /// which name the models in a list's rows. What cannot be read leaves
+    /// the rows with the models' ids.
+    func loadModelNames(for agents: [Role]) async {
+        guard await (try? loadAccounts()) != nil else { return }
+        for id in Set(agents.compactMap(\.providerAccountId)) where models(for: id).isEmpty {
+            guard let account = account(id), !runsItself(accountId: id, provider: account.provider) else { continue }
+            await loadModels(for: id)
+        }
+    }
+
     /// "GPT-6 Luna · OpenAI": the model's plain name, else its id, and the
     /// connection it runs on. The connection alone when the agent has no
     /// model.
