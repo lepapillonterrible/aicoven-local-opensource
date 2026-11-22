@@ -74,7 +74,7 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
             let max_tokens: Int
             let system: String?
             let messages: [RequestMessage]
-            let temperature: Double
+            let temperature: Double?
             let tools: [ToolDef]?
         }
         // Response structures — Anthropic returns content blocks that can be
@@ -139,17 +139,18 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
             )
         } : nil
 
-        let body = RequestBody(
-            model: model,
-            max_tokens: options.maxTokens ?? 4096,
-            system: finalSystem,
-            messages: reqMessages,
-            temperature: options.temperature,
-            tools: toolDefs
-        )
-        request.httpBody = try JSONEncoder().encode(body)
-
-        let (data, response) = try await urlSession.data(for: request)
+        let (data, response) = try await ModelTemperature.send(
+            request, to: model, of: "anthropic", temperature: options.temperature, with: urlSession
+        ) { temperature in
+            try JSONEncoder().encode(RequestBody(
+                model: model,
+                max_tokens: options.maxTokens ?? 4096,
+                system: finalSystem,
+                messages: reqMessages,
+                temperature: temperature,
+                tools: toolDefs
+            ))
+        }
         if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
             let message = "Anthropic HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
             throw NSError(
