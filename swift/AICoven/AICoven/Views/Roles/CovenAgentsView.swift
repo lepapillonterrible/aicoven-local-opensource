@@ -2,13 +2,18 @@ import SwiftUI
 
 /// A coven's agents, as the cloud app lists them: the title and one line,
 /// Add first, then one row per agent with its face, name, the first line of
-/// its instructions, and the model it runs on. A row opens the agent's form
-/// in a sheet.
+/// its instructions, and the model and connection it runs on. A row opens
+/// the agent's form in a sheet. The list is laid out for the Mac, the iPad
+/// and the iPhone (`AgentListLayout`).
 struct CovenAgentsView: View {
     let coven: Coven
     /// Starts a thread with an agent.
     let onNewThread: (Role) -> Void
 
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.isPadLayout) private var isPadLayout
+    /// The person's connections and their models, for the rows' model lines.
+    @StateObject private var choices = AgentModelChoices()
     @State private var roles: [Role] = []
     @State private var loadFailed = false
     /// The agent form on screen, if one is: each showing is its own.
@@ -27,9 +32,9 @@ struct CovenAgentsView: View {
     static let loadFailure = "Couldn't load the agents. Open this page again to retry."
     static let deleteFailure = "Couldn't delete the agent. Try again."
 
-    /// The page's centred column, and its rows.
-    private let column: CGFloat = 780
-    private let rowHeight: CGFloat = 60
+    private var layout: AgentListLayout {
+        .current(isPadLayout: isPadLayout)
+    }
 
     /// The first line of an agent's instructions that says anything.
     static func instructionsLine(_ instructions: String?) -> String {
@@ -50,9 +55,13 @@ struct CovenAgentsView: View {
             Group {
                 row {
                     VStack(alignment: .leading, spacing: Spacing.xs) {
-                        Text("Agents")
-                            .font(.aicovenDisplayLarge)
-                            .accessibilityAddTraits(.isHeader)
+                        // At compact width (the iPhone) the bar names the
+                        // page, so the title is drawn once.
+                        if horizontalSizeClass != .compact {
+                            Text("Agents")
+                                .font(.aicovenDisplayLarge)
+                                .accessibilityAddTraits(.isHeader)
+                        }
                         Text("Each agent answers with its own model and instructions.")
                             .font(.aicovenBody)
                             .foregroundStyle(Color.aicovenTextSecondary)
@@ -75,12 +84,12 @@ struct CovenAgentsView: View {
                                         .foregroundStyle(Color.aicovenWater)
                                 }
                             Text("Add Agent")
-                                .font(.title3.weight(.semibold))
+                                .font(layout.nameFont)
                                 .foregroundStyle(Color.aicovenWater)
                             Spacer(minLength: 0)
                         }
-                        .frame(minHeight: rowHeight)
-                        .padding(.horizontal, Spacing.xs)
+                        .frame(minHeight: layout.rowHeight)
+                        .padding(.horizontal, layout.rowPadding)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -90,13 +99,18 @@ struct CovenAgentsView: View {
                 ForEach(roles) { role in
                     row {
                         // The form records the view of the agent itself.
-                        AgentListRow(role: role, rowHeight: rowHeight) { form = .edit(role, showing: UUID()) }
+                        AgentListRow(role: role, modelLine: choices.runsOnLine(for: role), layout: layout) {
+                            form = .edit(role, showing: UUID())
+                        }
                     }
                     .accessibilityAction(named: "Delete") { askDelete(role) }
                     .contextMenu {
                         Button("New Thread with \(role.name)") { onNewThread(role) }
                         Button("Edit…") { form = .edit(role, showing: UUID()) }
                         Button("Delete…", role: .destructive) { askDelete(role) }
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button("Delete", role: .destructive) { askDelete(role) }
                     }
                 }
 
@@ -144,10 +158,12 @@ struct CovenAgentsView: View {
     /// One row of the list, in the page's centred column with no separator or
     /// background of its own.
     private func row(@ViewBuilder _ content: () -> some View) -> some View {
+        // The phone's layout has no column: a row fills the width, from
+        // its leading edge.
         content()
-            .frame(maxWidth: column, alignment: .leading)
+            .frame(maxWidth: layout.column ?? .infinity, alignment: .leading)
             .frame(maxWidth: .infinity)
-            .listRowInsets(EdgeInsets(top: 0, leading: Spacing.xl, bottom: 0, trailing: Spacing.xl))
+            .listRowInsets(EdgeInsets(top: 0, leading: layout.pageInset, bottom: 0, trailing: layout.pageInset))
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
     }
@@ -192,6 +208,7 @@ struct CovenAgentsView: View {
             guard reading == readings else { return }
             roles = loaded
             loadFailed = false
+            await choices.loadModelNames(for: loaded)
         } catch {
             guard reading == readings else { return }
             // The kind of failure only.
@@ -219,47 +236,101 @@ struct CovenAgentsView: View {
     }
 }
 
+/// How the list lays out on each platform: the Mac's 780 pt column with 60 pt
+/// rows, the iPad layout's 700 pt column with 68 pt rows and 17 pt names, and
+/// the phone layout's full width with 64 pt rows.
+enum AgentListLayout {
+    case mac, pad, phone
+
+    static func current(isPadLayout: Bool) -> AgentListLayout {
+        #if os(macOS)
+        return .mac
+        #else
+        return isPadLayout ? .pad : .phone
+        #endif
+    }
+
+    var column: CGFloat? {
+        switch self {
+        case .mac: 780
+        case .pad: 700
+        case .phone: nil
+        }
+    }
+
+    var rowHeight: CGFloat {
+        switch self {
+        case .mac: 60
+        case .pad: 68
+        case .phone: 64
+        }
+    }
+
+    var pageInset: CGFloat {
+        self == .phone ? Spacing.md : Spacing.xl
+    }
+
+    /// The row's own padding, so a highlight reaches past its text.
+    var rowPadding: CGFloat {
+        self == .phone ? 0 : Spacing.xs
+    }
+
+    /// Text styles, so the rows follow the person's text size: 15 pt on the
+    /// Mac (title 3) and 17 pt on touch (headline) at the default size.
+    var nameFont: Font {
+        self == .mac ? .title3.weight(.semibold) : .headline
+    }
+
+    /// The instructions line and the model: 13 pt on the Mac (body) and 15 pt
+    /// on touch (subheadline).
+    var secondaryFont: Font {
+        self == .mac ? .body : .subheadline
+    }
+}
+
 /// One agent: its face, name, the first line of its instructions, and the
-/// model it runs on at the right. Under the pointer the row takes the
-/// selected fill and shows a chevron.
+/// model it runs on. The model is at the right, or on the name's line on the
+/// iPhone. Under the pointer the row takes the selected fill and shows a
+/// chevron.
 private struct AgentListRow: View {
     let role: Role
-    let rowHeight: CGFloat
+    let modelLine: String
+    let layout: AgentListLayout
     let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
-        // Worked out once for the row, not for each place it is used.
-        let instructionsLine = CovenAgentsView.instructionsLine(role.systemPrompt)
-        return Button(action: action) {
+        Button(action: action) {
             HStack(spacing: Spacing.sm) {
                 role.face(size: 44)
-                VStack(alignment: .leading, spacing: Spacing.xxxs) {
-                    Text(role.name)
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(Color.aicovenTextPrimary)
-                        .lineLimit(1)
-                    if !instructionsLine.isEmpty {
-                        Text(instructionsLine)
-                            .font(.body)
-                            .foregroundStyle(Color.aicovenTextSecondary)
-                            .lineLimit(1)
+                if layout == .phone {
+                    stacked
+                } else {
+                    // A narrow pane (an iPad in portrait beside the sidebar)
+                    // takes the stacked row, so the instructions keep the
+                    // row's width.
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: Spacing.sm) {
+                            VStack(alignment: .leading, spacing: Spacing.xxxs) {
+                                nameText
+                                instructionsText
+                                    .frame(minWidth: 0, idealWidth: 200, alignment: .leading)
+                            }
+                            Spacer(minLength: Spacing.sm)
+                            modelText
+                                .fixedSize()
+                            Image(systemName: "chevron.right")
+                                .accessibilityHidden(true)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Color.aicovenTextTertiary)
+                                .opacity(hovering ? 1 : 0)
+                        }
+                        stacked
                     }
                 }
-                Spacer(minLength: Spacing.sm)
-                Text(role.model ?? "")
-                    .font(.body)
-                    .foregroundStyle(Color.aicovenTextTertiary)
-                    .lineLimit(1)
-                    .fixedSize()
-                Image(systemName: "chevron.right")
-                    .accessibilityHidden(true)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.aicovenTextTertiary)
-                    .opacity(hovering ? 1 : 0)
             }
-            .frame(minHeight: rowHeight)
-            .padding(.horizontal, Spacing.xs)
+            .frame(minHeight: layout.rowHeight)
+            .padding(.horizontal, layout.rowPadding)
             .background(
                 RoundedRectangle(cornerRadius: BorderRadius.sm)
                     .fill(hovering ? Color.aicovenSelected : Color.clear)
@@ -267,7 +338,7 @@ private struct AgentListRow: View {
             .overlay(alignment: .bottom) {
                 if !hovering {
                     Rectangle().fill(Color.aicovenRule).frame(height: 1)
-                        .padding(.leading, 44 + Spacing.sm + Spacing.xs)
+                        .padding(.leading, 44 + Spacing.sm + layout.rowPadding)
                 }
             }
             .contentShape(Rectangle())
@@ -276,6 +347,43 @@ private struct AgentListRow: View {
         .onHover { hovering = $0 }
         .accessibilityElement(children: .combine)
         .accessibilityHint("Opens this agent")
+    }
+
+    private var nameText: some View {
+        Text(role.name)
+            .font(layout.nameFont)
+            .foregroundStyle(Color.aicovenTextPrimary)
+            .lineLimit(1)
+    }
+
+    /// The name with the model at its right, and the instructions under them.
+    private var stacked: some View {
+        VStack(alignment: .leading, spacing: Spacing.xxxs) {
+            HStack(alignment: .firstTextBaseline, spacing: Spacing.xs) {
+                nameText
+                Spacer(minLength: Spacing.xs)
+                modelText
+            }
+            instructionsText
+        }
+    }
+
+    @ViewBuilder
+    private var instructionsText: some View {
+        let line = CovenAgentsView.instructionsLine(role.systemPrompt)
+        if !line.isEmpty {
+            Text(line)
+                .font(layout.secondaryFont)
+                .foregroundStyle(Color.aicovenTextSecondary)
+                .lineLimit(1)
+        }
+    }
+
+    private var modelText: some View {
+        Text(modelLine)
+            .font(layout.secondaryFont)
+            .foregroundStyle(Color.aicovenTextTertiary)
+            .lineLimit(1)
     }
 }
 

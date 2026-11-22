@@ -16,7 +16,7 @@ struct AgentRunsOnRow: View {
     }
 
     private var connectionName: String {
-        account?.displayName ?? (draft.provider.isEmpty ? "" : providerDisplayName(slug: draft.provider))
+        choices.connectionName(accountId: draft.accountId, provider: draft.provider)
     }
 
     private var line: String {
@@ -125,6 +125,44 @@ extension AgentModelChoices {
     nonisolated static func isUnlisted(model: String, models: [ProviderInitializationStatus.ModelMetadata]) -> Bool {
         guard !model.isEmpty, !models.isEmpty else { return false }
         return !models.contains { $0.id == model }
+    }
+
+    /// What a list says an agent runs on: its model, by its plain name once
+    /// its connection's models are read and by its id until then, and its
+    /// connection, by the provider's name where the connection is not
+    /// among the person's. An agent of the person's own (Hermes, OpenClaw
+    /// through its Gateway) runs its turns itself, whatever model is
+    /// stored with it: the connection alone.
+    func runsOnLine(for role: Role) -> String {
+        let provider = role.provider ?? ""
+        return Self.modelLine(
+            model: runsItself(accountId: role.providerAccountId, provider: provider) ? "" : role.model ?? "",
+            models: models(for: role.providerAccountId),
+            connection: connectionName(accountId: role.providerAccountId, provider: provider)
+        )
+    }
+
+    /// A connection's name as the person gave it; the provider's name
+    /// where the connection is not among the person's (or not read yet).
+    func connectionName(accountId: String?, provider: String) -> String {
+        account(accountId)?.displayName ?? (provider.isEmpty ? "" : providerDisplayName(slug: provider))
+    }
+
+    /// Reads the connections and, for those `agents` run on, their models,
+    /// which name the models in a list's rows: each connection's at the
+    /// same time, so a slow provider keeps only its own rows waiting. What
+    /// cannot be read leaves the rows with the models' ids.
+    func loadModelNames(for agents: [Role]) async {
+        guard await (try? loadAccounts()) != nil else { return }
+        let unread = Set(agents.compactMap(\.providerAccountId)).filter { id in
+            guard models(for: id).isEmpty, let account = account(id) else { return false }
+            return !runsItself(accountId: id, provider: account.provider)
+        }
+        await withTaskGroup(of: Void.self) { reads in
+            for id in unread {
+                reads.addTask { await self.loadModels(for: id) }
+            }
+        }
     }
 
     /// "GPT-6 Luna · OpenAI": the model's plain name, else its id, and the
