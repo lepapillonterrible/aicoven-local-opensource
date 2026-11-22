@@ -95,11 +95,9 @@ struct ShellContentView: View {
                     overview
                 }
             case .personalStrixSettings:
-                // Strix's agent is Strix itself: its own settings. Closing
-                // them leaves this place only if it is still the one on
-                // screen: a save can end after the person has gone elsewhere.
-                StrixSettingsView(onClose: { navigator.close(.personalStrix) })
-                    .environmentObject(StoreService.shared)
+                // Strix's agent is Strix itself, listed as a coven's agents
+                // are and opened in the agent form.
+                StrixAgentsView()
             case let .covenConnections(covenID):
                 if let coven, coven.id == covenID {
                     if onOpenSwitcher == nil {

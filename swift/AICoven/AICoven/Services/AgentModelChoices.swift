@@ -20,7 +20,18 @@ final class AgentModelChoices: ObservableObject {
 
         static let stored = Source(
             accounts: { try await ProviderAccountService.shared.loadProviderAccounts() },
-            models: { try await ProviderAccountService.shared.getInitializationStatus(accountId: $0).modelMetadata },
+            models: { id in
+                let service = ProviderAccountService.shared
+                let models = try await service.getInitializationStatus(accountId: id).modelMetadata
+                guard try await service.loadProviderAccounts().first(where: { $0.id == id })?.provider.lowercased() == "mlx" else {
+                    return models
+                }
+                // On this device a turn is answered by the model made
+                // active in its settings, and by no other: that is the one
+                // an agent can be put on.
+                let active = await MainActor.run { MLXModelManager.shared.activeModelID }
+                return models.filter { $0.id == active }
+            },
             hasGateway: { await (try? ProviderAccountService.shared.gatewayAddress(forAccount: $0)) != nil }
         )
     }

@@ -292,7 +292,7 @@ enum AgentListLayout {
 /// model it runs on. The model is at the right, or on the name's line on the
 /// iPhone. Under the pointer the row takes the selected fill and shows a
 /// chevron.
-private struct AgentListRow: View {
+struct AgentListRow: View {
     let role: Role
     let modelLine: String
     let layout: AgentListLayout

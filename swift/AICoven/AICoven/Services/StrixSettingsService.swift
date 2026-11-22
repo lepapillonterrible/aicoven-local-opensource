@@ -8,9 +8,15 @@ struct LocalStrixSettings: Codable {
     var provider: String?
     var providerAccountId: String?
     var autonomousMode: Bool?
+    /// The most tool steps of one of Strix's turns ("Most steps" in its
+    /// form), under the name the cloud app keeps an agent's under.
     var autonomousMaxSteps: Int?
     var plannerMaxTasks: Int?
     var plannerMaxSeconds: Double?
+    /// How freely Strix answers, and the longest its answer may be, as
+    /// an agent's: none stored where the person has set none.
+    var temperature: Double?
+    var maxTokens: Int?
 }
 
 /// Service for managing the personal Strix assistant configuration in the
@@ -61,8 +67,40 @@ actor StrixSettingsService {
     /// stored or the settings cannot be read. Only read: nothing is
     /// converted, defaulted or saved by asking.
     func instructions(of account: String) -> String? {
+        Self.stored(of: account)?.systemPrompt
+    }
+
+    /// Strix's settings exactly as `account` has them stored; nil where
+    /// none are stored or they cannot be read. Only read: nothing is
+    /// converted, defaulted or saved by asking.
+    nonisolated static func stored(of account: String) -> LocalStrixSettings? {
         guard let data = UserDefaults.standard.data(forKey: UserScope.scopedKey("strix_settings.v1", for: account)) else { return nil }
-        return (try? JSONDecoder().decode(LocalStrixSettings.self, from: data))?.systemPrompt
+        return try? JSONDecoder().decode(LocalStrixSettings.self, from: data)
+    }
+
+    /// Saves Strix as the agent form shows it, as the account that pressed
+    /// Save: its instructions (emptied ones are cleared), what it runs
+    /// on, and of the settings under Advanced those the form showed (nil
+    /// leaves what is stored). Nothing is saved if another account is
+    /// signed in by now, or for what is not something to save.
+    func save(_ strix: AgentSaving, as account: String) async throws -> LocalStrixSettings {
+        guard let strix = strix.storable else { throw CovenRepositoryError.agentIncomplete }
+        guard await MainActor.run(body: { UserScope.currentUserID }) == account else { throw RepositoryError.accountChanged }
+        var settings = loadLocalSettings()
+        settings.systemPrompt = strix.instructions.isEmpty ? nil : strix.instructions
+        if !strix.provider.isEmpty {
+            settings.provider = strix.provider
+            settings.model = strix.model.isEmpty ? nil : strix.model
+            settings.providerAccountId = strix.providerAccountId
+        }
+        if let temperature = strix.temperature { settings.temperature = temperature }
+        if let maxTokens = strix.maxTokens { settings.maxTokens = maxTokens }
+        if let mostSteps = strix.mostSteps { settings.autonomousMaxSteps = mostSteps }
+        // Asked again, with nothing waited for until the write.
+        guard await MainActor.run(body: { UserScope.currentUserID }) == account else { throw RepositoryError.accountChanged }
+        saveLocalSettings(settings)
+        updateLLMDefaults(from: settings)
+        return settings
     }
 
     /// Returns the first configured provider account (if any) to use as default.
@@ -157,19 +195,18 @@ actor StrixSettingsService {
         if let provider = settings.provider?.lowercased() {
             defaults.set(provider, forKey: UserScope.scopedKey("llm_provider"))
             if let model = settings.model {
+                // Each under the key `ChatService.resolveProviderAndModel`
+                // reads that provider's model from.
                 switch provider {
-                case "anthropic":
-                    defaults.set(model, forKey: UserScope.scopedKey("anthropic_model"))
                 case "google", "gemini":
                     defaults.set(model, forKey: UserScope.scopedKey("gemini_model"))
-                case "openrouter", "openai_compatible":
-                    defaults.set(model, forKey: UserScope.scopedKey("\(provider)_model"))
-                case "hermes":
-                    // The agent uses the model it is set up with: there is
-                    // none to keep here.
+                case "hermes", "mlx":
+                    // Hermes uses the model it is set up with, and a model
+                    // on this device is the one made active in its own
+                    // settings: there is none to keep here.
                     break
                 default:
-                    defaults.set(model, forKey: UserScope.scopedKey("openai_model"))
+                    defaults.set(model, forKey: UserScope.scopedKey("\(provider)_model"))
                 }
             }
         }

@@ -8,10 +8,16 @@ import AppKit
 /// disclosure, and Delete Agent last. The Mac shows it as a sheet with
 /// stone header and footer bars; on the iPhone and iPad it is a page with
 /// Save in the navigation bar, inside the stack of whoever shows it.
+///
+/// Strix, which is no coven's agent here, is edited in the same form
+/// (`.strix`): its name and face are its own, it has no description and
+/// is not deleted, and what it runs on is chosen only with the Creator
+/// upgrade, as before.
 struct AgentFormView: View {
     enum Mode: Equatable {
         case add(covenId: String)
         case edit(roleId: String)
+        case strix
     }
 
     let mode: Mode
@@ -24,6 +30,8 @@ struct AgentFormView: View {
     let onFinished: () -> Void
 
     @Environment(\.isPadLayout) private var isPadLayout
+    @ObservedObject private var store = StoreService.shared
+    @State private var showStore = false
     @StateObject private var choices = AgentModelChoices()
     @State private var draft = AgentDraft()
     @State private var loadFailed = false
@@ -63,6 +71,16 @@ struct AgentFormView: View {
         return false
     }
 
+    private var isStrix: Bool {
+        mode == .strix
+    }
+
+    /// Whether what the agent runs on can be chosen: always for a coven's
+    /// agent; for Strix with the Creator upgrade.
+    private var choosesWhatItRunsOn: Bool {
+        !isStrix || store.hasEntitlement(.modelCustomization)
+    }
+
     private var title: String {
         isAdd ? "New Agent" : (draft.name.isEmpty ? "Agent" : draft.name)
     }
@@ -88,7 +106,10 @@ struct AgentFormView: View {
 
     /// What Save would store; nil where the form cannot be saved as it is.
     private var saving: AgentSaving? {
-        draft.saving(usesTemperature: usesTemperature, usesMaxTokens: usesMaxTokens, usesSteps: usesSteps, needsModel: !runsItself)
+        draft.saving(
+            usesTemperature: usesTemperature, usesMaxTokens: usesMaxTokens, usesSteps: usesSteps,
+            needsModel: !runsItself, needsConnection: !isStrix
+        )
     }
 
     private var canSave: Bool {
@@ -115,6 +136,9 @@ struct AgentFormView: View {
                 // What it made is found by reading the connections again.
                 AddProviderKeySheet { Task { await accountAdded() } }
             }
+            .sheet(isPresented: $showStore) {
+                StoreView().environmentObject(store)
+            }
             .task {
                 guard !loaded else { return }
                 await load()
@@ -126,7 +150,9 @@ struct AgentFormView: View {
             }
             .onAppear {
                 isOnScreen = true
-                analytics.trackScreenView(screenName: isAdd ? "AddRoleView" : "EditRoleView", screenClass: "AgentFormView")
+                analytics.trackScreenView(
+                    screenName: isAdd ? "AddRoleView" : (isStrix ? "StrixSettingsView" : "EditRoleView"), screenClass: "AgentFormView"
+                )
             }
             .onDisappear { isOnScreen = false }
     }
@@ -224,7 +250,7 @@ struct AgentFormView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if loadFailed {
             ContentUnavailableView {
-                Label(isAdd ? "Couldn't load your AI connections" : "Couldn't load this agent", systemImage: "exclamationmark.triangle")
+                Label(isAdd ? "Couldn't load your AI connections" : "Couldn't load \(isStrix ? "Strix" : "this agent")", systemImage: "exclamationmark.triangle")
             } actions: {
                 Button("Try Again") { Task { await load() } }
             }
@@ -257,24 +283,33 @@ struct AgentFormView: View {
             VStack(alignment: .leading, spacing: 0) {
                 faceAndName
                 instructions
-                AgentRunsOnRow(
-                    choices: choices,
-                    draft: draft,
-                    onChoose: { account, model in choose(account, model: model) },
-                    onAdd: {
-                        addingFrom = (Set(choices.accounts.map(\.id)), draft.choicesMade)
-                        showAddAccount = true
-                    }
-                )
-                .disabled(savePhase != .idle)
-                .padding(.top, Spacing.md)
-                textField("Description", text: $draft.description, prompt: "Optional", axis: .vertical)
+                if choosesWhatItRunsOn {
+                    AgentRunsOnRow(
+                        choices: choices,
+                        draft: draft,
+                        onChoose: { account, model in choose(account, model: model) },
+                        onAdd: {
+                            addingFrom = (Set(choices.accounts.map(\.id)), draft.choicesMade)
+                            showAddAccount = true
+                        }
+                    )
+                    .disabled(savePhase != .idle)
                     .padding(.top, Spacing.md)
-                if usesTemperature || usesMaxTokens || usesSteps || !runsItself {
+                } else {
+                    runsOnLocked
+                        .padding(.top, Spacing.md)
+                }
+                if !isStrix {
+                    textField("Description", text: $draft.description, prompt: "Optional", axis: .vertical)
+                        .padding(.top, Spacing.md)
+                }
+                // An agent of the person's own is sent none of what is
+                // under Advanced.
+                if !runsItself {
                     advanced
                         .padding(.top, Spacing.sm)
                 }
-                if !isAdd {
+                if case .edit = mode {
                     deleteRow
                 }
             }
@@ -292,17 +327,62 @@ struct AgentFormView: View {
 
     private var faceAndName: some View {
         HStack(alignment: .top, spacing: Spacing.md) {
-            IconChoice(
-                symbol: $draft.iconSymbol,
-                tint: Binding(get: { draft.iconTint ?? .warm }, set: { draft.iconTint = $0 }),
-                suggestedSymbols: AgentFace.suggestedSymbols
-            ) {
+            if isStrix {
+                // Strix's name and face are its own.
                 AgentFace(symbol: draft.iconSymbol, tint: draft.iconTint, provider: draft.provider, size: 64)
                     .accessibilityHidden(true)
+                textField("Name", text: .constant(draft.name), prompt: "Name")
+                    .disabled(true)
+                    .padding(.top, Spacing.xs)
+            } else {
+                IconChoice(
+                    symbol: $draft.iconSymbol,
+                    tint: Binding(get: { draft.iconTint ?? .warm }, set: { draft.iconTint = $0 }),
+                    suggestedSymbols: AgentFace.suggestedSymbols
+                ) {
+                    AgentFace(symbol: draft.iconSymbol, tint: draft.iconTint, provider: draft.provider, size: 64)
+                        .accessibilityHidden(true)
+                }
+                textField("Name", text: $draft.name, prompt: "Name")
+                    .padding(.top, Spacing.xs)
             }
-            textField("Name", text: $draft.name, prompt: "Name")
-                .padding(.top, Spacing.xs)
         }
+    }
+
+    /// In Runs on's place where Strix's model is not the person's to
+    /// choose: what Strix runs on, and the way to the upgrade.
+    private var runsOnLocked: some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            HStack(spacing: Spacing.xs) {
+                Text("Runs on")
+                    .foregroundStyle(Color.aicovenTextSecondary)
+                Text(runsOnLine)
+                    .foregroundStyle(Color.aicovenTextPrimary)
+                    .lineLimit(1)
+                Image(systemName: "lock.fill")
+                    .font(.aicovenCaption)
+                    .foregroundStyle(Color.aicovenTextTertiary)
+                    .accessibilityHidden(true)
+                Spacer(minLength: 0)
+            }
+            .accessibilityElement(children: .combine)
+            Text("Unlock model customization with the Creator upgrade.")
+                .font(.aicovenBodySmall)
+                .foregroundStyle(Color.aicovenTextSecondary)
+            Button("View Upgrade Options") { showStore = true }
+                .font(.aicovenBodySmall)
+        }
+    }
+
+    /// What Strix runs on, in words: its model and connection, or that it
+    /// has none yet.
+    private var runsOnLine: String {
+        guard !draft.provider.isEmpty else { return "No AI connection yet" }
+        return AgentModelChoices.modelLine(
+            model: runsItself ? "" : draft.model,
+            models: choices.models(for: draft.accountId),
+            connection: choices.connectionName(accountId: draft.accountId, provider: draft.provider)
+        )
     }
 
     private var instructions: some View {
@@ -381,7 +461,7 @@ struct AgentFormView: View {
                             .foregroundStyle(Color.aicovenTextTertiary)
                     }
                 }
-                if !runsItself {
+                if !runsItself, choosesWhatItRunsOn {
                     textField("Model ID", text: $draft.model, prompt: "Model ID")
                 }
             }
@@ -492,11 +572,33 @@ struct AgentFormView: View {
             if choices.accountsLoaded, choices.account(draft.accountId) == nil {
                 draft.accountId = choices.accounts.first { $0.provider.lowercased() == draft.provider }?.id
             }
+        case .strix:
+            // As its settings were always read: with what it runs on taken
+            // from the person's connections where none is stored yet.
+            let settings = try? await StrixSettingsService.shared.loadPersonalStrix()
+            guard generation == loadGeneration else { return }
+            guard let settings else {
+                loadFailed = true
+                return
+            }
+            _ = try? await choices.loadAccounts()
+            guard generation == loadGeneration else { return }
+            draft = AgentDraft(strix: settings, appSteps: ChatService.currentMaxToolSteps())
+            savedName = draft.name
+            loaded = true
+            if choices.accountsLoaded, choices.account(draft.accountId) == nil {
+                draft.accountId = choices.accounts.first { $0.provider.lowercased() == draft.provider }?.id
+            }
         }
         if let accountId = draft.accountId, !runsItself {
             await choices.loadModels(for: accountId)
             guard generation == loadGeneration, draft.accountId == accountId else { return }
             draft.takeLoadedModels(choices.models(for: accountId), isNewAgent: isAdd)
+            // On this device Strix answers with the model that is active
+            // there, whatever was stored: that is the one shown.
+            if isStrix, draft.provider == "mlx", let active = choices.models(for: accountId).first {
+                draft.model = active.id
+            }
         }
     }
 
@@ -549,6 +651,8 @@ struct AgentFormView: View {
             case let .edit(roleId):
                 _ = try await RoleService.shared.saveAgent(roleId, agent, as: account)
                 analytics.trackRoleUpdate(roleId: roleId, field: "all")
+            case .strix:
+                _ = try await StrixSettingsService.shared.save(agent, as: account)
             }
             // The form stays working while whoever shows it closes it: a
             // press on Save as the sheet leaves makes no second agent.

@@ -1514,12 +1514,18 @@ actor ChatService {
     /// them (an agent of a coven; one on Hermes or on OpenClaw through its
     /// Gateway has a provider and no model), else the person's choice in
     /// Settings.
-    /// With them, what the turn takes from the agent's settings: the
-    /// app's own for a turn that is for no agent, or whose agent cannot
-    /// be read.
+    /// With them, what the turn takes from the settings of whoever
+    /// answers: the agent's, Strix's for a turn that is for no agent, and
+    /// the app's own where the agent cannot be read.
     private func preferredProviderAndModel(roleId: String?) async -> (provider: String, model: String, settings: AgentTurnSettings) {
         let role: Role? = if let roleId { try? await RoleService.shared.getRole(roleId: roleId) } else { nil }
-        let settings = role.map(AgentTurnSettings.init(of:)) ?? .standard
+        // A turn for no agent is Strix's, and takes Strix's own settings;
+        // one whose agent cannot be read takes the app's.
+        let settings: AgentTurnSettings = if roleId == nil {
+            await AgentTurnSettings(ofStrix: StrixSettingsService.stored(of: UserScope.currentUserID))
+        } else {
+            role.map(AgentTurnSettings.init(of:)) ?? .standard
+        }
         // An agent runs on its own provider and model. One on Hermes, or
         // on OpenClaw through its Gateway, names no model: the agent there
         // runs the turn itself. Where that agent is not connected, the

@@ -2,8 +2,8 @@ import Foundation
 
 /// What a turn takes from the settings of the agent it is for: how freely
 /// it answers, how long an answer may be, and how many tool steps it may
-/// take. A turn for no agent (Strix's), and an agent that says nothing of
-/// one of them, takes the app's own.
+/// take. A turn for no agent is Strix's, and takes Strix's settings the
+/// same way. Whoever says nothing of one of them takes the app's own.
 nonisolated struct AgentTurnSettings: Equatable {
     /// What a turn takes where no agent says otherwise.
     static let standard = AgentTurnSettings(temperature: 0.7, maxTokens: nil, mostSteps: nil)
@@ -36,6 +36,14 @@ nonisolated struct AgentTurnSettings: Equatable {
         mostSteps = (role.settings?.autonomousMaxSteps).flatMap { steps in
             steps > 0 ? min(steps, Self.mostStepsAllowed) : nil
         }
+    }
+
+    /// What one of Strix's turns takes from Strix's settings: as an
+    /// agent's, with the app's own where Strix has none stored.
+    init(ofStrix strix: LocalStrixSettings?) {
+        temperature = min(max(strix?.temperature ?? Self.standard.temperature, 0), 2)
+        maxTokens = strix?.maxTokens.flatMap { $0 > 0 ? $0 : nil }
+        mostSteps = strix?.autonomousMaxSteps.flatMap { $0 > 0 ? min($0, Self.mostStepsAllowed) : nil }
     }
 
     // MARK: - Which settings a turn uses, by what answers it
