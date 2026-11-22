@@ -43,11 +43,16 @@ final class ToolResultsTests: XCTestCase {
     func testACloudModelHasRoomForSeveralLongReads_andAModelOnThisDeviceForLittle() {
         let cloud = ToolResults.room(isLocalModel: false, isMobileDevice: false)
         XCTAssertEqual(cloud, ToolResults.room(isLocalModel: false, isMobileDevice: true), "Whatever the device")
-        // A read is 20,000 characters at most (a file's, a document's, an asset's).
-        let read = String(repeating: "r", count: AttachmentContext.longestText + 400)
-        let told = ToolResults.text(of: [read, read], room: cloud)
-        XCTAssertEqual(told, read + "\n\n" + read, "Two long reads, both whole")
+        // A file's or a document's text is told at 20,000 characters at most, with what its tool says around it.
+        let read = String(repeating: "r", count: AttachmentContext.longestText + 1000)
+        let told = ToolResults.text(of: [read, read, read], room: cloud)
+        XCTAssertEqual(told, [read, read, read].joined(separator: "\n\n"), "Three long reads, all whole")
+        XCTAssertFalse(told.contains(ToolResults.leftOutNote))
         XCTAssertFalse(ToolResults.text(of: [read], room: cloud).contains(ToolResults.cutMark))
+        // A fourth leaves the first out, whole.
+        let four = ToolResults.text(of: ["FIRST" + read, read, read, read], room: cloud)
+        XCTAssertTrue(four.hasPrefix(ToolResults.leftOutNote))
+        XCTAssertFalse(four.contains("FIRST"))
 
         XCTAssertEqual(ToolResults.room(isLocalModel: true, isMobileDevice: false), 3000)
         XCTAssertEqual(ToolResults.room(isLocalModel: true, isMobileDevice: true), 2000)

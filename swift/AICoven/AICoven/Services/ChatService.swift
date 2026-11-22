@@ -187,6 +187,8 @@ actor ChatService {
     /// Which connections the thread's coven lets its agents use; injected
     /// for tests.
     private let covenConnections: @Sendable (_ threadID: String) async -> CovenConnections?
+    /// Who is signed in, asked each time it matters; injected for tests.
+    private let signedIn: @Sendable () async -> String
     /// The threads whose latest turn was an agent's run (Hermes, or
     /// OpenClaw through its Gateway). What follows a turn (the thread's
     /// summary, and the memory proposed from it) is made by one of the
@@ -209,7 +211,8 @@ actor ChatService {
         openClawTurn: @escaping @Sendable (_ threadID: String) -> OpenClawTurn? = { threadID in
             ProviderAccountService.openClawGateway().map { OpenClawTurn(address: $0.address, token: $0.token, threadID: threadID) }
         },
-        covenConnections: @escaping @Sendable (_ threadID: String) async -> CovenConnections? = { await CovenService.shared.connections(forThread: $0) }
+        covenConnections: @escaping @Sendable (_ threadID: String) async -> CovenConnections? = { await CovenService.shared.connections(forThread: $0) },
+        signedIn: @escaping @Sendable () async -> String = { await UserScope.currentUserID }
     ) {
         self.contextBuilder = contextBuilder
         self.modelRouter = modelRouter
@@ -220,6 +223,20 @@ actor ChatService {
         self.hermesAgent = hermesAgent
         self.openClawTurn = openClawTurn
         self.covenConnections = covenConnections
+        self.signedIn = signedIn
+    }
+
+    /// What a turn that was cut off this way says in its thread.
+    static let accountChangedMessage = "Another account signed in before this reply was finished, so it was stopped."
+
+    /// Throws unless the account a turn began as is still the one signed
+    /// in. What a turn has gathered (its thread, its memories, what its
+    /// tools read) is that account's, and what is gathered for its next
+    /// request is gathered as whoever is signed in by then: asked just
+    /// before each request, so that nothing of either account is sent to a
+    /// provider through the other's connection.
+    private func requireStill(_ account: String) async throws {
+        guard await signedIn() == account else { throw RepositoryError.accountChanged }
     }
 
     /// Ensure that we have an up-to-date LLM environment based on the latest
@@ -326,6 +343,8 @@ actor ChatService {
         var state = TurnState(threadId: threadId)
         state.phase = .starting
         onStateChange(state)
+        // The account the turn is begun as: its requests are that account's.
+        let turnAccount = await signedIn()
         // Ensure we see any provider keys and live model lists that may have
         // been added or changed after ChatService was first initialized.
         await ensureEnvironment()
@@ -737,6 +756,7 @@ actor ChatService {
                     stream: false,
                     tools: nativeTools
                 )
+                try await requireStill(turnAccount)
                 let response = try await client.completeChat(
                     messages: contextMessages,
                     model: descriptor.modelID,
@@ -1000,6 +1020,11 @@ actor ChatService {
                 if let localError = error as? LocalChatError {
                     msg = localError.localizedDescription
                     errorCode = localError.analyticsCode
+                } else if case RepositoryError.accountChanged = error {
+                    // The turn was another account's by the time it would
+                    // have asked again: nothing more of it was sent.
+                    msg = Self.accountChangedMessage
+                    errorCode = "account_changed"
                 } else {
                     msg = error.localizedDescription
                     errorCode = "unknown_error"
@@ -1092,6 +1117,7 @@ actor ChatService {
 
             // A stopped turn does not ask for its answer.
             try Task.checkCancellation()
+            try await requireStill(turnAccount)
             do {
                 // If the client supports streaming, use token-by-token delivery
                 // for the final answer so the user sees text appear in real time.
@@ -1161,6 +1187,11 @@ actor ChatService {
                 if let localError = error as? LocalChatError {
                     msg = localError.localizedDescription
                     errorCode = localError.analyticsCode
+                } else if case RepositoryError.accountChanged = error {
+                    // The turn was another account's by the time it would
+                    // have asked again: nothing more of it was sent.
+                    msg = Self.accountChangedMessage
+                    errorCode = "account_changed"
                 } else {
                     msg = error.localizedDescription
                     errorCode = "unknown_error"

@@ -3,10 +3,10 @@ import Foundation
 /// What a turn's tools have told so far, as its model is given it with
 /// each later request. A result is kept whole: when there are more than
 /// the turn has room for, the oldest are left out first, and a line says
-/// so. A result is never cut down to its end. Its beginning says what it
-/// is (and, for what was read from a file or an asset, that it is content
-/// and where the content starts), so a result that is too long by itself
-/// keeps its beginning and loses its end.
+/// so. A result is never cut down to its end: one that is too long by
+/// itself keeps its beginning, where a tool says what its result is, and
+/// loses its end. (What a result says, and how long it may be, is its
+/// tool's own.)
 nonisolated enum ToolResults {
     static let leftOutNote = "... (older tool results left out)"
     static let cutMark = "\n...(truncated)..."
@@ -14,10 +14,11 @@ nonisolated enum ToolResults {
 
     /// The room a turn has for its tools' results, in characters. A model
     /// on this device or this network has little (less on an iPhone, where
-    /// it shares memory with the model); a cloud model has room for
-    /// several long reads (one is 20,000 characters at most).
+    /// it shares memory with the model); a cloud model has room for three
+    /// reads of the longest text a file or a document is told at (20,000
+    /// characters, and what its tool says around it).
     static func room(isLocalModel: Bool, isMobileDevice: Bool) -> Int {
-        guard isLocalModel else { return 60000 }
+        guard isLocalModel else { return 70000 }
         return isMobileDevice ? 2000 : 3000
     }
 
