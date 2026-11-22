@@ -508,14 +508,22 @@ actor CovenRepository {
         autonomousMaxSteps: Int? = nil,
         plannerMaxTasks: Int? = nil,
         plannerMaxSeconds: Double? = nil,
-        icon: (symbol: String, tint: IconTint)? = nil
+        icon: (symbol: String, tint: IconTint?)? = nil,
+        as account: String? = nil
     ) async throws -> Role {
         if let icon, !IconRules.isSymbolName(icon.symbol) { throw CovenRepositoryError.notASymbol }
         // Whose it is, read once: the agent is made for this account, in
         // a coven of this account, whoever is signed in by the time it is
-        // written.
-        let uid = await MainActor.run { UserScope.currentUserID }
+        // written. Where the caller says who asked (`account`), nothing is
+        // made if another is signed in by now.
+        let current = await MainActor.run { UserScope.currentUserID }
+        let uid = account ?? current
+        guard uid == current else { throw RepositoryError.accountChanged }
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        // Asked again once the database is in hand, just before the write.
+        if account != nil {
+            guard await MainActor.run(body: { UserScope.currentUserID }) == uid else { throw RepositoryError.accountChanged }
+        }
 
         let now = Date()
         let id = UUID().uuidString
@@ -532,21 +540,21 @@ actor CovenRepository {
                 .fetchCount(db) == 1 else {
                 throw CovenRepositoryError.covenNotFound
             }
-            // The tints worn are those the coven's agents show: one whose
-            // settings cannot be read as settings shows sand.
-            let face: (symbol: String?, tint: IconTint) = if let icon {
-                icon
-            } else {
-                try (
-                    AgentFace.symbol(forEmoji: emoji),
-                    IconTint.nextUnused(
-                        worn: RoleRecord
-                            .filter(RoleRecord.Columns.covenId == covenId)
-                            .filter(RoleRecord.Columns.userId == uid)
-                            .fetchAll(db)
-                            .map { (Self.shownTint(of: $0) ?? .warm).rawValue }
-                    )
+            /// The tints worn are those the coven's agents show: one whose
+            /// settings cannot be read as settings shows sand.
+            func unusedTint() throws -> IconTint {
+                try IconTint.nextUnused(
+                    worn: RoleRecord
+                        .filter(RoleRecord.Columns.covenId == covenId)
+                        .filter(RoleRecord.Columns.userId == uid)
+                        .fetchAll(db)
+                        .map { (Self.shownTint(of: $0) ?? .warm).rawValue }
                 )
+            }
+            let face: (symbol: String?, tint: IconTint) = if let icon {
+                try (icon.symbol, icon.tint ?? unusedTint())
+            } else {
+                try (AgentFace.symbol(forEmoji: emoji), unusedTint())
             }
             let roleSettings = RoleSettings(
                 toolConfig: nil,
@@ -646,6 +654,70 @@ actor CovenRepository {
         return try await getRole(roleId: roleId)
     }
 
+    /// Saves an agent of `account`'s as the agent form shows it, in one
+    /// write: its name, face, description, instructions, what it runs on,
+    /// and the settings under Advanced that the form showed. Everything
+    /// else in its stored settings stays as it is; settings that cannot be
+    /// read are not written over (that throws, and nothing is saved).
+    /// `account` is whoever pressed Save: nothing is saved if another is
+    /// signed in when this is asked, or when it is asked again with the
+    /// database in hand, just before the write (a write already waiting
+    /// its turn then is still that account's own, of its own agent). An
+    /// agent that is not that account's is not found. Gives the agent as
+    /// it was written.
+    func saveAgent(_ roleId: String, _ agent: AgentSaving, as account: String) async throws -> Role {
+        guard let agent = agent.storable else { throw CovenRepositoryError.agentIncomplete }
+        guard IconRules.isSymbolName(agent.iconSymbol) else { throw CovenRepositoryError.notASymbol }
+        guard await MainActor.run(body: { UserScope.currentUserID }) == account else { throw RepositoryError.accountChanged }
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        // Asked again once the database is in hand, just before the write.
+        guard await MainActor.run(body: { UserScope.currentUserID }) == account else { throw RepositoryError.accountChanged }
+
+        let record: RoleRecord = try await dbQueue.write { db in
+            guard var record = try RoleRecord.fetchOne(db, key: roleId), record.userId == account else {
+                throw CovenRepositoryError.roleNotFound
+            }
+            guard var settings = Self.storedSettings(ofRole: record) else { throw CovenRepositoryError.roleSettingsUnreadable }
+            record.name = agent.name
+            record.description = agent.description.isEmpty ? nil : agent.description
+            record.systemPrompt = agent.instructions.isEmpty ? nil : agent.instructions
+            record.provider = agent.provider
+            record.model = agent.model
+            record.providerAccountId = agent.providerAccountId
+            if let temperature = agent.temperature { record.temperature = temperature }
+            if let maxTokens = agent.maxTokens { record.maxTokens = maxTokens }
+            if let mostSteps = agent.mostSteps { settings["autonomous_max_steps"] = mostSteps }
+            settings["icon_symbol"] = agent.iconSymbol
+            if let tint = agent.iconTint { settings["icon_tint"] = tint.rawValue }
+            record.settings = try String(data: JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys]), encoding: .utf8)
+            record.updatedAt = Date()
+            try record.update(db)
+            return record
+        }
+        return mapRecordToRole(record)
+    }
+
+    /// Makes an agent in a coven of `account`'s as the agent form shows
+    /// it. `account` is whoever pressed Save: nothing is made if another
+    /// is signed in when this is asked, or just before the write.
+    func createAgent(inCoven covenId: String, _ agent: AgentSaving, as account: String) async throws -> Role {
+        guard let agent = agent.storable else { throw CovenRepositoryError.agentIncomplete }
+        return try await createRole(
+            covenId: covenId,
+            name: agent.name,
+            description: agent.description.isEmpty ? nil : agent.description,
+            systemPrompt: agent.instructions.isEmpty ? nil : agent.instructions,
+            model: agent.model,
+            provider: agent.provider,
+            providerAccountId: agent.providerAccountId,
+            temperature: agent.temperature,
+            maxTokens: agent.maxTokens,
+            autonomousMaxSteps: agent.mostSteps,
+            icon: (agent.iconSymbol, agent.iconTint),
+            as: account
+        )
+    }
+
     /// Deletes an agent of `account`'s (the signed-in account's where none
     /// is named). `account` is whoever asked: if another has signed in by
     /// the time this runs, nothing is deleted. An agent that is not that
@@ -706,6 +778,9 @@ enum CovenRepositoryError: Error, LocalizedError {
     case roleSettingsUnreadable
     /// What was given as an icon's symbol cannot be a symbol's name.
     case notASymbol
+    /// What was given to save is not an agent: it has no name, or one
+    /// too long, no provider or model, or a setting out of its range.
+    case agentIncomplete
 
     var errorDescription: String? {
         switch self {
@@ -714,6 +789,7 @@ enum CovenRepositoryError: Error, LocalizedError {
         case .settingsUnreadable: "This coven's settings could not be read"
         case .roleSettingsUnreadable: "This agent's settings could not be read"
         case .notASymbol: "That is not a symbol's name"
+        case .agentIncomplete: "This agent cannot be saved as it is"
         }
     }
 }

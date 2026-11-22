@@ -1,0 +1,135 @@
+import Foundation
+
+/// What the agent form saves of an agent, as the cloud app's form sends it.
+nonisolated struct AgentSaving: Equatable {
+    var name: String
+    var iconSymbol: String
+    /// The tint the agent wears. With none, a new agent takes the first
+    /// tint none of its coven's agents wears, and a saved one keeps its own.
+    var iconTint: IconTint?
+    /// Saved as they are: an emptied one clears what was stored.
+    var description: String
+    var instructions: String
+    var provider: String
+    var model: String
+    var providerAccountId: String?
+    /// Each is saved only where the form shows it, which is where the
+    /// agent's turns use it; nil leaves what is stored as it is.
+    var temperature: Double?
+    var maxTokens: Int?
+    var mostSteps: Int?
+    /// Whether the agent is one a model answers for, and so needs a model
+    /// named: not one on Hermes or on OpenClaw through its Gateway, which
+    /// are agents of the person's own and run their turns themselves.
+    var needsModel = true
+
+    static let longestName = 100
+
+    /// The agent as it is stored, by the cloud app's rules: its name
+    /// without the space around it, 1 to 100 characters; a provider and,
+    /// where a model answers for it, a model; a temperature from 0 to 2;
+    /// limits of at least 1. Nil for an agent that is not one of these,
+    /// which is not saved.
+    var storable: AgentSaving? {
+        var stored = self
+        stored.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        stored.provider = provider.trimmingCharacters(in: .whitespaces).lowercased()
+        stored.model = model.trimmingCharacters(in: .whitespaces)
+        guard !stored.name.isEmpty, stored.name.count <= Self.longestName,
+              !stored.provider.isEmpty, !stored.model.isEmpty || !needsModel,
+              temperature.map({ (0 ... 2).contains($0) }) ?? true,
+              maxTokens.map({ $0 >= 1 }) ?? true,
+              mostSteps.map({ $0 >= 1 }) ?? true else { return nil }
+        return stored
+    }
+}
+
+/// What the agent form edits, before it is saved.
+nonisolated struct AgentDraft: Equatable {
+    var name = ""
+    var iconSymbol = SymbolDisc.fallbackSymbol
+    /// Nil until the coven's unused tint is known or the person picks
+    /// one; a new agent saved with none is given one as it is made.
+    var iconTint: IconTint?
+    var description = ""
+    var instructions = ""
+    var accountId: String?
+    var provider = ""
+    var model = ""
+    var temperature = 0.7
+    var maxTokens = "2000"
+    var maxSteps = "30"
+
+    init() {}
+
+    init(role: Role) {
+        name = role.name
+        iconSymbol = role.iconSymbol ?? SymbolDisc.fallbackSymbol
+        iconTint = role.iconTintValue
+        description = role.description ?? ""
+        instructions = role.systemPrompt ?? ""
+        accountId = role.providerAccountId
+        provider = (role.provider ?? "").lowercased()
+        model = role.model ?? ""
+        temperature = role.temperature ?? 0.7
+        maxTokens = String(role.maxTokens ?? 2000)
+        if let steps = role.settings?.autonomousMaxSteps {
+            maxSteps = String(steps)
+        }
+    }
+
+    /// An agent runs on one account and one model, so it saves only with
+    /// both. An agent of the person's own (Hermes, OpenClaw through its
+    /// Gateway) runs its turns itself and needs no model (`needsModel`).
+    func hasAccountAndModel(needsModel: Bool = true) -> Bool {
+        accountId != nil && (!needsModel || !model.trimmingCharacters(in: .whitespaces).isEmpty)
+    }
+
+    /// Moves the agent to another account. The old account's model does not
+    /// carry over; it starts on the new account's default, or on none until
+    /// the account's model list loads.
+    mutating func moveToAccount(_ account: ProviderAccount) {
+        accountId = account.id
+        provider = account.provider.lowercased()
+        model = account.defaultModel ?? ""
+    }
+
+    /// The model once the form's account's list loads. A new agent starts on
+    /// a model the account lists. A saved agent keeps the model it has, listed
+    /// or not, since only the person changes it; one with none starts on the
+    /// first listed model.
+    mutating func takeLoadedModels(_ models: [ProviderInitializationStatus.ModelMetadata], isNewAgent: Bool) {
+        guard let first = models.first else { return }
+        if isNewAgent {
+            if !models.contains(where: { $0.id == model }) { model = first.id }
+        } else if model.trimmingCharacters(in: .whitespaces).isEmpty {
+            model = first.id
+        }
+    }
+
+    /// What saving the form stores. The settings under Advanced are saved
+    /// only where the form shows them (`uses`): the others stay as stored.
+    /// Nil where the form cannot be saved: no name, no account or model,
+    /// or a limit shown that is not a number of at least 1.
+    func saving(usesTemperature: Bool, usesMaxTokens: Bool, usesSteps: Bool, needsModel: Bool = true) -> AgentSaving? {
+        guard hasAccountAndModel(needsModel: needsModel) else { return nil }
+        let tokens = Int(maxTokens.trimmingCharacters(in: .whitespaces))
+        let steps = Int(maxSteps.trimmingCharacters(in: .whitespaces))
+        if usesMaxTokens, tokens == nil { return nil }
+        if usesSteps, steps == nil { return nil }
+        return AgentSaving(
+            name: name,
+            iconSymbol: iconSymbol,
+            iconTint: iconTint,
+            description: description,
+            instructions: instructions,
+            provider: provider,
+            model: model,
+            providerAccountId: accountId,
+            temperature: usesTemperature ? temperature : nil,
+            maxTokens: usesMaxTokens ? tokens : nil,
+            mostSteps: usesSteps ? steps : nil,
+            needsModel: needsModel
+        ).storable
+    }
+}
