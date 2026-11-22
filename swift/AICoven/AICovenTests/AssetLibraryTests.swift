@@ -65,6 +65,13 @@ final class AssetLibraryTests: XCTestCase {
         XCTAssertEqual(ids("plan", type: .chart), [], "Both must hold")
     }
 
+    func testTheChoiceOfNoStatusIsNamedForWhatItShows() {
+        let all = [asset("a", status: .draft), asset("b", status: .archived)]
+        let shown = AssetLibraryRules.shown(all, search: "", type: nil, status: nil)
+        XCTAssertEqual((shown.needsReview + shown.others).map(\.id), ["a"])
+        XCTAssertEqual(AssetLibraryRules.noStatusChosen, "Not Archived", "Not \"All Statuses\": what is archived is left out")
+    }
+
     func testWhatARowSays() {
         let mine = asset("a", "Q3 revenue", type: .designMockup, status: .approved, changed: -5 * 3600)
         XCTAssertEqual(AssetLibraryRules.quietLine(mine, now: now, calendar: utc), "Approved · Design Mockup · You · 5h ago")
@@ -141,6 +148,11 @@ final class AssetLibraryTests: XCTestCase {
         /// Lets the one who came first through.
         func letOneThrough() {
             if !held.isEmpty { held.removeFirst().resume() }
+        }
+
+        /// Lets the one who came last through, ahead of those before it.
+        func letNewestThrough() {
+            held.popLast()?.resume()
         }
     }
 
@@ -231,11 +243,12 @@ final class AssetLibraryTests: XCTestCase {
         let second = Task { await model.load() }
         await gate.arrived(2)
         // The later reading lands first; the earlier one, landing after it, is not shown over it.
-        await gate.letOneThrough()
-        await gate.letOneThrough()
-        await first.value
+        await gate.letNewestThrough()
         await second.value
         XCTAssertEqual(model.assets.map(\.id), ["new"])
+        await gate.letOneThrough()
+        await first.value
+        XCTAssertEqual(model.assets.map(\.id), ["new"], "Not the older reading that landed last")
     }
 
     func testNothingReadForAnAccountThatIsNoLongerSignedInIsShown() async {

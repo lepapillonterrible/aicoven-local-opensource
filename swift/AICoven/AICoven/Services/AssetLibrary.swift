@@ -5,6 +5,10 @@ import Foundation
 /// are shown and in which part, and what a row says.
 nonisolated enum AssetLibraryRules {
     static let unreadable = "Your encryption key can't open this asset."
+    /// What the Status filter calls its choice of no one status: everything
+    /// but what is archived (the cloud app calls it "All Statuses" and
+    /// leaves the archived out all the same).
+    static let noStatusChosen = "Not Archived"
 
     /// Who made an asset, as its row says it.
     static func madeBy(_ asset: Asset) -> String {

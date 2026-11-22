@@ -219,7 +219,9 @@ struct AssetLibraryView: View {
                 }
             }
             Picker("Status", selection: $model.statusFilter) {
-                Text("All Statuses").tag(AssetStatus?.none)
+                // With no status chosen, what is archived is left out: the
+                // choice is named for what it shows.
+                Text(AssetLibraryRules.noStatusChosen).tag(AssetStatus?.none)
                 ForEach(AssetStatus.allCases, id: \.rawValue) { status in
                     Text(status.displayName).tag(AssetStatus?.some(status))
                 }
