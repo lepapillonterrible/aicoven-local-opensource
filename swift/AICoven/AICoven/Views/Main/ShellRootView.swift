@@ -46,6 +46,8 @@ struct ShellRootView: View {
     @State private var splitViewProbe = SplitViewProbe()
     /// What each scope's new-thread page holds unsent.
     @StateObject private var drafts = DraftThreads()
+    /// The memory pages of the places opened in this window.
+    @StateObject private var memoryPages = MemoryPagesModel()
     @State private var showCreateCoven = false
     /// The phone's search over the Overview's threads.
     @State private var threadSearch = ""
@@ -84,6 +86,7 @@ struct ShellRootView: View {
 
     var body: some View {
         layout
+            .environmentObject(memoryPages)
             .stoneWindowBar()
             .navigationTitle(shellWindowTitle(covenName: scopeName, personPlace: navigator.personPlace, covenPlaceTitle: navigator.placeTitle))
             .threadActionsHost(threadActions)

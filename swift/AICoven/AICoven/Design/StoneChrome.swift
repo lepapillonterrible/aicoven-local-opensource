@@ -186,6 +186,24 @@ private struct StoneToolbarButton: View {
     }
 }
 
+// MARK: - A filled button
+
+/// The cloud app's filled button, for the one action a row or a form is
+/// there for (Save).
+struct StonePrimaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(Color.aicovenOnButton)
+            .padding(.horizontal, Spacing.md)
+            .frame(minHeight: PlatformCapabilities.current.platform == .macOS ? 28 : 44)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.aicovenButton))
+            .opacity(configuration.isPressed ? 0.85 : 1)
+            .opacity(isEnabled ? 1 : 0.5)
+    }
+}
+
 // MARK: - The bar behind a title
 
 /// The hairline at a bar's edge, in the rule tone. Increase Contrast draws it

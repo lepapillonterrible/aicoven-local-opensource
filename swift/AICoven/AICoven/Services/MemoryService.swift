@@ -35,61 +35,6 @@ struct MemoryProposal: Codable, Identifiable {
     }
 }
 
-/// Memory search response wrapper
-struct MemorySearchResponse: Codable {
-    let chunks: [Memory]
-    let totalCount: Int
-
-    enum CodingKeys: String, CodingKey {
-        case chunks
-        case totalCount = "total_count"
-    }
-}
-
-/// Request body for creating a memory
-struct CreateMemoryRequest: Codable {
-    let covenId: String?
-    let scope: String
-    let title: String?
-    let content: String
-    let tags: [String]?
-    let sourceMessageId: String?
-    let isPinned: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case covenId = "coven_id"
-        case scope
-        case title
-        case content
-        case tags
-        case sourceMessageId = "source_message_id"
-        case isPinned = "is_pinned"
-    }
-}
-
-/// Request body for updating a memory
-struct UpdateMemoryRequest: Codable {
-    let title: String?
-    let content: String?
-    let tags: [String]?
-    let scope: String?
-    let isPinned: Bool?
-
-    enum CodingKeys: String, CodingKey {
-        case title
-        case content
-        case tags
-        case scope
-        case isPinned = "is_pinned"
-    }
-}
-
-/// Request body for reviewing a memory proposal
-struct ReviewMemoryRequest: Codable {
-    let action: String
-    let feedback: String?
-}
-
 /// Why a proposal was not reviewed.
 nonisolated enum ProposalReviewError: LocalizedError, Equatable {
     /// A review of it is under way (a second press, or another window).
@@ -152,59 +97,20 @@ actor MemoryService {
         )
     }
 
+    /// The account something is done as: the one the caller read already,
+    /// or the one signed in now.
+    private func account(_ asked: String?) async -> String {
+        if let asked { asked } else { await currentAccount() }
+    }
+
     /// A page of the memories kept in one place, newest first: `limit` of
-    /// them after the first `offset`.
-    func memories(in place: MemoryPlace, limit: Int, offset: Int = 0) async throws -> [Memory] {
-        try await memoryStore.loadMemories(in: place, limit: limit, offset: offset, as: currentAccount()).map(Self.memory)
-    }
-
-    /// The memories of one place (`MemoryPlace.init(covenID:scope:)`): the
-    /// newest, or with a query those among the newest that match it best.
-    func searchMemory(
-        covenId: String?,
-        query: String? = nil,
-        scope: String? = nil,
-        tags _: [String]? = nil,
-        limit: Int = 20
-    ) async throws -> [Memory] {
-        let place = MemoryPlace(covenID: covenId, scope: scope)
-        let chunks: [LocalMemoryChunk] = if let queryText = query, !queryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            // Use embedding+lexical hybrid search for text queries.
-            try await EmbeddingService.shared.searchRelevantMemories(
-                query: queryText,
-                in: [place],
-                topK: limit,
-                candidateLimit: limit * 4,
-                includePII: false
-            )
-        } else {
-            try await memoryStore.loadMemories(in: place, limit: limit, offset: 0, as: currentAccount())
-        }
-        return chunks.map(Self.memory)
-    }
-
-    /// Get a specific memory chunk by ID from the local store.
-    func getMemory(memoryId: String) async throws -> Memory {
-        guard let chunk = try await memoryStore.loadMemory(id: memoryId) else {
-            throw MemoryStoreError.noSuchMemory
-        }
-        return Self.memory(from: chunk)
+    /// them after the first `offset`. They are `asked`'s, and are not read
+    /// if another account is signed in.
+    func memories(in place: MemoryPlace, limit: Int, offset: Int = 0, as asked: String? = nil) async throws -> [Memory] {
+        try await memoryStore.loadMemories(in: place, limit: limit, offset: offset, as: account(asked)).map(Self.memory)
     }
 
     // MARK: - Memory Creation and Updates (Local-only)
-
-    /// Stores a new memory, encrypted, where its coven and scope say
-    /// (`MemoryPlace.init(covenID:scope:)`).
-    func createMemory(
-        covenId: String?,
-        scope: String,
-        title _: String?,
-        content: String,
-        tags: [String]?,
-        isPinned _: Bool = false
-    ) async throws -> Memory {
-        try await createMemory(in: MemoryPlace(covenID: covenId, scope: scope), content: content, tags: tags)
-    }
 
     /// Stores a new memory, encrypted, in `place`, as `account` where the
     /// caller has read whose it is already (the account signed in now
@@ -213,7 +119,7 @@ actor MemoryService {
         // Whose memory it is, read before the embedding is waited for: it
         // is stored as theirs, or not at all if another account is signed
         // in by then.
-        let account = if let asked { asked } else { await currentAccount() }
+        let account = await account(asked)
         let embedding = try await embed(content)
         let chunk = try await memoryStore.storeMemory(
             in: place,
@@ -229,48 +135,22 @@ actor MemoryService {
     }
 
     /// Gives a memory new text, and new tags where some are given (nil
-    /// keeps its tags). It is changed as the account that asked, read
-    /// before the embedding is waited for, and not at all if another is
-    /// signed in by then. Throws `MemoryStoreError.noSuchMemory` if that
-    /// account has no such memory. A memory has no title, pin or scope of
-    /// its own to change: it stays where it is kept.
-    func updateMemory(
-        memoryId: String,
-        title _: String? = nil,
-        content: String,
-        tags: [String]?,
-        scope _: String? = nil,
-        isPinned _: Bool? = nil
-    ) async throws -> Memory {
-        let account = await currentAccount()
+    /// keeps its tags). It is changed as the account that asked (`asked`
+    /// where the caller has read whose it is already), read before the
+    /// embedding is waited for, and not at all if another is signed in by
+    /// then. Throws `MemoryStoreError.noSuchMemory` if that account has no
+    /// such memory. It stays where it is kept.
+    func updateMemory(memoryId: String, content: String, tags: [String]?, as asked: String? = nil) async throws -> Memory {
+        let account = await account(asked)
         let embedding = try await embed(content)
         let chunk = try await memoryStore.updateMemory(id: memoryId, newText: content, newTags: tags, newEmbedding: embedding, as: account)
         return Self.memory(from: chunk)
     }
 
-    /// Removes a memory of the signed-in account's.
-    func deleteMemory(memoryId: String) async throws {
-        try await memoryStore.deleteMemory(id: memoryId, as: currentAccount())
-    }
-
-    /// Pin or unpin a memory chunk. In the local-only client we treat this as
-    /// a purely in-memory flag and do not persist it yet.
-    func togglePin(memoryId: String, isPinned: Bool) async throws -> Memory {
-        let base = try await getMemory(memoryId: memoryId)
-        return Memory(
-            id: base.id,
-            covenId: base.covenId,
-            userId: base.userId,
-            roleId: base.roleId,
-            scope: base.scope,
-            title: base.title,
-            content: base.content,
-            tags: base.tags,
-            isPinned: isPinned,
-            isApproved: base.isApproved,
-            createdAt: base.createdAt,
-            updatedAt: base.updatedAt
-        )
+    /// Removes a memory of the signed-in account's, or of `asked`'s where
+    /// the caller has read whose it is already.
+    func deleteMemory(memoryId: String, as asked: String? = nil) async throws {
+        try await memoryStore.deleteMemory(id: memoryId, as: account(asked))
     }
 
     // MARK: - Memory Proposals (local-only)

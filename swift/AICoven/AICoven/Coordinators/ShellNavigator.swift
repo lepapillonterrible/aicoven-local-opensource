@@ -173,7 +173,7 @@ final class ShellNavigator: ObservableObject {
     private static func row(of place: WorkspaceTab) -> ShellSidebarItem? {
         switch place.type {
         case let .thread(thread): .thread(thread.id)
-        case .memoryList, .memoryProposals, .addMemory, .editMemory: .memory
+        case .memoryList: .memory
         case .covenAgents, .addRole, .editRole, .personalStrixSettings: .agents
         case .covenConnections: .connectedApps
         default: nil
@@ -373,17 +373,14 @@ final class ShellNavigator: ObservableObject {
         }
     }
 
-    /// Where a finished form leads back to: an agent's form to the agents,
-    /// a memory's form or the proposals to the memory; anything else to the
-    /// Overview.
+    /// Where a finished form leads back to: an agent's form to the agents;
+    /// anything else to the Overview.
     private static func parent(of type: WorkspaceTabType, in scope: ShellScope) -> WorkspaceTab? {
         switch type {
         case let .addRole(covenID):
             .covenAgents(covenId: covenID)
         case .editRole:
             scope.covenID.map { .covenAgents(covenId: $0) }
-        case let .addMemory(covenID), let .editMemory(_, covenID), let .memoryProposals(covenID):
-            .memoryList(covenId: covenID)
         default:
             nil
         }

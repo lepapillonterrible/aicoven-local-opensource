@@ -73,13 +73,18 @@ struct ShellContentView: View {
                     overview
                 }
             case let .memoryList(covenID):
-                ShellMemoryPlace(covenID: covenID)
-                    .id(covenID)
-                    // Once for each opening of a scope's memory: outside the
-                    // list, which is made anew after every save.
-                    .onAppear {
-                        if ShellRootView.reportsUsage { AnalyticsService.shared.trackMemoryListOpened(covenId: covenID) }
-                    }
+                // Strix's, or the coven's on screen; while that coven is
+                // not in, or it is another's, the Overview.
+                if covenID == nil || coven?.id == covenID {
+                    ShellMemoryPlace(covenID: covenID, covenName: coven?.name ?? "Strix")
+                        .id(covenID)
+                        // Once for each opening of a scope's memory.
+                        .onAppear {
+                            if ShellRootView.reportsUsage { AnalyticsService.shared.trackMemoryListOpened(covenId: covenID) }
+                        }
+                } else {
+                    overview
+                }
             case let .covenAgents(covenID):
                 // Only for the coven on screen; while it is not in, or it is
                 // another's, the Overview.
@@ -198,16 +203,12 @@ struct ShellContentView: View {
     }
 }
 
-/// The memory of the scope on screen: what is saved, or what the agents
-/// have proposed to save, which the person reviews here. The list asks for
-/// its forms as tabs (it was made for the window's tabs); here a form opens
-/// in a sheet over it, and the list is read again when one has saved.
+/// The memory of the scope on screen: its page, or what the agents have
+/// proposed to remember, which the person reviews here.
 private struct ShellMemoryPlace: View {
     let covenID: String?
-    @State private var form: MemoryForm?
-    /// Counts the saves, so the list is made anew, and reads again, after each.
-    @State private var saves = 0
-    /// The proposals are on screen, not what is saved.
+    let covenName: String
+    /// The proposals are on screen, not the page.
     @State private var showsProposals = false
 
     var body: some View {
@@ -223,70 +224,13 @@ private struct ShellMemoryPlace: View {
             .padding(.top, Spacing.md)
             if showsProposals {
                 // It acts on the proposals themselves and opens no form.
-                // What is saved from one is in the list when that is shown
-                // again: the list is made anew each time.
+                // What is saved from one is on the page when that is shown
+                // again: the page reads its memory each time it comes on.
                 MemoryProposalsView(covenId: covenID, openTabs: .constant([]), activeTabId: .constant(nil))
             } else {
-                MemoryListView(covenId: covenID, openTabs: tabs, activeTabId: .constant(nil))
-                    .id(saves)
+                MemoryPagesView(scope: ShellScope(covenID: covenID), covenName: covenName)
             }
         }
-        .sheet(item: $form) { form in
-            ShellFormSheet(onCancel: { self.form = nil }) {
-                if let memoryID = form.memoryID {
-                    EditMemoryView(memoryId: memoryID, covenId: covenID) { saved(form) }
-                } else {
-                    AddMemoryView(covenId: covenID) { saved(form) }
-                }
-            }
-        }
-    }
-
-    /// A form has saved: its sheet closes, if it is still the one on screen
-    /// (a save can end after its sheet was cancelled and another opened),
-    /// and the list is read again either way.
-    private func saved(_ saved: MemoryForm) {
-        if form == saved { form = nil }
-        saves += 1
-    }
-
-    /// What the list takes for the window's tabs: it holds none, and a tab
-    /// the list adds for a form opens that form.
-    private var tabs: Binding<[WorkspaceTab]> {
-        Binding(
-            get: { [] },
-            set: { tabs in
-                if let asked = tabs.last.flatMap(MemoryForm.init(tab:)) { form = asked }
-            }
-        )
-    }
-}
-
-/// One showing of a memory's form: a new memory, or one being edited. Each
-/// showing is its own, so a form that saves late closes only its own sheet.
-enum MemoryForm: Identifiable, Equatable {
-    case add(showing: UUID)
-    case edit(memoryID: String, showing: UUID)
-
-    /// The form a tab stands for; nil for a tab that is no memory form.
-    init?(tab: WorkspaceTab) {
-        switch tab.type {
-        case .addMemory: self = .add(showing: UUID())
-        case let .editMemory(memoryID, _): self = .edit(memoryID: memoryID, showing: UUID())
-        default: return nil
-        }
-    }
-
-    var id: UUID {
-        switch self {
-        case let .add(showing), let .edit(_, showing): showing
-        }
-    }
-
-    /// The memory being edited; nil for a new one.
-    var memoryID: String? {
-        if case let .edit(memoryID, _) = self { return memoryID }
-        return nil
     }
 }
 

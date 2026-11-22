@@ -1,0 +1,370 @@
+@testable import AICoven
+import XCTest
+
+final class MemoryPageTests: XCTestCase {
+    func testPageTagWinsOverEveryOtherRule() {
+        XCTAssertEqual(MemoryPage.of(tags: ["coven:policy", "page:purpose"]), .purpose)
+        XCTAssertEqual(MemoryPage.of(tags: ["person", "page:facts"]), .facts)
+    }
+
+    func testPolicyAndSkillTagsGoOnHowWeWorkHere() {
+        XCTAssertEqual(MemoryPage.of(tags: ["coven:policy"]), .howWeWork)
+        XCTAssertEqual(MemoryPage.of(tags: ["coven:skill", "person"]), .howWeWork)
+    }
+
+    func testPeopleTagsGoOnWhosWhoInAnyCase() {
+        XCTAssertEqual(MemoryPage.of(tags: ["People"]), .people)
+        XCTAssertEqual(MemoryPage.of(tags: ["project", "person:dana"]), .people)
+        XCTAssertEqual(MemoryPage.of(tags: ["TEAM"]), .people)
+    }
+
+    func testEverythingElseGoesOnFactsAndFigures() {
+        XCTAssertEqual(MemoryPage.of(tags: []), .facts)
+        XCTAssertEqual(MemoryPage.of(tags: ["summary", "coven:source", "page:unknown"]), .facts)
+    }
+
+    func testAnEntryAddedOnAPageLandsBackOnThatPage() {
+        for page in MemoryPage.allCases {
+            XCTAssertEqual(MemoryPage.of(tags: page.tagsForNewEntry), page)
+        }
+    }
+}
+
+final class MemoryDraftTests: XCTestCase {
+    func testAnOpenFieldHoldsTheCursorOnlyWhileItHoldsUnsavedText() {
+        XCTAssertFalse(MemoryDraft.holdsText(editing: nil, editDraft: "", adding: false, addDraft: ""))
+        XCTAssertFalse(MemoryDraft.holdsText(editing: nil, editDraft: "left over", adding: false, addDraft: "left over"))
+        XCTAssertFalse(MemoryDraft.holdsText(editing: nil, editDraft: "", adding: true, addDraft: "  \n"))
+        XCTAssertTrue(MemoryDraft.holdsText(editing: nil, editDraft: "", adding: true, addDraft: "Ask Sam"))
+        XCTAssertFalse(MemoryDraft.holdsText(editing: "Ask Sam", editDraft: " Ask Sam ", adding: false, addDraft: ""))
+        XCTAssertTrue(MemoryDraft.holdsText(editing: "Ask Sam", editDraft: "Ask Sam first", adding: false, addDraft: ""))
+    }
+
+    func testSavingIsUnchangedWhenOnlyTheWhitespaceAtTheEndsDiffers() {
+        XCTAssertTrue(MemoryDraft.isUnchanged("Ask Sam", from: "Ask Sam"))
+        XCTAssertTrue(MemoryDraft.isUnchanged("Ask Sam", from: "Ask Sam \n"))
+        XCTAssertTrue(MemoryDraft.isUnchanged(" Ask Sam\n", from: "\nAsk Sam  "))
+        XCTAssertFalse(MemoryDraft.isUnchanged("Ask Sam first", from: "Ask Sam \n"))
+        XCTAssertFalse(MemoryDraft.isUnchanged("Ask  Sam", from: "Ask Sam"))
+    }
+
+    func testOnlyAnEntryWithLineBreaksIsEditedInAMultilineField() {
+        XCTAssertFalse(MemoryDraft.editsInMultilineField("Ask Sam"))
+        XCTAssertFalse(MemoryDraft.editsInMultilineField(""))
+        XCTAssertTrue(MemoryDraft.editsInMultilineField("Ask Sam\nthen Priya"))
+        XCTAssertTrue(MemoryDraft.editsInMultilineField("Ask Sam\r\nthen Priya"))
+    }
+}
+
+@MainActor
+final class MemoryPagesModelTests: XCTestCase {
+    private let work = MemoryPlace.coven("work")
+
+    private func entry(_ id: String, _ content: String = "Text", tags: [String]? = nil, at seconds: TimeInterval = 0) -> Memory {
+        FakeMemoryStore.entry(id, content, tags: tags, at: seconds)
+    }
+
+    func testLoadPagesThroughEveryEntry() async {
+        let store = FakeMemoryStore()
+        store.stored = (0 ..< (MemoryPagesModel.pageSize * 2 + 5)).map { entry("m\($0)") }
+        let model = MemoryPagesModel(manager: store, signedIn: { "ada" })
+
+        XCTAssertNil(model.entries(in: work), "Nothing is said of a place before it is read")
+        await model.load(work)
+
+        XCTAssertEqual(model.entries(in: work)?.count, MemoryPagesModel.pageSize * 2 + 5)
+        XCTAssertEqual(store.offsets, [0, 100, 200])
+        XCTAssertEqual(store.askedAs, ["ada", "ada", "ada"], "Every page as the account the read began for")
+    }
+
+    func testLoadStopsWhenAPageBringsNothingNew() async {
+        let store = FakeMemoryStore()
+        store.stored = (0 ..< MemoryPagesModel.pageSize * 2).map { entry("m\($0)") }
+        store.ignoresOffset = true
+        let model = MemoryPagesModel(manager: store, signedIn: { "ada" })
+
+        await model.load(.aboutMe)
+
+        XCTAssertEqual(model.entries(in: .aboutMe)?.count, MemoryPagesModel.pageSize)
+        XCTAssertEqual(store.offsets, [0, 100])
+    }
+
+    func testAPageThatOverlapsTheLastStillReachesTheRest() async {
+        let store = FakeMemoryStore()
+        store.stored = (0 ..< (MemoryPagesModel.pageSize * 2 + 5)).map { entry("m\($0)") }
+        // A row added before the second page pushes the first page's last row onto it.
+        store.insertBeforeSecondPage = entry("new")
+        let model = MemoryPagesModel(manager: store, signedIn: { "ada" })
+
+        await model.load(work)
+
+        XCTAssertEqual(model.entries(in: work)?.count, MemoryPagesModel.pageSize * 2 + 5)
+        XCTAssertEqual(store.offsets, [0, 100, 200])
+    }
+
+    func testAPlaceThatCannotBeRead_saysSo_andIsReadAgainOnAsking() async {
+        let store = FakeMemoryStore()
+        store.stored = [entry("m1")]
+        store.failsReads = true
+        let model = MemoryPagesModel(manager: store, signedIn: { "ada" })
+
+        await model.load(work)
+        XCTAssertTrue(model.didLoadFail(in: work))
+        XCTAssertNil(model.entries(in: work))
+
+        store.failsReads = false
+        await model.load(work)
+        XCTAssertFalse(model.didLoadFail(in: work))
+        XCTAssertEqual(model.entries(in: work)?.map(\.id), ["m1"])
+    }
+
+    func testAPagesEntriesAreItsOwn_oldestFirst_andAboutMeHoldsThemAll() async {
+        let store = FakeMemoryStore()
+        store.stored = [
+            entry("later", "Ships on Fridays", tags: ["page:how"], at: 20),
+            entry("who", "Dana runs design", tags: ["person"], at: 5),
+            entry("earlier", "Reviews on Mondays", tags: ["coven:policy"], at: 10),
+            entry("fact", "Budget is 100", at: 1),
+        ]
+        let model = MemoryPagesModel(manager: store, signedIn: { "ada" })
+        await model.load(work)
+
+        XCTAssertEqual(model.entries(on: .howWeWork, in: work).map(\.id), ["earlier", "later"])
+        XCTAssertEqual(model.entries(on: .people, in: work).map(\.id), ["who"])
+        XCTAssertEqual(model.entries(on: .facts, in: work).map(\.id), ["fact"])
+        XCTAssertEqual(model.entries(on: .purpose, in: work).map(\.id), [])
+        XCTAssertEqual(model.entries(on: nil, in: work).map(\.id), ["fact", "who", "earlier", "later"])
+    }
+
+    func testALoadThatStartedBeforeAnEditDoesNotUndoIt() async throws {
+        let store = FakeMemoryStore()
+        let old = entry("m1", "Old")
+        store.stored = [old]
+        let model = MemoryPagesModel(manager: store, signedIn: { "ada" })
+        await model.load(work)
+
+        let held = store.holdNext(.read)
+        let reload = Task { await model.load(work) }
+        await held.reached()
+        try await model.edit(old, to: "New", in: work)
+        held.release()
+        await reload.value
+
+        XCTAssertEqual(model.entries(in: work)?.map(\.content), ["New"])
+    }
+
+    func testAnEditWhileAnEarlierOneIsOnItsWayIsIgnored() async throws {
+        let store = FakeMemoryStore()
+        let old = entry("m1", "Old")
+        store.stored = [old]
+        let model = MemoryPagesModel(manager: store, signedIn: { "ada" })
+        await model.load(work)
+
+        let held = store.holdNext(.update)
+        let first = Task { try await model.edit(old, to: "First", in: self.work) }
+        await held.reached()
+        XCTAssertTrue(model.savingIds.contains("m1"))
+        try await model.edit(old, to: "Second", in: work)
+        held.release()
+        try await first.value
+
+        XCTAssertEqual(store.updates, ["First"])
+        XCTAssertEqual(model.entries(in: work)?.map(\.content), ["First"])
+        XCTAssertTrue(model.savingIds.isEmpty)
+    }
+
+    func testAnEditThatFails_leavesTheEntryAsItWas_andCanBeTriedAgain() async throws {
+        let store = FakeMemoryStore()
+        let old = entry("m1", "Old")
+        store.stored = [old]
+        let model = MemoryPagesModel(manager: store, signedIn: { "ada" })
+        await model.load(work)
+
+        store.failsWrites = true
+        do {
+            try await model.edit(old, to: "New", in: work)
+            XCTFail("Reported a change that was not made")
+        } catch {}
+        XCTAssertEqual(model.entries(in: work)?.map(\.content), ["Old"])
+        XCTAssertTrue(model.savingIds.isEmpty)
+
+        store.failsWrites = false
+        try await model.edit(old, to: "New", in: work)
+        XCTAssertEqual(model.entries(in: work)?.map(\.content), ["New"])
+    }
+
+    func testAForgetWhileTheSameOneIsOnItsWayIsIgnored() async throws {
+        let store = FakeMemoryStore()
+        let gone = entry("m1")
+        store.stored = [gone]
+        let model = MemoryPagesModel(manager: store, signedIn: { "ada" })
+        await model.load(work)
+
+        let held = store.holdNext(.delete)
+        let first = Task { try await model.forget(gone, in: self.work) }
+        await held.reached()
+        try await model.forget(gone, in: work)
+        held.release()
+        try await first.value
+
+        XCTAssertEqual(store.deletes, ["m1"])
+        XCTAssertEqual(model.entries(in: work)?.isEmpty, true)
+        XCTAssertTrue(model.forgettingIds.isEmpty)
+    }
+
+    func testAddPutsTheEntryOnItsPage_inItsPlace() async throws {
+        let store = FakeMemoryStore()
+        let model = MemoryPagesModel(manager: store, signedIn: { "ada" })
+        await model.load(work)
+        await model.load(.aboutMe)
+
+        try await model.add("Send options as PDFs", on: .howWeWork, in: work)
+        try await model.add("Lives in Lisbon", on: nil, in: .aboutMe)
+
+        XCTAssertEqual(model.entries(on: .howWeWork, in: work).map(\.content), ["Send options as PDFs"])
+        XCTAssertEqual(model.entries(on: nil, in: .aboutMe).map(\.content), ["Lives in Lisbon"])
+        XCTAssertEqual(store.created.map(\.place), [work, .aboutMe])
+        XCTAssertEqual(store.created.map(\.tags), [["page:how", "coven:policy"], nil], "The person's own memory has no pages")
+        XCTAssertEqual(store.offsets.count, 2, "What was added is shown as the store gave it back, with no second read")
+    }
+
+    func testWhatWasReadForOneAccount_isNotShownToTheNext_andALateAnswerIsDropped() async throws {
+        let store = FakeMemoryStore()
+        store.stored = [entry("adas", "Ada's")]
+        var signedIn = "ada"
+        let model = MemoryPagesModel(manager: store, signedIn: { signedIn })
+        await model.load(work)
+        XCTAssertEqual(model.entries(in: work)?.map(\.content), ["Ada's"])
+
+        // A read for Ada is under way when Grace signs in.
+        let held = store.holdNext(.read)
+        let adas = Task { await model.load(self.work) }
+        await held.reached()
+        signedIn = "grace"
+        store.stored = [entry("graces", "Grace's")]
+        await model.load(work)
+        XCTAssertEqual(model.entries(in: work)?.map(\.content), ["Grace's"], "Ada's went when Grace's were asked for")
+        held.release()
+        await adas.value
+        XCTAssertEqual(model.entries(in: work)?.map(\.content), ["Grace's"], "Ada's late read is not shown to Grace")
+        XCTAssertEqual(store.askedAs.last, "grace")
+
+        // An edit Ada began lands after Grace signed in: nothing of it is shown.
+        signedIn = "ada"
+        await model.load(work)
+        let old = try XCTUnwrap(model.entries(in: work)?.first)
+        let update = store.holdNext(.update)
+        let edit = Task { try await model.edit(old, to: "Edited", in: self.work) }
+        await update.reached()
+        signedIn = "grace"
+        await model.load(work)
+        update.release()
+        try await edit.value
+        XCTAssertEqual(model.entries(in: work)?.map(\.content), ["Grace's"])
+        XCTAssertTrue(model.savingIds.isEmpty)
+    }
+}
+
+// MARK: - Fakes
+
+/// A store in memory that can be made to wait or fail.
+@MainActor
+private final class FakeMemoryStore: MemoryPagesManaging {
+    enum Step {
+        case read, update, delete
+    }
+
+    /// A step of the store held until the test lets it go.
+    final class Held {
+        private let (arrivals, arrive) = AsyncStream<Void>.makeStream()
+        private let (releases, letGo) = AsyncStream<Void>.makeStream()
+
+        /// Returns once the store has got to the held step.
+        func reached() async {
+            for await _ in arrivals {
+                break
+            }
+        }
+
+        func release() {
+            letGo.yield()
+        }
+
+        fileprivate func hold() async {
+            arrive.yield()
+            for await _ in releases {
+                break
+            }
+        }
+    }
+
+    var stored: [Memory] = []
+    var ignoresOffset = false
+    var failsReads = false
+    var failsWrites = false
+    var insertBeforeSecondPage: Memory?
+    private(set) var offsets: [Int] = []
+    private(set) var askedAs: [String?] = []
+    private(set) var created: [(place: MemoryPlace, tags: [String]?)] = []
+    private(set) var updates: [String] = []
+    private(set) var deletes: [String] = []
+    private var holding: [Step: Held] = [:]
+
+    static func entry(_ id: String, _ content: String, tags: [String]? = nil, at seconds: TimeInterval = 0) -> Memory {
+        Memory(
+            id: id, covenId: nil, userId: nil, roleId: nil, scope: .coven, title: nil, content: content, tags: tags,
+            isPinned: false, isApproved: true, createdAt: Date(timeIntervalSince1970: seconds), updatedAt: nil
+        )
+    }
+
+    func holdNext(_ step: Step) -> Held {
+        let held = Held()
+        holding[step] = held
+        return held
+    }
+
+    private func pass(_ step: Step) async {
+        if let held = holding.removeValue(forKey: step) {
+            await held.hold()
+        }
+    }
+
+    func memories(in _: MemoryPlace, limit: Int, offset: Int, as account: String?) async throws -> [Memory] {
+        offsets.append(offset)
+        askedAs.append(account)
+        if offset > 0, let added = insertBeforeSecondPage {
+            insertBeforeSecondPage = nil
+            stored.insert(added, at: 0)
+        }
+        let answer = Array(stored.dropFirst(ignoresOffset ? 0 : offset).prefix(limit))
+        await pass(.read)
+        if failsReads { throw RepositoryError.databaseUnavailable }
+        return answer
+    }
+
+    func createMemory(in place: MemoryPlace, content: String, tags: [String]?, as _: String?) async throws -> Memory {
+        if failsWrites { throw RepositoryError.databaseUnavailable }
+        created.append((place, tags))
+        let added = Self.entry("new-\(created.count)", content, tags: tags, at: 100)
+        stored.insert(added, at: 0)
+        return added
+    }
+
+    func updateMemory(memoryId: String, content: String, tags _: [String]?, as _: String?) async throws -> Memory {
+        if failsWrites { throw RepositoryError.databaseUnavailable }
+        let text = content
+        updates.append(text)
+        await pass(.update)
+        guard let index = stored.firstIndex(where: { $0.id == memoryId }) else { throw MemoryStoreError.noSuchMemory }
+        let old = stored[index]
+        stored[index] = Self.entry(old.id, text, tags: old.tags, at: old.createdAt.timeIntervalSince1970)
+        return stored[index]
+    }
+
+    func deleteMemory(memoryId: String, as _: String?) async throws {
+        if failsWrites { throw RepositoryError.databaseUnavailable }
+        deletes.append(memoryId)
+        await pass(.delete)
+        stored.removeAll { $0.id == memoryId }
+    }
+}

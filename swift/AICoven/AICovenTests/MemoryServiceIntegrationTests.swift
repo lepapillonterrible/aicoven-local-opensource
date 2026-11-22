@@ -31,14 +31,7 @@ final class MemoryServiceIntegrationTests: XCTestCase {
         let content = "Memory content for integration test"
         let tags = ["one", "two"]
 
-        let memory = try await service.createMemory(
-            covenId: coven,
-            scope: "coven",
-            title: "Test Title",
-            content: content,
-            tags: tags,
-            isPinned: false
-        )
+        let memory = try await service.createMemory(in: .coven(coven), content: content, tags: tags)
 
         XCTAssertEqual(memory.scope, .coven)
         XCTAssertEqual(memory.covenId, coven)

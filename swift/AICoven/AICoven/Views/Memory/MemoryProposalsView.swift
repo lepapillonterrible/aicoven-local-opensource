@@ -477,3 +477,28 @@ struct EmptyProposalsState: View {
         .padding(Spacing.xl)
     }
 }
+
+/// Error state view for memory views
+struct MemoryErrorView: View {
+    let message: String
+    let onRetry: () -> Void
+
+    var body: some View {
+        VStack(spacing: Spacing.lg) {
+            IconBadge(icon: "exclamationmark.triangle", size: 60, color: .red)
+
+            Text("Error")
+                .font(.aicovenH2)
+                .foregroundColor(.aicovenTextPrimary)
+
+            Text(message)
+                .font(.aicovenBodySmall)
+                .foregroundColor(.aicovenTextSecondary)
+                .multilineTextAlignment(.center)
+
+            GradientButton("Retry", icon: "arrow.clockwise", style: .secondary, action: onRetry)
+                .frame(width: 120)
+        }
+        .padding(Spacing.xl)
+    }
+}

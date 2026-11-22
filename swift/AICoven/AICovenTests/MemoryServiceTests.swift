@@ -67,25 +67,6 @@ final class MemoryServiceTests: XCTestCase {
         )
     }
 
-    func testTheListsMemoriesAreThoseOfItsPlace() async throws {
-        let mockStore = MockMemoryStore()
-        mockStore.memoriesToReturn = [chunk("1", "Note")]
-        let service = MemoryService(memoryStore: mockStore)
-
-        // Strix's list is the person's own memory.
-        let result = try await service.searchMemory(covenId: nil, query: nil, scope: nil, tags: nil, limit: 10)
-        XCTAssertEqual(result.map(\.content), ["Note"])
-        XCTAssertEqual(mockStore.calls.last, .init(place: .aboutMe, limit: 10, offset: 0))
-
-        // A coven's list is that coven's, and no other's.
-        _ = try await service.searchMemory(covenId: "work", query: nil, scope: "all", tags: nil, limit: 10)
-        XCTAssertEqual(mockStore.calls.last?.place, .coven("work"))
-        _ = try await service.searchMemory(covenId: "work", query: nil, scope: "coven", tags: nil, limit: 10)
-        XCTAssertEqual(mockStore.calls.last?.place, .coven("work"))
-        _ = try await service.searchMemory(covenId: "work", query: nil, scope: "user", tags: nil, limit: 10)
-        XCTAssertEqual(mockStore.calls.last?.place, .aboutMe, "The person's own, wherever it is asked for")
-    }
-
     func testAPageOfAPlace_isAskedOfTheStoreAsItIs_andSaysWhichEntriesCannotBeOpened() async throws {
         let mockStore = MockMemoryStore()
         mockStore.memoriesToReturn = [chunk("1", "Note"), chunk("2", "", unreadable: true)]
@@ -98,15 +79,7 @@ final class MemoryServiceTests: XCTestCase {
         XCTAssertEqual(page[1].unreadable, true)
     }
 
-    func testWhereAMemoryIsKept_byItsCovenAndScope() {
-        XCTAssertEqual(MemoryPlace(covenID: nil, scope: nil), .aboutMe)
-        XCTAssertEqual(MemoryPlace(covenID: nil, scope: "user"), .aboutMe)
-        XCTAssertEqual(MemoryPlace(covenID: "work", scope: "user"), .aboutMe)
-        XCTAssertEqual(MemoryPlace(covenID: "work", scope: nil), .coven("work"))
-        XCTAssertEqual(MemoryPlace(covenID: "work", scope: "all"), .coven("work"))
-        XCTAssertEqual(MemoryPlace(covenID: "work", scope: "agent"), .coven("work"))
-        XCTAssertEqual(MemoryPlace(covenID: nil, scope: "coven"), .strix)
-
+    func testWhereAMemoryIsKept_andWhatAThreadReads() {
         XCTAssertEqual(MemoryPlace.aboutMe.scope, "user")
         XCTAssertEqual(MemoryPlace.strix.scope, "coven")
         XCTAssertEqual(MemoryPlace.coven("work").scope, "coven")
