@@ -208,6 +208,14 @@ struct MemoryPagesView: View {
         if addingTo == section {
             pageRow { addField(section) }
                 .id(addKey(section))
+        } else if model.failures[addKey(section)] != nil {
+            // An Add begun on an earlier showing of the page, whose field is
+            // gone, says here what it came to.
+            pageRow {
+                failureLine(addKey(section))
+                    .padding(.horizontal, Spacing.xs)
+                    .padding(.bottom, Spacing.xs)
+            }
         }
         ForEach(entries) { entry in
             pageRow { entryRow(entry, in: place) }

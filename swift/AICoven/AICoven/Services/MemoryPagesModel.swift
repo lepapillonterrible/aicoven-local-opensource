@@ -80,6 +80,13 @@ final class MemoryPagesModel: ObservableObject {
         return now
     }
 
+    /// Whether `asked`, the account something began as, is still the one
+    /// signed in. If another is by now, what was held for the first is
+    /// dropped here, and what the first began comes to nothing.
+    private func isStill(_ asked: String) -> Bool {
+        currentAccount() == asked
+    }
+
     /// The place's entries once read; `nil` before the first read lands.
     func entries(in place: MemoryPlace) -> [Memory]? {
         entriesByPlace[place]
@@ -164,10 +171,10 @@ final class MemoryPagesModel: ObservableObject {
         failures[key] = nil
         do {
             let added = try await manager.createMemory(in: place, content: text, tags: page?.tagsForNewEntry, as: asked)
-            guard account == asked else { return false }
+            guard isStill(asked) else { return false }
             apply(in: place) { $0.append(added) }
         } catch {
-            if account == asked { failures[key] = Self.couldNotAdd }
+            if isStill(asked) { failures[key] = Self.couldNotAdd }
             return false
         }
         // A place whose entries have not been read (its first read failed,
@@ -176,7 +183,7 @@ final class MemoryPagesModel: ObservableObject {
         if entriesByPlace[place] == nil {
             await load(place)
         }
-        return true
+        return isStill(asked)
     }
 
     /// Saves new text for `memory`. True once it is saved; false, with
@@ -186,11 +193,11 @@ final class MemoryPagesModel: ObservableObject {
     func edit(_ memory: Memory, to text: String, in place: MemoryPlace) async -> Bool {
         let asked = currentAccount()
         guard savingIds.insert(memory.id).inserted else { return false }
-        defer { if account == asked { savingIds.remove(memory.id) } }
+        defer { if isStill(asked) { savingIds.remove(memory.id) } }
         failures[memory.id] = nil
         do {
             let updated = try await manager.updateMemory(memoryId: memory.id, content: text, tags: nil, as: asked)
-            guard account == asked else { return false }
+            guard isStill(asked) else { return false }
             apply(in: place) { entries in
                 if let index = entries.firstIndex(where: { $0.id == updated.id }) {
                     entries[index] = updated
@@ -198,7 +205,7 @@ final class MemoryPagesModel: ObservableObject {
             }
             return true
         } catch {
-            if account == asked { failures[memory.id] = Self.couldNotSave }
+            if isStill(asked) { failures[memory.id] = Self.couldNotSave }
             return false
         }
     }
@@ -210,15 +217,15 @@ final class MemoryPagesModel: ObservableObject {
     func forget(_ memory: Memory, in place: MemoryPlace) async -> Bool {
         let asked = currentAccount()
         guard forgettingIds.insert(memory.id).inserted else { return false }
-        defer { if account == asked { forgettingIds.remove(memory.id) } }
+        defer { if isStill(asked) { forgettingIds.remove(memory.id) } }
         failures[memory.id] = nil
         do {
             try await manager.deleteMemory(memoryId: memory.id, as: asked)
-            guard account == asked else { return false }
+            guard isStill(asked) else { return false }
             apply(in: place) { $0.removeAll { $0.id == memory.id } }
             return true
         } catch {
-            if account == asked { failures[memory.id] = Self.couldNotForget }
+            if isStill(asked) { failures[memory.id] = Self.couldNotForget }
             return false
         }
     }

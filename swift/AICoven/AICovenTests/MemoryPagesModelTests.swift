@@ -162,15 +162,12 @@ final class MemoryPagesModelTests: XCTestCase {
         let held = store.holdNext(.read)
         let first = Task { await model.load(self.work) }
         await held.reached()
-        let second = Task { await model.load(self.work) }
-        // The second has asked by the time the first is let go: it was
-        // queued on the main actor before this, and runs up to its wait.
-        for _ in 0 ..< 3 {
-            await Task.yield()
-        }
-        held.release()
+        // The first is let go only once the second, asked here, is waiting:
+        // this is queued on the main actor, which runs nothing else until
+        // the second load, called on it below, comes to its wait.
+        Task { held.release() }
+        await model.load(work)
         await first.value
-        await second.value
 
         XCTAssertEqual(store.offsets, [0], "The second shared the read under way")
         XCTAssertEqual(model.entries(in: work)?.map(\.id), ["m1"])
@@ -340,6 +337,22 @@ final class MemoryPagesModelTests: XCTestCase {
         XCTAssertFalse(forgotten)
         XCTAssertTrue(model.failures.isEmpty)
         XCTAssertTrue(model.forgettingIds.isEmpty)
+
+        // Nor where the account changes with nothing else asked of the model meanwhile.
+        signedIn = "ada"
+        await model.load(work)
+        let adasAgain = try XCTUnwrap(model.entries(in: work)?.first)
+        let unasked = store.holdNext(.update)
+        let lateEdit = Task { await model.edit(adasAgain, to: "Edited", in: self.work) }
+        await unasked.reached()
+        signedIn = "grace"
+        store.failsNextHeld = true
+        unasked.release()
+        let lateSaved = await lateEdit.value
+        XCTAssertFalse(lateSaved)
+        XCTAssertTrue(model.failures.isEmpty, "Ada's failure is not said to Grace")
+        XCTAssertNil(model.entries(in: work), "What was held for Ada went with her")
+        XCTAssertTrue(model.savingIds.isEmpty)
     }
 }
 
@@ -435,6 +448,10 @@ private final class FakeMemoryStore: MemoryPagesManaging {
         let text = content
         updates.append(text)
         await pass(.update)
+        if failsNextHeld {
+            failsNextHeld = false
+            throw RepositoryError.databaseUnavailable
+        }
         guard let index = stored.firstIndex(where: { $0.id == memoryId }) else { throw MemoryStoreError.noSuchMemory }
         let old = stored[index]
         stored[index] = Self.entry(old.id, text, tags: old.tags, at: old.createdAt.timeIntervalSince1970)
