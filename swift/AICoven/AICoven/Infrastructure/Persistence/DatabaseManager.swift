@@ -563,6 +563,58 @@ final class DatabaseManager {
                 }
             }
 
+            // v18: the account's assets, each in a coven of the account's or
+            // with Strix (an empty coven id), with its files. Titles, what
+            // says what an asset is, and each file's name, size and bytes
+            // are encrypted; the bytes are kept here with the asset, as the
+            // row's last column, so that reading the rest does not read
+            // them. An asset is kept only in a coven of the same account,
+            // and goes with its coven; it stays when its thread goes.
+            migrator.registerMigration("v18_assets") { db in
+                try db.create(table: "assets") { t in
+                    t.column("id", .text).primaryKey()
+                    t.column("user_id", .text).notNull()
+                    t.column("coven_id", .text).notNull().defaults(to: "")
+                    t.column("type", .text).notNull()
+                    t.column("status", .text).notNull()
+                    t.column("title_ciphertext", .blob).notNull()
+                    t.column("details_ciphertext", .blob).notNull()
+                    t.column("made_by_agent_id", .text)
+                    t.column("thread_id", .text)
+                    t.column("source_message_id", .text)
+                    t.column("created_at", .datetime).notNull()
+                    t.column("updated_at", .datetime).notNull()
+                }
+                try db.create(index: "assets_user_coven", on: "assets", columns: ["user_id", "coven_id"])
+                try db.create(table: "asset_files") { t in
+                    t.column("id", .text).primaryKey()
+                    t.column("asset_id", .text).notNull().indexed().references("assets", onDelete: .cascade)
+                    t.column("meta_ciphertext", .blob).notNull()
+                    t.column("created_at", .datetime).notNull()
+                    t.column("body_ciphertext", .blob).notNull()
+                }
+                for (event, name) in [("INSERT", "insert"), ("UPDATE OF user_id, coven_id", "update")] {
+                    try db.execute(sql: """
+                    CREATE TRIGGER assets_match_coven_user_\(name)
+                    BEFORE \(event) ON assets
+                    WHEN length(trim(NEW.user_id)) = 0 OR (NEW.coven_id <> '' AND NOT EXISTS (
+                        SELECT 1 FROM covens
+                        WHERE covens.id = NEW.coven_id AND covens.user_id = NEW.user_id
+                    ))
+                    BEGIN
+                        SELECT RAISE(ABORT, 'assets.coven_id must reference a coven owned by the same user');
+                    END;
+                    """)
+                }
+                try db.execute(sql: """
+                CREATE TRIGGER covens_take_their_assets
+                AFTER DELETE ON covens
+                BEGIN
+                    DELETE FROM assets WHERE user_id = OLD.user_id AND coven_id = OLD.id;
+                END;
+                """)
+            }
+
             try migrator.migrate(queue)
             dbQueue = queue
         } catch {

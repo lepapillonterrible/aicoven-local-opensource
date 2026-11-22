@@ -25,11 +25,16 @@ nonisolated enum AccountSeal {
     /// with its own key in memory from before the text is encrypted until
     /// after. A key locked or changed under way is told as that.
     static func seal(_ text: String, purpose: String, for account: String) async throws -> Data {
+        try await seal(bytes: Data(text.utf8), purpose: purpose, for: account)
+    }
+
+    /// The same, of bytes.
+    static func seal(bytes data: Data, purpose: String, for account: String) async throws -> Data {
         let epoch = await DataEncryptionService.shared.keyEpoch
         try await requireKey(of: account, since: epoch)
         let ciphertext: Data
         do {
-            ciphertext = try await DataEncryptionService.shared.encrypt(Data(text.utf8), purpose: purpose)
+            ciphertext = try await DataEncryptionService.shared.encrypt(data, purpose: purpose)
         } catch {
             try await requireKey(of: account, since: epoch)
             throw error
