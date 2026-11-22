@@ -42,12 +42,17 @@ nonisolated enum NotificationComposer {
         let named = agentName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         // A thread with no agent of its own is answered by Strix.
         let agent = named.isEmpty ? "Strix" : named
-        let (title, fallback, detail): (String, String, String?) = switch event {
-        case let .needsOK(question): ("\(agent) needs your OK", reviewFallback, oneLine(question))
-        case let .finished(reply): ("\(agent) finished", answerFallback, firstSentence(of: reply))
-        case let .problem(reason): ("\(agent) stopped on a problem", problemFallback, firstSentence(of: reason))
+        let (title, fallback): (String, String) = switch event {
+        case .needsOK: ("\(agent) needs your OK", reviewFallback)
+        case .finished: ("\(agent) finished", answerFallback)
+        case .problem: ("\(agent) stopped on a problem", problemFallback)
         }
         guard showsDetails else { return ComposedNotification(title: title, subtitle: "", body: fallback) }
+        // What was said is read only where it is to be shown.
+        let detail: String? = switch event {
+        case let .needsOK(question): oneLine(question)
+        case let .finished(said), let .problem(said): firstSentence(of: said)
+        }
         return ComposedNotification(title: title, subtitle: "\(placeName) · \(threadTitle)", body: detail.map(capped) ?? fallback)
     }
 

@@ -30,8 +30,8 @@ final class LocalNotifications: ObservableObject {
         /// Asks the person, with the system's prompt; true if they allow.
         var ask: () async -> Bool
         /// Shows a notification under `id`, in place of any earlier one
-        /// under it.
-        var show: (_ id: String, _ notification: ComposedNotification) async -> Void
+        /// under it; false if the system would not take it.
+        var show: (_ id: String, _ notification: ComposedNotification) async -> Bool
         /// Takes back the notifications under these ids, delivered or not.
         var withdraw: (_ ids: [String]) -> Void
         var withdrawAll: () -> Void
@@ -53,7 +53,14 @@ final class LocalNotifications: ObservableObject {
                 content.sound = .default
                 // Nothing of the thread or the account goes with it: the
                 // id alone ties it to its thread, on this device.
-                try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+                do {
+                    try await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+                    return true
+                } catch {
+                    // The kind of failure only.
+                    AppErrorReporter.log(message: "A notification was not taken by the system (\(type(of: error)))", context: "LocalNotifications.show")
+                    return false
+                }
             },
             withdraw: { ids in
                 UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ids)
@@ -108,24 +115,47 @@ final class LocalNotifications: ObservableObject {
     /// Whether the account wants notifications at all: on, unless they
     /// turned them off in Settings.
     func isOn(for account: String) -> Bool {
-        defaults.object(forKey: UserScope.scopedKey("notifications_on", for: account)) as? Bool ?? true
+        defaults.object(forKey: Self.onKey(for: account)) as? Bool ?? true
     }
 
     func setOn(_ isOn: Bool, for account: String) {
         objectWillChange.send()
-        defaults.set(isOn, forKey: UserScope.scopedKey("notifications_on", for: account))
-        if !isOn { center.withdrawAll() }
+        defaults.set(isOn, forKey: Self.onKey(for: account))
+        if !isOn {
+            // Nothing stays notified, and nothing more is offered.
+            center.withdrawAll()
+            offer = nil
+        }
+    }
+
+    private static func onKey(for account: String) -> String {
+        UserScope.scopedKey("notifications_on", for: account)
+    }
+
+    private static func detailsKey(for account: String) -> String {
+        UserScope.scopedKey("notification_details", for: account)
+    }
+
+    private static func declinedKey(for account: String) -> String {
+        UserScope.scopedKey("notifications_offer_declined_at", for: account)
+    }
+
+    /// The account is deleted: its choices go with it.
+    func forget(_ account: String) {
+        for key in [Self.onKey(for: account), Self.detailsKey(for: account), Self.declinedKey(for: account)] {
+            defaults.removeObject(forKey: key)
+        }
     }
 
     /// Whether a notification names the thread and says what was said:
     /// off unless the account turned it on.
     func showsDetails(for account: String) -> Bool {
-        defaults.bool(forKey: UserScope.scopedKey("notification_details", for: account))
+        defaults.bool(forKey: Self.detailsKey(for: account))
     }
 
     func setShowsDetails(_ shows: Bool, for account: String) {
         objectWillChange.send()
-        defaults.set(shows, forKey: UserScope.scopedKey("notification_details", for: account))
+        defaults.set(shows, forKey: Self.detailsKey(for: account))
     }
 
     // MARK: - Permission
@@ -156,7 +186,7 @@ final class LocalNotifications: ObservableObject {
     /// Not now: the line goes, and is not offered again for a week.
     func declineOffer(as account: String) {
         offer = nil
-        defaults.set(now(), forKey: UserScope.scopedKey("notifications_offer_declined_at", for: account))
+        defaults.set(now(), forKey: Self.declinedKey(for: account))
     }
 
     /// A reply of `agentName`'s finished while the person was away: the
@@ -165,9 +195,11 @@ final class LocalNotifications: ObservableObject {
     /// off.
     func offerIfUseful(agentName: String?, as account: String) async {
         guard !isAsking, signedIn() == account, isOn(for: account) else { return }
-        if permission == nil { await refreshPermission() }
+        // Read each time: the person can have answered in the system's
+        // own settings since it was last read.
+        await refreshPermission()
         guard permission == .notAsked, !isAsking, signedIn() == account, isOn(for: account) else { return }
-        let declinedAt = defaults.object(forKey: UserScope.scopedKey("notifications_offer_declined_at", for: account)) as? Date
+        let declinedAt = defaults.object(forKey: Self.declinedKey(for: account)) as? Date
         if let declinedAt, now().timeIntervalSince(declinedAt) < Self.quietAfterDeclining { return }
         let named = agentName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         offer = Offer(agentName: named.isEmpty ? "Strix" : named)
@@ -191,7 +223,10 @@ final class LocalNotifications: ObservableObject {
         _ event: NotificationEvent, in thread: Thread, placeName: String, as account: String, ifStill stands: @MainActor () -> Bool = { true }
     ) async -> Bool {
         guard !appIsInFront, signedIn() == account, thread.userId == account, isOn(for: account) else { return false }
-        if permission == nil { await refreshPermission() }
+        // Read each time: the person can have allowed or refused
+        // notifications in the system's own settings since it was last
+        // read.
+        await refreshPermission()
         // Asked again: the wait above may have been long enough for the
         // person to come back, to turn notifications off, for another
         // account to sign in, or for what it is about to be over.
@@ -200,8 +235,7 @@ final class LocalNotifications: ObservableObject {
             event, agentName: thread.agentName, threadTitle: ThreadListRules.title(of: thread), placeName: placeName,
             showsDetails: showsDetails(for: account)
         )
-        await center.show(Self.id(forThread: thread.id), composed)
-        return true
+        return await center.show(Self.id(forThread: thread.id), composed)
     }
 
     /// The thread came on screen: what was notified of it is seen.

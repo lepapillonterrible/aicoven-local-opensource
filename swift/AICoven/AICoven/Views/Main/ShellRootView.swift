@@ -150,7 +150,12 @@ struct ShellRootView: View {
                 // Nothing is notified of while the app is in front. What
                 // tells of turns and approvals is started with the shell.
                 LocalNotifications.shared.appIsInFront = phase == .active
-                _ = NotificationSource.shared
+                // What tells of turns and approvals is started with the
+                // shell, so that what ends while the person is looking is
+                // known to be seen. An approval still waiting as they
+                // leave is told of then.
+                let source = NotificationSource.shared
+                if phase != .active { source.wentAway() }
             }
             // A thread was used, or made: the list follows it.
             .onReceive(NotificationCenter.default.publisher(for: ThreadService.threadUsed)) { _ in

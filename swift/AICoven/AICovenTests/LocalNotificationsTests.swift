@@ -63,6 +63,8 @@ final class LocalNotificationsTests: XCTestCase {
         var readingWaits: Gate?
         var askingWaits: Gate?
         var shown: [(id: String, notification: ComposedNotification)] = []
+        /// Whether the system takes a notification it is given.
+        var takes = true
         var withdrawn: [String] = []
         var withdrewAll = 0
 
@@ -80,7 +82,11 @@ final class LocalNotificationsTests: XCTestCase {
                     permission = allows ? .allowed : .denied
                     return allows
                 },
-                show: { [self] id, notification in shown.append((id, notification)) },
+                show: { [self] id, notification in
+                    guard takes else { return false }
+                    shown.append((id, notification))
+                    return true
+                },
                 withdraw: { [self] ids in withdrawn += ids },
                 withdrawAll: { [self] in withdrewAll += 1 }
             )
@@ -166,15 +172,22 @@ final class LocalNotificationsTests: XCTestCase {
         XCTAssertFalse(made)
         notifications.setOn(true, for: "ada")
 
-        // This device does not allow them, or was never asked.
+        // This device does not allow them, or was never asked: read each time, as it is then.
         for permission in [LocalNotifications.Permission.denied, .notAsked] {
             system.permission = permission
-            await notifications.refreshPermission()
             made = await notifications.notify(event, in: thread(), placeName: "Client work", as: "ada")
             XCTAssertFalse(made, "\(permission)")
         }
         XCTAssertEqual(system.shown.count, 1)
         XCTAssertEqual(system.asked, 0, "Notifying never asks for the permission")
+        // Allowed since, in the system's own settings: the next one is made, with nothing in the app opened between.
+        system.permission = .allowed
+        made = await notifications.notify(event, in: thread(), placeName: "Client work", as: "ada")
+        XCTAssertTrue(made)
+        // One the system would not take was not made.
+        system.takes = false
+        made = await notifications.notify(event, in: thread(), placeName: "Client work", as: "ada")
+        XCTAssertFalse(made)
     }
 
     func testDetailsAreEachAccountsOwnChoice() async {
@@ -336,6 +349,26 @@ final class LocalNotificationsTests: XCTestCase {
         notifications.setOn(true, for: "ada")
         await notifications.offerIfUseful(agentName: "Scout", as: "grace")
         XCTAssertNil(notifications.offer)
+        // Offered, and then turned off in Settings: the line goes.
+        await notifications.offerIfUseful(agentName: "Scout", as: "ada")
+        XCTAssertNotNil(notifications.offer)
+        notifications.setOn(false, for: "ada")
+        XCTAssertNil(notifications.offer)
+    }
+
+    func testAnAccountsChoicesGoWithTheAccount() {
+        let notifications = notifications(System())
+        notifications.setOn(false, for: "ada")
+        notifications.setShowsDetails(true, for: "ada")
+        notifications.declineOffer(as: "ada")
+        notifications.setShowsDetails(true, for: "grace")
+
+        notifications.forget("ada")
+
+        XCTAssertTrue(notifications.isOn(for: "ada"), "As for an account that never chose")
+        XCTAssertFalse(notifications.showsDetails(for: "ada"))
+        XCTAssertNil(defaults.object(forKey: UserScope.scopedKey("notifications_offer_declined_at", for: "ada")))
+        XCTAssertTrue(notifications.showsDetails(for: "grace"), "Another account's stay")
     }
 
     // MARK: - What tells of turns and approvals
@@ -347,10 +380,12 @@ final class LocalNotificationsTests: XCTestCase {
     }
 
     private func source(
-        _ told: Told, threads: [AICoven.Thread], lookingUpWaits: Gate? = nil, account: @escaping @MainActor () -> String = { "ada" }
+        _ told: Told, threads: [AICoven.Thread], lookingUpWaits: Gate? = nil, isAway: @escaping @MainActor () -> Bool = { true },
+        account: @escaping @MainActor () -> String = { "ada" }
     ) -> NotificationSource {
         NotificationSource(dependencies: .init(
             account: account,
+            isAway: isAway,
             thread: { id in
                 await lookingUpWaits?.wait()
                 return threads.first { $0.id == id }
@@ -456,10 +491,32 @@ final class LocalNotificationsTests: XCTestCase {
         XCTAssertEqual(told.events.map(\.thread), ["t1", "t2"])
     }
 
+    func testWhatHappensWhileThePersonIsLookingIsNotLookedUp_andAnApprovalStillWaitingWhenTheyLeaveIsToldThen() async {
+        let told = Told()
+        var away = false
+        let source = source(told, threads: [thread("t1"), thread("t2")], isAway: { away })
+        let approval = ToolApproval(threadID: "t1", question: "Run this command?", details: "ls", toolName: "shell.execute")
+
+        // In front: a reply finishes and an approval is asked. Nothing is told.
+        XCTAssertEqual(source.ended(["t2": ending("turn-1", .completed, saying: "Done.")]).count, 0)
+        XCTAssertEqual(source.asked([approval]).count, 0)
+
+        // The person leaves with the approval still waiting: it is told of now; the reply they saw is not.
+        away = true
+        for task in source.wentAway() {
+            await task.value
+        }
+        XCTAssertEqual(told.events.map(\.event), [.needsOK(question: "Run this command?")])
+        for task in source.ended(["t2": ending("turn-1", .completed, saying: "Done.")]) + source.wentAway() {
+            await task.value
+        }
+        XCTAssertEqual(told.events.count, 1, "Each once")
+    }
+
     func testNothingIsToldOfAThreadThatIsNotTheSignedInAccounts() async {
         let told = Told()
         var signedIn = "ada"
-        let source = source(told, threads: [thread("hers", of: "grace"), thread("t1")]) { signedIn }
+        let source = source(told, threads: [thread("hers", of: "grace"), thread("t1")], account: { signedIn })
 
         for task in source.ended(["hers": ending("turn-1", .completed, saying: "Hers."), "gone": ending("turn-2", .completed, saying: "No such thread.")]) {
             await task.value

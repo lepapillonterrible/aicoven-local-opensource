@@ -344,6 +344,7 @@ class AuthService: ObservableObject {
         CovenOrderStore().remove(for: userId)
         LastUsedAgentStore().remove(for: userId)
         ScopeVisitStore().remove(for: userId)
+        LocalNotifications.shared.forget(userId)
 
         // Delete the Firebase Auth user
         do {
