@@ -488,7 +488,7 @@ struct ShellRootView: View {
     }
 
     /// Opens the thread a tapped notification is about, as the account
-    /// signed in when it was tapped.
+    /// signed in when the shell took it.
     private func openThread(askedFor threadID: String) {
         let account = UserScope.currentUserID
         Task {

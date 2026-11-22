@@ -24,7 +24,9 @@ class AppState: ObservableObject {
     @Published var threads: [Thread] = []
     @Published var pendingDeepLink: DeepLinkTarget?
     /// The thread a notification that was tapped is about: held until
-    /// the shell takes it, as a link is, and for the same account only.
+    /// the shell takes it, as a link is, and dropped when the account
+    /// that was signed in leaves or another takes its place. (The shell
+    /// opens only a thread of the account it finds signed in.)
     @Published private(set) var pendingThreadID: String?
     /// The place in Settings a request names. The Settings window shows it
     /// and clears this.
