@@ -240,6 +240,14 @@ final class ShellNavigator: ObservableObject {
         personPlaceRequest += 1
     }
 
+    /// Whether the person has not moved since the navigator was at
+    /// `generation`: for what is asked for in a sheet and opened once the
+    /// sheet has gone, which must not cover where the person went
+    /// meanwhile.
+    func isStill(at generation: Int) -> Bool {
+        generation == placeGeneration
+    }
+
     /// Opens the new-thread page in the selected scope: the thread is made
     /// when its first message is sent. `agentID` names the agent it is to
     /// go to where the person chose one; asked again without one, the

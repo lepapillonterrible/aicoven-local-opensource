@@ -38,6 +38,29 @@ final class ThreadServiceTests: XCTestCase {
         XCTAssertFalse(existingIDs.contains(thread.id))
     }
 
+    func testAThreadChangedIsToldToWhatListsThreads_andAnArchivedOneIsNotAmongThoseNotArchived() async throws {
+        let service = ThreadService.shared
+        let created = try await service.createThread(title: "Told " + UUID().uuidString, covenId: nil, agentId: nil)
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await ThreadService.shared.deleteThread(threadId: created.id)
+        }
+        let before = try await service.threadsNotArchived()
+        XCTAssertTrue(before.contains { $0.id == created.id }, "Across Strix and every coven")
+
+        let archived = expectation(forNotification: ThreadService.threadChanged, object: nil)
+        _ = try await service.updateThread(threadId: created.id, isArchived: true)
+        await fulfillment(of: [archived], timeout: 10)
+        let afterArchiving = try await service.threadsNotArchived()
+        XCTAssertFalse(afterArchiving.contains { $0.id == created.id })
+
+        let renamed = expectation(forNotification: ThreadService.threadChanged, object: nil)
+        _ = try await service.updateThread(threadId: created.id, title: "Renamed", isArchived: false)
+        await fulfillment(of: [renamed], timeout: 10)
+        let afterRenaming = try await service.threadsNotArchived()
+        XCTAssertEqual(afterRenaming.first { $0.id == created.id }?.title, "Renamed")
+    }
+
     func testUpdateAndDeleteThreadAffectPersonalStore() async throws {
         let service = ThreadService.shared
 

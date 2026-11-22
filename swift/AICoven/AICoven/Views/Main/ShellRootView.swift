@@ -55,7 +55,9 @@ struct ShellRootView: View {
     /// The phone's switcher, a sheet from the bar; and what it was asked
     /// to open, done once the sheet has gone so nothing opens under it.
     @State private var showSwitcher = false
-    @State private var switcherFollowUp: SwitcherFollowUp?
+    /// What the switcher was asked for, and where the navigator was then
+    /// (`placeGeneration`).
+    @State private var switcherFollowUp: (kind: SwitcherFollowUp, askedAt: Int)?
 
     /// Whether the shell reports how it is used (a scope viewed, a place
     /// opened, New Thread, a thread made, the memory list opened), where
@@ -325,15 +327,15 @@ struct ShellRootView: View {
                 navigator.select(scope)
             },
             onCreateCoven: {
-                switcherFollowUp = .createCoven
+                switcherFollowUp = (.createCoven, navigator.placeGeneration)
                 showSwitcher = false
             },
             onOpenSettings: {
-                switcherFollowUp = .settings
+                switcherFollowUp = (.settings, navigator.placeGeneration)
                 showSwitcher = false
             },
             onOpenActivity: {
-                switcherFollowUp = .activity
+                switcherFollowUp = (.activity, navigator.placeGeneration)
                 showSwitcher = false
             },
             onMoveCoven: moveCoven
@@ -341,14 +343,15 @@ struct ShellRootView: View {
     }
 
     /// Opens what the switcher was asked for, now that its sheet has gone.
+    /// A place is not opened over where the person went meanwhile (New
+    /// Thread from a keyboard, say).
     private func runSwitcherFollowUp() {
-        let followUp = switcherFollowUp
+        guard let followUp = switcherFollowUp else { return }
         switcherFollowUp = nil
-        switch followUp {
+        switch followUp.kind {
         case .createCoven: showCreateCoven = true
-        case .settings: openSettings(.settings)
-        case .activity: navigator.openPersonPlace(.activity)
-        case nil: break
+        case .settings: if navigator.isStill(at: followUp.askedAt) { openSettings(.settings) }
+        case .activity: if navigator.isStill(at: followUp.askedAt) { navigator.openPersonPlace(.activity) }
         }
     }
 

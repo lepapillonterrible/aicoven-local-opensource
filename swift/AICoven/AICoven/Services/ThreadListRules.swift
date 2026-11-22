@@ -64,10 +64,11 @@ nonisolated enum ThreadListRules {
             .sorted { $0.repliedAt == $1.repliedAt ? $0.thread.id < $1.thread.id : $0.repliedAt > $1.repliedAt }
     }
 
-    /// What a reply's row says under the thread's title: who replied.
+    /// What a reply's row says under the thread's title: who replied. A
+    /// thread with no agent of its own is answered by Strix.
     static func replyDetail(agentName: String?) -> String {
         let name = agentName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return name.isEmpty ? "New reply" : "\(name) replied"
+        return "\(name.isEmpty ? "Strix" : name) replied"
     }
 
     /// The threads a search for `query` shows: those whose title, as a row

@@ -19,11 +19,15 @@ struct ActivityView: View {
 
     static let loadFailure = "Couldn't load Activity."
 
+    /// The groups, once the threads are read.
+    private var groups: ActivityGroups? {
+        model.shown.map { ActivityGroups.make(threads: $0, activity: activities.activity, unreadReplyAt: activities.unreadReplyAt) }
+    }
+
     var body: some View {
         ScrollView {
             Group {
-                if let threads = model.shown {
-                    let groups = ActivityGroups.make(threads: threads, activity: activities.activity, unreadReplyAt: activities.unreadReplyAt)
+                if let groups {
                     if horizontalSizeClass == .compact {
                         stacked(groups)
                     } else if isPadLayout {
@@ -54,8 +58,17 @@ struct ActivityView: View {
         // A thread made, renamed, archived or deleted, or a message
         // stored: the threads are read again.
         .onReceive(NotificationCenter.default.publisher(for: ThreadService.threadUsed)) { _ in reload() }
+        .onReceive(NotificationCenter.default.publisher(for: ThreadService.threadChanged)) { _ in reload() }
         .onReceive(NotificationCenter.default.publisher(for: .didCreateThread)) { _ in reload() }
         .onReceive(NotificationCenter.default.publisher(for: .didDeleteThread)) { _ in reload() }
+        // Said to VoiceOver while the page is on screen: what newly waits
+        // for the person, and each reply that newly finished.
+        .onChange(of: groups) { old, new in
+            guard isOnScreen, let old, let new else { return }
+            for words in ActivityGroups.announcements(from: old, to: new) {
+                AccessibilityNotification.Announcement(words).post()
+            }
+        }
         .onChange(of: model.loadFailed) { _, failed in
             if isOnScreen, failed, model.shown == nil { AccessibilityNotification.Announcement(Self.loadFailure).post() }
         }

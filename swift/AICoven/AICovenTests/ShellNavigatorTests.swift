@@ -282,6 +282,13 @@ final class ShellNavigatorTests: XCTestCase {
         XCTAssertEqual(navigator.sidebarItem, .thread("s1"))
         XCTAssertEqual(navigator.phonePath, [.place])
 
+        // Asked for in the switcher's sheet, it is not opened over where the person went before the sheet had gone.
+        let asked = navigator.placeGeneration
+        XCTAssertTrue(navigator.isStill(at: asked))
+        navigator.requestNewThread()
+        XCTAssertFalse(navigator.isStill(at: asked), "The person moved meanwhile")
+        navigator.open(thread("s1", covenID: nil))
+
         // The scope on screen, chosen again, leaves it too; so does going back on a phone.
         navigator.openPlace(.activity)
         navigator.select(.strix)

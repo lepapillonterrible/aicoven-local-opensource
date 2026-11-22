@@ -77,6 +77,27 @@ final class ActivityTests: XCTestCase {
         XCTAssertEqual(ActivityRowMark.words(isWaiting: false, hasUnread: false), "")
     }
 
+    func testWhatNewlyWaitsOrFinishedIsSaidAloud_notATurnsChangingWords() {
+        let threads = [thread("asks", usedAt: 40), thread("broke", usedAt: 30), thread("works", usedAt: 20), thread("replied", usedAt: 10)]
+        func groups(_ activity: [String: ConversationActivity]) -> ActivityGroups {
+            ActivityGroups.make(threads: threads, activity: activity, unreadReplyAt: [:])
+        }
+        let before = groups(["works": .moving("Reading"), "broke": .broken("x")])
+        let after = groups(["works": .moving("Writing"), "broke": .broken("x"), "asks": .waiting("Needs your OK"), "replied": .unread])
+        XCTAssertEqual(
+            ActivityGroups.announcements(from: before, to: after),
+            ["Needs your OK: Asks", "Strix replied: Replied"],
+            "What was already there is not said again, nor that a turn's words changed"
+        )
+        XCTAssertEqual(ActivityGroups.announcements(from: after, to: after), [])
+        XCTAssertEqual(ActivityGroups.announcements(from: groups([:]), to: groups(["broke": .broken("x")])), ["Stopped on a problem: Broke"])
+        XCTAssertEqual(ActivityGroups.announcements(from: groups([:]), to: groups(["broke": .paused])), ["Paused: Broke"])
+        // A turn that needed an OK and then stopped on a problem is another thing that waits.
+        XCTAssertEqual(
+            ActivityGroups.announcements(from: groups(["asks": .waiting("x")]), to: groups(["asks": .broken("x")])), ["Stopped on a problem: Asks"]
+        )
+    }
+
     // MARK: - The model
 
     func testTheThreadsShownAreTheSignedInAccounts() async {
