@@ -142,6 +142,15 @@ final class StrixAgentTests: XCTestCase {
         XCTAssertNil(saving.providerAccountId)
         XCTAssertEqual(saving.mostSteps, 5)
 
+        // Strix on a connection with no model named (none listed yet, and none to type without the upgrade):
+        // with what it runs on left out of the save, the rest of the form saves.
+        var unnamed = AgentDraft(strix: LocalStrixSettings(systemPrompt: "Be brief.", provider: "anthropic", providerAccountId: "acct"), appSteps: 5)
+        XCTAssertNil(unnamed.saving(usesTemperature: true, usesMaxTokens: true, usesSteps: true, needsConnection: false))
+        unnamed.accountId = nil
+        let kept = try XCTUnwrap(unnamed.saving(usesTemperature: true, usesMaxTokens: true, usesSteps: true, needsConnection: false))
+        XCTAssertEqual([kept.provider, kept.model], ["", ""], "What it runs on stays as stored")
+        XCTAssertEqual(kept.temperature, 0.7)
+
         // With a connection chosen it is saved as an agent is: a model's connection needs a model.
         draft.accountId = "acct"
         draft.provider = "anthropic"

@@ -105,8 +105,13 @@ struct AgentFormView: View {
     }
 
     /// What Save would store; nil where the form cannot be saved as it is.
+    /// Where what Strix runs on is not the person's to choose, it is left
+    /// exactly as stored: the rest of the form saves whatever it runs on,
+    /// or nothing yet.
     private var saving: AgentSaving? {
-        draft.saving(
+        var draft = draft
+        if !choosesWhatItRunsOn { draft.accountId = nil }
+        return draft.saving(
             usesTemperature: usesTemperature, usesMaxTokens: usesMaxTokens, usesSteps: usesSteps,
             needsModel: !runsItself, needsConnection: !isStrix
         )
@@ -159,6 +164,8 @@ struct AgentFormView: View {
     }
 
     private func readOtherModels() async {
+        // They fill the Runs on menu: nothing to read where it is not shown.
+        guard choosesWhatItRunsOn else { return }
         for account in choices.accounts
             where account.id != draft.accountId && choices.models(for: account.id).isEmpty
             && !choices.runsItself(accountId: account.id, provider: account.provider) {
