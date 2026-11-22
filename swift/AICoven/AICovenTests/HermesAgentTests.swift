@@ -709,6 +709,35 @@ final class HermesAgentTests: XCTestCase {
         XCTAssertEqual(reports.all.last?.answer, "From Hermes.")
         XCTAssertEqual(HermesStub.requests.first?.session, threadID)
         XCTAssertEqual(model.calls, 0, "No model answered for it")
+
+        // With Hermes no longer connected, the agent's turn is answered as Strix's are: by the model chosen in Settings.
+        defaults.set("gpt", forKey: UserScope.scopedKey("openai_model"))
+        addTeardownBlock { UserDefaults.standard.removeObject(forKey: UserScope.scopedKey("openai_model")) }
+        let better = CountingModel()
+        let withoutHermes = ChatService(
+            contextBuilder: ContextBuilder(limits: .init(maxRecentMessages: 4, maxRecentMemories: 4)),
+            modelRouter: HeuristicModelRouter(availableModels: [
+                ModelDescriptor(
+                    providerID: "anthropic", modelID: "better", maxContextTokens: 200_000,
+                    supportsTools: true, supportsEmbeddings: false, costClass: .expensive
+                ),
+                ModelDescriptor(
+                    providerID: "openai", modelID: "gpt", maxContextTokens: 4096,
+                    supportsTools: false, supportsEmbeddings: false, costClass: .cheap
+                ),
+            ]),
+            llmClients: ["openai": model, "anthropic": better],
+            threadStore: ThreadRepository.shared,
+            toolService: ToolService.shared,
+            shouldAutoRefreshEnvironment: false,
+            hermesAgent: { nil }
+        )
+        let requestsBefore = HermesStub.requests.count
+        // These stand-in models answer with a failure: which of them was asked is what is looked at.
+        try? await withoutHermes.streamMessage(threadId: threadID, message: "Hello again", roleId: scout.id, onStateChange: { _ in })
+        XCTAssertEqual(HermesStub.requests.count, requestsBefore, "Hermes is not asked")
+        XCTAssertGreaterThan(model.calls, 0, "The model chosen in Settings is asked")
+        XCTAssertEqual(better.calls, 0, "Not whichever model is ranked highest")
         await DataEncryptionService.shared.lock()
     }
 

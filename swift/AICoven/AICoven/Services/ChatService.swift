@@ -1511,7 +1511,9 @@ actor ChatService {
     }
 
     /// The provider and model a turn is for: the role's own where it has
-    /// them (an agent of a coven), else the person's choice in Settings.
+    /// them (an agent of a coven; one on Hermes or on OpenClaw through its
+    /// Gateway has a provider and no model), else the person's choice in
+    /// Settings.
     /// With them, what the turn takes from the agent's settings: the
     /// app's own for a turn that is for no agent, or whose agent cannot
     /// be read.
@@ -1520,11 +1522,18 @@ actor ChatService {
         let settings = role.map(AgentTurnSettings.init(of:)) ?? .standard
         // An agent runs on its own provider and model. One on Hermes, or
         // on OpenClaw through its Gateway, names no model: the agent there
-        // runs the turn itself.
+        // runs the turn itself. Where that agent is not connected, the
+        // turn is answered as one for no agent's model is: by the
+        // person's choice in Settings.
         if let role,
            let roleProvider = role.provider?.lowercased(), !roleProvider.isEmpty {
             let roleModel = role.model ?? ""
-            if !roleModel.isEmpty || ["hermes", "openclaw"].contains(roleProvider) {
+            let runsItself = switch roleProvider {
+            case "hermes": hermesAgent() != nil
+            case "openclaw": openClawTurn("") != nil
+            default: false
+            }
+            if !roleModel.isEmpty || runsItself {
                 #if DEBUG
                 AppErrorReporter.log(message: "Role resolved provider=\(roleProvider) model=\(roleModel)", context: "ChatService.streamMessage.roleResolution")
                 #endif
