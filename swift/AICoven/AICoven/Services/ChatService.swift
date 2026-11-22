@@ -187,6 +187,8 @@ actor ChatService {
     /// Which connections the thread's coven lets its agents use; injected
     /// for tests.
     private let covenConnections: @Sendable (_ threadID: String) async -> CovenConnections?
+    /// Who is signed in, asked each time it matters; injected for tests.
+    private let signedIn: @Sendable () async -> String
     /// The threads whose latest turn was an agent's run (Hermes, or
     /// OpenClaw through its Gateway). What follows a turn (the thread's
     /// summary, and the memory proposed from it) is made by one of the
@@ -209,7 +211,8 @@ actor ChatService {
         openClawTurn: @escaping @Sendable (_ threadID: String) -> OpenClawTurn? = { threadID in
             ProviderAccountService.openClawGateway().map { OpenClawTurn(address: $0.address, token: $0.token, threadID: threadID) }
         },
-        covenConnections: @escaping @Sendable (_ threadID: String) async -> CovenConnections? = { await CovenService.shared.connections(forThread: $0) }
+        covenConnections: @escaping @Sendable (_ threadID: String) async -> CovenConnections? = { await CovenService.shared.connections(forThread: $0) },
+        signedIn: @escaping @Sendable () async -> String = { await UserScope.currentUserID }
     ) {
         self.contextBuilder = contextBuilder
         self.modelRouter = modelRouter
@@ -220,6 +223,20 @@ actor ChatService {
         self.hermesAgent = hermesAgent
         self.openClawTurn = openClawTurn
         self.covenConnections = covenConnections
+        self.signedIn = signedIn
+    }
+
+    /// What a turn that was cut off this way says in its thread.
+    static let accountChangedMessage = "Another account signed in before this reply was finished, so it was stopped."
+
+    /// Throws unless the account a turn began as is still the one signed
+    /// in. What a turn has gathered (its thread, its memories, what its
+    /// tools read) is that account's, and what is gathered for its next
+    /// request is gathered as whoever is signed in by then: asked just
+    /// before each request, so that nothing of either account is sent to a
+    /// provider through the other's connection.
+    private func requireStill(_ account: String) async throws {
+        guard await signedIn() == account else { throw RepositoryError.accountChanged }
     }
 
     /// Ensure that we have an up-to-date LLM environment based on the latest
@@ -326,6 +343,8 @@ actor ChatService {
         var state = TurnState(threadId: threadId)
         state.phase = .starting
         onStateChange(state)
+        // The account the turn is begun as: its requests are that account's.
+        let turnAccount = await signedIn()
         // Ensure we see any provider keys and live model lists that may have
         // been added or changed after ChatService was first initialized.
         await ensureEnvironment()
@@ -347,6 +366,9 @@ actor ChatService {
             let earlier = try await loadMessages(threadId: threadId, limit: Self.hermesHistoryLimit)
             let said = await message + AttachmentContext.block(for: attachments ?? [])
             let toldFirst = try await contextBuilder.preface(threadID: threadId, question: message, agent: agent)
+            // What was gathered for the run is the turn's account's: the
+            // run is not started once another has signed in.
+            try await requireStill(turnAccount)
             try await HermesTurn(client: hermes, threadID: threadId).run(
                 input: said,
                 history: Self.hermesHistory(from: earlier, toldFirst: toldFirst),
@@ -362,6 +384,7 @@ actor ChatService {
             let earlier = try await loadMessages(threadId: threadId, limit: Self.hermesHistoryLimit)
             let said = await message + AttachmentContext.block(for: attachments ?? [])
             let toldFirst = try await contextBuilder.preface(threadID: threadId, question: message, agent: agent)
+            try await requireStill(turnAccount)
             try await turn.run(
                 message: OpenClawTurn.message(
                     said, after: Self.hermesHistory(from: earlier).map { ($0.role, $0.content) }, toldFirst: toldFirst
@@ -483,11 +506,9 @@ actor ChatService {
         let maxToolRefusalRetries = 1
 
         // ── Tool result compression threshold ────────────────────────────
-        // Once toolContextLog exceeds this length (chars), older results
-        // are truncated to prevent context overflow. Use a lower limit on
-        // iPhone to reduce peak memory alongside the MLX model.
+        // What the tools tell is kept whole, result by result, in the room
+        // the turn has for it; the oldest are left out first (`ToolResults`).
         let isMobileDevice = Self.isMobileDevice
-        let toolContextCompressThreshold = isMobileDevice ? 2000 : 3000
 
         // Track initial message sent
         AnalyticsService.shared.trackMessageSent(threadId: threadId, hasAttachments: !(attachments?.isEmpty ?? true), attachmentCount: attachments?.count ?? 0)
@@ -679,6 +700,11 @@ actor ChatService {
             remainingToolSteps = 0
         }
 
+        // The results so far, each whole: what was gathered before the
+        // loop is the first of them.
+        var toolResults: [String] = toolContextLog.isEmpty ? [] : [toolContextLog]
+        let toolResultRoom = ToolResults.room(isLocalModel: isLocalModel, isMobileDevice: isMobileDevice)
+
         // First phase: while we still have tool budget, let the model decide
         // whether to call a tool. Each successful tool invocation consumes one
         // step from the budget; a direct natural-language reply ends the loop.
@@ -714,7 +740,8 @@ actor ChatService {
                 images: attached.pictures + (turnPictures?.images ?? []),
                 maxContextTokens: promptBudget,
                 toolConfig: toolConfig,
-                agent: agent
+                agent: agent,
+                as: turnAccount
             )
 
             do {
@@ -734,6 +761,7 @@ actor ChatService {
                     stream: false,
                     tools: nativeTools
                 )
+                try await requireStill(turnAccount)
                 let response = try await client.completeChat(
                     messages: contextMessages,
                     model: descriptor.modelID,
@@ -835,19 +863,10 @@ actor ChatService {
                     state.bumpVersion()
                     onStateChange(state)
                     if let block = contextBlock {
-                        if toolContextLog.isEmpty {
-                            toolContextLog = block
-                        } else {
-                            toolContextLog += "\n\n" + block
-                        }
-                    }
-
-                    // ── Tool result compression ──────────────────────────
-                    // Prevent context overflow when many tool steps run.
-                    if toolContextLog.count > toolContextCompressThreshold {
-                        let keep = toolContextCompressThreshold / 2
-                        let suffix = String(toolContextLog.suffix(keep))
-                        toolContextLog = "... (older tool results truncated)\n\n" + suffix
+                        // Each result whole; the oldest left out first
+                        // when there are more than the turn has room for.
+                        toolResults.append(block)
+                        toolContextLog = ToolResults.text(of: toolResults, room: toolResultRoom)
                     }
                     // Loop again with updated tool context.
                     continue
@@ -894,11 +913,8 @@ actor ChatService {
                         state.bumpVersion()
                         onStateChange(state)
                         if let block = contextBlock {
-                            if toolContextLog.isEmpty {
-                                toolContextLog = block
-                            } else {
-                                toolContextLog += "\n\n" + block
-                            }
+                            toolResults.append(block)
+                            toolContextLog = ToolResults.text(of: toolResults, room: toolResultRoom)
                         }
                         // Loop again with updated tool context.
                         continue
@@ -924,9 +940,11 @@ actor ChatService {
                         AppErrorReporter.log(message: "Premature stop detected (\(continuationCount)/\(maxContinuationPrompts)); injecting continuation prompt.", context: "ChatService.streamMessage.continuation")
                         #endif
                         // Append the model's partial response and a nudge
-                        if !toolContextLog.isEmpty { toolContextLog += "\n\n" }
-                        toolContextLog += "[Assistant partial response]\n" + rawText
-                        toolContextLog += "\n\n[System] You indicated there is more work to do but didn't call any tools. Please continue with the next step. Use the appropriate tool to proceed."
+                        toolResults.append(
+                            "[Assistant partial response]\n" + rawText
+                                + "\n\n[System] You indicated there is more work to do but didn't call any tools. Please continue with the next step. Use the appropriate tool to proceed."
+                        )
+                        toolContextLog = ToolResults.text(of: toolResults, room: toolResultRoom)
                         continue
                     }
 
@@ -979,7 +997,8 @@ actor ChatService {
                             onStateChange(state)
                             if let block = contextBlock {
                                 // Replace context with fresh MCP results.
-                                toolContextLog = block
+                                toolResults = [block]
+                                toolContextLog = ToolResults.text(of: toolResults, room: toolResultRoom)
                             }
                             // Loop again — the model now has real tool
                             // results and should produce a useful answer.
@@ -987,7 +1006,8 @@ actor ChatService {
                         } else {
                             // No MCP tool matched — inject a correction
                             // prompt as a last-resort fallback.
-                            toolContextLog = "[System CORRECTION] You have tools. Look at AVAILABLE TOOLS in your instructions and use them. Respond with ONLY a JSON tool call."
+                            toolResults = ["[System CORRECTION] You have tools. Look at AVAILABLE TOOLS in your instructions and use them. Respond with ONLY a JSON tool call."]
+                            toolContextLog = ToolResults.text(of: toolResults, room: toolResultRoom)
                             continue
                         }
                     }
@@ -1005,6 +1025,11 @@ actor ChatService {
                 if let localError = error as? LocalChatError {
                     msg = localError.localizedDescription
                     errorCode = localError.analyticsCode
+                } else if case RepositoryError.accountChanged = error {
+                    // The turn was another account's by the time it would
+                    // have asked again: nothing more of it was sent.
+                    msg = Self.accountChangedMessage
+                    errorCode = "account_changed"
                 } else {
                     msg = error.localizedDescription
                     errorCode = "unknown_error"
@@ -1019,7 +1044,9 @@ actor ChatService {
 
                 state.phase = .finalizing
                 state.status = .failed
-                state.answer = "Error: \(msg)"
+                // Said as it is where the turn was cut off for its
+                // account; any other failure is marked as an error.
+                state.answer = msg == Self.accountChangedMessage ? msg : "Error: \(msg)"
                 state.bumpVersion()
                 onStateChange(state)
                 return
@@ -1092,12 +1119,16 @@ actor ChatService {
                 images: attached.pictures + (turnPictures?.images ?? []),
                 maxContextTokens: promptBudget,
                 toolConfig: finalToolConfig,
-                agent: agent
+                agent: agent,
+                as: turnAccount
             )
 
             // A stopped turn does not ask for its answer.
             try Task.checkCancellation()
             do {
+                // Whoever began the turn is still signed in, or nothing
+                // more is sent: said like any other failure of the answer.
+                try await requireStill(turnAccount)
                 // If the client supports streaming, use token-by-token delivery
                 // for the final answer so the user sees text appear in real time.
                 if let streamingClient = client as? StreamingLLMClient {
@@ -1166,6 +1197,11 @@ actor ChatService {
                 if let localError = error as? LocalChatError {
                     msg = localError.localizedDescription
                     errorCode = localError.analyticsCode
+                } else if case RepositoryError.accountChanged = error {
+                    // The turn was another account's by the time it would
+                    // have asked again: nothing more of it was sent.
+                    msg = Self.accountChangedMessage
+                    errorCode = "account_changed"
                 } else {
                     msg = error.localizedDescription
                     errorCode = "unknown_error"
@@ -1180,7 +1216,9 @@ actor ChatService {
 
                 state.phase = .finalizing
                 state.status = .failed
-                state.answer = "Error: \(msg)"
+                // Said as it is where the turn was cut off for its
+                // account; any other failure is marked as an error.
+                state.answer = msg == Self.accountChangedMessage ? msg : "Error: \(msg)"
                 state.bumpVersion()
                 onStateChange(state)
                 return
