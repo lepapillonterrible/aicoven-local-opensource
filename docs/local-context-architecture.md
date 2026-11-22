@@ -44,8 +44,8 @@ There is no mandatory backend: users bring their own LLM provider API keys or lo
   - `memories(in:limit:offset:)` reads a page of one place's entries for the Memory page; a turn's memories are found by `EmbeddingService.searchRelevantMemories`, a hybrid vector/lexical search over the newest entries of the places its thread reads.
   - `createMemory(...)`, `updateMemory(...)`, and `deleteMemory(...)` manage encrypted chunks and always recompute embeddings when text changes.
 - Suggested memory writes from chat/agents are stored in the `memory_proposals` table via `MemoryProposalRecord` / `MemoryProposalRepository`.
-  - `listProposals(...)` powers the **Memory Proposals** UI for reviewing pending writes, one scope at a time (a coven's, or those made in no coven).
-  - When a proposal is approved via `reviewProposal(...)`, its content is embedded (`EmbeddingService.embedText`) and stored in `memory_chunks` through the memory store, so "Approve" behaves as "save this as memory" in the local-only client; `saveProposalAsMemory(...)` does the same with the text as the person edited it. A proposal is settled once, as the account that reviewed it.
+  - A proposal is asked of the person beside its thread once its turn has ended (`MemoryProposalQuestions`). One nobody has answered waits on Activity, under Waiting for you: `listProposals(...)` reads the latest pending ones, one scope at a time (a coven's, or those made in no coven), for `ActivityProposals`. Memory itself has no list of proposals.
+  - When a proposal is approved via `reviewProposal(...)`, its content is embedded (`EmbeddingService.embedText`) and stored in `memory_chunks` through the memory store, so "Approve" behaves as "save this as memory" in the local-only client. A proposal is settled once, as the account that reviewed it.
 
 ### LLM Integration
 

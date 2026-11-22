@@ -401,26 +401,6 @@ final class AnalyticsService {
         ])
     }
 
-    func trackMemoryProposalViewed() {
-        logEventIfEnabled("memory_proposal_viewed", parameters: nil)
-    }
-
-    func trackMemoryProposalApproved(proposalId: String) {
-        // Hash proposal ID to anonymize user's memory data.
-        guard let hashedProposalId = hashIdentifier(proposalId) else { return }
-        logEventIfEnabled("memory_proposal_approved", parameters: [
-            "proposal_id_hash": hashedProposalId
-        ])
-    }
-
-    func trackMemoryProposalRejected(proposalId: String) {
-        // Hash proposal ID to anonymize user's memory data.
-        guard let hashedProposalId = hashIdentifier(proposalId) else { return }
-        logEventIfEnabled("memory_proposal_rejected", parameters: [
-            "proposal_id_hash": hashedProposalId
-        ])
-    }
-
     // MARK: - Navigation Events
 
     func trackTabOpened(tabType: String) {
