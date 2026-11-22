@@ -400,6 +400,12 @@ class AuthService: ObservableObject {
                     arguments: [userId]
                 )
 
+                // Delete user's skills
+                try db.execute(
+                    sql: "DELETE FROM skills WHERE user_id = ?",
+                    arguments: [userId]
+                )
+
                 // Delete user's roles (cascade from covens may handle some)
                 try db.execute(
                     sql: "DELETE FROM roles WHERE user_id = ?",
