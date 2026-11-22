@@ -366,6 +366,9 @@ actor ChatService {
             let earlier = try await loadMessages(threadId: threadId, limit: Self.hermesHistoryLimit)
             let said = await message + AttachmentContext.block(for: attachments ?? [])
             let toldFirst = try await contextBuilder.preface(threadID: threadId, question: message, agent: agent)
+            // What was gathered for the run is the turn's account's: the
+            // run is not started once another has signed in.
+            try await requireStill(turnAccount)
             try await HermesTurn(client: hermes, threadID: threadId).run(
                 input: said,
                 history: Self.hermesHistory(from: earlier, toldFirst: toldFirst),
@@ -381,6 +384,7 @@ actor ChatService {
             let earlier = try await loadMessages(threadId: threadId, limit: Self.hermesHistoryLimit)
             let said = await message + AttachmentContext.block(for: attachments ?? [])
             let toldFirst = try await contextBuilder.preface(threadID: threadId, question: message, agent: agent)
+            try await requireStill(turnAccount)
             try await turn.run(
                 message: OpenClawTurn.message(
                     said, after: Self.hermesHistory(from: earlier).map { ($0.role, $0.content) }, toldFirst: toldFirst
@@ -1040,7 +1044,9 @@ actor ChatService {
 
                 state.phase = .finalizing
                 state.status = .failed
-                state.answer = "Error: \(msg)"
+                // Said as it is where the turn was cut off for its
+                // account; any other failure is marked as an error.
+                state.answer = msg == Self.accountChangedMessage ? msg : "Error: \(msg)"
                 state.bumpVersion()
                 onStateChange(state)
                 return
@@ -1210,7 +1216,9 @@ actor ChatService {
 
                 state.phase = .finalizing
                 state.status = .failed
-                state.answer = "Error: \(msg)"
+                // Said as it is where the turn was cut off for its
+                // account; any other failure is marked as an error.
+                state.answer = msg == Self.accountChangedMessage ? msg : "Error: \(msg)"
                 state.bumpVersion()
                 onStateChange(state)
                 return

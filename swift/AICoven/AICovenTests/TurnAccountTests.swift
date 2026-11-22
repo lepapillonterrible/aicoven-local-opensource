@@ -130,7 +130,7 @@ final class TurnAccountTests: XCTestCase {
         try await chat(with: model, signedIn: signedIn).streamMessage(threadId: thread, message: "What time is it?", onStateChange: { states.add($0) })
         XCTAssertEqual(model.timesAsked, 1, "What the tool told is not sent: the model is not asked again")
         XCTAssertEqual(states.last?.status, .failed, "The turn ends there")
-        XCTAssertEqual(states.last?.answer, "Error: " + ChatService.accountChangedMessage)
+        XCTAssertEqual(states.last?.answer, ChatService.accountChangedMessage, "In the same words wherever the turn was cut off")
     }
 
     func testTheFinalAnswerIsNotAskedForOnceAnotherAccountHasSignedIn_streamedOrNot() async throws {
@@ -154,7 +154,7 @@ final class TurnAccountTests: XCTestCase {
             )
             XCTAssertEqual(model.timesAsked, 1, "The final answer is not asked for (streams: \(streams))")
             XCTAssertEqual(states.last?.status, .failed)
-            XCTAssertEqual(states.last?.answer, "Error: " + ChatService.accountChangedMessage, "Said plainly (streams: \(streams))")
+            XCTAssertEqual(states.last?.answer, ChatService.accountChangedMessage, "Said plainly (streams: \(streams))")
         }
     }
 
