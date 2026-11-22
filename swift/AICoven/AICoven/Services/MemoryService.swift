@@ -196,9 +196,9 @@ actor MemoryService {
         )
     }
 
-    /// List memory proposals from the local SQLite store. The default
-    /// `status = "pending"` matches the UI's initial filter; passing "all"
-    /// disables status filtering. With a `limit`, the latest that many.
+    /// List a scope's memory proposals from the local SQLite store: those
+    /// still pending by default, which is what waits on Activity; "all"
+    /// for every status. With a `limit`, the latest that many.
     func listProposals(
         covenId: String?,
         status: String = "pending",
