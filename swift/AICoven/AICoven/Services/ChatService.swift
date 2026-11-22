@@ -483,11 +483,9 @@ actor ChatService {
         let maxToolRefusalRetries = 1
 
         // ── Tool result compression threshold ────────────────────────────
-        // Once toolContextLog exceeds this length (chars), older results
-        // are truncated to prevent context overflow. Use a lower limit on
-        // iPhone to reduce peak memory alongside the MLX model.
+        // What the tools tell is kept whole, result by result, in the room
+        // the turn has for it; the oldest are left out first (`ToolResults`).
         let isMobileDevice = Self.isMobileDevice
-        let toolContextCompressThreshold = isMobileDevice ? 2000 : 3000
 
         // Track initial message sent
         AnalyticsService.shared.trackMessageSent(threadId: threadId, hasAttachments: !(attachments?.isEmpty ?? true), attachmentCount: attachments?.count ?? 0)
@@ -679,6 +677,11 @@ actor ChatService {
             remainingToolSteps = 0
         }
 
+        // The results so far, each whole: what was gathered before the
+        // loop is the first of them.
+        var toolResults: [String] = toolContextLog.isEmpty ? [] : [toolContextLog]
+        let toolResultRoom = ToolResults.room(isLocalModel: isLocalModel, isMobileDevice: isMobileDevice)
+
         // First phase: while we still have tool budget, let the model decide
         // whether to call a tool. Each successful tool invocation consumes one
         // step from the budget; a direct natural-language reply ends the loop.
@@ -835,19 +838,10 @@ actor ChatService {
                     state.bumpVersion()
                     onStateChange(state)
                     if let block = contextBlock {
-                        if toolContextLog.isEmpty {
-                            toolContextLog = block
-                        } else {
-                            toolContextLog += "\n\n" + block
-                        }
-                    }
-
-                    // ── Tool result compression ──────────────────────────
-                    // Prevent context overflow when many tool steps run.
-                    if toolContextLog.count > toolContextCompressThreshold {
-                        let keep = toolContextCompressThreshold / 2
-                        let suffix = String(toolContextLog.suffix(keep))
-                        toolContextLog = "... (older tool results truncated)\n\n" + suffix
+                        // Each result whole; the oldest left out first
+                        // when there are more than the turn has room for.
+                        toolResults.append(block)
+                        toolContextLog = ToolResults.text(of: toolResults, room: toolResultRoom)
                     }
                     // Loop again with updated tool context.
                     continue
@@ -894,11 +888,8 @@ actor ChatService {
                         state.bumpVersion()
                         onStateChange(state)
                         if let block = contextBlock {
-                            if toolContextLog.isEmpty {
-                                toolContextLog = block
-                            } else {
-                                toolContextLog += "\n\n" + block
-                            }
+                            toolResults.append(block)
+                            toolContextLog = ToolResults.text(of: toolResults, room: toolResultRoom)
                         }
                         // Loop again with updated tool context.
                         continue
@@ -924,9 +915,11 @@ actor ChatService {
                         AppErrorReporter.log(message: "Premature stop detected (\(continuationCount)/\(maxContinuationPrompts)); injecting continuation prompt.", context: "ChatService.streamMessage.continuation")
                         #endif
                         // Append the model's partial response and a nudge
-                        if !toolContextLog.isEmpty { toolContextLog += "\n\n" }
-                        toolContextLog += "[Assistant partial response]\n" + rawText
-                        toolContextLog += "\n\n[System] You indicated there is more work to do but didn't call any tools. Please continue with the next step. Use the appropriate tool to proceed."
+                        toolResults.append(
+                            "[Assistant partial response]\n" + rawText
+                                + "\n\n[System] You indicated there is more work to do but didn't call any tools. Please continue with the next step. Use the appropriate tool to proceed."
+                        )
+                        toolContextLog = ToolResults.text(of: toolResults, room: toolResultRoom)
                         continue
                     }
 
@@ -979,7 +972,8 @@ actor ChatService {
                             onStateChange(state)
                             if let block = contextBlock {
                                 // Replace context with fresh MCP results.
-                                toolContextLog = block
+                                toolResults = [block]
+                                toolContextLog = ToolResults.text(of: toolResults, room: toolResultRoom)
                             }
                             // Loop again — the model now has real tool
                             // results and should produce a useful answer.
@@ -987,7 +981,8 @@ actor ChatService {
                         } else {
                             // No MCP tool matched — inject a correction
                             // prompt as a last-resort fallback.
-                            toolContextLog = "[System CORRECTION] You have tools. Look at AVAILABLE TOOLS in your instructions and use them. Respond with ONLY a JSON tool call."
+                            toolResults = ["[System CORRECTION] You have tools. Look at AVAILABLE TOOLS in your instructions and use them. Respond with ONLY a JSON tool call."]
+                            toolContextLog = ToolResults.text(of: toolResults, room: toolResultRoom)
                             continue
                         }
                     }
