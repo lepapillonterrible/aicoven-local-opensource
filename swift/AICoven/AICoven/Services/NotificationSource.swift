@@ -20,7 +20,11 @@ final class NotificationSource {
         var thread: @Sendable (_ id: String) async -> Thread?
         /// What the scope a thread is in is called: Strix, or its coven.
         var placeName: @Sendable (_ thread: Thread) async -> String
-        var notify: @MainActor (_ event: NotificationEvent, _ thread: Thread, _ placeName: String, _ account: String) async -> Void
+        /// Makes the notification, if what it is about still stands
+        /// (`stands`) at the moment it is made.
+        var notify: @MainActor (
+            _ event: NotificationEvent, _ thread: Thread, _ placeName: String, _ account: String, _ stands: @escaping @MainActor () -> Bool
+        ) async -> Void
         /// A reply finished: the line that offers notifications may be
         /// due.
         var replyFinished: @MainActor (_ thread: Thread, _ account: String) async -> Void
@@ -33,8 +37,8 @@ final class NotificationSource {
                 let covens = await (try? CovenService.shared.loadCovens()) ?? []
                 return covens.first { $0.id == covenID }?.name ?? "A coven"
             },
-            notify: { event, thread, placeName, account in
-                await LocalNotifications.shared.notify(event, in: thread, placeName: placeName, as: account)
+            notify: { event, thread, placeName, account, stands in
+                await LocalNotifications.shared.notify(event, in: thread, placeName: placeName, as: account, ifStill: stands)
             },
             replyFinished: { thread, account in
                 guard !LocalNotifications.shared.appIsInFront else { return }
@@ -130,7 +134,7 @@ final class NotificationSource {
             guard let thread = await dependencies.thread(threadID), thread.userId == account, dependencies.account() == account else { return }
             let placeName = await dependencies.placeName(thread)
             guard dependencies.account() == account, stands() else { return }
-            await dependencies.notify(event, thread, placeName, account)
+            await dependencies.notify(event, thread, placeName, account, stands)
             if case .finished = event {
                 await dependencies.replyFinished(thread, account)
             }

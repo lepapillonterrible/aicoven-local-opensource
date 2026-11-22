@@ -84,6 +84,8 @@ final class LocalNotifications: ObservableObject {
     /// Whether the app is in front: nothing is notified of while it is.
     var appIsInFront = true
 
+    /// Counts the readings of the permission, so that only the latest is kept.
+    private var permissionReads = 0
     private let center: Center
     private let defaults: UserDefaults
     private let signedIn: () -> String
@@ -128,8 +130,14 @@ final class LocalNotifications: ObservableObject {
 
     // MARK: - Permission
 
+    /// Reads this device's permission. Only the latest reading is kept:
+    /// one that was asked for earlier and answers later says nothing.
     func refreshPermission() async {
-        permission = await center.permission()
+        permissionReads += 1
+        let read = permissionReads
+        let answer = await center.permission()
+        guard read == permissionReads else { return }
+        permission = answer
     }
 
     /// Turn on, from the line or from Settings: the system asks the
@@ -176,15 +184,18 @@ final class LocalNotifications: ObservableObject {
     /// Notifies of something in `thread`, which is `account`'s, in the
     /// scope named `placeName`: only while the app is not in front, the
     /// account is the one signed in and wants notifications, and this
-    /// device allows them. Says whether it did.
+    /// device allows them; and only if what it is about still stands
+    /// (`stands`) at the moment it is made. Says whether it did.
     @discardableResult
-    func notify(_ event: NotificationEvent, in thread: Thread, placeName: String, as account: String) async -> Bool {
+    func notify(
+        _ event: NotificationEvent, in thread: Thread, placeName: String, as account: String, ifStill stands: @MainActor () -> Bool = { true }
+    ) async -> Bool {
         guard !appIsInFront, signedIn() == account, thread.userId == account, isOn(for: account) else { return false }
         if permission == nil { await refreshPermission() }
         // Asked again: the wait above may have been long enough for the
-        // person to come back, to turn notifications off, or for another
-        // account to sign in.
-        guard permission == .allowed, !appIsInFront, signedIn() == account, isOn(for: account) else { return false }
+        // person to come back, to turn notifications off, for another
+        // account to sign in, or for what it is about to be over.
+        guard permission == .allowed, !appIsInFront, signedIn() == account, isOn(for: account), stands() else { return false }
         let composed = NotificationComposer.compose(
             event, agentName: thread.agentName, threadTitle: ThreadListRules.title(of: thread), placeName: placeName,
             showsDetails: showsDetails(for: account)

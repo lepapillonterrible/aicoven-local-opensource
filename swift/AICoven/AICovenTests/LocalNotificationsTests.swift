@@ -69,8 +69,10 @@ final class LocalNotificationsTests: XCTestCase {
         var center: LocalNotifications.Center {
             LocalNotifications.Center(
                 permission: { [self] in
+                    // As it is when it is asked for, however long the answer takes.
+                    let answer = permission
                     await readingWaits?.wait()
-                    return permission
+                    return answer
                 },
                 ask: { [self] in
                     asked += 1
@@ -223,6 +225,49 @@ final class LocalNotificationsTests: XCTestCase {
         XCTAssertEqual(system.shown.count, 0, "Nothing is shown after the person turned them off")
     }
 
+    func testWhatItIsAboutBeingOverWhileOneIsOnItsWay_isNotMade() async {
+        let system = System()
+        system.readingWaits = Gate()
+        let notifications = notifications(system)
+        var stillAsked = true
+        // An approval is asked; the permission has not been read yet, so making its notification waits.
+        let making = Task {
+            await notifications.notify(.needsOK(question: "Run this command?"), in: self.thread(), placeName: "Client work", as: "ada") { stillAsked }
+        }
+        await system.readingWaits?.arrived()
+        // Meanwhile it is answered.
+        stillAsked = false
+        await system.readingWaits?.open()
+
+        let made = await making.value
+        XCTAssertFalse(made)
+        XCTAssertEqual(system.shown.count, 0, "Nothing says an OK is needed that no longer is")
+    }
+
+    func testAnOlderReadingOfThePermissionDoesNotUndoANewerOne() async {
+        let system = System()
+        system.permission = .notAsked
+        let gate = Gate()
+        system.readingWaits = gate
+        let notifications = notifications(system)
+
+        // Settings reads the permission (never asked for), and its answer is slow.
+        let older = Task { await notifications.refreshPermission() }
+        await gate.arrived()
+        // Meanwhile the person allows notifications, and that is read.
+        system.permission = .allowed
+        let newer = Task { await notifications.refreshPermission() }
+        await gate.arrived(2)
+        await gate.open()
+        await older.value
+        await newer.value
+
+        XCTAssertEqual(notifications.permission, .allowed)
+        // So the line is not offered again after the system's question was answered.
+        await notifications.offerIfUseful(agentName: "Scout", as: "ada")
+        XCTAssertNil(notifications.offer)
+    }
+
     // MARK: - Asking for the permission
 
     func testWhileTheSystemIsAskingNothingElseAsksOrIsOffered_andTheLineIsGoneOnceItHasAnswered() async {
@@ -311,7 +356,9 @@ final class LocalNotificationsTests: XCTestCase {
                 return threads.first { $0.id == id }
             },
             placeName: { _ in "Client work" },
-            notify: { event, thread, place, account in told.events.append((event, thread.id, place, account)) },
+            notify: { event, thread, place, account, stands in
+                if stands() { told.events.append((event, thread.id, place, account)) }
+            },
             replyFinished: { thread, _ in told.finished.append(thread.id) }
         ))
     }
