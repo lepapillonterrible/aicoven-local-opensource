@@ -7,8 +7,11 @@ import SwiftUI
 /// compact width, and in an iPad pane too narrow for both, they stack.
 struct ActivityView: View {
     @ObservedObject var navigator: ShellNavigator
-    /// The person's covens, which name each row's place.
+    /// The person's covens, which name each row's place, and whether
+    /// they have been read: until then it is not known where proposals
+    /// may wait.
     let covens: [Coven]
+    var covensAreKnown = true
 
     @StateObject private var model = ActivityModel()
     @ObservedObject private var activities = ThreadActivities.shared
@@ -63,8 +66,13 @@ struct ActivityView: View {
         .task { await model.load() }
         // The proposals that wait: read again when the covens are known,
         // and when a question about one starts or ends.
-        .task(id: ProposalReading(covens: covens.map(\.id), asking: questions.asked)) {
-            await proposals.load(covens: covens.map(\.id))
+        .task(id: ProposalReading(covens: covensAreKnown ? covens.map(\.id) : nil, asked: questions.asked)) {
+            await proposals.show(covens: covensAreKnown ? covens.map(\.id) : nil, asked: questions.asked)
+        }
+        // Said to VoiceOver while the page is on screen: a reading of the
+        // proposals that failed, an answer kept or not, one that newly waits.
+        .onChange(of: proposals.announcement) { _, said in
+            if isOnScreen, let said { AccessibilityNotification.Announcement(said.words).post() }
         }
         .onAppear { isOnScreen = true }
         .onDisappear { isOnScreen = false }
@@ -182,7 +190,7 @@ struct ActivityView: View {
                         .font(.aicovenBodySmall)
                         .foregroundStyle(Color.aicovenError)
                     Button("Try again") {
-                        Task { await proposals.load(covens: covens.map(\.id)) }
+                        Task { await proposals.load() }
                     }
                     .buttonStyle(.bordered)
                     .accessibilityLabel("Try loading memory proposals again")
@@ -199,10 +207,9 @@ struct ActivityView: View {
     private func proposalRow(_ proposal: MemoryProposal) -> some View {
         let coven = proposal.covenId.flatMap { id in covens.first { $0.id == id } }
         let approval = ActivityProposals.question(about: proposal, in: proposal.covenId == nil ? "Strix" : coven?.name ?? "a coven")
-        let covenIDs = covens.map(\.id)
         func answer(_ approve: Bool) {
             let account = UserScope.currentUserID
-            Task { await proposals.answer(proposal, approve: approve, covens: covenIDs, as: account) }
+            Task { await proposals.answer(proposal, approve: approve, as: account) }
         }
         return VStack(alignment: .leading, spacing: Spacing.xxs) {
             ApprovalBlock(approval: approval, phase: .asking, onApprove: { answer(true) }, onDeny: { answer(false) })
@@ -315,8 +322,9 @@ struct ActivityView: View {
 
 /// What the reading of the proposals that wait depends on.
 private struct ProposalReading: Equatable {
-    let covens: [String]
-    let asking: Set<String>
+    /// The person's covens; nil while they are not known.
+    let covens: [String]?
+    let asked: Set<String>
 }
 
 /// A row's card: the mark, the thread's title, where it is, and one or two

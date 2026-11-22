@@ -7,28 +7,37 @@ import Foundation
 /// on the question, say). Answered here, a proposal is kept where it was
 /// proposed, or rejected, as from the question beside its thread.
 ///
-/// Only its latest reading is shown, and nothing read or said for an
-/// account that is no longer signed in.
+/// Each scope is read on its own: one that cannot be read keeps what was
+/// read of it before and does not keep the others from being read. Only
+/// the latest reading is shown, and nothing read or said for an account
+/// that is no longer signed in.
 @MainActor
 final class ActivityProposals: ObservableObject {
     struct Source {
-        /// A scope's pending proposals, the latest first: a coven's, or,
-        /// for none, those made in no coven. One more than are listed
-        /// at once is enough: it tells that more wait.
-        var pending: (_ covenID: String?) async throws -> [MemoryProposal]
+        /// The latest `limit` of a scope's pending proposals, the latest
+        /// first: a coven's, or, for none, those made in no coven.
+        var pending: (_ covenID: String?, _ limit: Int) async throws -> [MemoryProposal]
         var review: (_ proposalID: String, _ approve: Bool) async throws -> Void
 
         static let live = Source(
-            pending: { try await MemoryService.shared.listProposals(covenId: $0, limit: ActivityProposals.most + 1) },
+            pending: { try await MemoryService.shared.listProposals(covenId: $0, limit: $1) },
             review: { proposalID, approve in
                 _ = try await MemoryService.shared.reviewProposal(proposalId: proposalID, action: approve ? "approve" : "reject")
             }
         )
     }
 
+    /// Something to tell VoiceOver: each time is its own, also one in the
+    /// same words as the time before.
+    struct Announcement: Equatable {
+        let number: Int
+        let words: String
+    }
+
     static let couldNotLoad = "Couldn't load memory proposals."
     static let answerNotKept = "Couldn't save your answer. Try again."
     static let moreWait = "More proposals are waiting. They come in as these are answered."
+    static let newlyWaiting = "A memory proposal is waiting for you."
     /// The most proposals listed at once: the rest come in as these are
     /// answered.
     static let most = 20
@@ -51,21 +60,30 @@ final class ActivityProposals: ObservableObject {
         return approval
     }
 
-    @Published private var proposals: [MemoryProposal] = []
-    /// Whether the account's proposals have been read at least once:
-    /// until then nothing is known of whether any wait.
-    @Published private var wasRead = false
-    /// Whether the latest reading failed.
+    /// What waits in each scope, as last read.
+    @Published private var byScope: [ShellScope: [MemoryProposal]] = [:]
+    /// The scopes read at least once.
+    @Published private var readScopes: Set<ShellScope> = []
+    /// The scopes to look in: Strix and the person's covens; nil until
+    /// the covens are known.
+    @Published private var scopes: [ShellScope]?
+    /// Whether a scope could not be read at the latest reading.
     @Published private(set) var loadFailed = false
     /// The proposals whose answer is on its way: one answer at a time.
     @Published private(set) var answering: Set<String> = []
     /// The proposals whose last answer could not be kept.
     @Published private(set) var notKept: Set<String> = []
+    /// What VoiceOver is told while the page is on screen: a reading that
+    /// failed, an answer kept or not kept, a proposal that newly waits.
+    @Published private(set) var announcement: Announcement?
 
     private let source: Source
     private let signedIn: () -> String
     /// Whose proposals are held.
     private var account: String?
+    /// The proposals a question is asking about, as last told: so many
+    /// more are read, since they are left out of what is listed.
+    private var asked: Set<String> = []
     /// Counts the readings, so that only the latest is shown.
     private var readings = 0
 
@@ -74,9 +92,9 @@ final class ActivityProposals: ObservableObject {
         self.signedIn = signedIn
     }
 
-    /// The proposals to list, the latest first: the signed-in account's,
-    /// without those being asked just now (`asked`), which the approvals'
-    /// spot shows.
+    /// The proposals to list, the latest first across scopes, `most` at
+    /// most: the signed-in account's, without those being asked just now
+    /// (`asked`), which the approvals' spot shows.
     func shown(without asked: Set<String>) -> [MemoryProposal] {
         Array(waiting(without: asked).prefix(Self.most))
     }
@@ -86,63 +104,108 @@ final class ActivityProposals: ObservableObject {
         waiting(without: asked).count > Self.most
     }
 
-    /// Whether the signed-in account's proposals have been read: only
-    /// then can it be said that none waits.
+    /// Whether everything that could hold a proposal of the signed-in
+    /// account's has been read: only then can it be said that none
+    /// waits. Not while the covens are not known.
     var hasRead: Bool {
-        account == signedIn() && wasRead
+        guard account == signedIn(), let scopes else { return false }
+        return readScopes.isSuperset(of: scopes)
     }
 
     private func waiting(without asked: Set<String>) -> [MemoryProposal] {
         guard account == signedIn() else { return [] }
-        return proposals.filter { !asked.contains($0.id) }
+        return byScope.values.joined()
+            .filter { !asked.contains($0.id) }
+            .sorted { $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt > $1.createdAt }
     }
 
-    /// Reads what waits in Strix and in each of `covens`. A reading that
-    /// fails leaves what was read before for the same account, and says
-    /// it failed.
-    func load(covens: [String]) async {
+    /// Where to look (`covens`: the person's, or nil while they are not
+    /// known, when only Strix is read) and what is being asked just now;
+    /// then reads.
+    func show(covens: [String]?, asked: Set<String>) async {
+        scopes = covens.map { [ShellScope.strix] + $0.map(ShellScope.coven) }
+        self.asked = asked
+        await load()
+    }
+
+    /// Reads what waits in each scope, as things stand now. A scope that
+    /// cannot be read keeps what was read of it before, the others are
+    /// read all the same, and the reading says it failed.
+    func load() async {
         readings += 1
         let reading = readings
-        let asked = signedIn()
-        if account != asked {
-            proposals = []
+        let who = signedIn()
+        if account != who {
+            byScope = [:]
+            readScopes = []
             notKept = []
-            wasRead = false
-            account = asked
+            account = who
         }
         loadFailed = false
-        do {
-            var read = try await source.pending(nil)
-            for coven in covens {
-                read += try await source.pending(coven)
+        let looking = scopes ?? [.strix]
+        // One more than is listed tells that more wait; and as many more
+        // as are left out for being asked about.
+        let limit = Self.most + 1 + asked.count
+        var read: [ShellScope: [MemoryProposal]] = [:]
+        var failed = false
+        for scope in looking {
+            do {
+                let pending = try await source.pending(scope.covenID, limit)
+                guard reading == readings, signedIn() == who else { return }
+                read[scope] = pending
+            } catch {
+                guard reading == readings, signedIn() == who else { return }
+                // The kind of failure only.
+                AppErrorReporter.log(message: "Could not read a scope's memory proposals for Activity (\(type(of: error)))", context: "ActivityProposals.load")
+                failed = true
             }
-            guard reading == readings, signedIn() == asked else { return }
-            proposals = read.sorted { $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt > $1.createdAt }
-            wasRead = true
-        } catch {
-            guard reading == readings, signedIn() == asked else { return }
-            // The kind of failure only.
-            AppErrorReporter.log(message: "Could not read the memory proposals for Activity (\(type(of: error)))", context: "ActivityProposals.load")
-            loadFailed = true
+        }
+        let hadRead = hasRead
+        let before = Set(waiting(without: asked).map(\.id))
+        // A scope no longer looked in goes; one that failed keeps what
+        // was read of it before.
+        var next: [ShellScope: [MemoryProposal]] = [:]
+        for scope in looking {
+            next[scope] = read[scope] ?? byScope[scope]
+        }
+        byScope = next
+        readScopes = readScopes.intersection(looking).union(read.keys)
+        loadFailed = failed
+        if failed {
+            announce(Self.couldNotLoad)
+        } else if hadRead, !Set(waiting(without: asked).map(\.id)).isSubset(of: before) {
+            announce(Self.newlyWaiting)
         }
     }
 
     /// Keeps the person's answer to a proposal, as `account`, who gave
     /// it: one answer of a proposal at a time. One that cannot be read is
-    /// not approved as it is. An answer that could not be kept is said
-    /// under the proposal, to that account only.
-    func answer(_ proposal: MemoryProposal, approve: Bool, covens: [String], as account: String) async {
+    /// not approved as it is. What came of it is said aloud; an answer
+    /// that could not be kept is also said under the proposal. Only to
+    /// that account. The proposals are then read again, as things stand
+    /// by then.
+    func answer(_ proposal: MemoryProposal, approve: Bool, as account: String) async {
         guard !approve || !proposal.isUnreadable, answering.insert(proposal.id).inserted else { return }
         defer { answering.remove(proposal.id) }
         notKept.remove(proposal.id)
         do {
             try await source.review(proposal.id, approve)
+            if signedIn() == account {
+                announce((approve ? ToolApprovals.Outcome.approved : .denied).words)
+            }
         } catch ProposalReviewError.alreadyReviewed {
             // It has had its answer elsewhere: read again, it is gone.
         } catch {
             AppErrorReporter.log(message: "An answer about a memory could not be kept (\(type(of: error)))", context: "ActivityProposals.answer")
-            if signedIn() == account { notKept.insert(proposal.id) }
+            if signedIn() == account {
+                notKept.insert(proposal.id)
+                announce(Self.answerNotKept)
+            }
         }
-        await load(covens: covens)
+        await load()
+    }
+
+    private func announce(_ words: String) {
+        announcement = Announcement(number: (announcement?.number ?? 0) + 1, words: words)
     }
 }

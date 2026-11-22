@@ -584,8 +584,10 @@ actor MemoryProposalRepository {
                 if let status {
                     request = request.filter(MemoryProposalRecord.Columns.status == status)
                 }
-                // The latest only, where no more are wanted: none of the
-                // rest is read or opened.
+                // The latest only, where no more are wanted: the rest is
+                // not listed or opened. (What is still stored as text
+                // from before proposals were sealed was sealed above,
+                // all of it, the once.)
                 if let limit {
                     request = request.limit(limit)
                 }
