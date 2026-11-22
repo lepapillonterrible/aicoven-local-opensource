@@ -229,6 +229,19 @@ struct ContextBuilder {
         }
     }
 
+    /// The skills that are on, as a turn is told them, in no more than
+    /// `room` characters: the account's own, for every agent of theirs;
+    /// nil where none is on, or they cannot be read.
+    private func skillsTold(to account: String, room: Int) async -> String? {
+        do {
+            return try await SkillsTold.block(of: SkillRepository.shared.followed(as: account), room: room)
+        } catch {
+            // The kind of failure only.
+            AppErrorReporter.log(message: "The skills could not be read (\(type(of: error)))", context: "ContextBuilder.skillsTold")
+            return nil
+        }
+    }
+
     /// The memories of where a thread is that bear on a question, as a
     /// turn is told them: a heading, then a line for each; none where
     /// there are none, or the thread could not be placed.
@@ -252,9 +265,10 @@ struct ContextBuilder {
     /// What a turn handed to an agent of the person's own (Hermes, an
     /// OpenClaw Gateway) is told before the conversation, as the cloud
     /// app gives such a run its system messages: who answers and how,
-    /// what every agent where the thread is knows, and the memories that
-    /// bear on the question (matched on this device, by their words: the
-    /// question goes to the agent and nowhere else). The agent runs the
+    /// what every agent where the thread is knows, the skills that are
+    /// on, and the memories that bear on the question (matched on this
+    /// device, by their words: the question goes to the agent and nowhere
+    /// else). The agent runs the
     /// turn itself, with its own tools and loop, so nothing of this app's
     /// tools or policies is said.
     /// Nil where there is nothing to say, or another account is signed in
@@ -265,6 +279,9 @@ struct ContextBuilder {
         var parts: [String] = []
         if let knows = await covenContext(in: scope, for: account) {
             parts.append(knows)
+        }
+        if let skills = await skillsTold(to: account, room: SkillsTold.mostCharacters) {
+            parts.append(skills)
         }
         do {
             // Chosen on this device, by their words: a question on its way
@@ -374,6 +391,13 @@ struct ContextBuilder {
         let policies = "Treat all information as private to this device. Do not expose sensitive personal data (PII) from memories unless the user has explicitly brought the same details into the current question. " +
             "When uncertain, ask clarifying questions. When you propose new memories, present them as suggestions for the user to confirm; do not assume they are persisted."
         segments.system.append(LLMMessage(role: .system, content: policies))
+
+        // The skills the person turned on, after the rest of what the
+        // system says, as the cloud app puts them. They take a part of the
+        // prompt only: the rest is the conversation's.
+        if let skills = await skillsTold(to: account, room: SkillsTold.room(promptTokens: maxContextTokens)) {
+            segments.system.append(LLMMessage(role: .system, content: skills))
+        }
 
         // Layer 4: memories – embedding-based when possible. A thread's
         // turns read the memory of where the thread is: its coven's pages,
