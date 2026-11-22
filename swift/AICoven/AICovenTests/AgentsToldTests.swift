@@ -1,6 +1,25 @@
 @testable import AICoven
 import XCTest
 
+/// A provider that embeds, and counts what it was asked to embed.
+private final class CountingEmbedder: LLMClient, @unchecked Sendable {
+    private let lock = NSLock()
+    private var asked: [String] = []
+
+    var questions: [String] {
+        lock.withLock { asked }
+    }
+
+    func completeChat(messages _: [LLMMessage], model: String, options _: ChatOptions) async throws -> LLMChatResponse {
+        LLMChatResponse(message: LLMMessage(role: .assistant, content: ""), providerID: "test", modelID: model, usage: nil)
+    }
+
+    func embed(texts: [String], model _: String) async throws -> [[Float]] {
+        lock.withLock { asked += texts }
+        return Array(repeating: [0, 1], count: texts.count)
+    }
+}
+
 /// What a turn handed to an agent of the person's own (Hermes, an
 /// OpenClaw Gateway) is told before the conversation.
 @MainActor
@@ -19,6 +38,44 @@ final class AgentsToldTests: XCTestCase {
 
     private var account: String {
         UserScope.currentUserID
+    }
+
+    func testTheQuestionOfAnAgentsRunIsNotSentToBeEmbedded_andItsMemoriesAreMatchedByTheirWords() async throws {
+        let embedder = CountingEmbedder()
+        let embedding = EmbeddingService(environment: (
+            models: [ModelDescriptor(
+                providerID: "test", modelID: "embedder", maxContextTokens: 8_000,
+                supportsTools: false, supportsEmbeddings: true, costClass: .cheap
+            )],
+            clients: ["test": embedder]
+        ))
+        let builder = ContextBuilder(embeddingService: embedding, limits: .init(maxRecentMessages: 4, maxRecentMemories: 1))
+        let coven = try await CovenService.shared.createCoven(name: "Told \(UUID().uuidString)")
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await CovenService.shared.deleteCoven(id: coven.id)
+        }
+        let thread = try await ThreadService.shared.createThread(title: "Told \(UUID().uuidString)", covenId: coven.id).id
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await ThreadService.shared.deleteThread(threadId: thread)
+        }
+        for text in ["Dana runs design", "The office closes at six"] {
+            _ = try await MemoryRepository.shared.storeMemory(
+                in: .coven(coven.id), text: text, tags: [], pii: false, createdBy: nil, source: nil, embedding: nil, as: account
+            )
+        }
+        let scout = ContextBuilder.Agent(name: "Scout", instructions: "You review code.", account: account)
+
+        let told = try await builder.preface(threadID: thread, question: "Who runs design?", agent: scout)
+
+        XCTAssertEqual(embedder.questions, [], "The question goes to the agent and nowhere else")
+        XCTAssertEqual(told?.contains("Dana runs design"), true, "The one memory told is the one whose words match, not the newest")
+        XCTAssertEqual(told?.contains("The office closes at six"), false)
+
+        // A model's turn has its question embedded, as before.
+        _ = try await embedding.searchRelevantMemories(query: "Who runs design?", in: [.coven(coven.id)], of: account)
+        XCTAssertEqual(embedder.questions, ["Who runs design?"])
     }
 
     func testAnAgentsRunIsToldWhoAnswers_whatItsScopeKnows_andTheMemoriesThatBearOnTheQuestion() async throws {
@@ -71,7 +128,15 @@ final class AgentsToldTests: XCTestCase {
         let anothers = ContextBuilder.Agent(name: "Scout", instructions: "You review code.", account: "someone-who-signed-out")
         let notTheirs = try await builder.preface(threadID: inEmpty, question: "Who runs design?", agent: anothers)
         XCTAssertNil(notTheirs)
-        // A thread that cannot be placed is told nothing of any scope.
+        // A thread that cannot be placed is told nothing of any scope: not Strix's either.
+        try await CovenContextRepository.shared.setContext("Strix plans the week.", forCoven: nil, as: account)
+        let account = account
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await CovenContextRepository.shared.setContext("", forCoven: nil, as: account)
+        }
+        let inStrix = try await builder.preface(threadID: nil, question: "Who runs design?", agent: scout)
+        XCTAssertEqual(inStrix?.contains("## Coven Context\nStrix plans the week."), true)
         let unplaced = try await builder.preface(threadID: "no-such-thread-\(UUID().uuidString)", question: "Who runs design?", agent: scout)
         XCTAssertEqual(unplaced, scout.systemPrompt)
     }

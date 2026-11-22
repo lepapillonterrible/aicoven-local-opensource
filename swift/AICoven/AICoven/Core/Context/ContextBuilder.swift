@@ -232,14 +232,17 @@ struct ContextBuilder {
     /// The memories of where a thread is that bear on a question, as a
     /// turn is told them: a heading, then a line for each; none where
     /// there are none, or the thread could not be placed.
-    private func memoryLines(in scope: ShellScope?, about question: String, for account: String) async throws -> [String] {
+    private func memoryLines(
+        in scope: ShellScope?, about question: String, for account: String, onDeviceOnly: Bool = false
+    ) async throws -> [String] {
         guard let scope else { return [] }
         let memories = try await embeddingService.searchRelevantMemories(
             query: question,
             in: MemoryPlace.read(inCoven: scope.covenID),
             of: account,
             topK: limits.maxRecentMemories,
-            candidateLimit: limits.maxRecentMemories * 8
+            candidateLimit: limits.maxRecentMemories * 8,
+            onDeviceOnly: onDeviceOnly
         )
         guard !memories.isEmpty else { return [] }
         return ["Relevant memories (for your reasoning; avoid reciting private details verbatim):"]
@@ -250,8 +253,10 @@ struct ContextBuilder {
     /// OpenClaw Gateway) is told before the conversation, as the cloud
     /// app gives such a run its system messages: who answers and how,
     /// what every agent where the thread is knows, and the memories that
-    /// bear on the question. The agent runs the turn itself, with its own
-    /// tools and loop, so nothing of this app's tools or policies is said.
+    /// bear on the question (matched on this device, by their words: the
+    /// question goes to the agent and nowhere else). The agent runs the
+    /// turn itself, with its own tools and loop, so nothing of this app's
+    /// tools or policies is said.
     /// Nil where there is nothing to say, or another account is signed in
     /// by the time it has been read.
     func preface(threadID: String?, question: String, agent: Agent?) async throws -> String? {
@@ -262,7 +267,10 @@ struct ContextBuilder {
             parts.append(knows)
         }
         do {
-            let memories = try await memoryLines(in: scope, about: question, for: account)
+            // Chosen on this device, by their words: a question on its way
+            // to the person's own agent is not sent to another provider to
+            // be embedded first.
+            let memories = try await memoryLines(in: scope, about: question, for: account, onDeviceOnly: true)
             if !memories.isEmpty {
                 parts.append(memories.joined(separator: "\n"))
             }
