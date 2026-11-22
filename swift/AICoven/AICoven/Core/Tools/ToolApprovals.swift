@@ -20,6 +20,11 @@ nonisolated struct ToolApproval: Identifiable, Equatable {
     /// False for something that can only be denied: what asks will not
     /// take an approval, or does not say what it would be an approval of.
     var canApprove = true
+    /// False for a question asked once its turn has ended (whether to
+    /// remember something an agent proposed): no turn waits on it, so it
+    /// marks no thread as waiting to be allowed something, and its answer
+    /// is no line of a turn's.
+    var isOfATurn = true
 
     /// What the thread's line says was approved or denied: the first line
     /// of what will happen (the command, the file, the branch), or its
@@ -172,7 +177,9 @@ final class ToolApprovals: ObservableObject {
                     return
                 }
                 asked[approval.id] = continuation
-                askingThreadIDs.insert(approval.threadID)
+                if approval.isOfATurn {
+                    askingThreadIDs.insert(approval.threadID)
+                }
                 if isComposing {
                     held.append(approval)
                     releaseWhenComposingEnds()
@@ -190,7 +197,7 @@ final class ToolApprovals: ObservableObject {
             sayNoLongerWaiting(approval.id)
             return .withdrawn
         }
-        if answer == .approved || answer == .denied {
+        if approval.isOfATurn, answer == .approved || answer == .denied {
             answered[approval.threadID, default: []].append(
                 WorkTrace.Approval(id: approval.id, subject: approval.subject, approved: answer == .approved)
             )
@@ -334,7 +341,9 @@ final class ToolApprovals: ObservableObject {
     /// Gives the waiting turn its answer, once.
     private func settle(_ approvalID: String, with answer: ApprovalAnswer) {
         guard let continuation = asked.removeValue(forKey: approvalID) else { return }
-        let stillAsking = Set(([showing?.approval].compactMap(\.self) + waiting + held).filter { asked[$0.id] != nil }.map(\.threadID))
+        let stillAsking = Set(
+            ([showing?.approval].compactMap(\.self) + waiting + held).filter { $0.isOfATurn && asked[$0.id] != nil }.map(\.threadID)
+        )
         askingThreadIDs = stillAsking
         continuation.resume(returning: answer)
     }
@@ -382,6 +391,21 @@ final class ToolApprovals: ObservableObject {
 nonisolated extension ToolApproval {
     /// The most of a file's or a message's text an approval shows.
     static let shownTextLimit = 2000
+
+    /// Whether to remember what an agent proposed: about the person, for
+    /// one proposed in no coven, or for the coven. Asked once the turn
+    /// that proposed it has ended.
+    static func memory(_ text: String, forACoven: Bool, threadID: String, afterAFailedAnswer: Bool = false) -> ToolApproval {
+        let question = forACoven ? "Remember this for the coven?" : "Remember this about you?"
+        var approval = ToolApproval(
+            threadID: threadID,
+            question: afterAFailedAnswer ? "Couldn't confirm your answer. \(question)" : question,
+            details: text,
+            toolName: "memory"
+        )
+        approval.isOfATurn = false
+        return approval
+    }
 
     static func shell(command: String, directory: String, threadID: String) -> ToolApproval {
         ToolApproval(
