@@ -122,7 +122,10 @@ final class MemoryPagesModel: ObservableObject {
                 fetched = try? await fetchAll(in: place, as: asked)
             } while fetched != nil && account == asked && revision != revisions[place, default: 0]
             // Another account's by now: what was read is nobody's to see.
+            // The read is over all the same, so the next one asked for as
+            // this account is a read of its own.
             guard account == asked, signedIn() == asked else {
+                if account == asked { loads[place] = nil }
                 return
             }
             if let fetched {
@@ -172,7 +175,11 @@ final class MemoryPagesModel: ObservableObject {
         do {
             let added = try await manager.createMemory(in: place, content: text, tags: page?.tagsForNewEntry, as: asked)
             guard isStill(asked) else { return false }
-            apply(in: place) { $0.append(added) }
+            // A read that landed since the store kept it has it already.
+            apply(in: place) { entries in
+                entries.removeAll { $0.id == added.id }
+                entries.append(added)
+            }
         } catch {
             if isStill(asked) { failures[key] = Self.couldNotAdd }
             return false

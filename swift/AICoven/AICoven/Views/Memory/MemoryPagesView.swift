@@ -403,8 +403,9 @@ struct MemoryPagesView: View {
         }
     }
 
-    /// "Forget this?" in the row: the entry stays readable above it. It
-    /// announces itself and takes focus, on Cancel, when it appears.
+    /// "Forget this?" in the row: the entry stays readable above it. It is
+    /// announced, and takes focus on Cancel, when it is asked
+    /// (`askToForget`): once, not each time the row comes back on screen.
     private func forgetQuestion(_ entry: Memory, in place: MemoryPlace) -> some View {
         let isForgetting = model.forgettingIds.contains(entry.id)
         return VStack(alignment: .leading, spacing: Spacing.xs) {
@@ -440,13 +441,6 @@ struct MemoryPagesView: View {
                         .controlSize(.small)
                 }
             }
-        }
-        .onAppear {
-            // A page opened while the forget is on its way shows it busy
-            // without asking again.
-            guard !isForgetting else { return }
-            forgetFocus = entry.id
-            AccessibilityNotification.Announcement("Forget this? It comes off this page, and this can't be undone.").post()
         }
     }
 
@@ -703,6 +697,9 @@ struct MemoryPagesView: View {
         closeOpenRows()
         model.clearFailure(entry.id)
         confirmingIds.insert(entry.id)
+        announce("Forget this? It comes off this page, and this can't be undone.")
+        // Once the question's buttons are in the row.
+        Task { @MainActor in forgetFocus = entry.id }
     }
 
     private func cancelForget(_ entry: Memory) {

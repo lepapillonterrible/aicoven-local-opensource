@@ -234,6 +234,26 @@ final class MemoryPagesModelTests: XCTestCase {
         XCTAssertNil(model.failures[addKey])
     }
 
+    func testAnEntryAReadBroughtBeforeItsAddAnswered_isShownOnce() async {
+        let store = FakeMemoryStore()
+        store.stored = [entry("m1", "Old")]
+        let model = MemoryPagesModel(manager: store, signedIn: { "ada" })
+        await model.load(work)
+
+        // The store has kept the entry, and a read lands with it, before the Add is answered.
+        let held = store.holdNext(.create)
+        let add = Task { await model.add("New", on: .facts, in: self.work) }
+        await held.reached()
+        await model.load(work)
+        XCTAssertEqual(model.entries(in: work)?.map(\.content).sorted(), ["New", "Old"])
+        held.release()
+        let added = await add.value
+        XCTAssertTrue(added)
+
+        XCTAssertEqual(model.entries(in: work)?.map(\.content).sorted(), ["New", "Old"], "Once, not twice")
+        XCTAssertEqual(Set(model.entries(in: work)?.map(\.id) ?? []).count, 2)
+    }
+
     func testAnEntryAddedToAPlaceThatWasNotRead_isShown() async {
         let store = FakeMemoryStore()
         store.failsReads = true
@@ -362,7 +382,7 @@ final class MemoryPagesModelTests: XCTestCase {
 @MainActor
 private final class FakeMemoryStore: MemoryPagesManaging {
     enum Step {
-        case read, update, delete
+        case read, create, update, delete
     }
 
     /// A step of the store held until the test lets it go.
@@ -440,6 +460,8 @@ private final class FakeMemoryStore: MemoryPagesManaging {
         created.append((place, tags))
         let added = Self.entry("new-\(created.count)", content, tags: tags, at: 100)
         stored.insert(added, at: 0)
+        // Held, if it is, once the entry is kept and before the answer.
+        await pass(.create)
         return added
     }
 

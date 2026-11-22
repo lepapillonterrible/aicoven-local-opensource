@@ -41,7 +41,7 @@ There is no mandatory backend: users bring their own LLM provider API keys or lo
 - Long-term context is stored in the `memory_chunks` table, mapped to `MemoryChunkRecord` / `LocalMemoryChunk` and accessed via `MemoryRepository`.
 - Each row contains encrypted text, an optional embedding vector, a scope string (for example `user`, `coven`, or `thread:<thread_id>`), tags, and basic provenance metadata.
 - `MemoryService` provides the high-level API used by views, chat, and agents:
-  - `searchMemory(...)` uses `EmbeddingService.searchRelevantMemories` for hybrid vector/lexical search when a query is provided, and falls back to the most recent chunks per scope otherwise.
+  - `memories(in:limit:offset:)` reads a page of one place's entries for the Memory page; a turn's memories are found by `EmbeddingService.searchRelevantMemories`, a hybrid vector/lexical search over the newest entries of the places its thread reads.
   - `createMemory(...)`, `updateMemory(...)`, and `deleteMemory(...)` manage encrypted chunks and always recompute embeddings when text changes.
 - Suggested memory writes from chat/agents are stored in the `memory_proposals` table via `MemoryProposalRecord` / `MemoryProposalRepository`.
   - `listProposals(...)` powers the **Memory Proposals** UI for reviewing pending writes, one scope at a time (a coven's, or those made in no coven).
