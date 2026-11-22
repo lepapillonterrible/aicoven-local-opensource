@@ -69,6 +69,14 @@ final class AgentRunsOnTests: XCTestCase {
         } catch {}
         XCTAssertEqual(pagesRead, AnthropicModelsPage.mostPages)
 
+        // Nor is one whose page says there is more without saying after which model.
+        do {
+            _ = try await AnthropicModelsPage.all { _ in
+                try JSONDecoder().decode(AnthropicModelsPage.self, from: Data(#"{"data":[{"id":"a"}],"has_more":true}"#.utf8))
+            }
+            XCTFail("An unfinished list is not a list")
+        } catch {}
+
         // A page that cannot be read ends the reading.
         struct Unreachable: Error {}
         do {

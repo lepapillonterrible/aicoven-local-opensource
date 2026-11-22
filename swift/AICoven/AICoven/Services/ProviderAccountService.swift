@@ -52,13 +52,17 @@ nonisolated struct AnthropicModelsPage: Decodable {
         var models: [Item] = []
         var after: String?
         var pages = 0
+        var isWhole = false
         repeat {
             let read = try await page(after)
             models += read.data ?? []
             after = read.next
+            // A page that says there is more and does not say after which
+            // model leaves the list unfinished.
+            isWhole = read.has_more != true
             pages += 1
         } while after != nil && pages < mostPages
-        if after != nil {
+        if !isWhole {
             throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Anthropic's list of models is longer than is read"])
         }
         return models
