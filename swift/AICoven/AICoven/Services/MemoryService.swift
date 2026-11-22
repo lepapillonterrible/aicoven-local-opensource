@@ -16,6 +16,9 @@ struct MemoryProposal: Codable, Identifiable {
     let createdAt: Date
     let reviewedAt: Date?
     let title: String?
+    /// Its text could not be opened with the account's key: it can be
+    /// rejected, or saved as other words, and not approved as it is.
+    var isUnreadable = false
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -41,11 +44,14 @@ nonisolated enum ProposalReviewError: LocalizedError, Equatable {
     case underWay
     /// It was reviewed already, and is no longer pending.
     case alreadyReviewed
+    /// Its text cannot be opened, so there is nothing to approve.
+    case unreadable
 
     var errorDescription: String? {
         switch self {
         case .underWay: "This proposal is already being reviewed."
         case .alreadyReviewed: "This proposal was already reviewed."
+        case .unreadable: "This proposal's text can't be opened, so it can only be rejected."
         }
     }
 }
@@ -185,7 +191,8 @@ actor MemoryService {
             reviewedBy: rec.reviewedBy,
             createdAt: rec.createdAt,
             reviewedAt: rec.reviewedAt,
-            title: rec.title
+            title: rec.title,
+            isUnreadable: rec.isUnreadable
         )
     }
 
@@ -261,9 +268,13 @@ actor MemoryService {
         guard let storing else {
             return try await mark(proposalId, as: status, feedback: feedback, for: account)
         }
-        let text: String = switch storing {
-        case .itsContent: existing.proposedContent
-        case let .text(edited): edited
+        let text: String
+        switch storing {
+        case .itsContent:
+            guard !existing.isUnreadable else { throw ProposalReviewError.unreadable }
+            text = existing.proposedContent
+        case let .text(edited):
+            text = edited
         }
         // Kept where it was proposed: in its coven's pages, or for one
         // proposed in no coven as the person's own.

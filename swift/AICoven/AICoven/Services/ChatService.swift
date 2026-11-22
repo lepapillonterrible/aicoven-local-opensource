@@ -1185,23 +1185,31 @@ actor ChatService {
         let parseResult = ToolCallParser.parse(dedupedAnswer)
         let answer = parseResult.strippedText.isEmpty ? rawAnswer : parseResult.strippedText
 
-        // What the model asked to keep for every conversation is kept
-        // where the thread is: in its coven's pages, or in no coven as the
-        // person's own. Nothing is kept where the thread cannot be placed.
-        // What it asked to keep for this conversation alone is not kept:
-        // no turn has ever read such a memory, and no page shows one.
-        // Whose it is is read once: the thread is placed, and the memory
-        // kept, as the same account.
-        let asked = parseResult.memoryProposals.filter { $0.scope != "thread" }
-        let keeper = await UserScope.currentUserID
-        if !asked.isEmpty, let place = await contextBuilder.memoryPlaces(ofThread: threadId, for: keeper).first {
-            for proposal in asked {
+        // What the model asked to keep for every conversation is proposed
+        // to the person, who is asked beside the thread: where the thread
+        // is, in its coven or as the person's own. Nothing is proposed
+        // where the thread cannot be placed. What it asked to keep for
+        // this conversation alone is not: no turn has ever read such a
+        // memory, and no page shows one. Whose it is is read once: the
+        // thread is placed, and the proposal stored, as the same account.
+        let proposed = parseResult.memoryProposals.filter { $0.scope != "thread" }
+        let asked = await UserScope.currentUserID
+        if !proposed.isEmpty, let scope = await contextBuilder.scope(ofThread: threadId, for: asked) {
+            for proposal in proposed {
                 do {
-                    _ = try await MemoryService.shared.createMemory(
-                        in: place, content: proposal.content, tags: proposal.category.map { [$0] }, as: keeper
+                    let stored = try await MemoryProposalRepository.shared.insertProposal(
+                        eventId: nil,
+                        covenId: scope.covenID,
+                        proposedContent: proposal.content,
+                        proposedTags: proposal.category.map { [$0] },
+                        scope: scope.covenID == nil ? "user" : "coven",
+                        reason: nil,
+                        sourceMessageId: nil,
+                        proposedBy: "agent",
+                        title: nil,
+                        as: asked
                     )
-                    // That one was saved: never its words.
-                    AppErrorReporter.log(message: "Saved a memory the model asked to keep", context: "ChatService.streamMessage.memoryWrite")
+                    await MemoryProposalQuestions.shared.ask(stored, inThread: threadId, as: asked)
                 } catch {
                     AppErrorReporter.log(error: error, context: "ChatService.streamMessage.memoryWrite")
                 }
@@ -1243,6 +1251,9 @@ actor ChatService {
     /// and is safe to call opportunistically after new messages are added.
     func updateThreadSummary(threadId: String) async {
         guard !threadsLastAnsweredByAnAgent.contains(threadId) else { return }
+        // Whose thread it is, read before anything is waited for: what
+        // comes of the summary is proposed to that account, or to nobody.
+        let summarizedFor = await UserScope.currentUserID
         // On iOS, skip background summaries when only local models are
         // available. Loading a second MLX model (~1.5 GB) for an optional
         // summary will push past the jetsam memory limit and crash the app.
@@ -1314,7 +1325,8 @@ actor ChatService {
                 reason: "Automatic summary representing the key facts of a recent thread.",
                 sourceMessageId: nil,
                 proposedBy: "system",
-                title: "Thread Summary"
+                title: "Thread Summary",
+                as: summarizedFor
             )
         } catch {
             // Thread summaries are an optional optimization. In the local-only

@@ -295,6 +295,38 @@ final class ToolApprovalsTests: XCTestCase {
         XCTAssertNil(approvals.showing)
     }
 
+    func testAQuestionAskedOnceItsTurnHasEnded_marksNoThreadAsWaiting_andLeavesNoLineOfATurn() async {
+        let approvals = makeApprovals()
+        let question = ToolApproval.memory("Ships on Fridays", forACoven: true, threadID: "thread-1")
+        XCTAssertEqual(question.question, "Remember this for the coven?")
+        XCTAssertEqual(ToolApproval.memory("Lives in Lisbon", forACoven: false, threadID: "thread-1").question, "Remember this about you?")
+        XCTAssertEqual(
+            ToolApproval.memory("Lives in Lisbon", forACoven: false, threadID: "thread-1", afterAFailedAnswer: true).question,
+            "Couldn't confirm your answer. Remember this about you?"
+        )
+
+        let asking = Task { await approvals.ask(question) }
+        await asked(approvals, 1)
+        XCTAssertEqual(approvals.showing, .init(approval: question, phase: .asking), "It is asked in the one spot, like any approval")
+        XCTAssertEqual(approvals.askingThreadIDs, [], "No turn of the thread waits on it")
+
+        // A turn's approval asked meanwhile marks its thread, and still does once the question is answered.
+        let ofATurn = approval(in: "thread-2")
+        let turn = Task { await approvals.ask(ofATurn) }
+        await asked(approvals, 2)
+        XCTAssertEqual(approvals.askingThreadIDs, ["thread-2"])
+        approvals.answer(question.id, approve: true)
+        let answer = await asking.value
+        XCTAssertEqual(answer, .approved)
+        XCTAssertEqual(approvals.askingThreadIDs, ["thread-2"])
+        XCTAssertNil(approvals.answered["thread-1"], "Its answer is no line of a turn's")
+
+        runScheduled()
+        approvals.answer(ofATurn.id, approve: false)
+        _ = await turn.value
+        XCTAssertEqual(approvals.answered["thread-2"]?.count, 1)
+    }
+
     func testADeniedApproval_isRefused() async {
         let approvals = makeApprovals()
         let first = approval()

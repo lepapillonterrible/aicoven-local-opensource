@@ -340,7 +340,7 @@ final class MemoryPlacesTests: XCTestCase {
         )
     }
 
-    func testWhatAModelAsksToKeep_isKeptWhereItsThreadIs_andNotWhatItAsksToKeepForOneThread() async throws {
+    func testWhatAModelAsksToKeep_isProposedWhereItsThreadIs_andKeptOnlyOnceThePersonSaysSo() async throws {
         let defaults = UserDefaults.standard
         let key = UserScope.scopedKey("llm_provider")
         let saved = defaults.object(forKey: key)
@@ -356,31 +356,43 @@ final class MemoryPlacesTests: XCTestCase {
         [MEMORY_WRITE: scope=user]Ships on Fridays \(mark)[/MEMORY_WRITE]
         [MEMORY_WRITE: scope=thread]Only for this conversation \(mark)[/MEMORY_WRITE]
         """
+        let proposals = MemoryProposalRepository.shared
+        func proposed(in coven: String?) async throws -> [MemoryProposalRecord] {
+            try await proposals.listProposals(covenId: coven, status: "pending").filter { $0.proposedContent.hasSuffix(mark) }
+        }
         let account = account
         addTeardownBlock {
             await DataEncryptionService.shared.unlockForTestingEphemeral()
-            for place in [MemoryPlace.aboutMe, .strix] {
-                for kept in await (try? MemoryRepository.shared.loadMemories(in: place, limit: 20)) ?? [] where kept.text.hasSuffix(mark) {
-                    try? await MemoryRepository.shared.deleteMemory(id: kept.id, as: account)
-                }
+            // The questions leave the screen, and what was proposed in no coven is settled.
+            await MainActor.run { MemoryProposalQuestions.shared.accountChanged() }
+            for left in await (try? proposals.listProposals(covenId: nil, status: "pending")) ?? [] where left.proposedContent.hasSuffix(mark) {
+                _ = try? await proposals.settlePending(id: left.id, as: "rejected", reviewedBy: nil, reviewFeedback: nil, for: account)
             }
         }
 
         try await chat(answering: answer).streamMessage(threadId: inCoven, message: "Remember when we ship.", onStateChange: { _ in })
-        let covens = try await texts(in: .coven(coven))
-        XCTAssertEqual(covens, ["Ships on Fridays \(mark)"], "In the coven's pages, where its agents read it")
-        var own = try await texts(in: .aboutMe).filter { $0.hasSuffix(mark) }
-        XCTAssertEqual(own, [], "Not in the person's own memory")
+        let covens = try await proposed(in: coven)
+        XCTAssertEqual(covens.map(\.proposedContent), ["Ships on Fridays \(mark)"], "Proposed for the coven its thread is in")
+        XCTAssertEqual(covens.map(\.scope), ["coven"])
+        let keptInCoven = try await texts(in: .coven(coven))
+        XCTAssertEqual(keptInCoven, [], "Nothing is kept until the person says so")
+        var own = try await proposed(in: nil)
+        XCTAssertEqual(own.count, 0, "Not proposed as the person's own")
 
         try await chat(answering: answer).streamMessage(threadId: personal, message: "Remember when we ship.", onStateChange: { _ in })
-        own = try await texts(in: .aboutMe).filter { $0.hasSuffix(mark) }
-        XCTAssertEqual(own, ["Ships on Fridays \(mark)"])
-        let strixs = try await texts(in: .strix).filter { $0.hasSuffix(mark) }
-        XCTAssertEqual(strixs, [], "What was for one conversation is kept nowhere")
-        let covensAfter = try await texts(in: .coven(coven))
-        XCTAssertEqual(covensAfter.count, 1)
+        own = try await proposed(in: nil)
+        XCTAssertEqual(own.map(\.proposedContent), ["Ships on Fridays \(mark)"], "What was for one conversation is not proposed")
+        XCTAssertEqual(own.map(\.scope), ["user"])
+        let keptAsOwn = try await texts(in: .aboutMe).filter { $0.hasSuffix(mark) }
+        XCTAssertEqual(keptAsOwn, [])
 
-        // In a thread whose coven is gone, it is kept nowhere: not as the person's own either.
+        // Approved, it is kept where it was proposed.
+        let service = MemoryService(memoryStore: MemoryRepository.shared, embed: { _ in nil })
+        _ = try await service.reviewProposal(proposalId: XCTUnwrap(covens.first).id, action: "approve")
+        let approved = try await texts(in: .coven(coven))
+        XCTAssertEqual(approved, ["Ships on Fridays \(mark)"])
+
+        // In a thread whose coven is gone, or that is not there, nothing is proposed anywhere.
         let gone = try await newCoven()
         let orphan = try await thread(inCoven: gone)
         try await CovenService.shared.deleteCoven(id: gone)
@@ -388,13 +400,10 @@ final class MemoryPlacesTests: XCTestCase {
         let told = try await builder.buildContext(threadID: orphan, userMessage: "What do you know of \(mark)?", maxContextTokens: 8000, toolConfig: .noTools)
         XCTAssertFalse(told.contains { $0.content.contains("Ships on Fridays") }, "Nor is it told any other place's memory")
         try await chat(answering: answer).streamMessage(threadId: orphan, message: "Remember when we ship.", onStateChange: { _ in })
-        own = try await texts(in: .aboutMe).filter { $0.hasSuffix(mark) }
-        XCTAssertEqual(own.count, 1, "Only what the personal thread kept")
-        // Nor in a thread that is not there.
         try? await chat(answering: answer).streamMessage(threadId: "no-such-thread-\(UUID().uuidString)", message: "Remember when we ship.", onStateChange: { _ in })
-        own = try await texts(in: .aboutMe).filter { $0.hasSuffix(mark) }
-        XCTAssertEqual(own.count, 1, "Still only what the personal thread kept")
-        let strixsAfter = try await texts(in: .strix).filter { $0.hasSuffix(mark) }
-        XCTAssertEqual(strixsAfter, [])
+        own = try await proposed(in: nil)
+        XCTAssertEqual(own.count, 1, "Only what the personal thread proposed")
+        let ofTheGoneCoven = try await proposed(in: gone)
+        XCTAssertTrue(ofTheGoneCoven.isEmpty, "A coven that is gone is proposed nothing")
     }
 }

@@ -507,6 +507,32 @@ final class DatabaseManager {
                 """)
             }
 
+            // v16: a memory proposal's text is kept encrypted. Rows from
+            // before this hold it as text until the account's proposals are
+            // next read with its key (`MemoryProposalRepository`), when it
+            // is sealed and the text taken out. And a proposal is stored
+            // only for a coven of the same account, or for none.
+            migrator.registerMigration("v16_memory_proposal_ciphertext") { db in
+                try db.alter(table: "memory_proposals") { t in
+                    t.add(column: "content_ciphertext", .blob)
+                }
+                // As a coven's memory is: proposed only for a coven of the
+                // same account.
+                for (event, name) in [("INSERT", "insert"), ("UPDATE OF user_id, coven_id", "update")] {
+                    try db.execute(sql: """
+                    CREATE TRIGGER memory_proposals_match_coven_user_\(name)
+                    BEFORE \(event) ON memory_proposals
+                    WHEN NEW.coven_id IS NOT NULL AND NOT EXISTS (
+                        SELECT 1 FROM covens
+                        WHERE covens.id = NEW.coven_id AND covens.user_id = NEW.user_id
+                    )
+                    BEGIN
+                        SELECT RAISE(ABORT, 'memory_proposals.coven_id must reference a coven owned by the same user');
+                    END;
+                    """)
+                }
+            }
+
             try migrator.migrate(queue)
             dbQueue = queue
         } catch {
