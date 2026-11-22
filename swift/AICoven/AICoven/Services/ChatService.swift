@@ -477,7 +477,7 @@ actor ChatService {
         let connections = await covenConnections(threadId)
         let toolConfig: ContextBuilder.ToolConfig = isLocalModel
             ? await .mlxTools(connections: connections)
-            : await .connected(deliversFiles: true, seesPictures: descriptor.takesImages, connections: connections)
+            : await .connected(deliversFiles: true, seesPictures: descriptor.takesImages, readsAssets: true, connections: connections)
         await ToolExecutionService.shared.setWhitelist(for: "chat", tools: toolConfig.enabledTools)
         // The pictures this turn's tools make for its model, where the
         // model can be sent pictures: they go with its later requests.
@@ -2079,6 +2079,7 @@ extension ChatService {
         case "file.list": "File List"
         case "shell.execute": "Shell Command"
         case "image.generate": "Image Generation"
+        case _ where tool.hasPrefix("asset."): "Assets"
         case _ where tool.hasPrefix("github."): "GitHub"
         case _ where tool.hasPrefix("google_drive"): "Google Drive"
         case _ where tool.hasPrefix("google_docs"): "Google Docs"
@@ -2101,6 +2102,7 @@ extension ChatService {
         case "file.list": "📂 Listing files…"
         case "shell.execute": "💻 Running command…"
         case "image.generate": "🎨 Making an image…"
+        case _ where tool.hasPrefix("asset."): "🗂️ Looking at assets…"
         case _ where tool.hasPrefix("github."): "🐙 Working with GitHub…"
         case _ where tool.hasPrefix("google_drive"): "📁 Accessing Google Drive…"
         case _ where tool.hasPrefix("google_docs"): "📝 Working with Docs…"

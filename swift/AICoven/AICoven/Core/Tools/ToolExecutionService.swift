@@ -406,6 +406,10 @@ actor ToolExecutionService {
         case "image.generate":
             return await generateImage(toolCall: toolCall, threadID: threadID)
 
+        // --- Assets ---
+        case _ where AssetTools.reading.contains(toolCall.name):
+            return await AssetTools.read(toolCall, threadID: threadID)
+
         // --- Web Tools ---
         case "web_search":
             // Route to existing ToolService but wrap in standard result
