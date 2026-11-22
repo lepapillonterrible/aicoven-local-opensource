@@ -159,7 +159,14 @@ actor MemoryRepository {
     private func sealed(_ text: String, for account: String) async throws -> Data {
         let epoch = await DataEncryptionService.shared.keyEpoch
         try await requireKey(of: account, since: epoch)
-        let ciphertext = try await DataEncryptionService.shared.encrypt(Data(text.utf8), purpose: "memory_chunk")
+        let ciphertext: Data
+        do {
+            ciphertext = try await DataEncryptionService.shared.encrypt(Data(text.utf8), purpose: "memory_chunk")
+        } catch {
+            // A key locked or changed under way is told as that.
+            try await requireKey(of: account, since: epoch)
+            throw error
+        }
         try await requireKey(of: account, since: epoch)
         return ciphertext
     }

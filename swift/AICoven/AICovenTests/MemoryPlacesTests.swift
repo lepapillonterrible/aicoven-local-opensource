@@ -372,6 +372,10 @@ final class MemoryPlacesTests: XCTestCase {
         try await chat(answering: answer).streamMessage(threadId: orphan, message: "Remember when we ship.", onStateChange: { _ in })
         own = try await texts(in: .aboutMe).filter { $0.hasSuffix(mark) }
         XCTAssertEqual(own.count, 1, "Only what the personal thread kept")
+        // Nor in a thread that is not there.
+        try? await chat(answering: answer).streamMessage(threadId: "no-such-thread-\(UUID().uuidString)", message: "Remember when we ship.", onStateChange: { _ in })
+        own = try await texts(in: .aboutMe).filter { $0.hasSuffix(mark) }
+        XCTAssertEqual(own.count, 1, "Still only what the personal thread kept")
         let strixsAfter = try await texts(in: .strix).filter { $0.hasSuffix(mark) }
         XCTAssertEqual(strixsAfter, [])
     }
