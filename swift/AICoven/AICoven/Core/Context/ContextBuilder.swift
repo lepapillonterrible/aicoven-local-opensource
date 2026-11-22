@@ -494,7 +494,7 @@ private extension ContextBuilder {
     /// Logical segments of the context sandwich so we can apply truncation
     /// decisions (e.g. "keep last 6 turns") without guessing from raw indices.
     struct ContextSegments {
-        var system: [LLMMessage] = [] // Layers 1–3
+        var system: [LLMMessage] = [] // Layers 1–3, then the skills that are on
         var memories: [LLMMessage] = [] // Layer 4 (header + lines)
         var summary: [LLMMessage] = [] // Layer 5
         var recents: [LLMMessage] = [] // Layer 6

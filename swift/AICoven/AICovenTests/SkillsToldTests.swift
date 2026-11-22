@@ -145,21 +145,25 @@ final class SkillsToldTests: XCTestCase {
         XCTAssertEqual(told, scout.systemPrompt)
     }
 
-    func testTheSkillsAreReadAsTheAccountTheContextIsReadAs() async throws {
-        let account = account
+    func testTheSkillsAreReadAsTheAccountTheContextIsReadAs() async {
         let asked = Asked()
+        // A builder that is told Ada is signed in reads the skills as Ada, whoever the app says is.
         let builder = ContextBuilder(
             limits: .init(maxRecentMessages: 4, maxRecentMemories: 4),
+            signedIn: { "ada-\(#function)" },
             followedSkills: { account in
                 asked.note(account)
                 return [("House style", "Be brief.")]
             }
         )
 
-        _ = try await builder.buildContext(threadID: nil, userMessage: "Hello", maxContextTokens: 8000, toolConfig: .noTools)
-        _ = try await builder.preface(threadID: nil, question: "Hello", agent: nil)
+        // The stores refuse Ada here (she is not the account the app has signed in), which fails the turn's
+        // context and leaves the agent's run told nothing; the skills were asked for as her all the same.
+        _ = try? await builder.buildContext(threadID: nil, userMessage: "Hello", maxContextTokens: 8000, toolConfig: .noTools)
+        _ = try? await builder.preface(threadID: nil, question: "Hello", agent: nil)
 
-        XCTAssertEqual(asked.accounts, [account, account])
+        XCTAssertEqual(asked.accounts, ["ada-\(#function)", "ada-\(#function)"])
+        XCTAssertNotEqual(account, "ada-\(#function)")
     }
 
     func testAContextReadForAnAccountIsGivenToNoTurnOnceAnotherIsSignedIn() async throws {
