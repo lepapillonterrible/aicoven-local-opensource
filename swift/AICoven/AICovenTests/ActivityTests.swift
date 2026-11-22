@@ -77,6 +77,22 @@ final class ActivityTests: XCTestCase {
         XCTAssertEqual(ActivityRowMark.words(isWaiting: false, hasUnread: false), "")
     }
 
+    func testTheThreadWhoseApprovalIsAskedOnThePageHasNoRowOfItsOwn() {
+        let asks = thread("asks", usedAt: 30), also = thread("also", usedAt: 20), broke = thread("broke", usedAt: 10)
+        let waiting: [ActivityItem] = [.approval(asks), .approval(also), .problem(broke)]
+        let asked = ToolApproval(threadID: "asks", question: "Run this command?", details: "ls", toolName: "shell.run")
+
+        XCTAssertEqual(ActivityGroups.waitingRows(waiting, asking: asked), [.approval(also), .problem(broke)], "Its approval, with its name, is the block above")
+        XCTAssertEqual(ActivityGroups.waitingRows(waiting, asking: nil), waiting)
+        // A problem in the same thread is another thing, and keeps its row.
+        XCTAssertEqual(ActivityGroups.waitingRows([.problem(asks)], asking: asked), [.problem(asks)])
+        // A question that is no turn's (whether to remember something) takes no thread's row.
+        var memory = ToolApproval.memory("Dana runs design", forACoven: false, threadID: "asks")
+        XCTAssertFalse(memory.isOfATurn)
+        memory.threadTitle = "Asks"
+        XCTAssertEqual(ActivityGroups.waitingRows(waiting, asking: memory), waiting)
+    }
+
     func testWhatNewlyWaitsOrFinishedIsSaidAloud_notATurnsChangingWords() {
         let threads = [thread("asks", usedAt: 40), thread("broke", usedAt: 30), thread("works", usedAt: 20), thread("replied", usedAt: 10)]
         func groups(_ activity: [String: ConversationActivity]) -> ActivityGroups {

@@ -13,6 +13,7 @@ struct ActivityView: View {
     @StateObject private var model = ActivityModel()
     @ObservedObject private var activities = ThreadActivities.shared
     @ObservedObject private var engine = TurnEngine.shared
+    @ObservedObject private var approvals = ToolApprovals.shared
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.isPadLayout) private var isPadLayout
     @State private var isOnScreen = false
@@ -129,8 +130,30 @@ struct ActivityView: View {
         .accessibilityIdentifier(identifier)
     }
 
+    /// Waiting for you: what is being asked of the person, answered here
+    /// as beside a thread (the approvals' one spot: one at a time, the
+    /// rest behind it), then the threads that wait.
     private func waitingSection(_ items: [ActivityItem]) -> some View {
-        section("Waiting for you", empty: "Nothing is waiting for you.", items: items, identifier: "activity-waiting")
+        let asking = approvals.showing.flatMap { $0.phase == .asking ? $0.approval : nil }
+        let rows = ActivityGroups.waitingRows(items, asking: asking)
+        return VStack(alignment: .leading, spacing: Spacing.sm) {
+            Text("Waiting for you")
+                .font(.aicovenH2)
+                .foregroundStyle(Color.aicovenTextPrimary)
+                .accessibilityAddTraits(.isHeader)
+            if approvals.showing != nil {
+                ApprovalSpot(approvals: approvals)
+                    .frame(maxWidth: ApprovalBlock.spansTheWidth ? .infinity : 262, alignment: .leading)
+            }
+            if rows.isEmpty, approvals.showing == nil {
+                Text("Nothing is waiting for you.")
+                    .font(.aicovenBodySmall)
+                    .foregroundStyle(Color.aicovenTextSecondary)
+            } else {
+                ForEach(rows) { row($0) }
+            }
+        }
+        .accessibilityIdentifier("activity-waiting")
     }
 
     private func movingSection(_ items: [ActivityItem]) -> some View {

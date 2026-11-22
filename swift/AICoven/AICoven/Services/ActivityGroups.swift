@@ -95,6 +95,14 @@ nonisolated struct ActivityGroups: Equatable {
         return said.isEmpty ? nil : said.joined(separator: ". ")
     }
 
+    /// Waiting for you's rows while an approval is being asked on the
+    /// page itself: without the row of the thread that asked it, whose
+    /// approval the block above them shows, with the thread's name.
+    static func waitingRows(_ waiting: [ActivityItem], asking approval: ToolApproval?) -> [ActivityItem] {
+        guard let approval, approval.isOfATurn else { return waiting }
+        return waiting.filter { $0 != .approval($0.thread) || $0.thread.id != approval.threadID }
+    }
+
     /// Whether anything waits for the person.
     static func isAnythingWaiting(in activity: [String: ConversationActivity]) -> Bool {
         activity.values.contains { $0.isWaiting }
