@@ -98,7 +98,7 @@ final class AssetFilesTests: XCTestCase {
         let stand = Stand()
         let files = files(stand)
         await files.download(file("f1"))
-        files.exported(.success(URL(fileURLWithPath: "/tmp/elsewhere.csv")))
+        files.exported(.success(URL(fileURLWithPath: "/tmp/elsewhere.csv")), of: files.export)
         files.isExporting = false
         XCTAssertNil(files.document, "The bytes go when the exporter does")
         XCTAssertNil(files.said)
@@ -108,9 +108,9 @@ final class AssetFilesTests: XCTestCase {
         XCTAssertNil(files.document, "Closed without saving: nothing is kept in memory")
 
         await files.download(file("f1"))
-        files.exported(.failure(CocoaError(.userCancelled)))
+        files.exported(.failure(CocoaError(.userCancelled)), of: files.export)
         XCTAssertNil(files.said, "Closing the exporter is no failure")
-        files.exported(.failure(CocoaError(.fileWriteNoPermission)))
+        files.exported(.failure(CocoaError(.fileWriteNoPermission)), of: files.export)
         XCTAssertEqual(files.said, AssetFiles.cannotSave)
     }
 
@@ -168,19 +168,34 @@ final class AssetFilesTests: XCTestCase {
         let stand = Stand()
         let files = files(stand)
         await files.download(file("f1", "one.csv"))
+        let first = files.export
+        XCTAssertNotNil(first)
         // A second export is up by the time the first one's result comes.
         files.isExporting = false
         await files.download(file("f2", "two.csv"))
-        files.exported(.success(URL(fileURLWithPath: "/tmp/one.csv")))
+        XCTAssertNotEqual(files.export, first, "Each export is its own")
+
+        files.exported(.success(URL(fileURLWithPath: "/tmp/one.csv")), of: first)
         XCTAssertEqual(files.document?.data, Data("bytes of f2".utf8), "The newer export keeps its bytes")
+        files.exported(.failure(CocoaError(.fileWriteNoPermission)), of: first)
+        XCTAssertNil(files.said, "The earlier export's failure is not said over the later one")
+        files.exported(.failure(CocoaError(.fileWriteNoPermission)), of: nil)
+        XCTAssertNil(files.said, "Nor a result that is no export's")
+
+        // The later one's own failure is said.
+        files.exported(.failure(CocoaError(.fileWriteNoPermission)), of: files.export)
+        XCTAssertEqual(files.said, AssetFiles.cannotSave)
 
         // After another account signed in, or the view has gone, a failed save is not said.
+        await files.download(file("f3", "three.csv"))
+        XCTAssertNil(files.said)
         stand.account = "grace"
-        files.exported(.failure(CocoaError(.fileWriteNoPermission)))
+        files.exported(.failure(CocoaError(.fileWriteNoPermission)), of: files.export)
         XCTAssertNil(files.said, "Not to another account")
         stand.account = "ada"
+        let last = files.export
         files.teardown()
-        files.exported(.failure(CocoaError(.fileWriteNoPermission)))
+        files.exported(.failure(CocoaError(.fileWriteNoPermission)), of: last)
         XCTAssertNil(files.said, "Not once its view has gone")
     }
 

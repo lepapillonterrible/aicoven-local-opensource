@@ -51,6 +51,9 @@ final class AssetFiles: ObservableObject {
     }
 
     @Published private(set) var document: AssetExportDocument?
+    /// The export the exporter was last put up for: its result is told
+    /// with it, so that one that comes late is not taken for a later one's.
+    @Published private(set) var export: UUID?
     /// The name the exporter offers.
     @Published private(set) var exportName = ""
     /// The file being read for the exporter, if one is.
@@ -68,7 +71,7 @@ final class AssetFiles: ObservableObject {
     private let signedIn: @MainActor @Sendable () -> String
     /// The download this presenter is reading.
     private var reading: UUID?
-    /// The account the exporter was put up for; nil once this is torn down.
+    /// The account the exporter was last put up for; nil once this is torn down.
     private var offeredTo: String?
     private var followed: AnyCancellable?
 
@@ -122,6 +125,7 @@ final class AssetFiles: ObservableObject {
             document = AssetExportDocument(data: data)
             exportName = file.name
             offeredTo = account
+            export = request
             isExporting = true
         } catch {
             guard turn.asked == request, reading == request, signedIn() == account else { return }
@@ -129,12 +133,13 @@ final class AssetFiles: ObservableObject {
         }
     }
 
-    /// The exporter is done: closing it is no failure; anything else is
-    /// said, to the account it was put up for and only while this is
-    /// still in use. The bytes go when the exporter does (`isExporting`),
-    /// not here: a result that comes late clears nothing newer.
-    func exported(_ result: Result<URL, Error>) {
-        guard let account = offeredTo, signedIn() == account else { return }
+    /// The exporter put up for `export` is done: closing it is no failure;
+    /// anything else is said, if no later export has been offered since,
+    /// to the account it was put up for and only while this is still in
+    /// use. The bytes go when the exporter does (`isExporting`), not here:
+    /// a result that comes late clears nothing newer.
+    func exported(_ result: Result<URL, Error>, of export: UUID?) {
+        guard let export, export == self.export, let account = offeredTo, signedIn() == account else { return }
         if case let .failure(error) = result, (error as? CocoaError)?.code != .userCancelled {
             say(Self.cannotSave)
         }
@@ -147,6 +152,7 @@ final class AssetFiles: ObservableObject {
         reading = nil
         preparing = nil
         offeredTo = nil
+        export = nil
         isExporting = false
         failure = nil
         preview.teardown()
@@ -172,10 +178,17 @@ private struct AssetFilesPresentation: ViewModifier {
     func body(content: Content) -> some View {
         content
             .quickLookPreview(Binding(get: { files.preview.previewURL }, set: { files.preview.previewURL = $0 }))
-            .fileExporter(
-                isPresented: $files.isExporting, document: files.document, contentType: .data, defaultFilename: files.exportName
-            ) { result in
-                files.exported(result)
+            .background {
+                // An exporter of its own for each export: its result
+                // comes back with the export it was put up for.
+                let export = files.export
+                Color.clear
+                    .fileExporter(
+                        isPresented: $files.isExporting, document: files.document, contentType: .data, defaultFilename: files.exportName
+                    ) { result in
+                        files.exported(result, of: export)
+                    }
+                    .id(export)
             }
             .onDisappear { files.teardown() }
     }

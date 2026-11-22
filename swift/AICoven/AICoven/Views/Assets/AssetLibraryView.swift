@@ -495,6 +495,8 @@ private struct NewAssetSheet: View {
     @State private var isReadingFile = false
     /// Whether the sheet is up: a file read after it has gone says nothing.
     @State private var isShown = false
+    /// The account the file chooser was put up for.
+    @State private var choosingAs: String?
     @State private var failure: String?
 
     #if os(iOS)
@@ -525,6 +527,7 @@ private struct NewAssetSheet: View {
 
                 Section {
                     Button {
+                        choosingAs = UserScope.currentUserID
                         isChoosingFile = true
                     } label: {
                         Label(file.map { AssetFile.keptName($0.name) } ?? "Choose File…", systemImage: "plus.square.fill")
@@ -574,13 +577,16 @@ private struct NewAssetSheet: View {
 
     /// Takes the file the person chose, or says why it was not taken.
     private func receive(_ result: Result<[URL], Error>) {
+        // The chooser's answer is for whoever put it up, in this sheet:
+        // nothing of it is kept or said once either has gone.
+        let account = UserScope.currentUserID
+        guard isShown, choosingAs == account else { return }
         switch result {
         case let .success(files):
             guard let chosen = files.first else { return }
             // Read away from the main actor: a large file, or one a file
             // provider has to fetch, does not hold the sheet up.
             isReadingFile = true
-            let account = UserScope.currentUserID
             Task {
                 let read = await Task.detached { Result { try AssetFileChoice.read(chosen) } }.value
                 isReadingFile = false
