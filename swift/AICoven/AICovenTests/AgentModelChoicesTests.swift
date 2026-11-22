@@ -28,6 +28,10 @@ final class AgentModelChoicesTests: XCTestCase {
         func openFirst() {
             if !waiting.isEmpty { waiting.removeFirst().resume() }
         }
+
+        func openLast() {
+            if !waiting.isEmpty { waiting.removeLast().resume() }
+        }
     }
 
     private func account(_ id: String, _ provider: String, status: String = "healthy") -> ProviderAccount {
@@ -121,6 +125,40 @@ final class AgentModelChoicesTests: XCTestCase {
         XCTAssertEqual(choices.models(for: "a").count, 0)
     }
 
+    func testWhatWasReadForOneAccountIsGoneOnceAnotherIsSignedIn() async throws {
+        var signedIn = "ada"
+        let choices = choices(
+            accounts: [account("claw", "openclaw"), account("a", "anthropic")],
+            models: { _ in [self.model("m")] },
+            gateways: ["claw"],
+            signedIn: { signedIn }
+        )
+        try await choices.loadAccounts()
+        await choices.loadModels(for: "a")
+        XCTAssertEqual(choices.accounts.count, 2)
+        XCTAssertEqual(choices.models(for: "a").count, 1)
+
+        // Another account signs in: nothing read for the first is shown, before anything is read again.
+        signedIn = "grace"
+        XCTAssertEqual(choices.accounts.count, 0)
+        XCTAssertFalse(choices.accountsLoaded)
+        XCTAssertEqual(choices.withGateway, [])
+        XCTAssertNil(choices.account("a"))
+        XCTAssertNil(choices.newAgentDefault(strixProvider: "anthropic"))
+        XCTAssertEqual(choices.models(for: "a").count, 0)
+        XCTAssertFalse(choices.runsItself(accountId: "claw", provider: "openclaw"))
+
+        // What the second reads is its own, with none of the first's models under it.
+        try await choices.loadAccounts()
+        XCTAssertEqual(choices.accounts.count, 2)
+        XCTAssertEqual(choices.models(for: "a").count, 0, "The first account's models are not kept under the second")
+
+        // And the first, signed in again, is shown nothing of what was read before.
+        signedIn = "ada"
+        XCTAssertEqual(choices.accounts.count, 0)
+        XCTAssertEqual(choices.models(for: "a").count, 0)
+    }
+
     func testAConnectionsModelsAreKeptUnderIt_andAFailedReadKeepsTheListItHad() async {
         struct Unreachable: Error {}
         var fails = false
@@ -162,13 +200,14 @@ final class AgentModelChoicesTests: XCTestCase {
         await gate.arrived(1)
         let second = Task { await choices.loadModels(for: "a") }
         await gate.arrived(2)
-        // The older read lands last.
-        await gate.openFirst()
+        // The newer read lands, and then the older one after it.
+        await gate.openLast()
+        await second.value
+        XCTAssertEqual(choices.models(for: "a").map(\.id), ["read-2"])
         await gate.openFirst()
         await first.value
-        await second.value
 
-        XCTAssertEqual(choices.models(for: "a").map(\.id), ["read-2"])
+        XCTAssertEqual(choices.models(for: "a").map(\.id), ["read-2"], "The older read, landing last, changes nothing")
     }
 
     func testANewAgentStartsOnTheConnectionOfStrixsProvider_elseOnAHealthyOne() async throws {

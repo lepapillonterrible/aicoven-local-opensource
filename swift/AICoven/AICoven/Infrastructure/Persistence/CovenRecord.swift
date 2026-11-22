@@ -660,8 +660,11 @@ actor CovenRepository {
     /// else in its stored settings stays as it is; settings that cannot be
     /// read are not written over (that throws, and nothing is saved).
     /// `account` is whoever pressed Save: nothing is saved if another is
-    /// signed in by the time this runs, and an agent that is not that
-    /// account's is not found. Gives the agent as it was written.
+    /// signed in when this is asked, or when it is asked again with the
+    /// database in hand, just before the write (a write already waiting
+    /// its turn then is still that account's own, of its own agent). An
+    /// agent that is not that account's is not found. Gives the agent as
+    /// it was written.
     func saveAgent(_ roleId: String, _ agent: AgentSaving, as account: String) async throws -> Role {
         guard let agent = agent.storable else { throw CovenRepositoryError.agentIncomplete }
         guard IconRules.isSymbolName(agent.iconSymbol) else { throw CovenRepositoryError.notASymbol }
@@ -696,7 +699,7 @@ actor CovenRepository {
 
     /// Makes an agent in a coven of `account`'s as the agent form shows
     /// it. `account` is whoever pressed Save: nothing is made if another
-    /// is signed in by the time this runs.
+    /// is signed in when this is asked, or just before the write.
     func createAgent(inCoven covenId: String, _ agent: AgentSaving, as account: String) async throws -> Role {
         guard let agent = agent.storable else { throw CovenRepositoryError.agentIncomplete }
         return try await createRole(

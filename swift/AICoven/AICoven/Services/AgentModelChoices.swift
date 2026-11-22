@@ -5,7 +5,8 @@ import SwiftUI
 /// on menu. Models are kept per connection, so a read that finishes after
 /// the person picked another connection lands under its own and never
 /// replaces the newer one's list. What it holds is one account's: a read
-/// that lands after another account signed in is dropped.
+/// that lands after another account signed in is dropped, and what was
+/// read for an account is shown only while that account is signed in.
 @MainActor
 final class AgentModelChoices: ObservableObject {
     /// Where the connections and their models are read from.
@@ -23,14 +24,39 @@ final class AgentModelChoices: ObservableObject {
         )
     }
 
-    @Published private(set) var accounts: [ProviderAccount] = []
+    /// What was read, and the account it was read for.
+    private struct Held {
+        var account: String
+        var accounts: [ProviderAccount] = []
+        var accountsLoaded = false
+        var modelsByAccount: [String: [ProviderInitializationStatus.ModelMetadata]] = [:]
+        var withGateway: Set<String> = []
+    }
+
+    @Published private var held: Held
+
+    /// What is held, while the account it was read for is the one signed
+    /// in: nothing of it once another is.
+    private var shown: Held {
+        let account = signedIn()
+        return held.account == account ? held : Held(account: account)
+    }
+
+    var accounts: [ProviderAccount] {
+        shown.accounts
+    }
+
     /// Whether `accounts` is the person's list, as against not read yet or
     /// a read that failed.
-    @Published private(set) var accountsLoaded = false
-    @Published private(set) var modelsByAccount: [String: [ProviderInitializationStatus.ModelMetadata]] = [:]
+    var accountsLoaded: Bool {
+        shown.accountsLoaded
+    }
+
     /// The OpenClaw connections that name a Gateway: their turns are run
     /// by the agent there, not by a model here.
-    @Published private(set) var withGateway: Set<String> = []
+    var withGateway: Set<String> {
+        shown.withGateway
+    }
 
     /// Counts each connection's model reads, so only the newest one applies.
     private var modelReads: [String: Int] = [:]
@@ -42,6 +68,14 @@ final class AgentModelChoices: ObservableObject {
     init(source: Source = .stored, signedIn: @escaping () -> String = { UserScope.currentUserID }) {
         self.source = source
         self.signedIn = signedIn
+        held = Held(account: signedIn())
+    }
+
+    /// Makes what is held the signed-in account's: what was read for
+    /// another is dropped.
+    private func holdForTheSignedInAccount() {
+        let account = signedIn()
+        if held.account != account { held = Held(account: account) }
     }
 
     /// Reads the person's connections. A read that finishes after a newer
@@ -56,9 +90,10 @@ final class AgentModelChoices: ObservableObject {
             if await source.hasGateway(connection.id) { gateways.insert(connection.id) }
         }
         guard load == accountLoads, signedIn() == account else { return }
-        accounts = read
-        withGateway = gateways
-        accountsLoaded = true
+        holdForTheSignedInAccount()
+        held.accounts = read
+        held.withGateway = gateways
+        held.accountsLoaded = true
     }
 
     func account(_ id: String?) -> ProviderAccount? {
@@ -68,7 +103,7 @@ final class AgentModelChoices: ObservableObject {
 
     func models(for accountId: String?) -> [ProviderInitializationStatus.ModelMetadata] {
         guard let accountId else { return [] }
-        return modelsByAccount[accountId] ?? []
+        return shown.modelsByAccount[accountId] ?? []
     }
 
     /// Asks the connection's provider for its models. A read that fails or
@@ -81,7 +116,8 @@ final class AgentModelChoices: ObservableObject {
         let account = signedIn()
         guard let models = try? await source.models(accountId), !models.isEmpty,
               modelReads[accountId] == read, signedIn() == account else { return }
-        modelsByAccount[accountId] = models
+        holdForTheSignedInAccount()
+        held.modelsByAccount[accountId] = models
     }
 
     /// The connection a new agent starts on: the one of Strix's provider,
@@ -113,26 +149,5 @@ final class AgentModelChoices: ObservableObject {
 
     func usesSteps(accountId: String?, provider: String) -> Bool {
         !runsItself(accountId: accountId, provider: provider)
-    }
-
-    /// Whether the connection's model list leaves out the agent's model, as
-    /// when the provider has dropped it since the agent was saved. No list
-    /// read says nothing.
-    nonisolated static func isUnlisted(model: String, models: [ProviderInitializationStatus.ModelMetadata]) -> Bool {
-        guard !model.isEmpty, !models.isEmpty else { return false }
-        return !models.contains { $0.id == model }
-    }
-
-    /// "GPT-6 Luna · OpenAI": the model's plain name, else its id, and the
-    /// connection it runs on. The connection alone when the agent has no
-    /// model.
-    nonisolated static func modelLine(
-        model: String,
-        models: [ProviderInitializationStatus.ModelMetadata],
-        connection: String
-    ) -> String {
-        if model.isEmpty { return connection }
-        let name = models.first { $0.id == model }?.name ?? model
-        return connection.isEmpty ? name : "\(name) · \(connection)"
     }
 }
