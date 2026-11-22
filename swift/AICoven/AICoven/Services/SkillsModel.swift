@@ -83,16 +83,27 @@ final class SkillsModel: ObservableObject {
     static let couldNotDelete = "Couldn't delete the skill. Try again."
     static let unreadable = "Your encryption key can't open this skill."
 
+    /// What is said under the address of a repository before anything is asked.
+    static let fromGitHubHint = "Each Markdown file directly in a public repository, or in the folder the address names, becomes a skill. "
+        + "Skills are added off: turn on the ones you want your agents to follow."
+
     private let store: SkillRepository
     private let signedIn: () -> String
+    /// What GitHub is asked with.
+    private let session: URLSession
     /// Counts the readings, so that only the latest is shown.
     private var readings = 0
     /// Counts the things asked, so that only the latest says what went wrong.
     private var asks = 0
 
-    init(store: SkillRepository = .shared, signedIn: @escaping () -> String = { UserScope.currentUserID }) {
+    init(
+        store: SkillRepository = .shared,
+        signedIn: @escaping () -> String = { UserScope.currentUserID },
+        session: URLSession = UnkeptFetch.session
+    ) {
         self.store = store
         self.signedIn = signedIn
+        self.session = session
     }
 
     /// Reads the account's skills.
@@ -105,6 +116,8 @@ final class SkillsModel: ObservableObject {
             guard reading == readings, signedIn() == account else { return }
             skills = read
             loadFailed = false
+        } catch is CancellationError {
+            // Whoever asked was called off: nothing was read, and what is shown stays.
         } catch {
             guard reading == readings, signedIn() == account else { return }
             // The kind of failure only.
@@ -143,6 +156,102 @@ final class SkillsModel: ObservableObject {
         case SkillError.empty: empty
         case SkillError.tooMany: tooMany
         default: couldNotAdd
+        }
+    }
+
+    /// What came of adding skills from GitHub.
+    enum FromGitHub: Equatable {
+        /// How many skills were added, and how many Markdown files there
+        /// could not be.
+        case added(Int, notAdded: Int)
+        /// What was typed is no address of a repository on GitHub, or
+        /// GitHub listed nothing for it.
+        case notListed
+        /// The folder holds more files than GitHub lists of one.
+        case notAllListed
+        /// GitHub could not be reached at all.
+        case notReached
+        /// No Markdown file is directly there.
+        case nothingThere
+    }
+
+    /// Adds the Markdown files directly in the place on GitHub that
+    /// `typed` names, each as a skill that is off, for `account`, who
+    /// asked. A file added before from the same place takes its skill's
+    /// place, as the store has it. No more is added once the asking is
+    /// called off or another account is signed in, and then nothing is
+    /// said of what came of it (nil): the list, read again, shows what
+    /// was added.
+    func addFromGitHub(_ typed: String, as account: String) async -> FromGitHub? {
+        _ = asking()
+        // What is no address is not asked of GitHub.
+        let outcome: FromGitHub = if let place = GitHubSkillsPlace(typed) {
+            await added(from: place, as: account)
+        } else {
+            .notListed
+        }
+        // Asked last, whatever came of it and with everything waited for
+        // behind: nothing is said of an adding that was called off, or to
+        // another account.
+        return Task.isCancelled || signedIn() != account ? nil : outcome
+    }
+
+    private func added(from place: GitHubSkillsPlace, as account: String) async -> FromGitHub {
+        let listed: (files: [SkillsOnGitHub.File], leftOut: Int)
+        do {
+            listed = try await SkillsOnGitHub.files(in: place, session: session)
+        } catch SkillsOnGitHub.Failure.notAllListed {
+            return .notAllListed
+        } catch {
+            // The kind of failure only; none of an asking that was called off.
+            if !Task.isCancelled {
+                AppErrorReporter.log(message: "GitHub did not list a place (\(type(of: error)))", context: "SkillsModel.addFromGitHub")
+            }
+            // No answer at all is not a wrong address.
+            return error is URLError ? .notReached : .notListed
+        }
+        guard !listed.files.isEmpty || listed.leftOut > 0 else { return .nothingThere }
+        var added = 0
+        var notAdded = listed.leftOut
+        for file in listed.files {
+            guard !Task.isCancelled, signedIn() == account else { break }
+            do {
+                let text = try await SkillsOnGitHub.text(of: file, session: session)
+                let title = SkillTitle.of(text: text, fileName: file.name, folder: file.folder)
+                _ = try await store.add(title: title, text: text, source: file.address.absoluteString, as: account)
+                added += 1
+            } catch {
+                notAdded += 1
+            }
+        }
+        // Read in a task of its own: one that was called off reads nothing,
+        // and what was added before it was is to be shown.
+        await Task { await self.load() }.value
+        return .added(added, notAdded: notAdded)
+    }
+
+    /// Whether anything was added.
+    static func addedAny(_ outcome: FromGitHub) -> Bool {
+        if case let .added(added, _) = outcome { return added > 0 }
+        return false
+    }
+
+    /// What is said of what came of adding from GitHub.
+    static func words(for outcome: FromGitHub) -> String {
+        func files(_ count: Int) -> String {
+            count == 1 ? "1 file" : "\(count) files"
+        }
+        func skills(_ count: Int) -> String {
+            count == 1 ? "1 skill" : "\(count) skills"
+        }
+        switch outcome {
+        case let .added(added, notAdded: 0): return "Added \(skills(added))."
+        case let .added(0, notAdded): return "\(files(notAdded)) there couldn't be added."
+        case let .added(added, notAdded): return "Added \(skills(added)). \(files(notAdded)) couldn't be added."
+        case .notListed: return "The skills couldn't be added. Check the address."
+        case .notReached: return "Couldn't reach GitHub. Check your connection and try again."
+        case .notAllListed: return "That folder holds more files than GitHub lists at once, so nothing was added. Name a smaller folder."
+        case .nothingThere: return "No Markdown files were found there."
         }
     }
 

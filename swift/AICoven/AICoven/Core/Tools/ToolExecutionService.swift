@@ -41,7 +41,7 @@ actor ToolExecutionService {
         connectedAccountsService = .shared
         hasToolsPack = Self.hasBoughtTheToolsPack
         appSession = .shared
-        pictureSession = FigmaToolService.unkeptSession
+        pictureSession = UnkeptFetch.session
     }
 
     /// Test-friendly initializer that accepts a mock tool service, an
@@ -69,7 +69,7 @@ actor ToolExecutionService {
         self.hasToolsPack = hasToolsPack
         self.appSession = appSession
         // A test's scripted session answers for the pictures too.
-        pictureSession = appSession === URLSession.shared ? FigmaToolService.unkeptSession : appSession
+        pictureSession = appSession === URLSession.shared ? UnkeptFetch.session : appSession
     }
 
     // Configuration

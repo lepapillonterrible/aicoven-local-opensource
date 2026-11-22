@@ -273,55 +273,19 @@ nonisolated extension FigmaToolService {
         case tooLarge
     }
 
-    /// The session rendered pictures are fetched with: one that keeps
-    /// nothing of what it fetches (no cache on disk or in memory, no
-    /// cookies), so that a picture does not outlive its turn on the
-    /// device.
-    static let unkeptSession: URLSession = {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.urlCache = nil
-        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        configuration.httpCookieStorage = nil
-        configuration.httpShouldSetCookies = false
-        configuration.urlCredentialStorage = nil
-        return URLSession(configuration: configuration)
-    }()
-
     /// Fetches a rendered picture from where Figma put it. The token is
     /// not sent (the link is signed), a redirect is not followed, no
     /// more than `largestRenderFetched` bytes are taken, and nothing of
-    /// it is kept by the session it is fetched with.
+    /// it is kept by the session it is fetched with (`UnkeptFetch`).
     @concurrent
-    static func fetchRender(_ link: String, session: URLSession = unkeptSession) async throws -> Data {
+    static func fetchRender(_ link: String, session: URLSession = UnkeptFetch.session) async throws -> Data {
         guard let url = URL(string: link), isFetchable(url) else { throw FetchFailure.notFetchable }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 30
-        request.httpShouldHandleCookies = false
-        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        let (bytes, response) = try await session.bytes(for: request, delegate: NoRedirects())
-        guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else { throw FetchFailure.unavailable }
-        guard response.expectedContentLength <= Int64(largestRenderFetched) else { throw FetchFailure.tooLarge }
-        var data = Data()
-        if response.expectedContentLength > 0 { data.reserveCapacity(Int(response.expectedContentLength)) }
-        for try await byte in bytes {
-            data.append(byte)
-            if data.count > largestRenderFetched { throw FetchFailure.tooLarge }
-        }
-        guard !data.isEmpty else { throw FetchFailure.unavailable }
-        return data
-    }
-
-    /// Follows no redirect: the picture is at the address Figma gave, or
-    /// it is not fetched.
-    private final class NoRedirects: NSObject, URLSessionTaskDelegate {
-        func urlSession(
-            _ session: URLSession,
-            task: URLSessionTask,
-            willPerformHTTPRedirection response: HTTPURLResponse,
-            newRequest request: URLRequest,
-            completionHandler: @escaping (URLRequest?) -> Void
-        ) {
-            completionHandler(nil)
+        do {
+            return try await UnkeptFetch.data(from: url, atMost: largestRenderFetched, session: session)
+        } catch UnkeptFetch.Failure.unavailable {
+            throw FetchFailure.unavailable
+        } catch UnkeptFetch.Failure.tooLarge {
+            throw FetchFailure.tooLarge
         }
     }
 
@@ -333,7 +297,7 @@ nonisolated extension FigmaToolService {
 
     /// Fetches the picture Figma made of one node and makes it what a
     /// model is sent: a JPEG, 1568 pixels on its longest edge at most.
-    static func rendered(from link: String?, session: URLSession = unkeptSession) async -> Rendered {
+    static func rendered(from link: String?, session: URLSession = UnkeptFetch.session) async -> Rendered {
         guard let link else { return .notRendered(reason: "Figma returned no image") }
         let fetched: Data
         do {
