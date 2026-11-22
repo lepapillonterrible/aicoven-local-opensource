@@ -43,7 +43,10 @@ nonisolated struct SkillFile: Equatable {
 /// The account's skills as Settings › Learning & skills shows them: the
 /// list, adding one from a file, turning one on or off, deleting one. What
 /// it shows is one account's: only its latest reading is shown, and
-/// nothing read or done for an account that is no longer signed in.
+/// nothing read or done for an account that is no longer signed in. What
+/// went wrong is said of the latest thing asked only: an earlier one that
+/// fails after a later one was asked is not said over the later one's
+/// outcome (the list, read again, shows how the skill stands).
 @MainActor
 final class SkillsModel: ObservableObject {
     @Published private(set) var skills: [Skill] = []
@@ -51,8 +54,13 @@ final class SkillsModel: ObservableObject {
     @Published private(set) var loadFailed = false
     /// What went wrong with the last thing asked, in words; nil for nothing.
     @Published private(set) var failure: String?
-    /// The skills a change is on its way for: one change of a skill at a time.
+    /// The skills whose switch is on its way: one at a time for a skill.
     @Published private(set) var changing: Set<Skill.ID> = []
+    /// The skills being deleted. A skill is deleted whether or not its
+    /// switch is on its way: Delete, once confirmed, is never dropped.
+    @Published private(set) var deleting: Set<Skill.ID> = []
+
+    static let couldNotLoad = "Couldn't load your skills. Open this page again to retry."
 
     static let couldNotOpen = "AICoven couldn't open that file."
     static let notText = "That file couldn't be read as text."
@@ -69,6 +77,8 @@ final class SkillsModel: ObservableObject {
     private let signedIn: () -> String
     /// Counts the readings, so that only the latest is shown.
     private var readings = 0
+    /// Counts the things asked, so that only the latest says what went wrong.
+    private var asks = 0
 
     init(store: SkillRepository = .shared, signedIn: @escaping () -> String = { UserScope.currentUserID }) {
         self.store = store
@@ -97,14 +107,20 @@ final class SkillsModel: ObservableObject {
     /// Adds the file the person chose as a skill, off. `account` is
     /// whoever chose it. Says what went wrong, if anything did.
     func add(from file: URL, as account: String) async {
-        failure = nil
+        let ask = asking()
         do {
             let read = try SkillFile.read(file)
             _ = try await store.add(title: read.title, text: read.text, source: read.source, as: account)
         } catch {
-            say(Self.words(forNotAdding: error), to: account)
+            say(Self.words(forNotAdding: error), of: ask, to: account)
         }
         await load()
+    }
+
+    /// The file `account` chose was not handed over by the system: said
+    /// as a file that could not be opened.
+    func fileNotHandedOver(to account: String) {
+        say(Self.couldNotOpen, of: asking(), to: account)
     }
 
     /// What is said of a file that was not added.
@@ -119,40 +135,61 @@ final class SkillsModel: ObservableObject {
         }
     }
 
-    /// Turns a skill on or off, once at a time for one skill.
+    /// Turns a skill on or off, as it is listed here: once at a time for
+    /// one skill, and not while it is being deleted (its switch is off
+    /// for both, `isBusy`).
     func setOn(_ isOn: Bool, _ skill: Skill, as account: String) async {
-        guard changing.insert(skill.id).inserted else { return }
+        guard !deleting.contains(skill.id), changing.insert(skill.id).inserted else { return }
         defer { changing.remove(skill.id) }
-        failure = nil
+        let ask = asking()
         do {
-            try await store.setOn(isOn, id: skill.id, as: account)
+            try await store.setOn(isOn, skill, as: account)
         } catch SkillError.changed {
             // Its text is not the one the switch was pressed for: nothing was turned on.
-            say(Self.changedMeanwhile, to: account)
+            say(Self.changedMeanwhile, of: ask, to: account)
+        } catch SkillError.noSuchSkill {
+            // It was deleted meanwhile: the list, read again, shows so.
         } catch {
             AppErrorReporter.log(message: "Could not change a skill (\(type(of: error)))", context: "SkillsModel.setOn")
-            say(Self.couldNotChange, to: account)
+            say(Self.couldNotChange, of: ask, to: account)
         }
         await load()
     }
 
-    /// Deletes a skill, once.
+    /// Deletes a skill, also one whose switch is on its way. A second
+    /// Delete of a skill that is being deleted is the same Delete.
     func delete(_ skill: Skill, as account: String) async {
-        guard changing.insert(skill.id).inserted else { return }
-        defer { changing.remove(skill.id) }
-        failure = nil
+        guard deleting.insert(skill.id).inserted else { return }
+        defer { deleting.remove(skill.id) }
+        let ask = asking()
         do {
             try await store.delete(id: skill.id, as: account)
+        } catch SkillError.noSuchSkill {
+            // It is gone, which is what was asked.
         } catch {
             AppErrorReporter.log(message: "Could not delete a skill (\(type(of: error)))", context: "SkillsModel.delete")
-            say(Self.couldNotDelete, to: account)
+            say(Self.couldNotDelete, of: ask, to: account)
         }
         await load()
     }
 
-    /// Says what went wrong, to the account that asked and no other.
-    private func say(_ words: String, to account: String) {
-        guard signedIn() == account else { return }
+    /// Whether a skill's switch is on its way or it is being deleted: its
+    /// switch is off meanwhile.
+    func isBusy(_ skill: Skill) -> Bool {
+        changing.contains(skill.id) || deleting.contains(skill.id)
+    }
+
+    /// Something new is asked: what was said of the last thing goes.
+    private func asking() -> Int {
+        asks += 1
+        failure = nil
+        return asks
+    }
+
+    /// Says what went wrong with the thing asked as `ask`, if nothing was
+    /// asked since, to the account that asked and no other.
+    private func say(_ words: String, of ask: Int, to account: String) {
+        guard ask == asks, signedIn() == account else { return }
         failure = words
     }
 }

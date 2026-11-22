@@ -25,7 +25,7 @@ struct LearningSettingsView: View {
                         Text(failure)
                             .foregroundStyle(Color.aicovenError)
                     } else if model.loadFailed {
-                        Text("Couldn't load your skills. Open this page again to retry.")
+                        Text(SkillsModel.couldNotLoad)
                             .foregroundStyle(Color.aicovenError)
                     }
                 }
@@ -53,8 +53,14 @@ struct LearningSettingsView: View {
             // For the account that chose the file: read here, not when the
             // file has been read.
             let account = UserScope.currentUserID
-            guard let file = try? result.get().first else { return }
-            Task { await model.add(from: file, as: account) }
+            switch result {
+            case let .success(files):
+                guard let file = files.first else { return }
+                Task { await model.add(from: file, as: account) }
+            case let .failure(error):
+                // Closing the picker is no failure; anything else is said.
+                if (error as? CocoaError)?.code != .userCancelled { model.fileNotHandedOver(to: account) }
+            }
         }
         .confirmationDialog(
             "Delete \(deleting.map(title) ?? "this skill")?",
@@ -76,6 +82,9 @@ struct LearningSettingsView: View {
         .onChange(of: model.failure) { _, failure in
             // Said to VoiceOver too, while the pane is on screen.
             if isOnScreen, let failure { AccessibilityNotification.Announcement(failure).post() }
+        }
+        .onChange(of: model.loadFailed) { _, failed in
+            if isOnScreen, failed { AccessibilityNotification.Announcement(SkillsModel.couldNotLoad).post() }
         }
     }
 
@@ -99,7 +108,7 @@ struct LearningSettingsView: View {
                         Task { await model.setOn(isOn, skill, as: account) }
                     }
                 ))
-                .disabled(model.changing.contains(skill.id))
+                .disabled(model.isBusy(skill))
             }
         }
         .swipeActions(edge: .trailing) {
