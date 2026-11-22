@@ -51,8 +51,10 @@ final class MemoryProposalQuestions {
     }
 
     /// Asks about a proposal of `account`'s made in `threadID`, without
-    /// waiting for the answer: once no turn runs in that thread, so the
-    /// question never comes up under the reply that proposed it. An
+    /// waiting for the answer: once the thread has been seen with no turn
+    /// running, so the question does not come up under the reply that
+    /// proposed it (a later turn of the thread can be running by the time
+    /// it shows, as with any approval). An
     /// answer is taken only while that account is still the one signed
     /// in. If the answer cannot be kept (it failed, or the proposal was
     /// being reviewed elsewhere just then) and the proposal still waits,

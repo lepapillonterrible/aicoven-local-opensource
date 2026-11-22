@@ -357,12 +357,14 @@ final class MemoryProposalQuestionsTests: XCTestCase {
         // Nor is one of the account's own moved there.
         let mine = try await newCoven()
         let own = try await propose("Mine", in: mine)
-        do {
-            try await queue.write { db in
-                try db.execute(sql: "UPDATE memory_proposals SET coven_id = ? WHERE id = ?", arguments: [theirs, own.id])
-            }
-            XCTFail("Moved a proposal to another account's coven")
-        } catch {}
+        for coven in [theirs, "no-such-coven-\(UUID().uuidString)"] {
+            do {
+                try await queue.write { db in
+                    try db.execute(sql: "UPDATE memory_proposals SET coven_id = ? WHERE id = ?", arguments: [coven, own.id])
+                }
+                XCTFail("Moved a proposal to \(coven)")
+            } catch {}
+        }
         // One proposed in no coven is stored.
         let personal = try await proposals.insertProposal(
             eventId: nil, covenId: nil, proposedContent: "About the person", proposedTags: nil, scope: "user", reason: nil,
