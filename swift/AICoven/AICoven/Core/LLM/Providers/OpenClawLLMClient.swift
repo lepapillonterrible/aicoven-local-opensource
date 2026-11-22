@@ -235,16 +235,19 @@ final class OpenClawLLMClient: LLMClient, @unchecked Sendable {
             )
         } : nil
 
-        let body = RequestBody(
-            model: model,
-            messages: reqMessages,
-            temperature: options.temperature,
-            max_tokens: options.maxTokens,
-            tools: toolDefs
-        )
-        request.httpBody = try JSONEncoder().encode(body)
-
-        let (data, response) = try await urlSession.data(for: request)
+        // A server that passes the request on to a model that takes no
+        // temperature may refuse it as the model does.
+        let (data, response) = try await ModelTemperature.send(
+            request, to: model, of: providerID, temperature: options.temperature, with: urlSession
+        ) { temperature in
+            try JSONEncoder().encode(RequestBody(
+                model: model,
+                messages: reqMessages,
+                temperature: temperature,
+                max_tokens: options.maxTokens,
+                tools: toolDefs
+            ))
+        }
         if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
             let message = "\(providerName) HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
             throw NSError(

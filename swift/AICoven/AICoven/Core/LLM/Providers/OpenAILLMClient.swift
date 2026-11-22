@@ -101,7 +101,7 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
         struct RequestBody: Encodable {
             let model: String
             let messages: [RequestMessage]
-            let temperature: Double
+            let temperature: Double?
             let tools: [ToolDef]?
         }
         // Response structures
@@ -176,15 +176,11 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
             )
         } : nil
 
-        let body = RequestBody(
-            model: model,
-            messages: reqMessages,
-            temperature: options.temperature,
-            tools: toolDefs
-        )
-        request.httpBody = try JSONEncoder().encode(body)
-
-        let (data, response) = try await urlSession.data(for: request)
+        let (data, response) = try await ModelTemperature.send(
+            request, to: model, of: providerID, temperature: options.temperature, with: urlSession
+        ) { temperature in
+            try JSONEncoder().encode(RequestBody(model: model, messages: reqMessages, temperature: temperature, tools: toolDefs))
+        }
         if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
             let message = "\(providerName) HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
             throw NSError(
