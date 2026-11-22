@@ -10,7 +10,9 @@ import UIKit
 /// behind other apps; the Mac may still sleep when left idle. On the
 /// iPhone and iPad it asks for the time the system gives an app that has
 /// left the screen to finish what it is doing: about half a minute, never
-/// promised, after which the turn waits until the app is opened again.
+/// promised, after which the system may suspend the app or end it. A turn
+/// of the app's own that was cut off says so when the app is opened again;
+/// an agent of the person's own goes on by itself and is followed again.
 /// While no turn runs, nothing is held.
 @MainActor
 final class TurnKeepAlive {
@@ -31,8 +33,10 @@ final class TurnKeepAlive {
             let activity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep, reason: "A turn is running")
             return { ProcessInfo.processInfo.endActivity(activity) }
             #else
+            // The system calls this on the main thread and gives the app
+            // only until it returns: the asking is ended in the call itself.
             let task = UIApplication.shared.beginBackgroundTask(withName: "A turn is running") {
-                Task { @MainActor in expired() }
+                MainActor.assumeIsolated { expired() }
             }
             return { if task != .invalid { UIApplication.shared.endBackgroundTask(task) } }
             #endif
@@ -48,8 +52,9 @@ final class TurnKeepAlive {
     private var timeWasUp = false
     private var followed: AnyCancellable?
 
-    init(system: System = .live) {
-        self.system = system
+    /// The system's own side unless a test gives another.
+    init(system: System? = nil) {
+        self.system = system ?? .live
     }
 
     func follow(_ engine: TurnEngine) {
@@ -82,6 +87,8 @@ final class TurnKeepAlive {
             self?.timeWasUp = true
             self?.release()
         }
+        // The time was up before the asking was even given: it is ended all the same.
+        if timeWasUp { release() }
     }
 
     private func release() {

@@ -9,11 +9,14 @@ final class TurnKeepAliveTests: XCTestCase {
         var begun = 0
         var ended = 0
         var expire: (@MainActor () -> Void)?
+        /// Whether the system says the time is up while it is being asked.
+        var expiresAsItIsAsked = false
 
         var system: TurnKeepAlive.System {
             TurnKeepAlive.System { [self] expired in
                 begun += 1
                 expire = expired
+                if expiresAsItIsAsked { expired() }
                 return { [self] in ended += 1 }
             }
         }
@@ -54,5 +57,18 @@ final class TurnKeepAliveTests: XCTestCase {
         XCTAssertEqual(system.begun, 2, "With the app in front again, the turn that still runs is held")
         keeping.turnsChanged(areRunning: false)
         XCTAssertEqual(system.ended, 2)
+    }
+
+    func testTimeThatIsUpWhileTheSystemIsBeingAskedEndsTheAskingToo() {
+        let system = System()
+        system.expiresAsItIsAsked = true
+        let keeping = TurnKeepAlive(system: system.system)
+
+        keeping.turnsChanged(areRunning: true)
+        XCTAssertEqual(system.begun, 1)
+        XCTAssertEqual(system.ended, 1, "Nothing is left held that the system has called in")
+
+        keeping.turnsChanged(areRunning: false)
+        XCTAssertEqual(system.ended, 1, "And it is ended once")
     }
 }
