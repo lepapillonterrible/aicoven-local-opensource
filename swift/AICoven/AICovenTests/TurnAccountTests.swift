@@ -33,6 +33,23 @@ private final class ScriptedModel: LLMClient, @unchecked Sendable {
     }
 }
 
+/// The same model, for a provider that streams its final answer.
+private final class StreamingScriptedModel: StreamingLLMClient, @unchecked Sendable {
+    let model: ScriptedModel
+
+    init(_ model: ScriptedModel) {
+        self.model = model
+    }
+
+    func completeChat(messages: [LLMMessage], model name: String, options: ChatOptions) async throws -> LLMChatResponse {
+        try await model.completeChat(messages: messages, model: name, options: options)
+    }
+
+    func embed(texts: [String], model name: String) async throws -> [[Float]] {
+        try await model.embed(texts: texts, model: name)
+    }
+}
+
 /// Who is signed in, changed by the test. Sendable by hand, under its lock.
 private final class SignedIn: @unchecked Sendable {
     private let lock = NSLock()
@@ -78,7 +95,7 @@ final class TurnAccountTests: XCTestCase {
         try await super.tearDown()
     }
 
-    private func chat(with model: ScriptedModel, signedIn: SignedIn) -> ChatService {
+    private func chat(with model: any LLMClient, signedIn: SignedIn) -> ChatService {
         ChatService(
             contextBuilder: ContextBuilder(limits: .init(maxRecentMessages: 4, maxRecentMemories: 4)),
             modelRouter: HeuristicModelRouter(availableModels: [ModelDescriptor(
@@ -114,6 +131,55 @@ final class TurnAccountTests: XCTestCase {
         XCTAssertEqual(model.timesAsked, 1, "What the tool told is not sent: the model is not asked again")
         XCTAssertEqual(states.last?.status, .failed, "The turn ends there")
         XCTAssertEqual(states.last?.answer, "Error: " + ChatService.accountChangedMessage)
+    }
+
+    func testTheFinalAnswerIsNotAskedForOnceAnotherAccountHasSignedIn_streamedOrNot() async throws {
+        // One tool step, so that the answer after it is the final one.
+        let key = UserScope.scopedKey("chat_max_tool_steps")
+        let before = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.set(1, forKey: key)
+        addTeardownBlock { UserDefaults.standard.set(before, forKey: key) }
+
+        for streams in [false, true] {
+            let thread = try await newThread()
+            let signedIn = SignedIn(UserScope.currentUserID)
+            let model = ScriptedModel(
+                answering: [#"{"tool":"current_time","input":null,"reason":"to know the time"}"#, "It is noon."],
+                whenFirstAsked: { signedIn.now = "someone-else" }
+            )
+            let client: any LLMClient = streams ? StreamingScriptedModel(model) : model
+            let states = States()
+            try await chat(with: client, signedIn: signedIn).streamMessage(
+                threadId: thread, message: "What time is it?", onStateChange: { states.add($0) }
+            )
+            XCTAssertEqual(model.timesAsked, 1, "The final answer is not asked for (streams: \(streams))")
+            XCTAssertEqual(states.last?.status, .failed)
+            XCTAssertEqual(states.last?.answer, "Error: " + ChatService.accountChangedMessage, "Said plainly (streams: \(streams))")
+        }
+    }
+
+    func testATurnThatThrowsBecauseAnotherAccountSignedInSaysSoPlainly() {
+        let ending = TurnProgress(agentName: nil).ending(in: "t", thrown: RepositoryError.accountChanged)
+        XCTAssertEqual(ending.outcome, .failed)
+        XCTAssertEqual(ending.message.content, ChatService.accountChangedMessage, "Not as a provider's failure")
+        let other = TurnProgress(agentName: nil).ending(in: "t", thrown: URLError(.timedOut))
+        XCTAssertTrue(other.message.content.hasPrefix("I ran into an error while contacting your provider"))
+    }
+
+    func testATurnsContextIsBuiltAsTheAccountItBeganAs_andOnlyWhileThatAccountIsSignedIn() async throws {
+        // Another account is signed in by the time the turn's next context is built.
+        let asAnother = ContextBuilder(limits: .init(maxRecentMessages: 4, maxRecentMemories: 4), signedIn: { "someone-else" })
+        do {
+            _ = try await asAnother.buildContext(threadID: nil, userMessage: "Hello", maxContextTokens: 8000, toolConfig: .noTools, as: UserScope.currentUserID)
+            XCTFail("Not built as whoever has signed in since")
+        } catch RepositoryError.accountChanged {}
+
+        // As the same account it is built, with or without being told whose turn it is.
+        let builder = ContextBuilder(limits: .init(maxRecentMessages: 4, maxRecentMemories: 4))
+        let told = try await builder.buildContext(threadID: nil, userMessage: "Hello", maxContextTokens: 8000, toolConfig: .noTools, as: UserScope.currentUserID)
+        XCTAssertTrue(told.contains { $0.role == .user && $0.content == "Hello" })
+        let untold = try await builder.buildContext(threadID: nil, userMessage: "Hello", maxContextTokens: 8000, toolConfig: .noTools)
+        XCTAssertTrue(untold.contains { $0.role == .user && $0.content == "Hello" })
     }
 
     func testATurnOfTheSameAccountGoesOnAsBefore() async throws {

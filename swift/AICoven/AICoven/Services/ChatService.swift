@@ -736,7 +736,8 @@ actor ChatService {
                 images: attached.pictures + (turnPictures?.images ?? []),
                 maxContextTokens: promptBudget,
                 toolConfig: toolConfig,
-                agent: agent
+                agent: agent,
+                as: turnAccount
             )
 
             do {
@@ -1112,13 +1113,16 @@ actor ChatService {
                 images: attached.pictures + (turnPictures?.images ?? []),
                 maxContextTokens: promptBudget,
                 toolConfig: finalToolConfig,
-                agent: agent
+                agent: agent,
+                as: turnAccount
             )
 
             // A stopped turn does not ask for its answer.
             try Task.checkCancellation()
-            try await requireStill(turnAccount)
             do {
+                // Whoever began the turn is still signed in, or nothing
+                // more is sent: said like any other failure of the answer.
+                try await requireStill(turnAccount)
                 // If the client supports streaming, use token-by-token delivery
                 // for the final answer so the user sees text appear in real time.
                 if let streamingClient = client as? StreamingLLMClient {

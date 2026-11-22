@@ -329,16 +329,21 @@ struct ContextBuilder {
     ///   - agent: Who answers the turn. Its instructions are what the model
     ///     is told first; with none given (an agent run of the app's own),
     ///     or one of another account, nothing is said of who answers.
-    /// - Throws: `RepositoryError.accountChanged` if another account is
-    ///   signed in by the time the context has been read: what was read is
-    ///   given to no turn then.
+    ///   - turnAccount: The account the turn began as. Its context is read
+    ///     as that account, and only while it is the one signed in; with
+    ///     none given, as whoever is signed in when this is asked.
+    /// - Throws: `RepositoryError.accountChanged` if the turn's account is
+    ///   not the one signed in when this is asked, or another is signed in
+    ///   by the time the context has been read: what was read is given to
+    ///   no turn then.
     func buildContext(
         threadID: String?,
         userMessage: String,
         images: [LLMImage] = [],
         maxContextTokens: Int? = nil,
         toolConfig: ToolConfig? = nil,
-        agent: Agent? = nil
+        agent: Agent? = nil,
+        as turnAccount: String? = nil
     ) async throws -> [LLMMessage] {
         let config = toolConfig ?? .default
 
@@ -352,8 +357,11 @@ struct ContextBuilder {
 
         // Whose turn it is, read once: who answers, where the thread is,
         // what its scope's agents are told and its memory are all read as
-        // the same account.
-        let account = signedIn()
+        // the same account. A turn that began as an account is built its
+        // context as that account, and only while it is the one signed in:
+        // not as whoever has signed in since.
+        let account = turnAccount ?? signedIn()
+        guard signedIn() == account else { throw RepositoryError.accountChanged }
 
         // Layer 1: system contract (with tool documentation if tools are enabled)
         let systemPrompt: String = if !config.enabledTools.isEmpty {

@@ -652,7 +652,13 @@ struct TurnProgress {
             return (.cancelled, Self.message(in: threadID, role: "assistant", content: content, metadata: named), trace)
         }
         if let thrown {
-            let text = "I ran into an error while contacting your provider: \(thrown.localizedDescription)"
+            // A turn cut off because another account signed in says so
+            // plainly: it is no failure of a provider.
+            let text = if case RepositoryError.accountChanged = thrown {
+                ChatService.accountChangedMessage
+            } else {
+                "I ran into an error while contacting your provider: \(thrown.localizedDescription)"
+            }
             return (.failed, Self.message(in: threadID, role: "assistant", content: text, metadata: named), trace)
         }
         // The chat service's last report is its outcome: the answer, or what
