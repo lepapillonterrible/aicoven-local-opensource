@@ -502,7 +502,7 @@ final class DatabaseManager {
                 CREATE TRIGGER covens_take_their_context
                 AFTER DELETE ON covens
                 BEGIN
-                    DELETE FROM coven_context WHERE coven_id = OLD.id;
+                    DELETE FROM coven_context WHERE user_id = OLD.user_id AND coven_id = OLD.id;
                 END;
                 """)
             }

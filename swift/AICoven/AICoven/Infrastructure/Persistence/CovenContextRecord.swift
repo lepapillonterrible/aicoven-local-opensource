@@ -59,15 +59,18 @@ actor CovenContextRepository {
     /// Keeps `text` as what every agent of `account`'s coven (Strix for
     /// nil) is told, and answers with what was kept (`kept(_:)`); an
     /// empty text keeps nothing. Throws unless `account` is the one
-    /// signed in with its own key in memory while the text is encrypted;
-    /// a coven's text is kept only for a coven of that account.
+    /// signed in with its own key in memory, whether a text is kept or
+    /// what was kept is removed; a coven's text is kept only for a coven
+    /// of that account.
     @discardableResult
     func setContext(_ text: String, forCoven covenID: String?, as account: String) async throws -> String {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         let text = Self.kept(text)
         let coven = covenID ?? ""
         guard !text.isEmpty else {
-            guard await MainActor.run(body: { UserScope.currentUserID }) == account else { throw RepositoryError.accountChanged }
+            // As any change of it: only as the account signed in, with its
+            // own key in memory.
+            try await AccountSeal.requireKey(of: account, since: DataEncryptionService.shared.keyEpoch)
             try await dbQueue.write { db in
                 try db.execute(sql: "DELETE FROM coven_context WHERE user_id = ? AND coven_id = ?", arguments: [account, coven])
             }

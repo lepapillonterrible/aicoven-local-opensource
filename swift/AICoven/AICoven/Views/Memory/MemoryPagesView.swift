@@ -51,8 +51,9 @@ struct MemoryPagesView: View {
     @State private var knows: String?
     @State private var knowsReadFailed = false
     @State private var knowsFailure: String?
-    /// Counts saves of the text: a read that began before one is not applied.
-    @State private var knowsSaves = 0
+    /// Counts the reads and the saves of the text: a read is applied only
+    /// if nothing has been read or saved since it began.
+    @State private var knowsRequests = 0
 
     /// A section of the page; `page` is `nil` for About me.
     private struct MemorySection: Hashable {
@@ -166,19 +167,25 @@ struct MemoryPagesView: View {
     private static let knowsMaxLength = CovenContextRepository.longest
 
     /// Reads the scope's text, as the account signed in when it is asked
-    /// for. A read that lands after a save began, or once another account
-    /// is signed in, is not applied.
+    /// for. A read is applied only if it is still the latest thing asked
+    /// of the text (no other read, and no save, since it began), nothing
+    /// is being saved, and the same account is signed in.
     private func readKnows() async {
         let account = UserScope.currentUserID
-        let saves = knowsSaves
+        knowsRequests += 1
+        let request = knowsRequests
         knowsReadFailed = false
+        var isCurrent: Bool {
+            request == knowsRequests && !isSavingKnows && !Task.isCancelled && UserScope.currentUserID == account
+        }
         do {
             let text = try await CovenContextRepository.shared.context(ofCoven: scope.covenID, as: account)
-            guard saves == knowsSaves, UserScope.currentUserID == account else { return }
+            guard isCurrent else { return }
             knows = text
         } catch {
-            guard !Task.isCancelled, saves == knowsSaves, UserScope.currentUserID == account else { return }
+            guard isCurrent else { return }
             knowsReadFailed = true
+            announce("Couldn't load it. Try again.")
         }
     }
 
@@ -227,7 +234,7 @@ struct MemoryPagesView: View {
         }
         .buttonStyle(.plain)
         .disabled(draftHeld || (knows == nil && !knowsReadFailed))
-        .accessibilityHint("Edits it here")
+        .accessibilityHint(knowsReadFailed ? "Reads it again" : "Edits it here")
         .accessibilityIdentifier("memory-knows-row")
     }
 
@@ -339,7 +346,7 @@ struct MemoryPagesView: View {
             return
         }
         let account = UserScope.currentUserID
-        knowsSaves += 1
+        knowsRequests += 1
         isSavingKnows = true
         knowsFailure = nil
         Task {
@@ -648,7 +655,10 @@ struct MemoryPagesView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.aicovenError)
-                .disabled(isForgetting)
+                // Not while it is being forgotten, nor while a field holds
+                // unsaved text (a Forget that failed leaves its question
+                // in the row, and a field can have been opened meanwhile).
+                .disabled(isForgetting || draftHeld)
                 .onKeyPress(keys: [.return, .space]) { _ in
                     forget(entry, in: place)
                     return .handled
@@ -929,6 +939,7 @@ struct MemoryPagesView: View {
     }
 
     private func forget(_ entry: Memory, in place: MemoryPlace) {
+        guard !draftHeld else { return }
         // Focus goes to the next row in the section, or its heading.
         let section = sections.first { section in
             model.entries(on: section.page, in: self.place(of: section)).contains { $0.id == entry.id }

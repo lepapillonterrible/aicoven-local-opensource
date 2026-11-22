@@ -98,6 +98,16 @@ final class CovenContextTests: XCTestCase {
         await refused("Kept with another account's key", with: .dataLocked) {
             try await self.store.setContext("Sealed with another's key", forCoven: coven, as: self.account)
         }
+        await refused("Cleared with another account's key", with: .dataLocked) {
+            try await self.store.setContext("", forCoven: coven, as: self.account)
+        }
+        await DataEncryptionService.shared.lock()
+        await refused("Cleared while the data is locked", with: .dataLocked) {
+            try await self.store.setContext("", forCoven: coven, as: self.account)
+        }
+        await refused("Read while the data is locked", with: .dataLocked) {
+            _ = try await self.store.context(ofCoven: coven, as: self.account)
+        }
 
         // Under a key that cannot open it, it is not taken for nothing.
         await DataEncryptionService.shared.unlockForTestingEphemeral()
@@ -118,6 +128,39 @@ final class CovenContextTests: XCTestCase {
             try await store.setContext("For a coven that is not there", forCoven: "no-such-coven-\(UUID().uuidString)", as: account)
             XCTFail("Kept a text for a coven that is not there")
         } catch {}
+
+        // Whatever writes the row: not without an account, and not for another account's coven.
+        let rows = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        let theirs = "their-coven-\(UUID().uuidString)"
+        let mine = try await newCoven()
+        let account = account
+        try await rows.write { db in
+            try db.execute(
+                sql: "INSERT INTO covens (id, name, created_at, updated_at, user_id) VALUES (?, ?, ?, ?, ?)",
+                arguments: [theirs, "Theirs", Date(), Date(), "someone-else"]
+            )
+        }
+        addTeardownBlock {
+            try? await rows.write { db in try db.execute(sql: "DELETE FROM covens WHERE id = ?", arguments: [theirs]) }
+        }
+        func refusedRow(_ what: String, _ sql: String, _ arguments: StatementArguments) async {
+            do {
+                try await rows.write { db in try db.execute(sql: sql, arguments: arguments) }
+                XCTFail(what)
+            } catch {}
+        }
+        let insert = "INSERT INTO coven_context (user_id, coven_id, text_ciphertext, updated_at) VALUES (?, ?, ?, ?)"
+        await refusedRow("Stored a row with no account", insert, [" ", "", Data("x".utf8), Date()])
+        await refusedRow("Stored a row for another account's coven", insert, [account, theirs, Data("x".utf8), Date()])
+        try await store.setContext("Mine", forCoven: mine, as: account)
+        await refusedRow(
+            "Moved a row to another account's coven",
+            "UPDATE coven_context SET coven_id = ? WHERE user_id = ? AND coven_id = ?", [theirs, account, mine]
+        )
+        await refusedRow(
+            "Gave a row to no account",
+            "UPDATE coven_context SET user_id = '' WHERE user_id = ? AND coven_id = ?", [account, mine]
+        )
 
         let coven = try await newCoven()
         let other = try await newCoven()
@@ -174,5 +217,11 @@ final class CovenContextTests: XCTestCase {
         try await store.setContext("", forCoven: coven, as: account)
         let toldNothing = try await told(inCoven)
         XCTAssertFalse(toldNothing.contains { $0.contains("## Coven Context") })
+
+        // Nor where what is kept cannot be opened: the turn goes on without it.
+        try await store.setContext("Written under another key.", forCoven: coven, as: account)
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        let toldUnreadable = try await told(inCoven)
+        XCTAssertFalse(toldUnreadable.contains { $0.contains("## Coven Context") })
     }
 }
