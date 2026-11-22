@@ -16,7 +16,7 @@ struct AgentRunsOnRow: View {
     }
 
     private var connectionName: String {
-        account?.displayName ?? (draft.provider.isEmpty ? "" : providerDisplayName(slug: draft.provider))
+        choices.connectionName(accountId: draft.accountId, provider: draft.provider)
     }
 
     private var line: String {
@@ -138,18 +138,30 @@ extension AgentModelChoices {
         return Self.modelLine(
             model: runsItself(accountId: role.providerAccountId, provider: provider) ? "" : role.model ?? "",
             models: models(for: role.providerAccountId),
-            connection: account(role.providerAccountId)?.displayName ?? (provider.isEmpty ? "" : providerDisplayName(slug: provider))
+            connection: connectionName(accountId: role.providerAccountId, provider: provider)
         )
     }
 
+    /// A connection's name as the person gave it; the provider's name
+    /// where the connection is not among the person's (or not read yet).
+    func connectionName(accountId: String?, provider: String) -> String {
+        account(accountId)?.displayName ?? (provider.isEmpty ? "" : providerDisplayName(slug: provider))
+    }
+
     /// Reads the connections and, for those `agents` run on, their models,
-    /// which name the models in a list's rows. What cannot be read leaves
-    /// the rows with the models' ids.
+    /// which name the models in a list's rows: each connection's at the
+    /// same time, so a slow provider keeps only its own rows waiting. What
+    /// cannot be read leaves the rows with the models' ids.
     func loadModelNames(for agents: [Role]) async {
         guard await (try? loadAccounts()) != nil else { return }
-        for id in Set(agents.compactMap(\.providerAccountId)) where models(for: id).isEmpty {
-            guard let account = account(id), !runsItself(accountId: id, provider: account.provider) else { continue }
-            await loadModels(for: id)
+        let unread = Set(agents.compactMap(\.providerAccountId)).filter { id in
+            guard models(for: id).isEmpty, let account = account(id) else { return false }
+            return !runsItself(accountId: id, provider: account.provider)
+        }
+        await withTaskGroup(of: Void.self) { reads in
+            for id in unread {
+                reads.addTask { await self.loadModels(for: id) }
+            }
         }
     }
 
