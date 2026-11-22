@@ -525,8 +525,11 @@ final class AssetStoreTests: XCTestCase {
         XCTAssertEqual(AssetFile.keptName(".."), "file")
         XCTAssertEqual(AssetFile.keptName(""), "file")
         XCTAssertEqual(AssetFile.keptName(String(repeating: "n", count: 300)).count, 255)
+        XCTAssertLessThanOrEqual(AssetFile.keptName(String(repeating: "é", count: 300)).utf8.count, 255, "What a file system takes for a name, in bytes")
+        XCTAssertEqual(AssetFile.keptName("Report: Q3.pdf"), "Report- Q3.pdf", "A colon does not cut the name")
+        XCTAssertEqual(AssetFile.keptName("Meeting 10:30.png"), "Meeting 10-30.png")
         // A separator with a mark put on it is still a separator: read by scalar, not by character.
-        for sly in ["../\u{0301}secret.txt", "..\\\u{0301}secret.txt", "a:\u{0301}secret.txt", "/\u{0308}/\u{0301}secret.txt"] {
+        for sly in ["../\u{0301}secret.txt", "..\\\u{0301}secret.txt", "/\u{0308}/\u{0301}secret.txt"] {
             let kept = AssetFile.keptName(sly)
             XCTAssertEqual(kept, "\u{0301}secret.txt", sly)
             XCTAssertFalse(kept.unicodeScalars.contains { $0 == "/" || $0 == "\\" || $0 == ":" }, sly)
@@ -549,7 +552,7 @@ final class AssetStoreTests: XCTestCase {
 
     func testAnAssetWrittenAfterTheDataWasLockedIsTakenBack() async throws {
         // Locked once everything was sealed, before the write has its turn.
-        let late = AssetRepository(beforeWriting: { await DataEncryptionService.shared.lock() })
+        let late = AssetRepository(at: { step in if step == .beforeWriting { await DataEncryptionService.shared.lock() } })
         do {
             _ = try await late.create(type: .image, title: "Too late", files: [file("l.png")], inCoven: nil, as: account)
             XCTFail("Nothing is made once the account's data is locked")
@@ -577,7 +580,7 @@ final class AssetStoreTests: XCTestCase {
         }
         let before = try await stored()
 
-        let late = AssetRepository(beforeWriting: { await DataEncryptionService.shared.lock() })
+        let late = AssetRepository(at: { step in if step == .beforeWriting { await DataEncryptionService.shared.lock() } })
         do {
             try await late.move(made.id, to: .proposed, as: account)
             XCTFail("Nothing is changed once the account's data is locked")
@@ -591,21 +594,34 @@ final class AssetStoreTests: XCTestCase {
     private actor Gate {
         private var held: [CheckedContinuation<Void, Never>] = []
         private(set) var arrivals = 0
-        private var hearing: [CheckedContinuation<Void, Never>] = []
+        private var noted = 0
+        private var hearing: [(arrivals: Int, noted: Int, continuation: CheckedContinuation<Void, Never>)] = []
 
         func wait() async {
             await withCheckedContinuation { continuation in
                 held.append(continuation)
                 arrivals += 1
-                hearing.forEach { $0.resume() }
-                hearing = []
+                tell()
             }
         }
 
-        /// Returns once someone has come to wait.
-        func someoneArrived() async {
-            if arrivals > 0 { return }
-            await withCheckedContinuation { hearing.append($0) }
+        /// Something happened that the test waits to hear of.
+        func note() {
+            noted += 1
+            tell()
+        }
+
+        private func tell() {
+            for heard in hearing where arrivals >= heard.arrivals && noted >= heard.noted {
+                heard.continuation.resume()
+            }
+            hearing.removeAll { arrivals >= $0.arrivals && noted >= $0.noted }
+        }
+
+        /// Returns once this many have come to wait and this many things were noted.
+        func heard(arrivals wanted: Int = 0, noted wantedNoted: Int = 0) async {
+            if arrivals >= wanted, noted >= wantedNoted { return }
+            await withCheckedContinuation { hearing.append((wanted, wantedNoted, $0)) }
         }
 
         func letThrough() {
@@ -627,11 +643,18 @@ final class AssetStoreTests: XCTestCase {
 
         // The first change waits just before its write; the second is asked meanwhile.
         let gate = Gate()
-        let late = AssetRepository(beforeWriting: { await gate.wait() })
+        let late = AssetRepository(at: { step in
+            switch step {
+            case .asked: await gate.note()
+            case .beforeWriting: await gate.wait()
+            }
+        })
         let account = account
         let first = Task { try await late.move(made.id, to: .proposed, as: account) }
-        await gate.someoneArrived()
+        await gate.heard(arrivals: 1)
         let second = Task { try await late.move(made.id, to: .approved, as: account) }
+        // Both are under way, the data still unlocked: only then is it locked.
+        await gate.heard(noted: 2)
         await DataEncryptionService.shared.lock()
         await gate.letThrough()
 

@@ -71,12 +71,32 @@ actor AssetRepository {
         let size: Int
     }
 
-    /// Runs just before a write, after everything it writes was looked at
-    /// and sealed: nothing in the app; a test locks the data there.
-    private let beforeWriting: (@Sendable () async -> Void)?
+    /// Where a test may step in: nothing in the app does.
+    enum Step {
+        /// A status change was asked for, before it waits its turn.
+        case asked
+        /// Just before a write, after everything it writes was looked at
+        /// and sealed.
+        case beforeWriting
+    }
 
-    init(beforeWriting: (@Sendable () async -> Void)? = nil) {
-        self.beforeWriting = beforeWriting
+    private let at: (@Sendable (Step) async -> Void)?
+
+    init(at: (@Sendable (Step) async -> Void)? = nil) {
+        self.at = at
+    }
+
+    /// Takes back what a rejected write wrote, whatever became of whoever
+    /// asked: one that was called off still has its write taken back. If
+    /// it cannot be, that is logged, by its kind only.
+    private func takeBack(in dbQueue: DatabaseQueue, _ undo: @escaping @Sendable (Database) throws -> Void) async {
+        await Task {
+            do {
+                try await dbQueue.write(undo)
+            } catch {
+                AppErrorReporter.log(message: "A rejected asset write could not be taken back (\(type(of: error)))", context: "AssetRepository")
+            }
+        }.value
     }
 
     private func getDbQueue() async -> DatabaseQueue? {
@@ -162,7 +182,7 @@ actor AssetRepository {
         let holding = AttachmentStore.holdingThreadID(for: account)
         // The sealed files are taken into the write as one value.
         let toWrite = sealedFiles
-        await beforeWriting?()
+        await at?(.beforeWriting)
         try await dbQueue.write { db in
             // Counted in the write that adds it.
             let count = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM assets WHERE user_id = ? AND coven_id = ?", arguments: [account, coven]) ?? 0
@@ -208,7 +228,7 @@ actor AssetRepository {
         } catch {
             // The account's data was locked, or changed hands, while the
             // write waited its turn: what it wrote is taken back.
-            _ = try? await dbQueue.write { db in
+            await takeBack(in: dbQueue) { db in
                 try db.execute(sql: "DELETE FROM assets WHERE id = ? AND user_id = ?", arguments: [id, account])
             }
             throw error
@@ -373,6 +393,7 @@ actor AssetRepository {
     func move(_ id: String, to next: AssetStatus, as account: String) async throws -> Date {
         let before = lastMove
         let moving = Task { () throws -> Date in
+            await self.at?(.asked)
             await before?.value
             return try await self.moveInTurn(id, to: next, as: account)
         }
@@ -388,7 +409,7 @@ actor AssetRepository {
         let epoch = await DataEncryptionService.shared.keyEpoch
         try await AccountSeal.requireKey(of: account, since: epoch)
         let now = Date()
-        await beforeWriting?()
+        await at?(.beforeWriting)
         // How it stood before, as it is stored, to put it back by.
         let before: (status: String, changed: String) = try await dbQueue.write { db in
             let stored = try Row.fetchOne(db, sql: "SELECT status, updated_at FROM assets WHERE id = ? AND user_id = ?", arguments: [id, account])
@@ -411,10 +432,11 @@ actor AssetRepository {
             // The account's data was locked, or changed hands, while the
             // write waited its turn: the asset is put back as it stood,
             // unless something has changed it since.
-            _ = try? await dbQueue.write { db in
+            let stood = before
+            await takeBack(in: dbQueue) { db in
                 try db.execute(
                     sql: "UPDATE assets SET status = ?, updated_at = ? WHERE id = ? AND user_id = ? AND status = ? AND updated_at = ?",
-                    arguments: [before.status, before.changed, id, account, next.rawValue, now]
+                    arguments: [stood.status, stood.changed, id, account, next.rawValue, now]
                 )
             }
             throw error

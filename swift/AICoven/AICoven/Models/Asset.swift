@@ -53,17 +53,23 @@ nonisolated struct AssetFile: Identifiable, Equatable {
     let sizeBytes: Int
 
     /// A file's name as it is kept: the last step of what was given, on
-    /// one line, without what a path is written with, 255 characters at
-    /// most; "file" for a name with nothing left. The name is later used
-    /// to name a copy of the file, so it never says where to put it.
+    /// one line, without what a path is written with, 255 bytes at most
+    /// (what a file system takes for a name); "file" for a name with
+    /// nothing left. The name is later used to name a copy of the file, so
+    /// it never says where to put it. A colon, which some systems read as
+    /// a separator, is kept as a hyphen: "Report: Q3.pdf" stays one name.
     static func keptName(_ given: String) -> String {
         // Read scalar by scalar: a separator is one whatever follows it
         // (a slash with an accent put on it is still a slash).
-        let steps = given.unicodeScalars.split(whereSeparator: { $0 == "/" || $0 == "\\" || $0 == ":" })
+        let steps = given.unicodeScalars.split(whereSeparator: { $0 == "/" || $0 == "\\" })
         let last = steps.last.map { String(String.UnicodeScalarView($0)) } ?? ""
-        let plain = String(last.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) && !CharacterSet.newlines.contains($0) })
-            .trimmingCharacters(in: .whitespaces)
-        let name = String(plain.prefix(255))
+        var name = String(String.UnicodeScalarView(last.unicodeScalars.compactMap { scalar -> Unicode.Scalar? in
+            if CharacterSet.controlCharacters.contains(scalar) || CharacterSet.newlines.contains(scalar) { return nil }
+            return scalar == ":" ? "-" : scalar
+        })).trimmingCharacters(in: .whitespaces)
+        while name.utf8.count > 255 {
+            name.removeLast()
+        }
         return name.unicodeScalars.allSatisfy { $0 == "." } ? "file" : name
     }
 }
