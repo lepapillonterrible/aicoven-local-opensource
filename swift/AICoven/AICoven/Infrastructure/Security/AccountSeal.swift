@@ -19,6 +19,9 @@ nonisolated enum AccountSeal {
         guard await signedInAccount() == account else { throw RepositoryError.accountChanged }
         guard await DataEncryptionService.shared.isUnlocked(for: account) else { throw RepositoryError.dataLocked }
         guard await DataEncryptionService.shared.keyEpoch == epoch else { throw RepositoryError.accountChanged }
+        // Asked again last: another account can have signed in while the
+        // key was looked at, with the first one's key still in memory.
+        guard await signedInAccount() == account else { throw RepositoryError.accountChanged }
     }
 
     /// `text`, encrypted for `account`, which must be the one signed in

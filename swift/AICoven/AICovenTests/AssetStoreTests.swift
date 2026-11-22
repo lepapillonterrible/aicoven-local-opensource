@@ -171,7 +171,7 @@ final class AssetStoreTests: XCTestCase {
         )
         XCTAssertEqual(made.title.count, AssetRepository.longestTitle)
         XCTAssertEqual(made.files.map(\.name), ["passwd", "plan.md", "file"], "A file's name never says where to put it")
-        XCTAssertEqual(made.type.displayName, "Wireframe V2")
+        XCTAssertEqual(made.type.rawValue, "wireframe_v2", "A type is any name that reads as one")
 
         await expect(.noTitle, "An asset has a title") {
             _ = try await self.store.create(type: .image, title: " \n ", files: [], inCoven: nil, as: self.account)
@@ -446,6 +446,12 @@ final class AssetStoreTests: XCTestCase {
         let listed = try await store.assets(inCoven: nil, as: account)
         XCTAssertEqual(listed.map(\.isUnreadable), [true])
         XCTAssertEqual(listed.first?.files, [], "Not listed with some of its files as if they were all")
+        // Nor are the bytes of any of its files given, though they would still open.
+        for file in made.files {
+            await expect(.unreadable, "The bytes of an asset listed as unreadable are not read") {
+                _ = try await self.store.data(ofFile: file.id, as: self.account)
+            }
+        }
     }
 
     // MARK: - Status
@@ -519,13 +525,65 @@ final class AssetStoreTests: XCTestCase {
         XCTAssertEqual(AssetFile.keptName(".."), "file")
         XCTAssertEqual(AssetFile.keptName(""), "file")
         XCTAssertEqual(AssetFile.keptName(String(repeating: "n", count: 300)).count, 255)
+        // A separator with a mark put on it is still a separator: read by scalar, not by character.
+        for sly in ["../\u{0301}secret.txt", "..\\\u{0301}secret.txt", "a:\u{0301}secret.txt", "/\u{0308}/\u{0301}secret.txt"] {
+            let kept = AssetFile.keptName(sly)
+            XCTAssertEqual(kept, "\u{0301}secret.txt", sly)
+            XCTAssertFalse(kept.unicodeScalars.contains { $0 == "/" || $0 == "\\" || $0 == ":" }, sly)
+        }
+        XCTAssertEqual(AssetFile.keptName("x/.\u{0}."), "file", "Dots alone name nothing")
     }
 
-    func testATypesNameAndWords() {
-        XCTAssertTrue(AssetType.designMockup.isName)
-        XCTAssertEqual(AssetType.designMockup.displayName, "Design Mockup")
-        XCTAssertEqual(AssetType.implementationBrief.iconSystemName, "doc.text")
-        XCTAssertEqual(AssetType(rawValue: "moodboard").iconSystemName, "shippingbox", "A type the app has no icon for still has one")
-        XCTAssertTrue(AssetType.offered.allSatisfy(\.isName))
+    func testWhatReadsAsATypesName() {
+        for type in [AssetType.image, .designMockup, .chart, .dataset, .implementationBrief, .socialCreative, .deck, .report] {
+            XCTAssertTrue(type.isName, type.rawValue)
+        }
+        XCTAssertTrue(AssetType(rawValue: "a").isName)
+        XCTAssertTrue(AssetType(rawValue: String(repeating: "a", count: 64)).isName)
+        for raw in ["", "A", "_a", "1a", "a b", "a-b", "a/b", "é", String(repeating: "a", count: 65)] {
+            XCTAssertFalse(AssetType(rawValue: raw).isName, raw)
+        }
+    }
+
+    // MARK: - A write that lands late
+
+    func testAnAssetWrittenAfterTheDataWasLockedIsTakenBack() async throws {
+        // Locked once everything was sealed, before the write has its turn.
+        let late = AssetRepository(beforeWriting: { await DataEncryptionService.shared.lock() })
+        do {
+            _ = try await late.create(type: .image, title: "Too late", files: [file("l.png")], inCoven: nil, as: account)
+            XCTFail("Nothing is made once the account's data is locked")
+        } catch RepositoryError.dataLocked {}
+
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        let account = account
+        let kept = try await queue.read { db in
+            try [
+                Int.fetchOne(db, sql: "SELECT COUNT(*) FROM assets WHERE user_id = ?", arguments: [account]) ?? -1,
+                Int.fetchOne(db, sql: "SELECT COUNT(*) FROM asset_files JOIN assets ON assets.id = asset_id WHERE user_id = ?", arguments: [account]) ?? -1,
+            ]
+        }
+        XCTAssertEqual(kept, [0, 0], "Neither the asset nor its file")
+    }
+
+    func testAStatusChangedAfterTheDataWasLockedIsPutBack() async throws {
+        let made = try await store.create(type: .image, title: "Kept", files: [file("k.png")], inCoven: nil, as: account)
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        func stored() async throws -> [String] {
+            try await queue.read { db in
+                let row = try Row.fetchOne(db, sql: "SELECT status, updated_at FROM assets WHERE id = ?", arguments: [made.id])
+                return [row?["status"] ?? "", row?["updated_at"] ?? ""]
+            }
+        }
+        let before = try await stored()
+
+        let late = AssetRepository(beforeWriting: { await DataEncryptionService.shared.lock() })
+        do {
+            try await late.move(made.id, to: .proposed, as: account)
+            XCTFail("Nothing is changed once the account's data is locked")
+        } catch RepositoryError.dataLocked {}
+        let after = try await stored()
+        XCTAssertEqual(after, before, "As it stood, also when it was last changed")
+        XCTAssertEqual(after.first, "draft")
     }
 }

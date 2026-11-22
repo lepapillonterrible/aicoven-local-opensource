@@ -1,7 +1,7 @@
 import Foundation
 
 /// What kind of thing an asset is. An open set, as the cloud app's: a type
-/// is a name, and the ones the app knows have an icon of their own.
+/// is a name, and these are the ones the cloud app starts with.
 nonisolated struct AssetType: RawRepresentable, Hashable {
     let rawValue: String
 
@@ -14,33 +14,11 @@ nonisolated struct AssetType: RawRepresentable, Hashable {
     static let deck = AssetType(rawValue: "deck")
     static let report = AssetType(rawValue: "report")
 
-    /// The types a person is offered for a new asset, in the cloud app's order.
-    static let offered: [AssetType] = [.image, .designMockup, .chart, .dataset, .implementationBrief, .socialCreative, .deck]
-
     /// Whether `rawValue` reads as a type's name: lowercase letters, digits
     /// and underscores, starting with a letter, 64 at most.
     var isName: Bool {
         guard let first = rawValue.unicodeScalars.first, ("a" ... "z").contains(first), rawValue.unicodeScalars.count <= 64 else { return false }
         return rawValue.unicodeScalars.allSatisfy { ("a" ... "z").contains($0) || ("0" ... "9").contains($0) || $0 == "_" }
-    }
-
-    var iconSystemName: String {
-        switch self {
-        case .image: "photo"
-        case .designMockup: "rectangle.3.group"
-        case .chart: "chart.xyaxis.line"
-        case .dataset: "tablecells"
-        case .implementationBrief: "doc.text"
-        case .socialCreative: "megaphone"
-        case .deck: "rectangle.on.rectangle.angled"
-        case .report: "doc.richtext"
-        default: "shippingbox"
-        }
-    }
-
-    /// The type in words: "Design Mockup" for `design_mockup`.
-    var displayName: String {
-        rawValue.split(separator: "_").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
     }
 }
 
@@ -52,15 +30,6 @@ nonisolated enum AssetStatus: String, CaseIterable {
     case proposed
     case approved
     case archived
-
-    var displayName: String {
-        switch self {
-        case .draft: "Draft"
-        case .proposed: "Proposed"
-        case .approved: "Approved"
-        case .archived: "Archived"
-        }
-    }
 
     /// Whether the person may move an asset from this status to `next`, as
     /// the cloud app has it: a draft is proposed; what is proposed is
@@ -88,11 +57,14 @@ nonisolated struct AssetFile: Identifiable, Equatable {
     /// most; "file" for a name with nothing left. The name is later used
     /// to name a copy of the file, so it never says where to put it.
     static func keptName(_ given: String) -> String {
-        let last = given.split(whereSeparator: { $0 == "/" || $0 == "\\" || $0 == ":" }).last.map(String.init) ?? ""
+        // Read scalar by scalar: a separator is one whatever follows it
+        // (a slash with an accent put on it is still a slash).
+        let steps = given.unicodeScalars.split(whereSeparator: { $0 == "/" || $0 == "\\" || $0 == ":" })
+        let last = steps.last.map { String(String.UnicodeScalarView($0)) } ?? ""
         let plain = String(last.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) && !CharacterSet.newlines.contains($0) })
             .trimmingCharacters(in: .whitespaces)
         let name = String(plain.prefix(255))
-        return name.isEmpty || name.allSatisfy { $0 == "." } ? "file" : name
+        return name.unicodeScalars.allSatisfy { $0 == "." } ? "file" : name
     }
 }
 

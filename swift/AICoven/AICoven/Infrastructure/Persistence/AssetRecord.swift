@@ -71,7 +71,13 @@ actor AssetRepository {
         let size: Int
     }
 
-    private init() {}
+    /// Runs just before a write, after everything it writes was looked at
+    /// and sealed: nothing in the app; a test locks the data there.
+    private let beforeWriting: (@Sendable () async -> Void)?
+
+    init(beforeWriting: (@Sendable () async -> Void)? = nil) {
+        self.beforeWriting = beforeWriting
+    }
 
     private func getDbQueue() async -> DatabaseQueue? {
         await MainActor.run { DatabaseManager.shared.dbQueue }
@@ -106,8 +112,10 @@ actor AssetRepository {
         as account: String
     ) async throws -> Asset {
         // Whoever asks is the account signed in, before anything is said
-        // of what was given.
-        try await AccountSeal.requireKey(of: account, since: DataEncryptionService.shared.keyEpoch)
+        // of what was given; and with the same key in memory from here
+        // until the asset has been written.
+        let epoch = await DataEncryptionService.shared.keyEpoch
+        try await AccountSeal.requireKey(of: account, since: epoch)
         guard type.isName else { throw AssetError.notAType }
         let title = Self.keptTitle(title)
         guard !title.isEmpty else { throw AssetError.noTitle }
@@ -154,6 +162,7 @@ actor AssetRepository {
         let holding = AttachmentStore.holdingThreadID(for: account)
         // The sealed files are taken into the write as one value.
         let toWrite = sealedFiles
+        await beforeWriting?()
         try await dbQueue.write { db in
             // Counted in the write that adds it.
             let count = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM assets WHERE user_id = ? AND coven_id = ?", arguments: [account, coven]) ?? 0
@@ -194,6 +203,16 @@ actor AssetRepository {
                 )
             }
         }
+        do {
+            try await AccountSeal.requireKey(of: account, since: epoch)
+        } catch {
+            // The account's data was locked, or changed hands, while the
+            // write waited its turn: what it wrote is taken back.
+            _ = try? await dbQueue.write { db in
+                try db.execute(sql: "DELETE FROM assets WHERE id = ? AND user_id = ?", arguments: [id, account])
+            }
+            throw error
+        }
         return Asset(
             id: id, covenID: covenID, type: type, status: .draft, title: title, details: details,
             madeByAgentID: agentID, threadID: threadID, sourceMessageID: messageID, files: kept,
@@ -205,6 +224,12 @@ actor AssetRepository {
 
     private func opened(_ sealed: Data, purpose: String) async -> Data? {
         try? await DataEncryptionService.shared.decrypt(sealed, purpose: purpose)
+    }
+
+    /// What is kept of a file beside its bytes; nil if it cannot be opened.
+    private func file(from sealedMeta: Data) async -> KeptFile? {
+        guard let meta = await opened(sealedMeta, purpose: Self.filePurpose) else { return nil }
+        return try? JSONDecoder().decode(KeptFile.self, from: meta)
     }
 
     /// An asset's row as it is stored: what is kept as it is, and what is sealed.
@@ -270,9 +295,7 @@ actor AssetRepository {
             // asset of which a file cannot be opened.
             var filesByAsset: [String: [AssetFile]?] = [:]
             for stored in storedFiles {
-                guard let meta = await self.opened(stored.meta, purpose: Self.filePurpose),
-                      let file = try? JSONDecoder().decode(KeptFile.self, from: meta)
-                else {
+                guard let file = await self.file(from: stored.meta) else {
                     filesByAsset[stored.assetID] = .some(nil)
                     continue
                 }
@@ -303,27 +326,36 @@ actor AssetRepository {
         }
     }
 
-    /// The bytes of a file of one of `account`'s assets.
+    /// The bytes of a file of one of `account`'s assets. Not those of an
+    /// asset that is listed as unreadable: every part of the asset must
+    /// open with the account's key, as for a listing.
     func data(ofFile fileID: String, as account: String) async throws -> Data {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         return try await AccountSeal.reading(as: account) {
-            let sealed = try await dbQueue.read { db in
-                try Data.fetchOne(
+            let stored: (title: Data, details: Data, metas: [Data], body: Data)? = try await dbQueue.read { db in
+                let asset = try Row.fetchOne(
                     db,
                     sql: """
-                    SELECT asset_files.body_ciphertext FROM asset_files
-                    JOIN assets ON assets.id = asset_files.asset_id
+                    SELECT assets.id, assets.title_ciphertext, assets.details_ciphertext, asset_files.body_ciphertext
+                    FROM asset_files JOIN assets ON assets.id = asset_files.asset_id
                     WHERE asset_files.id = ? AND assets.user_id = ?
                     """,
                     arguments: [fileID, account]
                 )
+                guard let asset else { return nil }
+                let assetID: String = asset["id"]
+                let metas = try Data.fetchAll(db, sql: "SELECT meta_ciphertext FROM asset_files WHERE asset_id = ?", arguments: [assetID])
+                return (asset["title_ciphertext"], asset["details_ciphertext"], metas, asset["body_ciphertext"])
             }
-            guard let sealed else { throw AssetError.noSuchAsset }
-            do {
-                return try await DataEncryptionService.shared.decrypt(sealed, purpose: Self.bodyPurpose)
-            } catch is CryptoKitError {
-                throw AssetError.unreadable
+            guard let stored else { throw AssetError.noSuchAsset }
+            guard await self.opened(stored.title, purpose: Self.titlePurpose) != nil,
+                  await self.opened(stored.details, purpose: Self.detailsPurpose) != nil
+            else { throw AssetError.unreadable }
+            for meta in stored.metas {
+                guard await self.file(from: meta) != nil else { throw AssetError.unreadable }
             }
+            guard let body = await self.opened(stored.body, purpose: Self.bodyPurpose) else { throw AssetError.unreadable }
+            return body
         }
     }
 
@@ -336,13 +368,16 @@ actor AssetRepository {
     @discardableResult
     func move(_ id: String, to next: AssetStatus, as account: String) async throws -> Date {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-        try await AccountSeal.requireKey(of: account, since: DataEncryptionService.shared.keyEpoch)
+        let epoch = await DataEncryptionService.shared.keyEpoch
+        try await AccountSeal.requireKey(of: account, since: epoch)
         let now = Date()
-        try await dbQueue.write { db in
-            guard let stored = try String.fetchOne(db, sql: "SELECT status FROM assets WHERE id = ? AND user_id = ?", arguments: [id, account]) else {
-                throw AssetError.noSuchAsset
-            }
-            guard (AssetStatus(rawValue: stored) ?? .draft).canMove(to: next) else { throw AssetError.notAllowed }
+        await beforeWriting?()
+        // How it stood before, as it is stored, to put it back by.
+        let before: (status: String, changed: String) = try await dbQueue.write { db in
+            let stored = try Row.fetchOne(db, sql: "SELECT status, updated_at FROM assets WHERE id = ? AND user_id = ?", arguments: [id, account])
+            guard let stored else { throw AssetError.noSuchAsset }
+            let status: String = stored["status"]
+            guard (AssetStatus(rawValue: status) ?? .draft).canMove(to: next) else { throw AssetError.notAllowed }
             if next == .proposed {
                 let hasAFile = try Bool.fetchOne(db, sql: "SELECT 1 FROM asset_files WHERE asset_id = ? LIMIT 1", arguments: [id]) ?? false
                 guard hasAFile else { throw AssetError.needsAFile }
@@ -351,6 +386,21 @@ actor AssetRepository {
                 sql: "UPDATE assets SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?",
                 arguments: [next.rawValue, now, id, account]
             )
+            return (status, stored["updated_at"])
+        }
+        do {
+            try await AccountSeal.requireKey(of: account, since: epoch)
+        } catch {
+            // The account's data was locked, or changed hands, while the
+            // write waited its turn: the asset is put back as it stood,
+            // unless something has changed it since.
+            _ = try? await dbQueue.write { db in
+                try db.execute(
+                    sql: "UPDATE assets SET status = ?, updated_at = ? WHERE id = ? AND user_id = ? AND status = ? AND updated_at = ?",
+                    arguments: [before.status, before.changed, id, account, next.rawValue, now]
+                )
+            }
+            throw error
         }
         return now
     }
