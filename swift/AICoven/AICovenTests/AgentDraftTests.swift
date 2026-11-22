@@ -178,6 +178,19 @@ final class AgentDraftTests: XCTestCase {
         XCTAssertEqual(draft.maxTokens, "900")
         XCTAssertEqual(draft.maxSteps, "12")
 
+        // A step count stored beyond what a turn takes shows as the most a turn takes.
+        let many = Role(
+            id: "r", covenId: "c", name: "Scout", emoji: nil, description: nil, systemPrompt: nil,
+            model: "m", provider: "openai", providerAccountId: "acct", temperature: nil, maxTokens: nil,
+            settings: RoleSettings(
+                toolConfig: nil, allowedTools: nil, collaboratorRoleIds: nil, autonomousMode: nil, autonomousMaxSteps: 500,
+                plannerMaxTasks: nil, plannerMaxSeconds: nil
+            ),
+            createdAt: Date(), updatedAt: Date()
+        )
+        XCTAssertEqual(AgentDraft(role: many).maxSteps, "100")
+        XCTAssertNotNil(AgentDraft(role: many).saving(usesTemperature: true, usesMaxTokens: false, usesSteps: true), "And can be saved")
+
         // What a new agent starts with, as in the cloud app.
         let new = AgentDraft()
         XCTAssertEqual([new.iconSymbol, new.maxTokens, new.maxSteps], ["cpu", "2000", "30"])

@@ -43,6 +43,27 @@ nonisolated struct AnthropicModelsPage: Decodable {
         has_more == true ? last_id : nil
     }
 
+    /// The whole list, read a page at a time with `page` (given the id to
+    /// read after; nil for the first), so that a model is not taken for
+    /// missing because it is on a later page. A list of more pages than
+    /// are read is not known, and is not given as if it were whole: that
+    /// throws.
+    static func all(page: (String?) async throws -> AnthropicModelsPage) async throws -> [Item] {
+        var models: [Item] = []
+        var after: String?
+        var pages = 0
+        repeat {
+            let read = try await page(after)
+            models += read.data ?? []
+            after = read.next
+            pages += 1
+        } while after != nil && pages < mostPages
+        if after != nil {
+            throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Anthropic's list of models is longer than is read"])
+        }
+        return models
+    }
+
     /// The address of a page: the first, or the one after the model `after`.
     static func address(after: String?) -> URL {
         var address = URLComponents(string: "https://api.anthropic.com/v1/models")!
@@ -1307,13 +1328,7 @@ extension ProviderAccountService {
             guard let apiKey = KeychainHelper.load(key: keychainKey(for: account.id)) else {
                 throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing Anthropic API key for account \(account.id)"])
             }
-            // The list comes a page at a time: every page is read (up to
-            // `mostPages`), so a model is not taken for missing because it
-            // is on a later one.
-            var modelsData: [AnthropicModelsPage.Item] = []
-            var after: String?
-            var pages = 0
-            repeat {
+            let modelsData = try await AnthropicModelsPage.all { after in
                 var request = URLRequest(url: AnthropicModelsPage.address(after: after))
                 request.httpMethod = "GET"
                 request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
@@ -1323,15 +1338,7 @@ extension ProviderAccountService {
                 if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
                     throw Self.sanitizedHTTPError(provider: "Anthropic", statusCode: http.statusCode)
                 }
-                let page = try JSONDecoder().decode(AnthropicModelsPage.self, from: data)
-                modelsData += page.data ?? []
-                after = page.next
-                pages += 1
-            } while after != nil && pages < AnthropicModelsPage.mostPages
-            // More pages than are read: the list is not known, and is not
-            // given as if it were whole.
-            if after != nil {
-                throw NSError(domain: "ProviderAccountService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Anthropic's list of models is longer than is read"])
+                return try JSONDecoder().decode(AnthropicModelsPage.self, from: data)
             }
             let chatOnly = modelsData
                 .map(\.id)

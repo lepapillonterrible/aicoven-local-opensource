@@ -376,7 +376,7 @@ struct AgentFormView: View {
                 if usesSteps {
                     VStack(alignment: .leading, spacing: Spacing.xxs) {
                         textField("Most steps", text: $draft.maxSteps, prompt: "30", numeric: true)
-                        Text("The most tool steps it takes to answer one message.")
+                        Text("The most tool steps it takes to answer one message, from 1 to \(AgentSaving.mostStepsAllowed).")
                             .font(.aicovenBodySmall)
                             .foregroundStyle(Color.aicovenTextTertiary)
                     }

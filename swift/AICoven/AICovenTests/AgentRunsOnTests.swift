@@ -38,6 +38,45 @@ final class AgentRunsOnTests: XCTestCase {
         )
     }
 
+    func testEveryPageOfAnthropicsListIsRead_andAListLongerThanIsReadIsNotGivenAsWhole() async throws {
+        func page(_ ids: [String], more: Bool) throws -> AnthropicModelsPage {
+            let items = ids.map { #"{"id":"\#($0)"}"# }.joined(separator: ",")
+            return try JSONDecoder().decode(
+                AnthropicModelsPage.self, from: Data(#"{"data":[\#(items)],"has_more":\#(more),"last_id":"\#(ids.last ?? "")"}"#.utf8)
+            )
+        }
+        var askedAfter: [String?] = []
+
+        let all = try await AnthropicModelsPage.all { after in
+            askedAfter.append(after)
+            switch after {
+            case nil: return try page(["a", "b"], more: true)
+            case "b": return try page(["c"], more: true)
+            default: return try page(["d"], more: false)
+            }
+        }
+        XCTAssertEqual(all.map(\.id), ["a", "b", "c", "d"])
+        XCTAssertEqual(askedAfter, [nil, "b", "c"], "Each page is asked for after the last model of the one before")
+
+        // A list that never ends is read no further than the most pages, and is not given.
+        var pagesRead = 0
+        do {
+            _ = try await AnthropicModelsPage.all { _ in
+                pagesRead += 1
+                return try page(["m\(pagesRead)"], more: true)
+            }
+            XCTFail("A list longer than is read is not a list")
+        } catch {}
+        XCTAssertEqual(pagesRead, AnthropicModelsPage.mostPages)
+
+        // A page that cannot be read ends the reading.
+        struct Unreachable: Error {}
+        do {
+            _ = try await AnthropicModelsPage.all { _ in throw Unreachable() }
+            XCTFail("A page that cannot be read is an error")
+        } catch is Unreachable {}
+    }
+
     private func model(_ id: String, name: String? = nil) -> ProviderInitializationStatus.ModelMetadata {
         ProviderInitializationStatus.ModelMetadata(id: id, name: name, provider: nil, contextLength: nil)
     }

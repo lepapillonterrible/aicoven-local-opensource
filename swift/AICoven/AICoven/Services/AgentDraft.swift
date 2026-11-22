@@ -80,8 +80,10 @@ nonisolated struct AgentDraft: Equatable {
         model = role.model ?? ""
         temperature = role.temperature ?? 0.7
         maxTokens = String(role.maxTokens ?? 2000)
+        // A number stored beyond the most a turn takes shows as the most:
+        // that is what the agent's turns take.
         if let steps = role.settings?.autonomousMaxSteps {
-            maxSteps = String(steps)
+            maxSteps = String(min(steps, AgentSaving.mostStepsAllowed))
         }
     }
 
