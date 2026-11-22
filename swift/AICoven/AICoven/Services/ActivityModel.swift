@@ -41,6 +41,9 @@ final class ActivityModel: ObservableObject {
             threads = nil
             account = asked
         }
+        // A reading under way has not failed: the line that says so goes
+        // while it is tried again.
+        loadFailed = false
         do {
             let read = try await loadThreads()
             guard reading == readings, signedIn() == asked else { return }

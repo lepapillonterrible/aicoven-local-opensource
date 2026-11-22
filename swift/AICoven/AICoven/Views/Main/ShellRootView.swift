@@ -55,8 +55,9 @@ struct ShellRootView: View {
     /// The phone's switcher, a sheet from the bar; and what it was asked
     /// to open, done once the sheet has gone so nothing opens under it.
     @State private var showSwitcher = false
-    /// What the switcher was asked for, and where the navigator was then.
-    @State private var switcherFollowUp: (kind: SwitcherFollowUp, askedAt: ShellNavigator.Stamp)?
+    /// What the switcher was asked for, and how much the person had done
+    /// in the shell by then (`ShellNavigator.personMoves`).
+    @State private var switcherFollowUp: (kind: SwitcherFollowUp, askedAt: Int)?
 
     /// Whether the shell reports how it is used (a scope viewed, a place
     /// opened, New Thread, a thread made, the memory list opened), where
@@ -326,15 +327,15 @@ struct ShellRootView: View {
                 navigator.select(scope)
             },
             onCreateCoven: {
-                switcherFollowUp = (.createCoven, navigator.stamp)
+                switcherFollowUp = (.createCoven, navigator.personMoves)
                 showSwitcher = false
             },
             onOpenSettings: {
-                switcherFollowUp = (.settings, navigator.stamp)
+                switcherFollowUp = (.settings, navigator.personMoves)
                 showSwitcher = false
             },
             onOpenActivity: {
-                switcherFollowUp = (.activity, navigator.stamp)
+                switcherFollowUp = (.activity, navigator.personMoves)
                 showSwitcher = false
             },
             onMoveCoven: moveCoven

@@ -204,6 +204,7 @@ final class ShellNavigator: ObservableObject {
     /// open in it earlier. Selecting the scope already on screen keeps its
     /// current place.
     func select(_ scope: ShellScope) {
+        personMoves += 1
         personPlace = nil
         guard scope != selected else { return }
         selected = scope
@@ -217,6 +218,7 @@ final class ShellNavigator: ObservableObject {
 
     /// Switches to `scope` and opens `tab` there.
     func open(_ tab: WorkspaceTab, in scope: ShellScope) {
+        personMoves += 1
         personPlace = nil
         selected = scope
         places[scope] = tab
@@ -228,6 +230,7 @@ final class ShellNavigator: ObservableObject {
     }
 
     func showOverview() {
+        personMoves += 1
         personPlace = nil
         places[selected] = nil
     }
@@ -236,29 +239,23 @@ final class ShellNavigator: ObservableObject {
     /// for again, it is shown anew. Any move of the person leaves it:
     /// choosing a scope, opening a place or a thread, the Overview.
     func openPersonPlace(_ place: PersonPlace) {
+        personMoves += 1
         personPlace = place
         personPlaceRequest += 1
     }
 
-    /// Where the person is and what they have asked of the shell, as one
-    /// value: it changes with every move (`placeGeneration`) and with
-    /// every ask that can leave the place as it is (the thread search, New
-    /// Thread asked again on its page).
-    nonisolated struct Stamp: Equatable {
-        let place: Int
-        let searches: Int
-        let newThreads: Int
-    }
+    /// Counts what the person does in the shell: every move of theirs
+    /// (choosing a scope, opening a place, a thread or the Overview, going
+    /// back) and every ask that can leave the place as it is (the thread
+    /// search, New Thread again on its page). Not what happens by itself:
+    /// a thread made, renamed or deleted, a coven that is gone.
+    private(set) var personMoves = 0
 
-    var stamp: Stamp {
-        Stamp(place: placeGeneration, searches: searchAsked, newThreads: draftRequests)
-    }
-
-    /// Whether the person has neither moved nor asked for anything since
-    /// `stamp`: for what is asked for in a sheet and opened once the sheet
+    /// Whether the person has done nothing in the shell since it counted
+    /// `moves`: for what is asked for in a sheet and opened once the sheet
     /// has gone, which must not cover what the person did meanwhile.
-    func isStill(at stamp: Stamp) -> Bool {
-        stamp == self.stamp
+    func isStill(at moves: Int) -> Bool {
+        moves == personMoves
     }
 
     /// Opens the new-thread page in the selected scope: the thread is made
@@ -306,10 +303,12 @@ final class ShellNavigator: ObservableObject {
         open(.thread(thread), in: scope)
     }
 
-    /// Opens one of the selected scope's places, for its sidebar row. A
-    /// thread opens with `open(_:)`. Strix's agent is Strix itself, so its
-    /// Agents place is Strix's settings; Strix uses every connection, so it
-    /// has no Connections place (its row leads to Settings instead).
+    /// Opens the place a sidebar row or a Go menu item leads to: one of
+    /// the selected scope's places, or Activity, which is the person's own
+    /// and covers the scope's. A thread opens with `open(_:)`. Strix's
+    /// agent is Strix itself, so its Agents place is Strix's settings;
+    /// Strix uses every connection, so it has no Connections place (its
+    /// row leads to Settings instead).
     func openPlace(_ item: ShellSidebarItem) {
         switch (item, selected) {
         case (.overview, _): showOverview()
@@ -325,6 +324,7 @@ final class ShellNavigator: ObservableObject {
     /// Asks for the thread search: the sidebar's, or in the phone layout
     /// the Overview's.
     func requestSearch() {
+        personMoves += 1
         searchAsked += 1
     }
 
@@ -366,14 +366,21 @@ final class ShellNavigator: ObservableObject {
     /// The person went back on the phone (the back button, or the swipe):
     /// what is no longer on the stack is left. Nothing is opened by this.
     func leavePhoneRoutes(notIn path: [PhoneRoute]) {
-        if !path.contains(.personPlace), personPlace != nil { personPlace = nil }
-        if !path.contains(.place), places[selected] != nil { places[selected] = nil }
+        if !path.contains(.personPlace), personPlace != nil {
+            personMoves += 1
+            personPlace = nil
+        }
+        if !path.contains(.place), places[selected] != nil {
+            personMoves += 1
+            places[selected] = nil
+        }
     }
 
     /// Leaves a finished place (a saved form, a deleted item) for the place
     /// it was reached from. Does nothing if the person has moved on from it.
     func close(_ tab: WorkspaceTab) {
         guard places[selected]?.id == tab.id else { return }
+        personMoves += 1
         places[selected] = Self.parent(of: tab.type, in: selected)
     }
 

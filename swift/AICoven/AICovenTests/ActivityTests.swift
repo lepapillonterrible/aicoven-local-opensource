@@ -73,7 +73,7 @@ final class ActivityTests: XCTestCase {
         XCTAssertFalse(ActivityGroups.isAnythingWaiting(in: ["a": .moving("x"), "b": .broken("x"), "c": .unread, "d": .paused]))
         XCTAssertFalse(ActivityGroups.isAnythingWaiting(in: [:]))
         XCTAssertEqual(ActivityRowMark.words(isWaiting: true, hasUnread: true), "Needs your OK", "What waits outranks a reply not yet seen")
-        XCTAssertEqual(ActivityRowMark.words(isWaiting: false, hasUnread: true), "New replies")
+        XCTAssertEqual(ActivityRowMark.words(isWaiting: false, hasUnread: true), "Unread", "True of one reply and of many")
         XCTAssertEqual(ActivityRowMark.words(isWaiting: false, hasUnread: false), "")
     }
 

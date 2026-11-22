@@ -283,17 +283,26 @@ final class ShellNavigatorTests: XCTestCase {
         XCTAssertEqual(navigator.phonePath, [.place])
 
         // Asked for in the switcher's sheet, it is not opened over where the person went before the sheet had gone.
-        let asked = navigator.stamp
+        let asked = navigator.personMoves
         XCTAssertTrue(navigator.isStill(at: asked))
         navigator.requestNewThread()
         XCTAssertFalse(navigator.isStill(at: asked), "The person moved meanwhile")
         // Nor over what they asked for that leaves the place as it is: New Thread again on its page, the thread search.
-        let onThePage = navigator.stamp
+        let onThePage = navigator.personMoves
         navigator.requestNewThread()
         XCTAssertFalse(navigator.isStill(at: onThePage))
-        let beforeSearching = navigator.stamp
+        let beforeSearching = navigator.personMoves
         navigator.requestSearch()
         XCTAssertFalse(navigator.isStill(at: beforeSearching))
+        // What happens by itself is no move of the person's: the new-thread page's thread being made, a
+        // rename, a thread deleted, a coven that is gone. What was asked for still opens after them.
+        let beforeTheThreadWasMade = navigator.personMoves
+        navigator.handleCreatedThread(thread("made", covenID: nil))
+        navigator.updateThread(thread("made", covenID: nil, title: "Renamed"))
+        navigator.removeThread(id: "made")
+        navigator.handleCovenGone(covenID: "work")
+        navigator.leavePhoneRoutes(notIn: navigator.phonePath)
+        XCTAssertTrue(navigator.isStill(at: beforeTheThreadWasMade))
         navigator.open(thread("s1", covenID: nil))
 
         // The scope on screen, chosen again, leaves it too; so does going back on a phone.

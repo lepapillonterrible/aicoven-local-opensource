@@ -219,6 +219,6 @@ struct ActivityRowMark: View {
     /// What VoiceOver reads after the row's name.
     static func words(isWaiting: Bool, hasUnread: Bool) -> String {
         if isWaiting { return ConversationActivity.needsOKWords }
-        return hasUnread ? "New replies" : ""
+        return hasUnread ? "Unread" : ""
     }
 }
