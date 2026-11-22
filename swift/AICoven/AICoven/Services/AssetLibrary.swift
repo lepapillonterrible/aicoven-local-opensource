@@ -1,9 +1,88 @@
 internal import Combine
 import Foundation
 
+/// What the person can do with an asset, in the cloud app's words.
+nonisolated enum AssetAction: String, Identifiable {
+    case propose
+    case approve
+    case sendBack
+    case unarchive
+    case download
+    case archive
+
+    var id: String {
+        rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .propose: "Propose for Review"
+        case .approve: "Approve"
+        case .sendBack: "Send Back"
+        case .unarchive: "Unarchive"
+        case .download: "Download…"
+        case .archive: "Archive"
+        }
+    }
+
+    var iconSystemName: String {
+        switch self {
+        case .propose: "paperplane"
+        case .approve: "checkmark.seal"
+        case .sendBack: "arrow.uturn.backward"
+        case .unarchive: "tray.and.arrow.up"
+        case .download: "arrow.down.circle"
+        case .archive: "archivebox"
+        }
+    }
+
+    /// The status it moves an asset to; nil for one that changes none.
+    var status: AssetStatus? {
+        switch self {
+        case .propose: .proposed
+        case .approve: .approved
+        case .sendBack, .unarchive: .draft
+        case .archive: .archived
+        case .download: nil
+        }
+    }
+}
+
 /// What the Assets place decides, apart from how it is drawn: which assets
-/// are shown and in which part, and what a row says.
+/// are shown and in which part, what a row says, and what can be done with
+/// an asset.
 nonisolated enum AssetLibraryRules {
+    /// The answers an asset's review takes, by where it stands, as the
+    /// cloud app offers them: a draft with a file is proposed; what is
+    /// proposed is approved or sent back; what is archived is taken out
+    /// again. An asset the key cannot open is not reviewed: nobody has
+    /// seen it.
+    static func reviewActions(_ asset: Asset) -> [AssetAction] {
+        switch asset.status {
+        case .archived: [.unarchive]
+        case _ where asset.isUnreadable: []
+        case .draft: asset.files.isEmpty ? [] : [.propose]
+        case .proposed: [.approve, .sendBack]
+        case .approved: []
+        }
+    }
+
+    /// What else can be done with an asset: its file saved somewhere (one
+    /// that can be opened and has a file), and the asset put out of the way.
+    static func otherActions(_ asset: Asset) -> [AssetAction] {
+        (asset.isUnreadable || asset.files.isEmpty ? [] : [.download]) + (asset.status == .archived ? [] : [.archive])
+    }
+
+    /// When something was last changed, in full: the day and the time.
+    static func fullTime(_ date: Date) -> String {
+        date.formatted(Date.FormatStyle().month(.abbreviated).day().hour().minute())
+    }
+
+    /// A file's size in words.
+    static func size(_ bytes: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+
     static let unreadable = "Your encryption key can't open this asset."
     /// What the Status filter calls its choice of no one status: everything
     /// but what is archived (the cloud app calls it "All Statuses" and
@@ -112,6 +191,7 @@ final class AssetLibraryModel: ObservableObject {
     struct Source {
         var assets: @Sendable (_ covenID: String?, _ account: String) async throws -> [Asset]
         var create: @Sendable (_ new: NewAsset, _ covenID: String?, _ account: String) async throws -> Asset
+        var move: @Sendable (_ assetID: String, _ next: AssetStatus, _ account: String) async throws -> Void
 
         static let live = Source(
             assets: { try await AssetRepository.shared.assets(inCoven: $0, as: $1) },
@@ -119,7 +199,8 @@ final class AssetLibraryModel: ObservableObject {
                 try await AssetRepository.shared.create(
                     type: new.type, title: new.title, details: new.details, files: [new.file], inCoven: covenID, as: account
                 )
-            }
+            },
+            move: { try await AssetRepository.shared.move($0, to: $1, as: $2) }
         )
     }
 
@@ -147,6 +228,17 @@ final class AssetLibraryModel: ObservableObject {
     @Published var statusFilter: AssetStatus?
     /// Whether a new asset is being made: one at a time.
     @Published private(set) var isCreating = false
+    /// The assets whose status is on its way: one change at a time for an asset.
+    @Published private(set) var changing: Set<Asset.ID> = []
+    /// What went wrong with the last thing asked of an asset: each time is
+    /// its own, also one in the same words as the time before.
+    struct ActionFailure: Equatable {
+        let number: Int
+        let assetID: String
+        let words: String
+    }
+
+    @Published private(set) var actionFailure: ActionFailure?
 
     static let couldNotRefresh = "Couldn't refresh the assets."
     static let couldNotOpenFile = "AICoven couldn't open that file."
@@ -155,6 +247,9 @@ final class AssetLibraryModel: ObservableObject {
     static let detailsTooLong = "That description is too long. Keep it under 5,000 characters."
     static let couldNotCreate = "Couldn't create the asset. Try again."
     static let needsUnlock = "Unlock your data to add an asset."
+    static let couldNotChange = "Couldn't update the asset. Try again."
+    static let changedMeanwhile = "That asset changed before this could be done. Look at it again."
+    static let needsUnlockToChange = "Unlock your data to change an asset."
 
     /// The coven whose assets these are; nil for Strix's.
     let covenID: String?
@@ -250,6 +345,41 @@ final class AssetLibraryModel: ObservableObject {
             return .failed(Self.words(forNotCreating: error))
         }
     }
+
+    /// Does what `action` does to an asset's status, for `account`, who
+    /// pressed it, and reads the list again. One change at a time for an
+    /// asset: a second ask while one is under way does nothing. What went
+    /// wrong is said in words, to that account only; an asset that is gone
+    /// is not said to have failed (the list, read again, shows so).
+    func perform(_ action: AssetAction, on asset: Asset, as account: String) async {
+        guard let next = action.status, changing.insert(asset.id).inserted else { return }
+        defer { changing.remove(asset.id) }
+        actionFailure = nil
+        do {
+            try await source.move(asset.id, next, account)
+        } catch AssetError.noSuchAsset {
+            // Gone, with its coven or its account.
+        } catch {
+            guard signedIn() == account else { return }
+            let words = switch error {
+            case AssetError.notAllowed, AssetError.needsAFile: Self.changedMeanwhile
+            case RepositoryError.dataLocked: Self.needsUnlockToChange
+            default: Self.couldNotChange
+            }
+            if !(error is AssetError), !(error is RepositoryError) {
+                AppErrorReporter.log(message: "Could not change an asset (\(type(of: error)))", context: "AssetLibraryModel.perform")
+            }
+            failures += 1
+            actionFailure = ActionFailure(number: failures, assetID: asset.id, words: words)
+        }
+        guard signedIn() == account else { return }
+        // In a task of its own: whoever pressed may be called off, and how
+        // the asset stands now is still to be shown.
+        await Task { await self.load() }.value
+    }
+
+    /// Counts what went wrong, so that each time is told apart.
+    private var failures = 0
 
     /// What is said of an asset that was not made.
     static func words(forNotCreating error: Error) -> String {

@@ -173,11 +173,15 @@ final class AssetLibraryTests: XCTestCase {
         var listFails = false
         var created: [(new: AssetLibraryModel.NewAsset, covenID: String?, account: String)] = []
         var createFails: Error?
+        var moved: [(assetID: String, next: AssetStatus, account: String)] = []
+        var moveFails: Error?
         var account = "ada"
         var readings = 0
     }
 
-    private func source(_ stand: Stand, readingWaits gate: Gate? = nil, creatingWaits: Gate? = nil) -> AssetLibraryModel.Source {
+    private func source(
+        _ stand: Stand, readingWaits gate: Gate? = nil, creatingWaits: Gate? = nil, movingWaits: Gate? = nil
+    ) -> AssetLibraryModel.Source {
         AssetLibraryModel.Source(
             assets: { _, _ in
                 let reading = await MainActor.run { () -> Int in
@@ -202,6 +206,17 @@ final class AssetLibraryTests: XCTestCase {
                     stand.listed = [(stand.listed.last ?? []) + [made]]
                     stand.readings = 0
                     return made
+                }
+            },
+            move: { assetID, next, account in
+                await movingWaits?.wait()
+                try await MainActor.run {
+                    if let error = stand.moveFails { throw error }
+                    stand.moved.append((assetID, next, account))
+                    stand.listed = [(stand.listed.last ?? []).map { asset in
+                        asset.id == assetID ? self.asset(asset.id, asset.title, type: asset.type, status: next) : asset
+                    }]
+                    stand.readings = 0
                 }
             }
         )
@@ -302,7 +317,8 @@ final class AssetLibraryTests: XCTestCase {
                     await gate.wait()
                     return await MainActor.run { stand.listed[0] }
                 },
-                create: { _, _, _ in throw CancellationError() }
+                create: { _, _, _ in throw CancellationError() },
+                move: { _, _, _ in }
             ),
             signedIn: { stand.account }
         )
@@ -322,7 +338,9 @@ final class AssetLibraryTests: XCTestCase {
     func testAReadingThatWasCalledOffIsNoFailedReading() async {
         let model = AssetLibraryModel(
             covenID: nil,
-            source: AssetLibraryModel.Source(assets: { _, _ in throw CancellationError() }, create: { _, _, _ in throw CancellationError() }),
+            source: AssetLibraryModel.Source(
+                assets: { _, _ in throw CancellationError() }, create: { _, _, _ in throw CancellationError() }, move: { _, _, _ in }
+            ),
             signedIn: { "ada" }
         )
         await model.load()
@@ -443,6 +461,129 @@ final class AssetLibraryTests: XCTestCase {
             XCTAssertEqual(said, .failed(words), "\(error)")
         }
         XCTAssertFalse(model.isCreating)
+    }
+
+    // MARK: - What can be done with an asset
+
+    func testTheActionsAnAssetOffers_byWhereItStands() {
+        func offered(_ status: AssetStatus, files: [String] = ["a.png"], unreadable: Bool = false) -> [[AssetAction]] {
+            let asset = asset("a", status: status, files: files, unreadable: unreadable)
+            return [AssetLibraryRules.reviewActions(asset), AssetLibraryRules.otherActions(asset)]
+        }
+        XCTAssertEqual(offered(.draft), [[.propose], [.download, .archive]])
+        XCTAssertEqual(offered(.draft, files: []), [[], [.archive]], "An asset with no file is not proposed, and has nothing to save")
+        XCTAssertEqual(offered(.proposed), [[.approve, .sendBack], [.download, .archive]])
+        XCTAssertEqual(offered(.approved), [[], [.download, .archive]])
+        XCTAssertEqual(offered(.archived), [[.unarchive], [.download]])
+        // One the key cannot open is not reviewed or saved: only put away, or taken out again.
+        XCTAssertEqual(offered(.proposed, unreadable: true), [[], [.archive]])
+        XCTAssertEqual(offered(.draft, unreadable: true), [[], [.archive]])
+        XCTAssertEqual(offered(.archived, unreadable: true), [[.unarchive], []])
+
+        // Each answer is a move the store allows from where the asset stands.
+        for status in AssetStatus.allCases {
+            let asset = asset("a", status: status, files: ["a.png"])
+            for action in AssetLibraryRules.reviewActions(asset) + AssetLibraryRules.otherActions(asset) {
+                guard let next = action.status else { continue }
+                XCTAssertTrue(status.canMove(to: next), "\(action) from \(status)")
+            }
+        }
+        XCTAssertEqual(
+            [AssetAction.propose, .approve, .sendBack, .unarchive, .download, .archive].map(\.title),
+            ["Propose for Review", "Approve", "Send Back", "Unarchive", "Download…", "Archive"]
+        )
+        XCTAssertNil(AssetAction.download.status)
+    }
+
+    func testAnActionChangesTheAssetsStatus_forWhoeverPressedIt_andTheListIsReadAgain() async {
+        let stand = Stand()
+        stand.listed = [[asset("a", status: .proposed, files: ["a.png"])]]
+        let model = AssetLibraryModel(covenID: nil, source: source(stand), signedIn: { stand.account })
+        await model.load()
+
+        await model.perform(.approve, on: model.assets[0], as: "ada")
+        XCTAssertEqual(stand.moved.map(\.assetID), ["a"])
+        XCTAssertEqual(stand.moved.map(\.next), [.approved])
+        XCTAssertEqual(stand.moved.map(\.account), ["ada"])
+        XCTAssertEqual(model.assets.map(\.status), [.approved], "Read again")
+        XCTAssertNil(model.actionFailure)
+        XCTAssertEqual(model.changing, [])
+
+        // Download changes no status: it is the files' own.
+        await model.perform(.download, on: model.assets[0], as: "ada")
+        XCTAssertEqual(stand.moved.count, 1)
+    }
+
+    func testOneChangeAtATimeForAnAsset() async {
+        let stand = Stand()
+        stand.listed = [[asset("a", status: .proposed, files: ["a.png"]), asset("b", status: .draft, files: ["b.png"])]]
+        let gate = Gate()
+        let model = AssetLibraryModel(covenID: nil, source: source(stand, movingWaits: gate), signedIn: { stand.account })
+        await model.load()
+        let (first, other) = (model.assets[0], model.assets[1])
+
+        let approving = Task { await model.perform(.approve, on: first, as: "ada") }
+        await gate.arrived(1)
+        XCTAssertEqual(model.changing, ["a"])
+        await model.perform(.sendBack, on: first, as: "ada")
+        XCTAssertEqual(stand.moved.count, 0, "A second answer while the first is on its way does nothing")
+        // Another asset is not kept waiting by it.
+        let proposing = Task { await model.perform(.propose, on: other, as: "ada") }
+        await gate.arrived(2)
+        XCTAssertEqual(model.changing, ["a", "b"])
+        await gate.letOneThrough()
+        await gate.letOneThrough()
+        await approving.value
+        await proposing.value
+        XCTAssertEqual(Set(stand.moved.map(\.assetID)), ["a", "b"])
+        XCTAssertEqual(model.changing, [])
+    }
+
+    func testWhatWentWrongWithAnActionIsSaidInWords_toWhoeverPressedIt() async {
+        let stand = Stand()
+        stand.listed = [[asset("a", status: .proposed, files: ["a.png"])]]
+        let gate = Gate()
+        let model = AssetLibraryModel(covenID: nil, source: source(stand, movingWaits: gate), signedIn: { stand.account })
+        await model.load()
+        let listed = model.assets[0]
+
+        var said: [String?] = []
+        for error in [AssetError.notAllowed as Error, AssetError.needsAFile, RepositoryError.dataLocked, RepositoryError.databaseUnavailable, AssetError.noSuchAsset] {
+            stand.moveFails = error
+            let acting = Task { await model.perform(.approve, on: listed, as: "ada") }
+            await gate.arrived(said.count + 1)
+            await gate.letOneThrough()
+            await acting.value
+            said.append(model.actionFailure?.words)
+            if let failure = model.actionFailure { XCTAssertEqual(failure.assetID, "a") }
+        }
+        XCTAssertEqual(said, [
+            AssetLibraryModel.changedMeanwhile, AssetLibraryModel.changedMeanwhile, AssetLibraryModel.needsUnlockToChange,
+            AssetLibraryModel.couldNotChange, nil,
+        ], "An asset that is gone is not said to have failed: the list shows it gone")
+
+        // The same failure twice is two failures to tell of.
+        stand.moveFails = RepositoryError.databaseUnavailable
+        var numbers: [Int?] = []
+        for turn in 0 ..< 2 {
+            let acting = Task { await model.perform(.approve, on: listed, as: "ada") }
+            await gate.arrived(said.count + turn + 1)
+            await gate.letOneThrough()
+            await acting.value
+            numbers.append(model.actionFailure?.number)
+        }
+        XCTAssertNotEqual(numbers[0], numbers[1])
+
+        // Nothing of it is said to another account.
+        let before = model.actionFailure
+        let acting = Task { await model.perform(.approve, on: listed, as: "ada") }
+        await gate.arrived(said.count + 3)
+        XCTAssertNil(model.actionFailure, "A new ask clears what was said of the last")
+        stand.account = "grace"
+        await gate.letOneThrough()
+        await acting.value
+        XCTAssertNil(model.actionFailure)
+        XCTAssertNotNil(before)
     }
 
     func testAChosenFileIsReadUnlessItIsTooLarge() throws {
