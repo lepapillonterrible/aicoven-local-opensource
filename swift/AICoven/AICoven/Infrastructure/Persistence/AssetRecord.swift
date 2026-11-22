@@ -365,8 +365,25 @@ actor AssetRepository {
     /// may (`AssetStatus.canMove(to:)`), and answers with when it was
     /// changed. Whether it may is decided in the write itself, against the
     /// asset as it is then; an asset with no file is not proposed.
+    /// One status change at a time: each waits for the one before it to be
+    /// written and, if it must be, put back. Two that overlapped while the
+    /// data was being locked could otherwise put back each other's
+    /// rejected write in place of how the asset stood.
     @discardableResult
     func move(_ id: String, to next: AssetStatus, as account: String) async throws -> Date {
+        let before = lastMove
+        let moving = Task { () throws -> Date in
+            await before?.value
+            return try await self.moveInTurn(id, to: next, as: account)
+        }
+        lastMove = Task { _ = try? await moving.value }
+        return try await moving.value
+    }
+
+    /// The status change last asked for, done or not.
+    private var lastMove: Task<Void, Never>?
+
+    private func moveInTurn(_ id: String, to next: AssetStatus, as account: String) async throws -> Date {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         let epoch = await DataEncryptionService.shared.keyEpoch
         try await AccountSeal.requireKey(of: account, since: epoch)

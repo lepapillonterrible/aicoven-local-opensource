@@ -586,4 +586,64 @@ final class AssetStoreTests: XCTestCase {
         XCTAssertEqual(after, before, "As it stood, also when it was last changed")
         XCTAssertEqual(after.first, "draft")
     }
+
+    /// Holds whoever comes to it until the test lets them through, and counts them.
+    private actor Gate {
+        private var held: [CheckedContinuation<Void, Never>] = []
+        private(set) var arrivals = 0
+        private var hearing: [CheckedContinuation<Void, Never>] = []
+
+        func wait() async {
+            await withCheckedContinuation { continuation in
+                held.append(continuation)
+                arrivals += 1
+                hearing.forEach { $0.resume() }
+                hearing = []
+            }
+        }
+
+        /// Returns once someone has come to wait.
+        func someoneArrived() async {
+            if arrivals > 0 { return }
+            await withCheckedContinuation { hearing.append($0) }
+        }
+
+        func letThrough() {
+            held.forEach { $0.resume() }
+            held = []
+        }
+    }
+
+    func testTwoStatusChangesThatOverlapALockLeaveTheAssetAsItStood() async throws {
+        let made = try await store.create(type: .image, title: "Kept", files: [file("k.png")], inCoven: nil, as: account)
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        func stored() async throws -> [String] {
+            try await queue.read { db in
+                let row = try Row.fetchOne(db, sql: "SELECT status, updated_at FROM assets WHERE id = ?", arguments: [made.id])
+                return [row?["status"] ?? "", row?["updated_at"] ?? ""]
+            }
+        }
+        let before = try await stored()
+
+        // The first change waits just before its write; the second is asked meanwhile.
+        let gate = Gate()
+        let late = AssetRepository(beforeWriting: { await gate.wait() })
+        let account = account
+        let first = Task { try await late.move(made.id, to: .proposed, as: account) }
+        await gate.someoneArrived()
+        let second = Task { try await late.move(made.id, to: .approved, as: account) }
+        await DataEncryptionService.shared.lock()
+        await gate.letThrough()
+
+        for (change, what) in [(first, "The first"), (second, "The second")] {
+            do {
+                _ = try await change.value
+                XCTFail("\(what) is not made once the account's data is locked")
+            } catch RepositoryError.dataLocked {}
+        }
+        let arrivals = await gate.arrivals
+        XCTAssertEqual(arrivals, 1, "The second waited for the first to be put back, and then wrote nothing")
+        let after = try await stored()
+        XCTAssertEqual(after, before, "Neither change, nor one put back in place of how it stood")
+    }
 }
