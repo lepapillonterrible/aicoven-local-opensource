@@ -652,6 +652,66 @@ final class HermesAgentTests: XCTestCase {
         await DataEncryptionService.shared.lock()
     }
 
+    func testATurnForACovensAgentOnHermes_isRunByHermes_whateverIsChosenForStrix() async throws {
+        let defaults = UserDefaults.standard
+        let keys = ["llm_provider", "hermes_model_connections_converted.v1"].map(UserScope.scopedKey)
+        let saved = keys.map { defaults.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                defaults.set(value, forKey: key)
+            }
+        }
+        // Strix answers with a model; the coven's agent is on Hermes.
+        defaults.set("openai", forKey: keys[0])
+        defaults.set(true, forKey: keys[1])
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        await MainActor.run { DatabaseManager.shared.configureIfNeeded() }
+        HermesStub.answer("GET", events, with: (200, stream(#"{"event":"run.completed","output":"From Hermes."}"#)))
+        let agent = client
+        let model = CountingModel()
+        let chat = ChatService(
+            contextBuilder: ContextBuilder(limits: .init(maxRecentMessages: 4, maxRecentMemories: 4)),
+            modelRouter: HeuristicModelRouter(availableModels: [ModelDescriptor(
+                providerID: "openai", modelID: "gpt", maxContextTokens: 4096,
+                supportsTools: false, supportsEmbeddings: false, costClass: .cheap
+            )]),
+            llmClients: ["openai": model],
+            threadStore: ThreadRepository.shared,
+            toolService: ToolService.shared,
+            shouldAutoRefreshEnvironment: false,
+            hermesAgent: { agent }
+        )
+        let account = await UserScope.currentUserID
+        let coven = try await CovenService.shared.createCoven(name: "Hermes \(UUID().uuidString)")
+        // As the agent form saves one on Hermes: with no model, since Hermes runs the turn itself.
+        let scout = try await RoleService.shared.createAgent(
+            inCoven: coven.id,
+            AgentSaving(
+                name: "Scout", iconSymbol: "cpu", iconTint: nil, description: "", instructions: "",
+                provider: "hermes", model: "", providerAccountId: "acct", needsModel: false
+            ),
+            as: account
+        )
+        await ThreadService.shared.reloadForCurrentUser()
+        let threadID = try await ThreadService.shared.createThread(title: "Hermes \(UUID().uuidString)", covenId: coven.id).id
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await ThreadService.shared.deleteThread(threadId: threadID)
+            try? await CovenService.shared.deleteCoven(id: coven.id)
+            await ThreadService.shared.reloadForCurrentUser()
+            await DataEncryptionService.shared.lock()
+        }
+        let reports = Reports()
+
+        try await chat.streamMessage(threadId: threadID, message: "Hello", roleId: scout.id, onStateChange: reports.add)
+
+        XCTAssertEqual(reports.all.last?.status, .completed)
+        XCTAssertEqual(reports.all.last?.answer, "From Hermes.")
+        XCTAssertEqual(HermesStub.requests.first?.session, threadID)
+        XCTAssertEqual(model.calls, 0, "No model answered for it")
+        await DataEncryptionService.shared.lock()
+    }
+
     func testAReplyByHermes_isGivenWhatWasReadFromTheMessagesAttachments() async throws {
         let defaults = UserDefaults.standard
         let keys = ["llm_provider", "hermes_model_connections_converted.v1"].map(UserScope.scopedKey)

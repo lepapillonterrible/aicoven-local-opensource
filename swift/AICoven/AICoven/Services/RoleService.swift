@@ -132,6 +132,18 @@ actor RoleService {
         )
     }
 
+    /// Makes an agent in a coven of `account`'s as the agent form shows it;
+    /// nothing is made if another account is signed in by then.
+    func createAgent(inCoven covenId: String, _ agent: AgentSaving, as account: String) async throws -> Role {
+        try await CovenRepository.shared.createAgent(inCoven: covenId, agent, as: account)
+    }
+
+    /// Saves an agent of `account`'s as the agent form shows it, in one
+    /// write; nothing is saved if another account is signed in by then.
+    func saveAgent(_ roleId: String, _ agent: AgentSaving, as account: String) async throws -> Role {
+        try await CovenRepository.shared.saveAgent(roleId, agent, as: account)
+    }
+
     /// Sets an agent's face.
     func setIcon(symbol: String, tint: IconTint, forRole id: String) async throws {
         try await CovenRepository.shared.setIcon(symbol: symbol, tint: tint, forRole: id)

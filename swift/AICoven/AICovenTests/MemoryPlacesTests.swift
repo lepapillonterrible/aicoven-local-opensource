@@ -211,8 +211,10 @@ final class MemoryPlacesTests: XCTestCase {
         try await keep("Written under this key", in: .coven(coven))
 
         let page = try await store.loadMemories(in: .coven(coven), limit: 10)
-        XCTAssertEqual(page.map(\.text), ["Written under this key", ""], "The rest of the page is still read")
-        XCTAssertEqual(page.map(\.isUnreadable), [false, true])
+        // The two may have been written in the same millisecond, and then come in either order.
+        XCTAssertEqual(Set(page.map(\.text)), ["Written under this key", ""], "The rest of the page is still read")
+        XCTAssertEqual(page.first { $0.id == old.id }?.isUnreadable, true)
+        XCTAssertEqual(page.filter(\.isUnreadable).count, 1)
         let found = try await EmbeddingService.shared.searchRelevantMemories(query: "Written under", in: [.coven(coven)], topK: 10)
         XCTAssertEqual(found.map(\.text), ["Written under this key"])
 

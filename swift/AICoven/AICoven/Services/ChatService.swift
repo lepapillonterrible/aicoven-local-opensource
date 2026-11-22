@@ -1518,13 +1518,18 @@ actor ChatService {
     private func preferredProviderAndModel(roleId: String?) async -> (provider: String, model: String, settings: AgentTurnSettings) {
         let role: Role? = if let roleId { try? await RoleService.shared.getRole(roleId: roleId) } else { nil }
         let settings = role.map(AgentTurnSettings.init(of:)) ?? .standard
+        // An agent runs on its own provider and model. One on Hermes, or
+        // on OpenClaw through its Gateway, names no model: the agent there
+        // runs the turn itself.
         if let role,
-           let roleProvider = role.provider, !roleProvider.isEmpty,
-           let roleModel = role.model, !roleModel.isEmpty {
-            #if DEBUG
-            AppErrorReporter.log(message: "Role resolved provider=\(roleProvider.lowercased()) model=\(roleModel)", context: "ChatService.streamMessage.roleResolution")
-            #endif
-            return (roleProvider.lowercased(), roleModel, settings)
+           let roleProvider = role.provider?.lowercased(), !roleProvider.isEmpty {
+            let roleModel = role.model ?? ""
+            if !roleModel.isEmpty || ["hermes", "openclaw"].contains(roleProvider) {
+                #if DEBUG
+                AppErrorReporter.log(message: "Role resolved provider=\(roleProvider) model=\(roleModel)", context: "ChatService.streamMessage.roleResolution")
+                #endif
+                return (roleProvider, roleModel, settings)
+            }
         }
         let (globalProvider, globalModel) = resolveProviderAndModel()
         #if DEBUG
