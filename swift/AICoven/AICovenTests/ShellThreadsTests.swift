@@ -349,18 +349,18 @@ final class ShellThreadsTests: XCTestCase {
         let note = "A note \(UUID().uuidString)"
         do {
             _ = try await MemoryRepository.shared.storeMemory(
-                scope: "user", text: note, tags: [], pii: false, createdBy: nil, source: nil, embedding: nil, as: "someone-who-signed-out"
+                in: .aboutMe, text: note, tags: [], pii: false, createdBy: nil, source: nil, embedding: nil, as: "someone-who-signed-out"
             )
             XCTFail("Stored a memory for an account that is not signed in")
         } catch {
             guard case RepositoryError.accountChanged = error else { return XCTFail("\(type(of: error))") }
         }
-        let kept = try await MemoryRepository.shared.loadMemories(scope: "user", limit: 500)
+        let kept = try await MemoryRepository.shared.loadMemories(in: .aboutMe, limit: 500)
         XCTAssertFalse(kept.contains { $0.text == note })
         let stored = try await MemoryRepository.shared.storeMemory(
-            scope: "user", text: note, tags: [], pii: false, createdBy: nil, source: nil, embedding: nil, as: account
+            in: .aboutMe, text: note, tags: [], pii: false, createdBy: nil, source: nil, embedding: nil, as: account
         )
-        addTeardownBlock { try? await MemoryRepository.shared.deleteMemory(id: stored.id) }
+        addTeardownBlock { try? await MemoryRepository.shared.deleteMemory(id: stored.id, as: account) }
         XCTAssertEqual(stored.text, note)
 
         // As the account that owns them, both are done.

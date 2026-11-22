@@ -14,6 +14,9 @@ struct Memory: Codable, Identifiable {
     let isApproved: Bool
     let createdAt: Date
     let updatedAt: Date?
+    /// A list marks an entry the account's key could not open: its content
+    /// is empty and it cannot be edited. It is removed as any entry is.
+    var unreadable: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -25,6 +28,7 @@ struct Memory: Codable, Identifiable {
         case isApproved = "approved"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case unreadable
     }
 }
 

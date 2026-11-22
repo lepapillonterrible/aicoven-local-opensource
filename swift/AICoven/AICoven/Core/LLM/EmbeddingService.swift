@@ -52,9 +52,16 @@ final class EmbeddingService {
     ///
     /// If no provider is configured for embeddings and no lexical overlap is
     /// found, falls back to recency-based retrieval.
+    ///
+    /// The candidates are the newest `candidateLimit` memories of each of
+    /// `places`, newest first; one whose text could not be opened is none.
+    /// They are `account`'s where the caller has read whose they are (the
+    /// account signed in now otherwise), and are not read if another is
+    /// signed in by then.
     func searchRelevantMemories(
         query: String,
-        scope: String? = nil,
+        in places: [MemoryPlace],
+        of account: String? = nil,
         topK: Int = 16,
         candidateLimit: Int = 200,
         includePII: Bool = false,
@@ -64,12 +71,14 @@ final class EmbeddingService {
         let queryTokens = tokenize(lowercasedQuery)
 
         let queryEmbedding = try await embedText(query)
-        let allCandidates = try await memoryRepository.loadMemories(scope: scope, limit: candidateLimit)
-        let candidates: [LocalMemoryChunk] = if includePII {
-            allCandidates
-        } else {
-            allCandidates.filter { !$0.pii }
+        var allCandidates: [LocalMemoryChunk] = []
+        let account = account ?? UserScope.currentUserID
+        for place in places {
+            allCandidates += try await memoryRepository.loadMemories(in: place, limit: candidateLimit, offset: 0, as: account)
         }
+        let candidates = allCandidates
+            .filter { !$0.isUnreadable && (includePII || !$0.pii) }
+            .sorted { $0.createdAt > $1.createdAt }
 
         // Blend semantic similarity (if available) with a cheap lexical score
         // based on word overlap. This approximates the "hybrid" retrieval

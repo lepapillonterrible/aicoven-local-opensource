@@ -163,6 +163,25 @@ struct ContextBuilder {
         self.limits = limits
     }
 
+    /// The memory the turns of a thread of `account`'s read
+    /// (`MemoryPlace.read(inCoven:)`), by the coven the thread is stored
+    /// in. None where the thread is not that account's, where it or its
+    /// coven cannot be read, or where the account changes while they are:
+    /// what cannot be placed is not read.
+    func memoryPlaces(ofThread threadID: String?, for account: String) async -> [MemoryPlace] {
+        guard UserScope.currentUserID == account else { return [] }
+        guard let threadID else { return MemoryPlace.read(inCoven: nil) }
+        do {
+            let covenID = try await threadRepository.covenID(ofThread: threadID, for: account)
+            guard UserScope.currentUserID == account else { return [] }
+            return MemoryPlace.read(inCoven: covenID)
+        } catch {
+            // The kind of failure only.
+            AppErrorReporter.log(message: "A thread's memory could not be placed (\(type(of: error)))", context: "ContextBuilder.memoryPlaces")
+            return []
+        }
+    }
+
     /// Builds a basic context sandwich for a chat turn.
     /// - Parameters:
     ///   - threadID: Optional existing thread to pull history from.
@@ -235,47 +254,20 @@ struct ContextBuilder {
             "When uncertain, ask clarifying questions. When you propose new memories, present them as suggestions for the user to confirm; do not assume they are persisted."
         segments.system.append(LLMMessage(role: .system, content: policies))
 
-        // Layer 4: memories – embedding-based when possible. For personal
-        // threads we combine user-scoped memories (available to all agents) and
-        // thread-scoped memories tied to this specific thread. This mirrors the
-        // "user" vs "thread" access levels in the design.
-        var allMemories: [LocalMemoryChunk] = []
-
-        if let threadID {
-            // Thread-specific scope convention: "thread:<threadId>".
-            let threadScope = "thread:\(threadID)"
-
-            let userMems = try await embeddingService.searchRelevantMemories(
-                query: question,
-                scope: "user",
-                topK: limits.maxRecentMemories / 2,
-                candidateLimit: limits.maxRecentMemories * 4
-            )
-            let threadMems = try await embeddingService.searchRelevantMemories(
-                query: question,
-                scope: threadScope,
-                topK: limits.maxRecentMemories,
-                candidateLimit: limits.maxRecentMemories * 4
-            )
-
-            // Combine with thread memories first, deduping by id.
-            var seen = Set<String>()
-            for m in threadMems + userMems {
-                if !seen.contains(m.id) {
-                    seen.insert(m.id)
-                    allMemories.append(m)
-                    if allMemories.count >= limits.maxRecentMemories { break }
-                }
-            }
-        } else {
-            // No thread context: just use user-scoped memories.
-            allMemories = try await embeddingService.searchRelevantMemories(
-                query: question,
-                scope: "user",
-                topK: limits.maxRecentMemories,
-                candidateLimit: limits.maxRecentMemories * 8
-            )
-        }
+        // Layer 4: memories – embedding-based when possible. A thread's
+        // turns read the memory of where the thread is: its coven's pages,
+        // or in no coven the person's own memory and Strix's pages.
+        // Whose they are is read once: the thread is placed, and its
+        // memory read, as the same account.
+        let account = UserScope.currentUserID
+        let places = await memoryPlaces(ofThread: threadID, for: account)
+        let allMemories = places.isEmpty ? [] : try await embeddingService.searchRelevantMemories(
+            query: question,
+            in: places,
+            of: account,
+            topK: limits.maxRecentMemories,
+            candidateLimit: limits.maxRecentMemories * 8
+        )
 
         if !allMemories.isEmpty {
             let header = "Relevant memories (for your reasoning; avoid reciting private details verbatim):"
