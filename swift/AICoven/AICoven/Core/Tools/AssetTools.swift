@@ -52,9 +52,7 @@ nonisolated enum AssetTools {
             AppErrorReporter.log(message: "The assets could not be read for a tool (\(type(of: error)))", context: "AssetTools.read")
             return .error(tool: call.name, message: "The assets could not be read.", errorType: "asset_store_unavailable", isRetryable: true)
         }
-        guard await store.account() == account else {
-            return .error(tool: call.name, message: "Another account signed in: nothing was read.", errorType: "asset_account_changed")
-        }
+        guard await store.account() == account else { return accountChanged(call) }
         switch call.name {
         case "asset.search":
             return search(call, among: assets, threadID: threadID, now: now)
@@ -149,19 +147,42 @@ nonisolated enum AssetTools {
         if flag(call.args["include_source"], otherwise: true), let latest = asset.files.last {
             do {
                 let data = try await store.data(latest.id, account)
-                guard await store.account() == account else {
-                    return .error(tool: call.name, message: "Another account signed in: nothing was read.", errorType: "asset_account_changed")
-                }
+                guard await store.account() == account else { return accountChanged(call) }
                 lines.append("[File: \(AttachmentContext.plainName(latest.name))]")
-                lines.append(AttachmentContext.body(of: data, mimeType: latest.mimeType))
+                lines.append(told(of: data, mimeType: latest.mimeType))
             } catch is CancellationError {
                 return .error(tool: call.name, message: "Stopped before the asset's file was read.", errorType: "cancelled")
             } catch {
+                // If another account signed in while the file was read,
+                // nothing of the asset is returned: not what was read of it
+                // before, either.
+                guard await store.account() == account else { return accountChanged(call) }
                 AppErrorReporter.log(message: "An asset's file could not be read for a tool (\(type(of: error)))", context: "AssetTools.get")
                 lines.append("(The file \(AttachmentContext.plainName(latest.name)) could not be read.)")
             }
         }
+        // Asked last, with everything read: nothing is returned to a turn
+        // whose account is no longer the one signed in.
+        guard await store.account() == account else { return accountChanged(call) }
         return .success(tool: call.name, result: ["asset_id": .string(asset.id)], contextBlock: lines.joined(separator: "\n"))
+    }
+
+    /// What a file of an asset says, as a model is told it: always
+    /// between fences, whatever it was read from (a PDF's text too, which
+    /// an attachment's is not), cut at an attachment's longest and marked;
+    /// a note for a PDF with no text, a picture, and anything else.
+    static func told(of data: Data, mimeType: String) -> String {
+        if mimeType == "application/pdf" || data.starts(with: Data("%PDF-".utf8)), let text = AttachmentContext.text(ofPDF: data) {
+            return text.isEmpty ? AttachmentContext.pdfWithoutTextNote : AttachmentContext.fenced(text)
+        }
+        if let text = String(data: data, encoding: .utf8) {
+            return AttachmentContext.fenced(AttachmentContext.cut(text, at: AttachmentContext.longestText))
+        }
+        return mimeType.hasPrefix("image/") ? AttachmentContext.pictureNote : AttachmentContext.binaryNote
+    }
+
+    private static func accountChanged(_ call: ParsedToolCall) -> ToolExecutionResult {
+        .error(tool: call.name, message: "Another account signed in: nothing is returned.", errorType: "asset_account_changed")
     }
 
     // MARK: - Arguments
