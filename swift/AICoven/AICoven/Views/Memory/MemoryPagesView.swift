@@ -186,7 +186,11 @@ struct MemoryPagesView: View {
         } catch {
             guard isCurrent else { return }
             knowsReadFailed = true
-            announce("Couldn't load it. Try again.")
+            // Said only where the row says it: with a text already
+            // shown, the row goes on showing that.
+            if knows == nil {
+                announce("Couldn't load it. Try again.")
+            }
         }
     }
 
@@ -203,9 +207,16 @@ struct MemoryPagesView: View {
         }
     }
 
+    /// The text has never been read here and its last read failed: the
+    /// row then reads it again. Once it has been read, the row edits what
+    /// it shows, whatever a later read came to.
+    private var knowsNeedsReading: Bool {
+        knows == nil && knowsReadFailed
+    }
+
     private var readingKnows: some View {
         Button {
-            if knowsReadFailed {
+            if knowsNeedsReading {
                 Task { await readKnows() }
             } else {
                 startEditingKnows()
@@ -235,7 +246,7 @@ struct MemoryPagesView: View {
         }
         .buttonStyle(.plain)
         .disabled(draftHeld || (knows == nil && !knowsReadFailed))
-        .accessibilityHint(knowsReadFailed ? "Reads it again" : "Edits it here")
+        .accessibilityHint(knowsNeedsReading ? "Reads it again" : "Edits it here")
         .accessibilityIdentifier("memory-knows-row")
     }
 
@@ -308,8 +319,8 @@ struct MemoryPagesView: View {
         .padding(.horizontal, Spacing.xs)
     }
 
-    /// Where the text goes, and a character count once it is within a tenth
-    /// of the limit.
+    /// Where the text goes, and a character count once the text is longer
+    /// than nine tenths of the limit.
     private var knowsFootnote: String {
         let note = "Added to every agent's instructions in this coven. Encrypted."
         guard knowsDraft.count > Self.knowsMaxLength * 9 / 10 else { return note }
