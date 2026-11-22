@@ -68,18 +68,24 @@ actor StrixSettingsService {
         let account = await signedIn()
         var settings = loadLocalSettings(of: account)
 
-        // Only apply defaults if provider/model are not set AND user has
-        // configured provider accounts. This avoids showing "gpt-4o" when
-        // the user only has a Gemini key configured.
-        // Hermes, and a model on this device, name no model here: there
-        // is none to look up for them.
-        let namesNoModel = ["hermes", "mlx"].contains(settings.provider?.lowercased() ?? "")
-        if settings.provider == nil || (settings.model == nil && !namesNoModel) {
+        /// Only apply defaults if provider/model are not set AND user has
+        /// configured provider accounts. This avoids showing "gpt-4o" when
+        /// the user only has a Gemini key configured.
+        /// Hermes, and a model on this device, name no model here: there
+        /// is none to look up for them.
+        func lacksWhatItRunsOn(_ settings: LocalStrixSettings) -> Bool {
+            let namesNoModel = ["hermes", "mlx"].contains(settings.provider?.lowercased() ?? "")
+            return settings.provider == nil || (settings.model == nil && !namesNoModel)
+        }
+        if lacksWhatItRunsOn(settings) {
             let defaultProvider = await firstConnection()
             // The connections looked up are those of whoever is signed in
             // now: they are not one account's to keep for another.
             guard await signedIn() == account else { throw RepositoryError.accountChanged }
-            if let defaultProvider {
+            // Read again, with nothing waited for until the write: what
+            // was saved while the connections were looked up is kept.
+            settings = loadLocalSettings(of: account)
+            if let defaultProvider, lacksWhatItRunsOn(settings) {
                 if settings.provider == nil {
                     settings.provider = defaultProvider.provider
                 }
@@ -134,9 +140,8 @@ actor StrixSettingsService {
         if let temperature = strix.temperature { settings.temperature = temperature }
         if let maxTokens = strix.maxTokens { settings.maxTokens = maxTokens }
         if let mostSteps = strix.mostSteps { settings.autonomousMaxSteps = mostSteps }
-        // Asked again, with nothing waited for until the write, which is
-        // under that account's own key.
-        guard await signedIn() == account else { throw RepositoryError.accountChanged }
+        // Nothing was waited for since the account was asked: the settings
+        // read are the ones written over, under that account's own key.
         saveLocalSettings(settings, for: account)
         updateLLMDefaults(from: settings, for: account)
         return settings

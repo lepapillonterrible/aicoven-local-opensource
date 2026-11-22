@@ -193,6 +193,21 @@ final class StrixAgentTests: XCTestCase {
         let onHermes = StrixAgentsView.row(for: LocalStrixSettings(model: "hermes", provider: "hermes"))
         XCTAssertEqual(choices.runsOnLine(for: onHermes), "Hermes", "An agent of the person's own names no model")
         XCTAssertEqual(choices.runsOnLine(for: StrixAgentsView.row(for: LocalStrixSettings())), "")
+        /// With no connection stored, Strix's is the first of its provider's, as its form takes it.
+        func connection(_ id: String, _ provider: String) -> ProviderAccount {
+            ProviderAccount(
+                id: id, userId: nil, provider: provider, accountName: nil, displayName: provider,
+                status: "healthy", scopes: [], defaultModel: nil, baseURL: nil, isHealthy: true,
+                lastHealthCheck: nil, lastHealthCheckAt: nil, quotaHint: nil, createdAt: nil
+            )
+        }
+        let connections = [connection("a", "openai"), connection("b", "anthropic"), connection("c", "anthropic")]
+        let unstored = StrixAgentsView.row(for: LocalStrixSettings(model: "claude-sonnet-4-6", provider: "Anthropic"), among: connections)
+        XCTAssertEqual(unstored.providerAccountId, "b")
+        XCTAssertEqual(StrixAgentsView.row(for: LocalStrixSettings(providerAccountId: "c"), among: connections).providerAccountId, "c")
+        XCTAssertNil(StrixAgentsView.row(for: LocalStrixSettings(), among: connections).providerAccountId)
+        // Steps stored as no number of steps are shown as the fewest there can be, so the form still saves.
+        XCTAssertEqual(AgentDraft(strix: LocalStrixSettings(autonomousMaxSteps: 0), appSteps: 5).maxSteps, "1")
     }
 
     /// Who is signed in, for a service of the test's own. Sendable by hand: read and written under its lock.
@@ -244,6 +259,18 @@ final class StrixAgentTests: XCTestCase {
         XCTAssertEqual(StrixSettingsService.stored(of: ada)?.provider, "anthropic")
         XCTAssertEqual(defaults.string(forKey: UserScope.scopedKey("anthropic_model", for: ada)), "claude-sonnet-4-6")
         XCTAssertNil(StrixSettingsService.stored(of: grace))
+
+        // What is saved while the connections are looked up is kept: the lookup adds only what Strix still lacks.
+        let adaKey = UserScope.scopedKey("strix_settings.v1", for: ada)
+        try defaults.set(JSONEncoder().encode(LocalStrixSettings(systemPrompt: "Old instructions.")), forKey: adaKey)
+        let slow = StrixSettingsService(signedIn: { signedIn.now }, firstConnection: {
+            let saved = LocalStrixSettings(systemPrompt: "Written meanwhile.")
+            UserDefaults.standard.set(try? JSONEncoder().encode(saved), forKey: adaKey)
+            return (provider: "anthropic", defaultModel: "claude-sonnet-4-6")
+        })
+        let afterwards = try await slow.loadPersonalStrix()
+        XCTAssertEqual([afterwards.systemPrompt, afterwards.provider, afterwards.model], ["Written meanwhile.", "anthropic", "claude-sonnet-4-6"])
+        XCTAssertEqual(StrixSettingsService.stored(of: ada)?.systemPrompt, "Written meanwhile.")
 
         // A model is looked up only for a provider that names one, and only from a connection of that provider.
         let hermesKey = UserScope.scopedKey("strix_settings.v1", for: ada)

@@ -104,7 +104,7 @@ nonisolated struct AgentDraft: Equatable {
         model = strix.model ?? ""
         temperature = strix.temperature ?? 0.7
         maxTokens = String(strix.maxTokens ?? 4096)
-        maxSteps = String(min(strix.autonomousMaxSteps ?? appSteps, AgentSaving.mostStepsAllowed))
+        maxSteps = String(max(1, min(strix.autonomousMaxSteps ?? appSteps, AgentSaving.mostStepsAllowed)))
     }
 
     /// An agent runs on one account and one model, so it saves only with

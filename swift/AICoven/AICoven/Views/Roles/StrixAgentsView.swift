@@ -23,11 +23,18 @@ struct StrixAgentsView: View {
         .current(isPadLayout: isPadLayout)
     }
 
-    /// Strix as a list's row shows an agent, from its settings.
-    static func row(for settings: LocalStrixSettings) -> Role {
-        Role(
+    /// What the row says Strix runs on while it runs on nothing, as the form says it.
+    static let noConnection = "No AI connection yet"
+
+    /// Strix as a list's row shows an agent, from its settings. Where no
+    /// connection is stored with it, it is the first of its provider's
+    /// among the person's `connections`, as its form takes it.
+    static func row(for settings: LocalStrixSettings, among connections: [ProviderAccount] = []) -> Role {
+        let provider = settings.provider?.lowercased()
+        let connection = settings.providerAccountId ?? connections.first { $0.provider.lowercased() == provider }?.id
+        return Role(
             id: "strix", covenId: "", name: "Strix", emoji: nil, description: nil, systemPrompt: settings.systemPrompt,
-            model: settings.model, provider: settings.provider, providerAccountId: settings.providerAccountId,
+            model: settings.model, provider: settings.provider, providerAccountId: connection,
             temperature: settings.temperature, maxTokens: settings.maxTokens,
             settings: RoleSettings(
                 toolConfig: nil, allowedTools: nil, collaboratorRoleIds: nil, autonomousMode: nil,
@@ -58,7 +65,8 @@ struct StrixAgentsView: View {
                 }
                 if let strix {
                     row {
-                        AgentListRow(role: strix, modelLine: choices.runsOnLine(for: strix), layout: layout) { form = Showing() }
+                        let runsOn = choices.runsOnLine(for: strix)
+                        AgentListRow(role: strix, modelLine: runsOn.isEmpty ? Self.noConnection : runsOn, layout: layout) { form = Showing() }
                     }
                 }
                 if loadFailed {
@@ -113,9 +121,13 @@ struct StrixAgentsView: View {
             let settings = try await StrixSettingsService.shared.loadPersonalStrix()
             // Only the latest reading, and only for the account it was read for.
             guard reading == readings, UserScope.currentUserID == account else { return }
-            let row = Self.row(for: settings)
-            strix = row
+            strix = Self.row(for: settings)
             loadFailed = false
+            // With the connections read, the one Strix runs on is known
+            // where none is stored with it, and its models name its model.
+            guard await (try? choices.loadAccounts()) != nil, reading == readings, UserScope.currentUserID == account else { return }
+            let row = Self.row(for: settings, among: choices.accounts)
+            strix = row
             await choices.loadModelNames(for: [row])
         } catch {
             guard reading == readings else { return }

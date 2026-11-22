@@ -395,7 +395,7 @@ struct AgentFormView: View {
     /// What Strix runs on, in words: its model and connection, or that it
     /// has none yet.
     private var runsOnLine: String {
-        guard !draft.provider.isEmpty else { return "No AI connection yet" }
+        guard !draft.provider.isEmpty else { return StrixAgentsView.noConnection }
         return AgentModelChoices.modelLine(
             model: runsItself ? "" : draft.model,
             models: choices.models(for: draft.accountId, provider: draft.provider),
