@@ -247,6 +247,22 @@ final class SkillsFromGitHubTests: XCTestCase {
         XCTAssertEqual(kept.map(\.title), ["a"], "What was added before stays the first account's")
     }
 
+    func testNothingIsSaidOfWhatIsNoAddressEither_toAnotherAccountOrOnceCalledOff() async throws {
+        let account = account
+        let (session, asked) = try gitHub(listing: (200, listing([entry("a.md")])))
+        // Another account is signed in by the time it is asked.
+        let anothers = await SkillsModel(signedIn: { "someone-else" }, session: session).addFromGitHub("not an address", as: account)
+        XCTAssertNil(anothers)
+        // The asking was called off before it began.
+        let model = SkillsModel(session: session)
+        let calledOff = await Task { () -> SkillsModel.FromGitHub? in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await model.addFromGitHub("not an address", as: account)
+        }.value
+        XCTAssertNil(calledOff)
+        XCTAssertEqual(asked.requests.count, 0)
+    }
+
     func testAFolderWithMoreFilesThanGitHubListsAddsNothing_andSaysSo() async throws {
         let place = try XCTUnwrap(GitHubSkillsPlace("github.com/ada/agent-skills"))
         let most = (1 ... SkillsOnGitHub.mostListed).map { entry(String(format: "n%04d.txt", $0)) }

@@ -182,11 +182,15 @@ final class SkillsModel: ObservableObject {
     /// was added.
     func addFromGitHub(_ typed: String, as account: String) async -> FromGitHub? {
         _ = asking()
-        // Not an address: GitHub is not asked.
-        guard let place = GitHubSkillsPlace(typed) else { return .notListed }
-        let outcome = await added(from: place, as: account)
-        // Asked last, with everything waited for behind: nothing is said
-        // of an adding that was called off, or to another account.
+        // What is no address is not asked of GitHub.
+        let outcome: FromGitHub = if let place = GitHubSkillsPlace(typed) {
+            await added(from: place, as: account)
+        } else {
+            .notListed
+        }
+        // Asked last, whatever came of it and with everything waited for
+        // behind: nothing is said of an adding that was called off, or to
+        // another account.
         return Task.isCancelled || signedIn() != account ? nil : outcome
     }
 
