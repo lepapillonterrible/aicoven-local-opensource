@@ -251,7 +251,7 @@ struct ProposalCard: View {
                     .background(Color.aicovenGlass)
                     .cornerRadius(BorderRadius.sm)
             } else {
-                Text(proposal.proposedContent)
+                Text(proposal.isUnreadable ? "Its text can't be opened, so it can't be approved as it is." : proposal.proposedContent)
                     .font(.aicovenBodySmall)
                     .foregroundColor(.aicovenTextSecondary)
                     .lineLimit(5)
