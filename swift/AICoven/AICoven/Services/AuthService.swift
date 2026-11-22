@@ -73,6 +73,7 @@ class AuthService: ObservableObject {
                 // signing out, and when an account is deleted.
                 ThreadActivities.shared.accountChanged()
                 MemoryProposalQuestions.shared.accountChanged()
+                ToolApprovals.shared.accountChanged()
                 if let firebaseUser {
                     print("✅ Firebase user signed in: \(firebaseUser.email ?? "unknown")")
                     // Clear any previous user's data first
@@ -86,6 +87,7 @@ class AuthService: ObservableObject {
                     // Read again now that the threads are this account's.
                     ThreadActivities.shared.accountChanged()
                     MemoryProposalQuestions.shared.accountChanged()
+                    ToolApprovals.shared.accountChanged()
 
                     // One-time cleanup: clear stale test purchases that were cached
                     // during automated testing. This runs once per user.
@@ -200,6 +202,7 @@ class AuthService: ObservableObject {
         // account stays said.
         ThreadActivities.shared.accountChanged()
         MemoryProposalQuestions.shared.accountChanged()
+        ToolApprovals.shared.accountChanged()
         currentUser = nil
         isAuthenticated = false
     }
@@ -354,6 +357,7 @@ class AuthService: ObservableObject {
         // Its threads are gone: so is what their rows said.
         ThreadActivities.shared.accountChanged()
         MemoryProposalQuestions.shared.accountChanged()
+        ToolApprovals.shared.accountChanged()
 
         print("✅ Account deleted successfully")
 

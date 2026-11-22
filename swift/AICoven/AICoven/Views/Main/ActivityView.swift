@@ -20,6 +20,11 @@ struct ActivityView: View {
 
     static let loadFailure = "Couldn't load Activity."
 
+    /// The approval the spot on this page is asking now.
+    private var asking: ToolApproval? {
+        approvals.showing.flatMap { $0.phase == .asking ? $0.approval : nil }
+    }
+
     /// The groups, once the threads are read.
     private var groups: ActivityGroups? {
         model.shown.map { ActivityGroups.make(threads: $0, activity: activities.activity, unreadReplyAt: activities.unreadReplyAt) }
@@ -65,7 +70,9 @@ struct ActivityView: View {
         // Said to VoiceOver while the page is on screen: what newly waits
         // for the person, and each reply that newly finished.
         .onChange(of: groups) { old, new in
-            guard isOnScreen, let old, let new, let words = ActivityGroups.announcement(from: old, to: new) else { return }
+            // Not the approval the spot is asking: the spot says it itself.
+            guard isOnScreen, let old, let new,
+                  let words = ActivityGroups.announcement(from: old, to: new, asking: asking) else { return }
             AccessibilityNotification.Announcement(words).post()
         }
         .onChange(of: model.loadFailed) { _, failed in
@@ -134,7 +141,6 @@ struct ActivityView: View {
     /// as beside a thread (the approvals' one spot: one at a time, the
     /// rest behind it), then the threads that wait.
     private func waitingSection(_ items: [ActivityItem]) -> some View {
-        let asking = approvals.showing.flatMap { $0.phase == .asking ? $0.approval : nil }
         let rows = ActivityGroups.waitingRows(items, asking: asking)
         return VStack(alignment: .leading, spacing: Spacing.sm) {
             Text("Waiting for you")

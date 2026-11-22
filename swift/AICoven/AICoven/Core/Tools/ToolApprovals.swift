@@ -237,6 +237,23 @@ final class ToolApprovals: ObservableObject {
         show(waiting.removeFirst())
     }
 
+    /// Another account is signed in, or none: everything that was being
+    /// asked of the first leaves, unanswered and unseen, and the turns
+    /// that asked are told it was withdrawn. Whoever is signed in next
+    /// is shown nothing of it and cannot answer it.
+    func accountChanged() {
+        for approvalID in Array(asked.keys) {
+            settle(approvalID, with: .withdrawn)
+        }
+        showingGeneration += 1
+        showing = nil
+        waiting = []
+        held = []
+        announced = []
+        answered = [:]
+        askingThreadIDs = []
+    }
+
     /// Forgets the answers given to a thread's turn: a turn that has ended
     /// keeps them itself, and a turn that starts begins with none.
     func forgetAnswers(threadID: String) {

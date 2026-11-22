@@ -52,6 +52,39 @@ final class ToolApprovalsTests: XCTestCase {
         XCTFail("The approval was never asked", file: file, line: line)
     }
 
+    // MARK: - Another account
+
+    func testWhenAnotherAccountSignsIn_everythingAskedLeavesUnanswered_andCannotBeAnswered() async {
+        let approvals = makeApprovals()
+        let first = approval(in: "thread-1"), second = approval(in: "thread-2", "Write this file?")
+        let asking = Task { await approvals.ask(first) }
+        await asked(approvals, 1)
+        let askingToo = Task { await approvals.ask(second) }
+        await asked(approvals, 2)
+        // A third is held back while the person composes.
+        approvals.composerFocusChanged(true)
+        approvals.noteComposerChanged()
+        let third = approval(in: "thread-3", "Create this branch?")
+        let askingHeld = Task { await approvals.ask(third) }
+        await held(approvals, 1)
+        XCTAssertEqual(approvals.askingThreadIDs, ["thread-1", "thread-2", "thread-3"])
+
+        approvals.accountChanged()
+
+        XCTAssertNil(approvals.showing, "Whoever is signed in next is shown nothing of it")
+        XCTAssertEqual(approvals.waiting, [])
+        XCTAssertEqual(approvals.held, [])
+        XCTAssertEqual(approvals.askingThreadIDs, [])
+        let answers = await [asking.value, askingToo.value, askingHeld.value]
+        XCTAssertEqual(answers, [.withdrawn, .withdrawn, .withdrawn], "The turns that asked are told it was withdrawn: none is approved")
+        // Nor can it be answered afterwards, or come back when what was scheduled runs.
+        approvals.answer(first.id, approve: true)
+        approvals.composerFocusChanged(false)
+        runScheduled()
+        XCTAssertNil(approvals.showing)
+        XCTAssertEqual(approvals.answered, [:])
+    }
+
     // MARK: - Not while typing
 
     func testAnApprovalAskedWhileThePersonIsTyping_isHeldUntilTheyPause() async {

@@ -106,6 +106,10 @@ final class ActivityTests: XCTestCase {
             "In one announcement; what was already there is not said again, nor that a turn's words changed"
         )
         XCTAssertNil(ActivityGroups.announcement(from: after, to: after))
+        // The approval being asked on the page is said by the approvals' spot itself, once: not here too.
+        let asked = ToolApproval(threadID: "asks", question: "Run this command?", details: "ls", toolName: "shell.run")
+        XCTAssertEqual(ActivityGroups.announcement(from: before, to: after, asking: asked), "Strix replied: Replied")
+        XCTAssertNil(ActivityGroups.announcement(from: groups([:]), to: groups(["asks": .waiting("x")]), asking: asked))
         XCTAssertEqual(ActivityGroups.announcement(from: groups([:]), to: groups(["broke": .broken("x")])), "Stopped on a problem: Broke")
         XCTAssertEqual(ActivityGroups.announcement(from: groups([:]), to: groups(["broke": .paused])), "Paused: Broke")
         // A turn that needed an OK and then stopped on a problem is another thing that waits.
