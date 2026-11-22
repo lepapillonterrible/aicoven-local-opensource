@@ -178,19 +178,27 @@ struct ContextBuilder {
     }
 
     let limits: Limits
+    /// Who is signed in, asked each time it matters.
+    private let signedIn: () -> String
+    /// The skills an account's agents follow (`SkillRepository.followed`).
+    private let followedSkills: (String) async throws -> [(title: String, text: String)]
 
     init(
         threadRepository: ThreadRepository? = nil,
         memoryRepository: MemoryRepository? = nil,
         embeddingService: EmbeddingService? = nil,
         toolService: ToolService? = nil,
-        limits: Limits = .init(maxRecentMessages: 16, maxRecentMemories: 16)
+        limits: Limits = .init(maxRecentMessages: 16, maxRecentMemories: 16),
+        signedIn: @escaping () -> String = { UserScope.currentUserID },
+        followedSkills: @escaping (String) async throws -> [(title: String, text: String)] = { try await SkillRepository.shared.followed(as: $0) }
     ) {
         self.threadRepository = threadRepository ?? .shared
         self.memoryRepository = memoryRepository ?? .shared
         self.embeddingService = embeddingService ?? .shared
         self.toolService = toolService ?? .shared
         self.limits = limits
+        self.signedIn = signedIn
+        self.followedSkills = followedSkills
     }
 
     /// Where a thread of `account`'s is: the coven it is stored in, or
@@ -201,11 +209,11 @@ struct ContextBuilder {
     /// read and keep what is a coven's only as the account whose coven it
     /// is, so a coven that is gone, or is not that account's, has nothing.
     func scope(ofThread threadID: String?, for account: String) async -> ShellScope? {
-        guard UserScope.currentUserID == account else { return nil }
+        guard signedIn() == account else { return nil }
         guard let threadID else { return .strix }
         do {
             let covenID = try await threadRepository.covenID(ofThread: threadID, for: account)
-            guard UserScope.currentUserID == account else { return nil }
+            guard signedIn() == account else { return nil }
             return ShellScope(covenID: covenID)
         } catch {
             // The kind of failure only.
@@ -225,6 +233,19 @@ struct ContextBuilder {
         } catch {
             // The kind of failure only.
             AppErrorReporter.log(message: "What a scope's agents are told could not be read (\(type(of: error)))", context: "ContextBuilder.covenContext")
+            return nil
+        }
+    }
+
+    /// The skills that are on, as a turn is told them, in no more than
+    /// `room` characters: the account's own, for every agent of theirs;
+    /// nil where none is on, or they cannot be read.
+    private func skillsTold(to account: String, room: Int) async -> String? {
+        do {
+            return try await SkillsTold.block(of: followedSkills(account), room: room)
+        } catch {
+            // The kind of failure only.
+            AppErrorReporter.log(message: "The skills could not be read (\(type(of: error)))", context: "ContextBuilder.skillsTold")
             return nil
         }
     }
@@ -252,19 +273,23 @@ struct ContextBuilder {
     /// What a turn handed to an agent of the person's own (Hermes, an
     /// OpenClaw Gateway) is told before the conversation, as the cloud
     /// app gives such a run its system messages: who answers and how,
-    /// what every agent where the thread is knows, and the memories that
-    /// bear on the question (matched on this device, by their words: the
-    /// question goes to the agent and nowhere else). The agent runs the
+    /// what every agent where the thread is knows, the skills that are
+    /// on, and the memories that bear on the question (matched on this
+    /// device, by their words: the question goes to the agent and nowhere
+    /// else). The agent runs the
     /// turn itself, with its own tools and loop, so nothing of this app's
     /// tools or policies is said.
     /// Nil where there is nothing to say, or another account is signed in
     /// by the time it has been read.
     func preface(threadID: String?, question: String, agent: Agent?) async throws -> String? {
-        let account = UserScope.currentUserID
+        let account = signedIn()
         let scope = await scope(ofThread: threadID, for: account)
         var parts: [String] = []
         if let knows = await covenContext(in: scope, for: account) {
             parts.append(knows)
+        }
+        if let skills = await skillsTold(to: account, room: SkillsTold.mostCharacters) {
+            parts.append(skills)
         }
         do {
             // Chosen on this device, by their words: a question on its way
@@ -279,7 +304,7 @@ struct ContextBuilder {
             // is nothing of the first's to tell.
             return nil
         }
-        guard UserScope.currentUserID == account else { return nil }
+        guard signedIn() == account else { return nil }
         if let agent, agent.account == account {
             parts.insert(agent.systemPrompt, at: 0)
         }
@@ -303,8 +328,10 @@ struct ContextBuilder {
     ///     instructions to include. Defaults to basic chat tools.
     ///   - agent: Who answers the turn. Its instructions are what the model
     ///     is told first; with none given (an agent run of the app's own),
-    ///     or one of an account no longer signed in, nothing is said of who
-    ///     answers.
+    ///     or one of another account, nothing is said of who answers.
+    /// - Throws: `RepositoryError.accountChanged` if another account is
+    ///   signed in by the time the context has been read: what was read is
+    ///   given to no turn then.
     func buildContext(
         threadID: String?,
         userMessage: String,
@@ -326,7 +353,7 @@ struct ContextBuilder {
         // Whose turn it is, read once: who answers, where the thread is,
         // what its scope's agents are told and its memory are all read as
         // the same account.
-        let account = UserScope.currentUserID
+        let account = signedIn()
 
         // Layer 1: system contract (with tool documentation if tools are enabled)
         let systemPrompt: String = if !config.enabledTools.isEmpty {
@@ -374,6 +401,13 @@ struct ContextBuilder {
         let policies = "Treat all information as private to this device. Do not expose sensitive personal data (PII) from memories unless the user has explicitly brought the same details into the current question. " +
             "When uncertain, ask clarifying questions. When you propose new memories, present them as suggestions for the user to confirm; do not assume they are persisted."
         segments.system.append(LLMMessage(role: .system, content: policies))
+
+        // The skills the person turned on, after the rest of what the
+        // system says, as the cloud app puts them. They take a part of the
+        // prompt only: the rest is the conversation's.
+        if let skills = await skillsTold(to: account, room: SkillsTold.room(promptTokens: maxContextTokens)) {
+            segments.system.append(LLMMessage(role: .system, content: skills))
+        }
 
         // Layer 4: memories – embedding-based when possible. A thread's
         // turns read the memory of where the thread is: its coven's pages,
@@ -434,11 +468,15 @@ struct ContextBuilder {
         let checklist = "Reply concisely. Ground your answer in the provided memories and conversation context—do not invent facts. If you used tools (web search, files), mention it naturally. Ask clarifying questions when details are ambiguous."
         segments.checklist.append(LLMMessage(role: .system, content: checklist))
 
+        // Everything that was waited for is in. What was read is the
+        // account's that asked: none of it is given to a turn once another
+        // is signed in.
+        guard signedIn() == account else { throw RepositoryError.accountChanged }
+
         // Who answers, and how the person asked it to: before anything
-        // else the model is told. Decided last, once everything that was
-        // waited for is in: not an agent of an account that is not the
-        // one this context was read as, nor once another is signed in.
-        if let agent, agent.account == account, UserScope.currentUserID == account {
+        // else the model is told. Not an agent of an account that is not
+        // the one this context was read as.
+        if let agent, agent.account == account {
             segments.system.insert(LLMMessage(role: .system, content: agent.systemPrompt), at: 0)
         }
 
@@ -456,7 +494,7 @@ private extension ContextBuilder {
     /// Logical segments of the context sandwich so we can apply truncation
     /// decisions (e.g. "keep last 6 turns") without guessing from raw indices.
     struct ContextSegments {
-        var system: [LLMMessage] = [] // Layers 1–3
+        var system: [LLMMessage] = [] // Layers 1–3, then the skills that are on
         var memories: [LLMMessage] = [] // Layer 4 (header + lines)
         var summary: [LLMMessage] = [] // Layer 5
         var recents: [LLMMessage] = [] // Layer 6
