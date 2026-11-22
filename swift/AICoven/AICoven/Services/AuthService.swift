@@ -74,6 +74,7 @@ class AuthService: ObservableObject {
                 ThreadActivities.shared.accountChanged()
                 MemoryProposalQuestions.shared.accountChanged()
                 ToolApprovals.shared.accountChanged()
+                LocalNotifications.shared.accountReported(firebaseUser?.uid)
                 if let firebaseUser {
                     print("✅ Firebase user signed in: \(firebaseUser.email ?? "unknown")")
                     // Clear any previous user's data first
@@ -202,6 +203,7 @@ class AuthService: ObservableObject {
         ThreadActivities.shared.accountChanged()
         MemoryProposalQuestions.shared.accountChanged()
         ToolApprovals.shared.accountChanged()
+        LocalNotifications.shared.accountReported(nil)
         currentUser = nil
         isAuthenticated = false
     }
@@ -342,6 +344,7 @@ class AuthService: ObservableObject {
         CovenOrderStore().remove(for: userId)
         LastUsedAgentStore().remove(for: userId)
         ScopeVisitStore().remove(for: userId)
+        LocalNotifications.shared.forget(userId)
 
         // Delete the Firebase Auth user
         do {
@@ -357,6 +360,7 @@ class AuthService: ObservableObject {
         ThreadActivities.shared.accountChanged()
         MemoryProposalQuestions.shared.accountChanged()
         ToolApprovals.shared.accountChanged()
+        LocalNotifications.shared.accountReported(nil)
 
         print("✅ Account deleted successfully")
 

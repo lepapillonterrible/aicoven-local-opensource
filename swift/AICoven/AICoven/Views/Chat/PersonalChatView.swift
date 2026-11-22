@@ -54,6 +54,11 @@ struct PersonalChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Offers notifications once a reply has finished while the
+            // person was away; nothing otherwise.
+            NotificationAskLine()
+                .padding(.horizontal, Spacing.lg)
+                .padding(.top, Spacing.sm)
 
             // Messages area
             ScrollViewReader { proxy in
@@ -350,14 +355,23 @@ struct PersonalChatView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase != .active {
                 Task { await ComposerDrafts.shared.saveNow() }
+            } else {
+                // Back in front with this thread still open: what was
+                // notified of it meanwhile is seen.
+                LocalNotifications.shared.threadShown(thread.id)
             }
         }
         // On screen, the thread is read as replies arrive; what its
         // composer holds is an unsent message once it has left.
-        .onAppear { ThreadActivities.shared.show(thread.id) }
+        .onAppear {
+            ThreadActivities.shared.show(thread.id)
+            // What was notified of this thread is seen.
+            LocalNotifications.shared.threadShown(thread.id)
+        }
         .onChange(of: thread.id) { was, now in
             ThreadActivities.shared.hide(was)
             ThreadActivities.shared.show(now)
+            LocalNotifications.shared.threadShown(now)
         }
         .onDisappear {
             ThreadActivities.shared.hide(thread.id)
