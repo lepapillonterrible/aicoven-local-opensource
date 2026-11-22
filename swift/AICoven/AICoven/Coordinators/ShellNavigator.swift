@@ -26,6 +26,8 @@ nonisolated enum ShellSidebarItem: Hashable {
     case memory
     case agents
     case connectedApps
+    /// Activity: the person's own, across every scope.
+    case activity
 
     /// A scope's places as a row of buttons shows them, in the sidebar and
     /// on a phone's Overview: each with its name and its symbol.
@@ -54,6 +56,9 @@ final class ShellNavigator: ObservableObject {
         /// Settings, opened at `pane` where a request names one (Provider
         /// Keys, Connected Apps, …).
         case settings(pane: WorkspaceTabType?)
+        /// Activity: what waits for the person, moves, and has finished,
+        /// across Strix and every coven.
+        case activity
     }
 
     /// The person's place on screen, over the scope's; nil for none.
@@ -162,7 +167,9 @@ final class ShellNavigator: ObservableObject {
     /// Agents for the agents and their forms, Memory for the memory and its
     /// forms, the Overview for none. Nil for a place that has no row.
     var sidebarItem: ShellSidebarItem? {
-        // The person's own place belongs to no row of the scope's.
+        // The person's own place belongs to no row of the scope's:
+        // Activity has its own, Settings has none.
+        if personPlace == .activity { return .activity }
         guard personPlace == nil else { return nil }
         guard let place else { return .overview }
         return Self.row(of: place)
@@ -184,7 +191,11 @@ final class ShellNavigator: ObservableObject {
     /// ("Untitled" for none), any other place's own; nil on the Overview.
     /// Settings', while it covers the scope's place.
     var placeTitle: String? {
-        if case .settings = personPlace { return "Settings" }
+        switch personPlace {
+        case .settings: return "Settings"
+        case .activity: return "Activity"
+        case nil: break
+        }
         guard let place else { return nil }
         return place.threadValue.map(ThreadListRules.title(of:)) ?? place.title
     }
@@ -193,6 +204,7 @@ final class ShellNavigator: ObservableObject {
     /// open in it earlier. Selecting the scope already on screen keeps its
     /// current place.
     func select(_ scope: ShellScope) {
+        personMoves += 1
         personPlace = nil
         guard scope != selected else { return }
         selected = scope
@@ -206,6 +218,7 @@ final class ShellNavigator: ObservableObject {
 
     /// Switches to `scope` and opens `tab` there.
     func open(_ tab: WorkspaceTab, in scope: ShellScope) {
+        personMoves += 1
         personPlace = nil
         selected = scope
         places[scope] = tab
@@ -217,6 +230,7 @@ final class ShellNavigator: ObservableObject {
     }
 
     func showOverview() {
+        personMoves += 1
         personPlace = nil
         places[selected] = nil
     }
@@ -225,8 +239,23 @@ final class ShellNavigator: ObservableObject {
     /// for again, it is shown anew. Any move of the person leaves it:
     /// choosing a scope, opening a place or a thread, the Overview.
     func openPersonPlace(_ place: PersonPlace) {
+        personMoves += 1
         personPlace = place
         personPlaceRequest += 1
+    }
+
+    /// Counts what the person does in the shell: every move of theirs
+    /// (choosing a scope, opening a place, a thread or the Overview, going
+    /// back) and every ask that can leave the place as it is (the thread
+    /// search, New Thread again on its page). Not what happens by itself:
+    /// a thread made, renamed or deleted, a coven that is gone.
+    private(set) var personMoves = 0
+
+    /// Whether the person has done nothing in the shell since it counted
+    /// `moves`: for what is asked for in a sheet and opened once the sheet
+    /// has gone, which must not cover what the person did meanwhile.
+    func isStill(at moves: Int) -> Bool {
+        moves == personMoves
     }
 
     /// Opens the new-thread page in the selected scope: the thread is made
@@ -274,10 +303,12 @@ final class ShellNavigator: ObservableObject {
         open(.thread(thread), in: scope)
     }
 
-    /// Opens one of the selected scope's places, for its sidebar row. A
-    /// thread opens with `open(_:)`. Strix's agent is Strix itself, so its
-    /// Agents place is Strix's settings; Strix uses every connection, so it
-    /// has no Connections place (its row leads to Settings instead).
+    /// Opens the place a sidebar row or a Go menu item leads to: one of
+    /// the selected scope's places, or Activity, which is the person's own
+    /// and covers the scope's. A thread opens with `open(_:)`. Strix's
+    /// agent is Strix itself, so its Agents place is Strix's settings;
+    /// Strix uses every connection, so it has no Connections place (its
+    /// row leads to Settings instead).
     func openPlace(_ item: ShellSidebarItem) {
         switch (item, selected) {
         case (.overview, _): showOverview()
@@ -285,6 +316,7 @@ final class ShellNavigator: ObservableObject {
         case let (.agents, .coven(covenID)): open(.covenAgents(covenId: covenID))
         case (.agents, .strix): open(.personalStrix)
         case let (.connectedApps, .coven(covenID)): open(.covenConnections(covenId: covenID))
+        case (.activity, _): openPersonPlace(.activity)
         case (.connectedApps, .strix), (.thread, _): break
         }
     }
@@ -292,6 +324,7 @@ final class ShellNavigator: ObservableObject {
     /// Asks for the thread search: the sidebar's, or in the phone layout
     /// the Overview's.
     func requestSearch() {
+        personMoves += 1
         searchAsked += 1
     }
 
@@ -333,14 +366,21 @@ final class ShellNavigator: ObservableObject {
     /// The person went back on the phone (the back button, or the swipe):
     /// what is no longer on the stack is left. Nothing is opened by this.
     func leavePhoneRoutes(notIn path: [PhoneRoute]) {
-        if !path.contains(.personPlace), personPlace != nil { personPlace = nil }
-        if !path.contains(.place), places[selected] != nil { places[selected] = nil }
+        if !path.contains(.personPlace), personPlace != nil {
+            personMoves += 1
+            personPlace = nil
+        }
+        if !path.contains(.place), places[selected] != nil {
+            personMoves += 1
+            places[selected] = nil
+        }
     }
 
     /// Leaves a finished place (a saved form, a deleted item) for the place
     /// it was reached from. Does nothing if the person has moved on from it.
     func close(_ tab: WorkspaceTab) {
         guard places[selected]?.id == tab.id else { return }
+        personMoves += 1
         places[selected] = Self.parent(of: tab.type, in: selected)
     }
 
@@ -394,6 +434,10 @@ nonisolated func shellWindowTitle(
     covenName: String?, personPlace: ShellNavigator.PersonPlace? = nil, covenPlaceTitle: String?
 ) -> String {
     guard let covenName else { return "AICoven" }
-    if case .settings = personPlace { return "\(covenName) — Settings" }
-    return "\(covenName) — \(covenPlaceTitle ?? "Overview")"
+    let place = switch personPlace {
+    case .settings: "Settings"
+    case .activity: "Activity"
+    case nil: covenPlaceTitle ?? "Overview"
+    }
+    return "\(covenName) — \(place)"
 }

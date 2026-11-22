@@ -24,6 +24,10 @@ struct CovenSwitcherList: View {
     let onSelect: (ShellScope) -> Void
     let onCreateCoven: () -> Void
     let onOpenSettings: () -> Void
+    /// Opens Activity, where this list has its row: on a phone, which has
+    /// no sidebar to hold it. With whether anything waits for the person
+    /// and whether a reply is not yet seen, for the row's mark.
+    var activity: (isWaiting: Bool, hasUnread: Bool, open: () -> Void)?
     /// Moves a coven to a place among the covens.
     let onMoveCoven: (_ covenID: String, _ index: Int) -> Void
 
@@ -54,6 +58,16 @@ struct CovenSwitcherList: View {
             Divider()
             VStack(alignment: .leading, spacing: 2) {
                 action(title: "New Coven…", systemImage: "plus", action: onCreateCoven)
+                if let activity {
+                    HStack(spacing: Spacing.xs) {
+                        action(title: "Activity", systemImage: "bell", action: activity.open)
+                        ActivityRowMark(isWaiting: activity.isWaiting, hasUnread: activity.hasUnread)
+                            .padding(.trailing, Spacing.sm)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityValue(ActivityRowMark.words(isWaiting: activity.isWaiting, hasUnread: activity.hasUnread))
+                    .accessibilityIdentifier("switcher-activity")
+                }
                 action(title: personName, systemImage: "person.crop.circle", action: onOpenSettings)
                     .accessibilityHint("Opens Settings")
             }
@@ -185,5 +199,26 @@ struct OtherCovenCurrentLine: View {
             ConversationActivityCaption(activity: current)
         }
         .accessibilityHidden(true)
+    }
+}
+
+/// The mark on Activity's row: the waiting mark while anything waits for
+/// the person, else the dot while a reply is not yet seen. Never a count.
+struct ActivityRowMark: View {
+    let isWaiting: Bool
+    let hasUnread: Bool
+
+    var body: some View {
+        if isWaiting {
+            WaitingMark()
+        } else if hasUnread {
+            ActivityDot()
+        }
+    }
+
+    /// What VoiceOver reads after the row's name.
+    static func words(isWaiting: Bool, hasUnread: Bool) -> String {
+        if isWaiting { return ConversationActivity.needsOKWords }
+        return hasUnread ? "Unread" : ""
     }
 }

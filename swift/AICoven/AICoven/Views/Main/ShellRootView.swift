@@ -55,7 +55,9 @@ struct ShellRootView: View {
     /// The phone's switcher, a sheet from the bar; and what it was asked
     /// to open, done once the sheet has gone so nothing opens under it.
     @State private var showSwitcher = false
-    @State private var switcherFollowUp: SwitcherFollowUp?
+    /// What the switcher was asked for, and how much the person had done
+    /// in the shell by then (`ShellNavigator.personMoves`).
+    @State private var switcherFollowUp: (kind: SwitcherFollowUp, askedAt: Int)?
 
     /// Whether the shell reports how it is used (a scope viewed, a place
     /// opened, New Thread, a thread made, the memory list opened), where
@@ -68,6 +70,7 @@ struct ShellRootView: View {
     private enum SwitcherFollowUp {
         case createCoven
         case settings
+        case activity
     }
 
     /// The covens in the person's order.
@@ -242,7 +245,7 @@ struct ShellRootView: View {
                 .navigationDestination(for: ShellNavigator.PhoneRoute.self) { route in
                     switch route {
                     case .place: phonePlace
-                    case .personPlace: phoneSettings
+                    case .personPlace: phonePersonPlace
                     }
                 }
         }
@@ -271,6 +274,7 @@ struct ShellRootView: View {
             threadActions: threadActions,
             drafts: drafts,
             coven: selectedCoven,
+            covens: orderedCovens,
             onNewThreadWithAgent: newThread(with:),
             onThreadCreated: threadCreated,
             onThreadAsked: threadMade,
@@ -284,11 +288,13 @@ struct ShellRootView: View {
             .stoneBackButton()
     }
 
-    /// Settings, pushed: the list, or the pane a request named. The list's
-    /// rows push their panes on this same stack.
+    /// The person's own place, pushed. Settings: the list, or the pane a
+    /// request named (the list's rows push their panes on this same
+    /// stack). Activity: its page.
     @ViewBuilder
-    private var phoneSettings: some View {
-        if case let .settings(request) = navigator.personPlace {
+    private var phonePersonPlace: some View {
+        switch navigator.personPlace {
+        case let .settings(request):
             Group {
                 if let request, let pane = SettingsPane(request) {
                     SettingsPaneView(pane: pane, request: request)
@@ -299,6 +305,15 @@ struct ShellRootView: View {
             }
             // Made anew for each ask, so it shows the pane now asked for.
             .id(navigator.personPlaceRequest)
+        case .activity:
+            ActivityView(navigator: navigator, covens: orderedCovens)
+                .navigationTitle("Activity")
+            #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+            #endif
+                .stoneBackButton()
+        case nil:
+            EmptyView()
         }
     }
 
@@ -312,11 +327,15 @@ struct ShellRootView: View {
                 navigator.select(scope)
             },
             onCreateCoven: {
-                switcherFollowUp = .createCoven
+                switcherFollowUp = (.createCoven, navigator.personMoves)
                 showSwitcher = false
             },
             onOpenSettings: {
-                switcherFollowUp = .settings
+                switcherFollowUp = (.settings, navigator.personMoves)
+                showSwitcher = false
+            },
+            onOpenActivity: {
+                switcherFollowUp = (.activity, navigator.personMoves)
                 showSwitcher = false
             },
             onMoveCoven: moveCoven
@@ -324,13 +343,15 @@ struct ShellRootView: View {
     }
 
     /// Opens what the switcher was asked for, now that its sheet has gone.
+    /// A place is not opened over what the person did meanwhile (New
+    /// Thread or Search Threads from a keyboard, say).
     private func runSwitcherFollowUp() {
-        let followUp = switcherFollowUp
+        guard let followUp = switcherFollowUp else { return }
         switcherFollowUp = nil
-        switch followUp {
+        switch followUp.kind {
         case .createCoven: showCreateCoven = true
-        case .settings: openSettings(.settings)
-        case nil: break
+        case .settings: if navigator.isStill(at: followUp.askedAt) { openSettings(.settings) }
+        case .activity: if navigator.isStill(at: followUp.askedAt) { navigator.openPersonPlace(.activity) }
         }
     }
 
@@ -359,6 +380,7 @@ struct ShellRootView: View {
                 threadActions: threadActions,
                 drafts: drafts,
                 coven: selectedCoven,
+                covens: orderedCovens,
                 onNewThreadWithAgent: newThread(with:),
                 onThreadCreated: threadCreated,
                 onThreadAsked: threadMade,
@@ -536,6 +558,7 @@ private struct PhoneSwitcherSheet: View {
     let onSelect: (ShellScope) -> Void
     let onCreateCoven: () -> Void
     let onOpenSettings: () -> Void
+    let onOpenActivity: () -> Void
     let onMoveCoven: (_ covenID: String, _ index: Int) -> Void
     @ObservedObject private var activities = ThreadActivities.shared
 
@@ -551,6 +574,12 @@ private struct PhoneSwitcherSheet: View {
             onSelect: onSelect,
             onCreateCoven: onCreateCoven,
             onOpenSettings: onOpenSettings,
+            // The phone has no sidebar: Activity's row is here.
+            activity: (
+                isWaiting: ActivityGroups.isAnythingWaiting(in: activities.activity),
+                hasUnread: !activities.scopesWithUnread.isEmpty,
+                open: onOpenActivity
+            ),
             onMoveCoven: onMoveCoven
         )
         .padding(.top, Spacing.md)

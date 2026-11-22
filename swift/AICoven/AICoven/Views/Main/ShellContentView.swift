@@ -13,6 +13,8 @@ struct ShellContentView: View {
     let drafts: DraftThreads
     /// The coven on screen; nil for Strix, or while the covens are not in.
     let coven: Coven?
+    /// The person's covens, which name the places of Activity's rows.
+    let covens: [Coven]
     /// Starts a thread with one of the coven's agents.
     let onNewThreadWithAgent: (Role) -> Void
     /// Told of a thread the new-thread page made, which takes the page's
@@ -29,12 +31,17 @@ struct ShellContentView: View {
 
     var body: some View {
         Group {
-            if onOpenSwitcher == nil, case let .settings(pane) = navigator.personPlace {
-                // The person's own place covers the scope's. Made anew for
-                // each ask, so it opens at the pane now asked for.
+            // The person's own place covers the scope's (on a phone it
+            // is pushed apart from this, and this shows the scope's).
+            switch onOpenSwitcher == nil ? navigator.personPlace : nil {
+            case let .settings(pane):
+                // Made anew for each ask, so it opens at the pane now
+                // asked for.
                 SettingsWorkspaceView(initialPane: pane)
                     .id(navigator.personPlaceRequest)
-            } else {
+            case .activity:
+                ActivityView(navigator: navigator, covens: covens)
+            case nil:
                 scopePlace
             }
         }

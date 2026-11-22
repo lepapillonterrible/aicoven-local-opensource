@@ -28,6 +28,11 @@ actor ThreadService {
     /// of threads read theirs again, since their order follows it.
     static let threadUsed = Notification.Name("ThreadService.threadUsed")
 
+    /// Posted when a thread of the signed-in account's was changed
+    /// (renamed, archived, unarchived): what lists threads across scopes
+    /// reads them again.
+    static let threadChanged = Notification.Name("ThreadService.threadChanged")
+
     /// A message was stored in a thread at `date`: the thread, if it is
     /// among those loaded, is as lately used as that.
     func noteMessage(in threadID: String, at date: Date) {
@@ -142,6 +147,13 @@ actor ThreadService {
         try await ensureLoaded()
         let filtered = personalThreads.filter { $0.covenId == covenId }
         return includeArchived ? filtered : filtered.filter { !$0.isArchived }
+    }
+
+    /// The account's threads that are not archived, across Strix and
+    /// every coven.
+    func threadsNotArchived() async throws -> [Thread] {
+        try await ensureLoaded()
+        return personalThreads.filter { !$0.isArchived }
     }
 
     /// Where each of the account's threads that is not archived belongs
@@ -280,6 +292,12 @@ actor ThreadService {
         // as lately used as the service holds it to be by now.
         let kept = updated.lastUsed(at: personalThreads[index].lastMessageAt)
         personalThreads[index] = kept
+        // Posted on the main actor: the lists that hear it are views. Only
+        // for the account it was, checked where it is posted.
+        Task { @MainActor in
+            guard UserScope.currentUserID == userID else { return }
+            NotificationCenter.default.post(name: Self.threadChanged, object: nil)
+        }
         return kept
     }
 

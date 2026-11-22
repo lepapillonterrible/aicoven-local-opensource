@@ -81,8 +81,8 @@ final class ScopeOverviewTests: XCTestCase {
         XCTAssertEqual(ThreadListRules.away(twins.reversed(), unreadReplyAt: sameMoment, since: lastVisit).map(\.thread.id), ["a", "b"])
 
         XCTAssertEqual(ThreadListRules.replyDetail(agentName: "Scout"), "Scout replied")
-        XCTAssertEqual(ThreadListRules.replyDetail(agentName: "  "), "New reply")
-        XCTAssertEqual(ThreadListRules.replyDetail(agentName: nil), "New reply")
+        XCTAssertEqual(ThreadListRules.replyDetail(agentName: "  "), "Strix replied", "A thread with no agent of its own is answered by Strix")
+        XCTAssertEqual(ThreadListRules.replyDetail(agentName: nil), "Strix replied")
     }
 
     func testTheOverviewSaysWhenThePersonWasLastHere() throws {

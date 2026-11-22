@@ -258,6 +258,64 @@ final class ShellNavigatorTests: XCTestCase {
     }
 
     @MainActor
+    func testActivityIsThePersonsOwnPlace_withARowOfItsOwn() {
+        let navigator = ShellNavigator()
+        navigator.select(.coven("work"))
+        navigator.open(.thread(thread("t1", covenID: "work")))
+
+        // Its row and the Go menu open it as a place is opened.
+        let before = navigator.placeGeneration
+        navigator.openPlace(.activity)
+        XCTAssertEqual(navigator.personPlace, .activity)
+        XCTAssertGreaterThan(navigator.placeGeneration, before, "The person has moved")
+        XCTAssertEqual(navigator.sidebarItem, .activity, "Its own row is the one selected")
+        XCTAssertEqual(navigator.placeTitle, "Activity")
+        XCTAssertEqual(shellWindowTitle(covenName: "Work", personPlace: navigator.personPlace, covenPlaceTitle: "A thread"), "Work — Activity")
+        XCTAssertEqual(navigator.place?.id, "t1", "The scope's place waits underneath")
+        XCTAssertEqual(navigator.phonePath, [.place, .personPlace])
+
+        // A row of Activity opens its thread where it belongs, which leaves Activity.
+        navigator.open(thread("s1", covenID: nil))
+        XCTAssertNil(navigator.personPlace)
+        XCTAssertEqual(navigator.selected, .strix)
+        XCTAssertEqual(navigator.place?.id, "s1")
+        XCTAssertEqual(navigator.sidebarItem, .thread("s1"))
+        XCTAssertEqual(navigator.phonePath, [.place])
+
+        // Asked for in the switcher's sheet, it is not opened over where the person went before the sheet had gone.
+        let asked = navigator.personMoves
+        XCTAssertTrue(navigator.isStill(at: asked))
+        navigator.requestNewThread()
+        XCTAssertFalse(navigator.isStill(at: asked), "The person moved meanwhile")
+        // Nor over what they asked for that leaves the place as it is: New Thread again on its page, the thread search.
+        let onThePage = navigator.personMoves
+        navigator.requestNewThread()
+        XCTAssertFalse(navigator.isStill(at: onThePage))
+        let beforeSearching = navigator.personMoves
+        navigator.requestSearch()
+        XCTAssertFalse(navigator.isStill(at: beforeSearching))
+        // What happens by itself is no move of the person's: the new-thread page's thread being made, a
+        // rename, a thread deleted, a coven that is gone. What was asked for still opens after them.
+        let beforeTheThreadWasMade = navigator.personMoves
+        navigator.handleCreatedThread(thread("made", covenID: nil))
+        navigator.updateThread(thread("made", covenID: nil, title: "Renamed"))
+        navigator.removeThread(id: "made")
+        navigator.handleCovenGone(covenID: "work")
+        navigator.leavePhoneRoutes(notIn: navigator.phonePath)
+        XCTAssertTrue(navigator.isStill(at: beforeTheThreadWasMade))
+        navigator.open(thread("s1", covenID: nil))
+
+        // The scope on screen, chosen again, leaves it too; so does going back on a phone.
+        navigator.openPlace(.activity)
+        navigator.select(.strix)
+        XCTAssertNil(navigator.personPlace)
+        navigator.openPlace(.activity)
+        navigator.leavePhoneRoutes(notIn: [.place])
+        XCTAssertNil(navigator.personPlace)
+        XCTAssertEqual(navigator.place?.id, "s1")
+    }
+
+    @MainActor
     func testAThreadMadeWhileSettingsIsOpen_doesNotTakeItsPlace() {
         // Asked for from an Overview, then Settings: the thread waits in its list.
         let navigator = ShellNavigator()
