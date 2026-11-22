@@ -45,11 +45,12 @@ nonisolated enum ShellCommandRules {
     }
 
     /// The cloud app's places and their numbers, of which these are here:
-    /// 2 (Tasks) and 5 (Assets) are kept for when they are.
+    /// 2 (Tasks) is kept for when it is.
     static let places: [Place] = [
         Place(title: "Overview", item: .overview, key: "1"),
         Place(title: "Memory", item: .memory, key: "3"),
         Place(title: "Agents", item: .agents, key: "4"),
+        Place(title: "Assets", item: .assets, key: "5"),
         Place(title: "Connections", item: .connectedApps, key: "6"),
     ]
 

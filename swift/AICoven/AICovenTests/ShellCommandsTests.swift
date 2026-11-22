@@ -11,10 +11,10 @@ final class ShellCommandsTests: XCTestCase {
 
     func testThePlaces_keepTheCloudAppsNumbers() {
         let places = ShellCommandRules.places
-        XCTAssertEqual(places.map(\.title), ["Overview", "Memory", "Agents", "Connections"])
-        XCTAssertEqual(places.map(\.item), [.overview, .memory, .agents, .connectedApps])
-        // 2 and 5 are Tasks and Assets in the cloud app: kept for them.
-        XCTAssertEqual(String(places.map(\.key)), "1346")
+        XCTAssertEqual(places.map(\.title), ["Overview", "Memory", "Agents", "Assets", "Connections"])
+        XCTAssertEqual(places.map(\.item), [.overview, .memory, .agents, .assets, .connectedApps])
+        // 2 is Tasks in the cloud app: kept for it.
+        XCTAssertEqual(String(places.map(\.key)), "13456")
     }
 
     func testTheScopes_areStrixThenTheCovensInTheirOrder_nineAtMost() {

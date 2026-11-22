@@ -25,6 +25,7 @@ nonisolated enum ShellSidebarItem: Hashable {
     case thread(String)
     case memory
     case agents
+    case assets
     case connectedApps
     /// Activity: the person's own, across every scope.
     case activity
@@ -34,6 +35,7 @@ nonisolated enum ShellSidebarItem: Hashable {
     static let scopePlaces: [(item: ShellSidebarItem, name: String, symbol: String)] = [
         (.memory, "Memory", "books.vertical"),
         (.agents, "Agents", "person.crop.circle"),
+        (.assets, "Assets", "photo.on.rectangle.angled"),
         (.connectedApps, "Connections", "puzzlepiece.extension"),
     ]
 }
@@ -181,6 +183,7 @@ final class ShellNavigator: ObservableObject {
         switch place.type {
         case let .thread(thread): .thread(thread.id)
         case .memoryList: .memory
+        case .assets: .assets
         case .covenAgents, .addRole, .editRole, .personalStrixSettings: .agents
         case .covenConnections: .connectedApps
         default: nil
@@ -334,6 +337,7 @@ final class ShellNavigator: ObservableObject {
         switch (item, selected) {
         case (.overview, _): showOverview()
         case (.memory, _): open(.memoryList(covenId: selected.covenID))
+        case (.assets, _): open(.assets(covenId: selected.covenID))
         case let (.agents, .coven(covenID)): open(.covenAgents(covenId: covenID))
         case (.agents, .strix): open(.personalStrix)
         case let (.connectedApps, .coven(covenID)): open(.covenConnections(covenId: covenID))
