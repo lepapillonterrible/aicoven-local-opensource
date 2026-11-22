@@ -2,10 +2,11 @@ import SwiftUI
 
 // MARK: - Memory (one page of sections and rows)
 
-/// A scope's Memory as one page, as the cloud app's: its four sections,
-/// each a heading with Add at its end, then its entries as rows. Strix's
-/// also has About me first, the person's own memory. Rows edit in place;
-/// nothing counts.
+/// A scope's Memory as one page, as the cloud app's: the "Every agent here
+/// knows…" row, then its four sections, each a heading with Add at its
+/// end, then its entries as rows. Strix's also has About me first, the
+/// person's own memory, so there the row comes after it. Rows edit in
+/// place; nothing counts.
 ///
 /// A `List`, because the iPhone's swipe actions only exist on a list row; the
 /// page draws its own hairlines and has no container.
@@ -40,6 +41,20 @@ struct MemoryPagesView: View {
     /// False once the page has left the screen: what an action of its own
     /// then comes to is said by the page that shows the place, not by it.
     @State private var isOnScreen = false
+    /// The text "Every agent here knows…" started from while its field is
+    /// open; `nil` when it is closed.
+    @State private var knowsOriginal: String?
+    @State private var knowsDraft = ""
+    @State private var isSavingKnows = false
+    /// The scope's text as this page last read or saved it; `nil` until
+    /// the first read lands.
+    @State private var knows: String?
+    @State private var knowsReadFailed = false
+    @State private var knowsFailure: String?
+    /// Counts the reads of the text, and the saves as each begins and
+    /// ends: a read is applied only if nothing has been read or saved
+    /// since it began.
+    @State private var knowsRequests = 0
 
     /// A section of the page; `page` is `nil` for About me.
     private struct MemorySection: Hashable {
@@ -78,11 +93,16 @@ struct MemoryPagesView: View {
                     if model.didLoadFail(in: pagesPlace) {
                         pageRow { MemoryLoadFailedLine(place: pagesPlace) }
                     }
+                    if !isStrix {
+                        knowsRow
+                    }
                     ForEach(sections, id: \.self) { section in
                         // In Strix the line covers the four sections, so it
-                        // sits below About me, which has its own.
+                        // sits below About me, which has its own; and the
+                        // row with it.
                         if isStrix, section.page == MemoryPage.allCases.first {
                             explanationRow
+                            knowsRow
                         }
                         sectionRows(section)
                     }
@@ -111,6 +131,9 @@ struct MemoryPagesView: View {
         .onAppear { isOnScreen = true }
         .onDisappear { isOnScreen = false }
         .task(id: scope) {
+            await readKnows()
+        }
+        .task(id: scope) {
             async let aboutMe: Void = loadAboutMe()
             await model.load(pagesPlace)
             await aboutMe
@@ -137,6 +160,225 @@ struct MemoryPagesView: View {
             .foregroundStyle(Color.aicovenTextSecondary)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, Spacing.xs)
+        }
+    }
+
+    // MARK: Every agent here knows…
+
+    private static let knowsMaxLength = CovenContextRepository.longest
+
+    /// Reads the scope's text, as the account signed in when it is asked
+    /// for. A read is applied only if it is still the latest thing asked
+    /// of the text (no other read, and no save, since it began), nothing
+    /// is being saved, and the same account is signed in.
+    private func readKnows() async {
+        let account = UserScope.currentUserID
+        knowsRequests += 1
+        let request = knowsRequests
+        knowsReadFailed = false
+        var isCurrent: Bool {
+            request == knowsRequests && !isSavingKnows && !Task.isCancelled && UserScope.currentUserID == account
+        }
+        do {
+            let text = try await CovenContextRepository.shared.context(ofCoven: scope.covenID, as: account)
+            guard isCurrent else { return }
+            knows = text
+        } catch {
+            guard isCurrent else { return }
+            knowsReadFailed = true
+            // Said only where the row says it: with a text already
+            // shown, the row goes on showing that.
+            if knows == nil {
+                announce("Couldn't load it. Try again.")
+            }
+        }
+    }
+
+    private var knowsRow: some View {
+        pageRow {
+            VStack(alignment: .leading, spacing: 0) {
+                if knowsOriginal != nil {
+                    editingKnows
+                } else {
+                    readingKnows
+                }
+                rule
+            }
+        }
+    }
+
+    /// The text has never been read here and its last read failed: the
+    /// row then reads it again. Once it has been read, the row edits what
+    /// it shows, whatever a later read came to.
+    private var knowsNeedsReading: Bool {
+        knows == nil && knowsReadFailed
+    }
+
+    private var readingKnows: some View {
+        Button {
+            if knowsNeedsReading {
+                Task { await readKnows() }
+            } else {
+                startEditingKnows()
+            }
+        } label: {
+            HStack(alignment: .top, spacing: Spacing.sm) {
+                VStack(alignment: .leading, spacing: Spacing.xxs) {
+                    Text("Every agent here knows…")
+                        .font(.aicovenBody.weight(.semibold))
+                        .foregroundStyle(Color.aicovenTextPrimary)
+                    Text(knowsLine)
+                        .font(.aicovenBody)
+                        .foregroundStyle(Color.aicovenTextSecondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Color.aicovenTextTertiary)
+                    .accessibilityHidden(true)
+            }
+            .padding(.vertical, Spacing.sm)
+            .padding(.horizontal, Spacing.xs)
+            .frame(minHeight: Self.rowMinHeight, alignment: .top)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(draftHeld || (knows == nil && !knowsReadFailed))
+        .accessibilityHint(knowsNeedsReading ? "Reads it again" : "Edits it here")
+        .accessibilityIdentifier("memory-knows-row")
+    }
+
+    private var editingKnows: some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            Text("Every agent here knows…")
+                .font(.aicovenBody.weight(.semibold))
+                .foregroundStyle(Color.aicovenTextPrimary)
+            // Several lines, as the text often is: Return is a new line here,
+            // and Save saves.
+            TextEditor(text: $knowsDraft)
+                .accessibilityLabel("Every agent here knows")
+                .accessibilityIdentifier("memory-knows-field")
+                .disabled(isSavingKnows)
+                .focused($isFieldFocused)
+                .onAppear { isFieldFocused = true }
+                .onKeyPress(.escape) {
+                    guard !isSavingKnows else { return .handled }
+                    stopEditingKnows()
+                    return .handled
+                }
+                .font(.aicovenBody)
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: 120)
+                .padding(Spacing.xxs)
+                .background(
+                    RoundedRectangle(cornerRadius: BorderRadius.sm)
+                        .fill(Color.aicovenSurface)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: BorderRadius.sm)
+                                .strokeBorder(Color.aicovenBorder, lineWidth: 1)
+                        )
+                )
+                .onChange(of: knowsDraft) { _, newValue in
+                    if newValue.count > Self.knowsMaxLength {
+                        knowsDraft = String(newValue.prefix(Self.knowsMaxLength))
+                    }
+                }
+            Text(knowsFootnote)
+                .font(.aicovenBodySmall)
+                .foregroundStyle(Color.aicovenTextSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: Spacing.xs) {
+                Button("Save") {
+                    saveKnows()
+                }
+                .buttonStyle(StonePrimaryButtonStyle())
+                .accessibilityIdentifier("memory-knows-save")
+                .disabled(isSavingKnows)
+                Button("Cancel") {
+                    stopEditingKnows()
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("memory-knows-cancel")
+                .disabled(isSavingKnows)
+                if isSavingKnows {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+            if let knowsFailure {
+                Text(knowsFailure)
+                    .font(.aicovenBodySmall)
+                    .foregroundStyle(Color.aicovenError)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("memory-row-error")
+            }
+        }
+        .padding(.vertical, Spacing.sm)
+        .padding(.horizontal, Spacing.xs)
+    }
+
+    /// Where the text goes, and a character count once the text is longer
+    /// than nine tenths of the limit.
+    private var knowsFootnote: String {
+        let note = "Added to every agent's instructions in this coven. Encrypted."
+        guard knowsDraft.count > Self.knowsMaxLength * 9 / 10 else { return note }
+        return "\(note) \(knowsDraft.count)/\(Self.knowsMaxLength) characters."
+    }
+
+    /// What the row says: the text, or that there is none, or that it is
+    /// still being read or couldn't be.
+    private var knowsLine: String {
+        if let knows { return knows.isEmpty ? "Nothing yet." : knows }
+        return knowsReadFailed ? "Couldn't load it. Try again." : "Loading…"
+    }
+
+    private func startEditingKnows() {
+        guard !draftHeld, let knows else { return }
+        closeOpenRows()
+        knowsFailure = nil
+        knowsDraft = knows
+        knowsOriginal = knows
+    }
+
+    private func stopEditingKnows() {
+        knowsFailure = nil
+        knowsOriginal = nil
+        knowsDraft = ""
+    }
+
+    /// Saves the scope's text, as the account signed in when Save is
+    /// pressed; an empty text clears it.
+    private func saveKnows() {
+        guard let original = knowsOriginal, !isSavingKnows else { return }
+        let text = trimmed(knowsDraft)
+        guard text != trimmed(original) else {
+            stopEditingKnows()
+            return
+        }
+        let account = UserScope.currentUserID
+        knowsRequests += 1
+        isSavingKnows = true
+        knowsFailure = nil
+        Task {
+            defer {
+                isSavingKnows = false
+                // A read that began while this was saving read what was
+                // there before it: it is not applied now.
+                knowsRequests += 1
+            }
+            do {
+                let kept = try await CovenContextRepository.shared.setContext(text, forCoven: scope.covenID, as: account)
+                guard UserScope.currentUserID == account else { return }
+                knows = kept
+                stopEditingKnows()
+                announce("Saved")
+            } catch {
+                guard UserScope.currentUserID == account else { return }
+                knowsFailure = MemoryPagesModel.couldNotSave
+                announce(knowsFailure)
+            }
         }
     }
 
@@ -262,7 +504,7 @@ struct MemoryPagesView: View {
             editDraft: editDraft,
             adding: addingTo != nil,
             addDraft: newEntry
-        )
+        ) || knowsOriginal.map { trimmed(knowsDraft) != trimmed($0) } ?? false
     }
 
     /// Whether the entry being edited has left the list, as after a reload;
@@ -430,7 +672,10 @@ struct MemoryPagesView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.aicovenError)
-                .disabled(isForgetting)
+                // Not while it is being forgotten, nor while a field holds
+                // unsaved text (a Forget that failed leaves its question
+                // in the row, and a field can have been opened meanwhile).
+                .disabled(isForgetting || draftHeld)
                 .onKeyPress(keys: [.return, .space]) { _ in
                     forget(entry, in: place)
                     return .handled
@@ -621,6 +866,7 @@ struct MemoryPagesView: View {
     /// stays until Save or Cancel, and nothing else starts meanwhile; an
     /// Edit, an Add or a Forget question otherwise closes the others.
     private func closeOpenRows() {
+        stopEditingKnows()
         stopEditing()
         stopAdding()
         // A Forget on its way keeps its row in the confirm, so a failure
@@ -710,6 +956,7 @@ struct MemoryPagesView: View {
     }
 
     private func forget(_ entry: Memory, in place: MemoryPlace) {
+        guard !draftHeld else { return }
         // Focus goes to the next row in the section, or its heading.
         let section = sections.first { section in
             model.entries(on: section.page, in: self.place(of: section)).contains { $0.id == entry.id }
@@ -727,7 +974,7 @@ struct MemoryPagesView: View {
             confirmingIds.remove(entry.id)
             forgetFocus = nil
             // Focus moves on only if the person isn't in a field by now.
-            if editingId == nil, addingTo == nil {
+            if editingId == nil, addingTo == nil, knowsOriginal == nil {
                 if let following {
                     focusedRow = following
                 } else {
