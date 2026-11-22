@@ -1,3 +1,4 @@
+internal import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -67,6 +68,10 @@ struct AssetLibraryView: View {
             }
         #endif
             .task { await model.load() }
+            // An agent made or changed an asset while this place is open.
+            .onReceive(NotificationCenter.default.publisher(for: AssetTools.changedAssets).receive(on: RunLoop.main)) { _ in
+                Task { await model.load() }
+            }
             .onAppear { isOnScreen = true }
             .onDisappear { isOnScreen = false }
             .onChange(of: model.actionFailure) { _, failed in

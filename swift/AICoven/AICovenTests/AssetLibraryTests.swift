@@ -208,13 +208,13 @@ final class AssetLibraryTests: XCTestCase {
                     return made
                 }
             },
-            move: { assetID, next, account in
+            move: { moved, next, account in
                 await movingWaits?.wait()
                 try await MainActor.run {
                     if let error = stand.moveFails { throw error }
-                    stand.moved.append((assetID, next, account))
+                    stand.moved.append((moved.id, next, account))
                     stand.listed = [(stand.listed.last ?? []).map { asset in
-                        asset.id == assetID ? self.asset(asset.id, asset.title, type: asset.type, status: next) : asset
+                        asset.id == moved.id ? self.asset(asset.id, asset.title, type: asset.type, status: next) : asset
                     }]
                     stand.readings = 0
                 }
@@ -548,7 +548,9 @@ final class AssetLibraryTests: XCTestCase {
         let listed = model.assets[0]
 
         var said: [String?] = []
-        for error in [AssetError.notAllowed as Error, AssetError.needsAFile, RepositoryError.dataLocked, RepositoryError.databaseUnavailable, AssetError.noSuchAsset] {
+        for error in [
+            AssetError.notAllowed as Error, AssetError.changed, RepositoryError.dataLocked, RepositoryError.databaseUnavailable, AssetError.noSuchAsset,
+        ] {
             stand.moveFails = error
             let acting = Task { await model.perform(.approve, on: listed, as: "ada") }
             await gate.arrived(said.count + 1)

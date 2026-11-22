@@ -24,8 +24,12 @@ enum AssetError: Error, Equatable {
     /// in the place the asset is kept in, or the message is not one of
     /// that thread's.
     case noSuchThread
-    /// An asset does not go from the status it has to the one asked for.
+    /// An asset does not go from the status it has to the one asked for;
+    /// or it is changed, and is no draft.
     case notAllowed
+    /// The asset is not what it was when it was listed: it is not approved
+    /// unseen.
+    case changed
     /// An asset with no file is not proposed.
     case needsAFile
     /// What is kept cannot be opened with the account's key.
@@ -101,6 +105,19 @@ actor AssetRepository {
 
     private func getDbQueue() async -> DatabaseQueue? {
         await MainActor.run { DatabaseManager.shared.dbQueue }
+    }
+
+    /// What tells an asset as it is stored from the same asset changed
+    /// (`Asset.version`): its files in the order they were added.
+    static func version(title: Data, details: Data, files: [(id: String, meta: Data)]) -> String {
+        var digest = SHA256()
+        digest.update(data: title)
+        digest.update(data: details)
+        for file in files {
+            digest.update(data: Data(file.id.utf8))
+            digest.update(data: file.meta)
+        }
+        return digest.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     /// A title as it is kept: one line, single spaces, no longer than the
@@ -236,8 +253,116 @@ actor AssetRepository {
         return Asset(
             id: id, covenID: covenID, type: type, status: .draft, title: title, details: details,
             madeByAgentID: agentID, threadID: threadID, sourceMessageID: messageID, files: kept,
+            version: Self.version(title: sealedTitle, details: sealedDetails, files: sealedFiles.map { ($0.id, $0.meta) }),
             createdAt: now, updatedAt: now
         )
+    }
+
+    // MARK: - Changing a draft
+
+    /// Whether the asset is `account`'s and a draft, in the write that
+    /// would change it: what is proposed is frozen for the person's
+    /// review, and what is approved or archived is not changed either.
+    private nonisolated static func requireDraft(_ id: String, of account: String, in db: Database) throws {
+        guard let status = try String.fetchOne(db, sql: "SELECT status FROM assets WHERE id = ? AND user_id = ?", arguments: [id, account]) else {
+            throw AssetError.noSuchAsset
+        }
+        guard status == AssetStatus.draft.rawValue else { throw AssetError.notAllowed }
+    }
+
+    /// Changes a draft's title, or what says what it is, or both (nil
+    /// leaves one as it is). Only a draft is changed.
+    func update(_ id: String, title newTitle: String? = nil, details newDetails: String? = nil, as account: String) async throws {
+        let epoch = await DataEncryptionService.shared.keyEpoch
+        try await AccountSeal.requireKey(of: account, since: epoch)
+        let title = newTitle.map(Self.keptTitle)
+        if let title, title.isEmpty { throw AssetError.noTitle }
+        let details = newDetails?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let details, details.count > Self.longestDetails { throw AssetError.tooLong }
+        guard title != nil || details != nil else { return }
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        var sealedTitle: Data?
+        if let title { sealedTitle = try await AccountSeal.seal(title, purpose: Self.titlePurpose, for: account) }
+        var sealedDetails: Data?
+        if let details { sealedDetails = try await AccountSeal.seal(details, purpose: Self.detailsPurpose, for: account) }
+        let (newTitleData, newDetailsData) = (sealedTitle, sealedDetails)
+        let now = Date()
+        await at?(.beforeWriting)
+        // What it held before, as it is stored, to put it back by.
+        let before: (title: Data, details: Data, changed: String) = try await dbQueue.write { db in
+            try Self.requireDraft(id, of: account, in: db)
+            let stored = try Row.fetchOne(
+                db, sql: "SELECT title_ciphertext, details_ciphertext, updated_at FROM assets WHERE id = ? AND user_id = ?", arguments: [id, account]
+            )
+            guard let stored else { throw AssetError.noSuchAsset }
+            let (oldTitle, oldDetails): (Data, Data) = (stored["title_ciphertext"], stored["details_ciphertext"])
+            try db.execute(
+                sql: "UPDATE assets SET title_ciphertext = ?, details_ciphertext = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+                arguments: [newTitleData ?? oldTitle, newDetailsData ?? oldDetails, now, id, account]
+            )
+            return (oldTitle, oldDetails, stored["updated_at"])
+        }
+        do {
+            try await AccountSeal.requireKey(of: account, since: epoch)
+        } catch {
+            // Locked, or another account's, while the write waited its
+            // turn: put back as it was, unless something changed it since.
+            let stood = before
+            await takeBack(in: dbQueue) { db in
+                try db.execute(
+                    sql: """
+                    UPDATE assets SET title_ciphertext = ?, details_ciphertext = ?, updated_at = ?
+                    WHERE id = ? AND user_id = ? AND title_ciphertext = ? AND details_ciphertext = ? AND updated_at = ?
+                    """,
+                    arguments: [stood.title, stood.details, stood.changed, id, account, newTitleData ?? stood.title, newDetailsData ?? stood.details, now]
+                )
+            }
+            throw error
+        }
+    }
+
+    /// Adds a file to a draft, after those it has. Only a draft is
+    /// changed, and an asset has only so many files (counted in the write).
+    @discardableResult
+    func addFile(_ file: NewFile, to id: String, as account: String) async throws -> AssetFile {
+        let epoch = await DataEncryptionService.shared.keyEpoch
+        try await AccountSeal.requireKey(of: account, since: epoch)
+        let name = AssetFile.keptName(file.name)
+        guard file.data.count <= Self.largestFile else { throw AssetError.fileTooLarge(name: name) }
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let meta = try await AccountSeal.seal(
+            bytes: JSONEncoder().encode(KeptFile(name: name, size: file.data.count)), purpose: Self.filePurpose, for: account
+        )
+        let body = try await AccountSeal.seal(bytes: file.data, purpose: Self.bodyPurpose, for: account)
+        let fileID = UUID().uuidString
+        let now = Date()
+        await at?(.beforeWriting)
+        let changedBefore: String = try await dbQueue.write { db in
+            try Self.requireDraft(id, of: account, in: db)
+            let count = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM asset_files WHERE asset_id = ?", arguments: [id]) ?? 0
+            guard count < Self.mostFiles else { throw AssetError.tooManyFiles }
+            let changed = try String.fetchOne(db, sql: "SELECT updated_at FROM assets WHERE id = ? AND user_id = ?", arguments: [id, account]) ?? ""
+            try db.execute(
+                sql: "INSERT INTO asset_files (id, asset_id, meta_ciphertext, created_at, body_ciphertext) VALUES (?, ?, ?, ?, ?)",
+                arguments: [fileID, id, meta, now, body]
+            )
+            try db.execute(sql: "UPDATE assets SET updated_at = ? WHERE id = ? AND user_id = ?", arguments: [now, id, account])
+            return changed
+        }
+        do {
+            try await AccountSeal.requireKey(of: account, since: epoch)
+        } catch {
+            // Locked, or another account's, while the write waited its
+            // turn: the file is taken out again.
+            await takeBack(in: dbQueue) { db in
+                try db.execute(sql: "DELETE FROM asset_files WHERE id = ? AND asset_id = ?", arguments: [fileID, id])
+                try db.execute(
+                    sql: "UPDATE assets SET updated_at = ? WHERE id = ? AND user_id = ? AND updated_at = ?", arguments: [changedBefore, id, account, now]
+                )
+            }
+            throw error
+        }
+        return AssetFile(id: fileID, name: name, mimeType: AttachmentImage.mimeType(forFileNamed: name), sizeBytes: file.data.count)
     }
 
     // MARK: - Reading
@@ -339,6 +464,10 @@ actor AssetRepository {
                     details: isReadable ? String(decoding: details ?? Data(), as: UTF8.self) : "",
                     madeByAgentID: stored.agentID, threadID: stored.threadID, sourceMessageID: stored.messageID,
                     files: isReadable ? files ?? [] : [], isUnreadable: !isReadable,
+                    version: Self.version(
+                        title: stored.title, details: stored.details,
+                        files: storedFiles.filter { $0.assetID == stored.id }.map { ($0.id, $0.meta) }
+                    ),
                     createdAt: stored.createdAt, updatedAt: stored.updatedAt
                 ))
             }
@@ -384,18 +513,21 @@ actor AssetRepository {
     /// Moves one of `account`'s assets to another status, as the person
     /// may (`AssetStatus.canMove(to:)`), and answers with when it was
     /// changed. Whether it may is decided in the write itself, against the
-    /// asset as it is then; an asset with no file is not proposed.
+    /// asset as it is then; an asset with no file is not proposed. An
+    /// asset is approved only as it was listed (`version`, the listed
+    /// asset's): one whose title, text or files were changed since is not
+    /// approved unseen (`AssetError.changed`).
     /// One status change at a time: each waits for the one before it to be
     /// written and, if it must be, put back. Two that overlapped while the
     /// data was being locked could otherwise put back each other's
     /// rejected write in place of how the asset stood.
     @discardableResult
-    func move(_ id: String, to next: AssetStatus, as account: String) async throws -> Date {
+    func move(_ id: String, to next: AssetStatus, listedAs version: String? = nil, as account: String) async throws -> Date {
         let before = lastMove
         let moving = Task { () throws -> Date in
             await self.at?(.asked)
             await before?.value
-            return try await self.moveInTurn(id, to: next, as: account)
+            return try await self.moveInTurn(id, to: next, listedAs: version, as: account)
         }
         lastMove = Task { _ = try? await moving.value }
         return try await moving.value
@@ -404,7 +536,7 @@ actor AssetRepository {
     /// The status change last asked for, done or not.
     private var lastMove: Task<Void, Never>?
 
-    private func moveInTurn(_ id: String, to next: AssetStatus, as account: String) async throws -> Date {
+    private func moveInTurn(_ id: String, to next: AssetStatus, listedAs version: String?, as account: String) async throws -> Date {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         let epoch = await DataEncryptionService.shared.keyEpoch
         try await AccountSeal.requireKey(of: account, since: epoch)
@@ -412,10 +544,20 @@ actor AssetRepository {
         await at?(.beforeWriting)
         // How it stood before, as it is stored, to put it back by.
         let before: (status: String, changed: String) = try await dbQueue.write { db in
-            let stored = try Row.fetchOne(db, sql: "SELECT status, updated_at FROM assets WHERE id = ? AND user_id = ?", arguments: [id, account])
+            let stored = try Row.fetchOne(
+                db, sql: "SELECT status, updated_at, title_ciphertext, details_ciphertext FROM assets WHERE id = ? AND user_id = ?",
+                arguments: [id, account]
+            )
             guard let stored else { throw AssetError.noSuchAsset }
             let status: String = stored["status"]
             guard (AssetStatus(rawValue: status) ?? .draft).canMove(to: next) else { throw AssetError.notAllowed }
+            if next == .approved {
+                // Approved as it was listed, or not at all.
+                let files = try Row.fetchAll(db, sql: "SELECT id, meta_ciphertext FROM asset_files WHERE asset_id = ? ORDER BY rowid", arguments: [id])
+                    .map { (id: $0["id"] as String, meta: $0["meta_ciphertext"] as Data) }
+                let asItIs = Self.version(title: stored["title_ciphertext"], details: stored["details_ciphertext"], files: files)
+                guard asItIs == version else { throw AssetError.changed }
+            }
             if next == .proposed {
                 let hasAFile = try Bool.fetchOne(db, sql: "SELECT 1 FROM asset_files WHERE asset_id = ? LIMIT 1", arguments: [id]) ?? false
                 guard hasAFile else { throw AssetError.needsAFile }

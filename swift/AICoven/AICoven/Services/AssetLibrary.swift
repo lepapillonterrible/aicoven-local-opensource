@@ -191,7 +191,8 @@ final class AssetLibraryModel: ObservableObject {
     struct Source {
         var assets: @Sendable (_ covenID: String?, _ account: String) async throws -> [Asset]
         var create: @Sendable (_ new: NewAsset, _ covenID: String?, _ account: String) async throws -> Asset
-        var move: @Sendable (_ assetID: String, _ next: AssetStatus, _ account: String) async throws -> Void
+        /// Moves the asset, as it was listed, to another status.
+        var move: @Sendable (_ asset: Asset, _ next: AssetStatus, _ account: String) async throws -> Void
 
         static let live = Source(
             assets: { try await AssetRepository.shared.assets(inCoven: $0, as: $1) },
@@ -200,7 +201,7 @@ final class AssetLibraryModel: ObservableObject {
                     type: new.type, title: new.title, details: new.details, files: [new.file], inCoven: covenID, as: account
                 )
             },
-            move: { try await AssetRepository.shared.move($0, to: $1, as: $2) }
+            move: { try await AssetRepository.shared.move($0.id, to: $1, listedAs: $0.version, as: $2) }
         )
     }
 
@@ -356,13 +357,13 @@ final class AssetLibraryModel: ObservableObject {
         defer { changing.remove(asset.id) }
         actionFailure = nil
         do {
-            try await source.move(asset.id, next, account)
+            try await source.move(asset, next, account)
         } catch AssetError.noSuchAsset {
             // Gone, with its coven or its account.
         } catch {
             guard signedIn() == account else { return }
             let words = switch error {
-            case AssetError.notAllowed, AssetError.needsAFile: Self.changedMeanwhile
+            case AssetError.notAllowed, AssetError.needsAFile, AssetError.changed: Self.changedMeanwhile
             case RepositoryError.dataLocked: Self.needsUnlockToChange
             default: Self.couldNotChange
             }
