@@ -232,7 +232,7 @@ final class MemoryProposalQuestionsTests: XCTestCase {
         let deniedStatus = try await status(of: denied.id)
         XCTAssertEqual(deniedStatus, "rejected")
 
-        // With nowhere to ask (its thread is gone, say), it waits among the proposals.
+        // With nowhere to ask (its thread is gone, say), it stays pending, and waits on Activity.
         let unasked = try await propose("Ships on Mondays", in: coven)
         let notAsking = questions { _ in .notAsked }
         notAsking.ask(unasked, inThread: "thread-1", as: account)
@@ -267,7 +267,7 @@ final class MemoryProposalQuestionsTests: XCTestCase {
         let memories = try await kept(in: coven)
         XCTAssertEqual(memories, ["Ships on Fridays"])
 
-        // Failing again, it is left among the proposals: it is not asked a third time.
+        // Failing again, it is left pending: it is not asked a third time.
         let again = try await propose("Ships on Mondays", in: coven)
         asked = []
         let alwaysFailing = MemoryProposalQuestions(

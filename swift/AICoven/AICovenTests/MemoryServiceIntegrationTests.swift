@@ -307,28 +307,6 @@ final class MemoryServiceIntegrationTests: XCTestCase {
         XCTAssertEqual(still, "pending", "It is still theirs to review")
     }
 
-    func testSavingAProposalWhoseAccountChangedWhileItWaited_storesAndMarksNothing() async throws {
-        let scope = try await newCoven()
-        let record = try await proposal(in: scope)
-        let me = UserScope.currentUserID
-        let asked = Counter()
-        let service = MemoryService(
-            memoryStore: MemoryRepository.shared,
-            embed: { _ in nil },
-            currentAccount: { await asked.next() == 1 ? me : "someone-else" }
-        )
-        do {
-            _ = try await service.saveProposalAsMemory(proposalId: record.id, content: "As edited")
-            XCTFail("Saved as another account")
-        } catch {
-            XCTAssertEqual(error as? RepositoryError, .accountChanged)
-        }
-        let made = try await memories(in: scope)
-        XCTAssertTrue(made.isEmpty)
-        let still = try await status(of: record.id)
-        XCTAssertEqual(still, "pending")
-    }
-
     func testAProposalWhoseMemoryCouldNotBeStored_isPendingAgain_andCanBeApprovedThen() async throws {
         let scope = try await newCoven()
         let record = try await proposal(in: scope)
@@ -351,27 +329,6 @@ final class MemoryServiceIntegrationTests: XCTestCase {
         XCTAssertEqual(approved.status, "approved")
         let made = try await memories(in: scope)
         XCTAssertEqual(made.count, 1)
-    }
-
-    func testSavingAProposalAsAMemory_storesItOnceAsEdited_andItIsNoLongerPending() async throws {
-        let scope = try await newCoven()
-        let record = try await proposal(in: scope, content: "As the agent put it")
-        let service = MemoryService(memoryStore: MemoryRepository.shared)
-
-        let saved = try await service.saveProposalAsMemory(proposalId: record.id, content: "  As the person put it\n")
-        XCTAssertEqual(saved.status, "rejected", "Reviewed, as the app has always marked one saved by hand")
-        let made = try await memories(in: scope)
-        XCTAssertEqual(made.map(\.text), ["As the person put it"], "Once, and as edited")
-        XCTAssertEqual(made.first?.tags, ["one"])
-
-        do {
-            _ = try await service.saveProposalAsMemory(proposalId: record.id, content: "Again")
-            XCTFail("Saved twice")
-        } catch {
-            XCTAssertEqual(error as? ProposalReviewError, .alreadyReviewed)
-        }
-        let after = try await memories(in: scope)
-        XCTAssertEqual(after.count, 1)
     }
 
     func testAScopesProposalsAreItsOwn_strixsAreThoseMadeInNoCoven() async throws {

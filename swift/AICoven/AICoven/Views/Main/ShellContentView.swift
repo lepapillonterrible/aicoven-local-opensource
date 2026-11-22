@@ -85,7 +85,7 @@ struct ShellContentView: View {
                 // Strix's, or the coven's on screen; while that coven is
                 // not in, or it is another's, the Overview.
                 if covenID == nil || coven?.id == covenID {
-                    ShellMemoryPlace(covenID: covenID, covenName: coven?.name ?? "Strix")
+                    MemoryPagesView(scope: ShellScope(covenID: covenID), covenName: coven?.name ?? "Strix")
                         .id(covenID)
                         // Once for each opening of a scope's memory.
                         .onAppear {
@@ -206,37 +206,6 @@ struct ShellContentView: View {
             .stoneToolbarMenu()
             .help("Thread Actions")
             .accessibilityIdentifier("thread-actions")
-        }
-    }
-}
-
-/// The memory of the scope on screen: its page, or what the agents have
-/// proposed to remember, which the person reviews here.
-private struct ShellMemoryPlace: View {
-    let covenID: String?
-    let covenName: String
-    /// The proposals are on screen, not the page.
-    @State private var showsProposals = false
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Picker("Memory View", selection: $showsProposals) {
-                Text("Saved").tag(false)
-                Text("Proposals").tag(true)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: 320)
-            .padding(.horizontal, Spacing.lg)
-            .padding(.top, Spacing.md)
-            if showsProposals {
-                // It acts on the proposals themselves and opens no form.
-                // What is saved from one is on the page when that is shown
-                // again: the page reads its memory each time it comes on.
-                MemoryProposalsView(covenId: covenID, openTabs: .constant([]), activeTabId: .constant(nil))
-            } else {
-                MemoryPagesView(scope: ShellScope(covenID: covenID), covenName: covenName)
-            }
         }
     }
 }
