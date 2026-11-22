@@ -5,6 +5,7 @@ import SwiftUI
 enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
     case aiConnections
     case connectedApps
+    case learning
     case usage
     case subscription
     case thisMac
@@ -20,6 +21,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .aiConnections: "AI connections"
         case .connectedApps: "Connected apps"
+        case .learning: "Learning & skills"
         case .usage: "Usage and budget"
         case .subscription: "Subscription"
         case .thisMac: "This Mac"
@@ -35,6 +37,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .aiConnections: "AI"
         case .connectedApps: "Apps"
+        case .learning: "Learning"
         case .usage: "Usage"
         case .subscription: "Subscription"
         case .thisMac: "This Mac"
@@ -58,6 +61,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .aiConnections: "key"
         case .connectedApps: "puzzlepiece.extension"
+        case .learning: "brain.head.profile"
         case .usage: "chart.bar.xaxis"
         case .subscription: "creditcard"
         case .thisMac: "laptopcomputer"
@@ -115,7 +119,7 @@ struct SettingsPaneView: View {
         case .connectedApps: AnalyticsService.shared.trackConnectedAppsOpened()
         case .usage: AnalyticsService.shared.trackUsageViewed()
         case .account: AnalyticsService.shared.trackProfileOpened()
-        case .aiConnections, .subscription, .thisMac, .appearance, .about: break
+        case .aiConnections, .learning, .subscription, .thisMac, .appearance, .about: break
         }
     }
 
@@ -126,6 +130,8 @@ struct SettingsPaneView: View {
             ProviderKeysView()
         case .connectedApps:
             ConnectedAppsView()
+        case .learning:
+            LearningSettingsView()
         case .usage:
             UsageSettingsView()
         case .subscription:
@@ -157,7 +163,7 @@ struct SettingsList: View {
         List {
             Group {
                 Section {
-                    rows(.aiConnections, .connectedApps)
+                    rows(.aiConnections, .connectedApps, .learning)
                 }
                 Section {
                     rows(.usage, .subscription)
