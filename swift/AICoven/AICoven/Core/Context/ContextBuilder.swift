@@ -278,13 +278,6 @@ struct ContextBuilder {
         // the same account.
         let account = UserScope.currentUserID
 
-        // Who answers, and how the person asked it to: before anything
-        // else the model is told. Not an agent of an account that is no
-        // longer the one signed in.
-        if let agent, agent.account == account {
-            segments.system.append(LLMMessage(role: .system, content: agent.systemPrompt))
-        }
-
         // Layer 1: system contract (with tool documentation if tools are enabled)
         let systemPrompt: String = if !config.enabledTools.isEmpty {
             if config.isLocalModel {
@@ -404,6 +397,14 @@ struct ContextBuilder {
         // conversational so models do not echo it verbatim.
         let checklist = "Reply concisely. Ground your answer in the provided memories and conversation context—do not invent facts. If you used tools (web search, files), mention it naturally. Ask clarifying questions when details are ambiguous."
         segments.checklist.append(LLMMessage(role: .system, content: checklist))
+
+        // Who answers, and how the person asked it to: before anything
+        // else the model is told. Decided last, once everything that was
+        // waited for is in: not an agent of an account that is not the
+        // one this context was read as, nor once another is signed in.
+        if let agent, agent.account == account, UserScope.currentUserID == account {
+            segments.system.insert(LLMMessage(role: .system, content: agent.systemPrompt), at: 0)
+        }
 
         // If we have a token budget, apply truncation rules before returning.
         if let maxContextTokens {

@@ -1410,7 +1410,8 @@ actor ChatService {
     /// Who answers a turn, for what the model is told first: the coven's
     /// agent the turn is for, with the instructions the person wrote for
     /// it, or with no agent Strix with its own. It is read as the account
-    /// signed in when it is asked for, and is that account's: nil if
+    /// signed in when it is asked for (both reads are given that account,
+    /// and read nothing of another's), and is that account's: nil if
     /// another is signed in by the time it has been read, and nil for an
     /// agent that cannot be read (it is gone, or is not that account's).
     /// The turn is then told nothing of who answers.
@@ -1419,7 +1420,7 @@ actor ChatService {
         let agent: ContextBuilder.Agent
         if let roleId {
             do {
-                let role = try await RoleService.shared.getRole(roleId: roleId)
+                let role = try await RoleService.shared.getRole(roleId: roleId, for: account)
                 agent = ContextBuilder.Agent(name: role.name, instructions: role.systemPrompt, account: account)
             } catch {
                 // The kind of failure only.
@@ -1427,7 +1428,7 @@ actor ChatService {
                 return nil
             }
         } else {
-            agent = await ContextBuilder.Agent(name: "Strix", instructions: StrixSettingsService.shared.instructions(), account: account)
+            agent = await ContextBuilder.Agent(name: "Strix", instructions: StrixSettingsService.shared.instructions(of: account), account: account)
         }
         // What was read is the account's that asked: not another's that
         // signed in while it was read.
