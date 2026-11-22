@@ -533,6 +533,36 @@ final class DatabaseManager {
                 }
             }
 
+            // v17: the account's skills. Title and text are encrypted; a
+            // skill from a source takes the place of the one the account
+            // already has from it.
+            migrator.registerMigration("v17_skills") { db in
+                try db.create(table: "skills") { t in
+                    t.column("id", .text).primaryKey()
+                    t.column("user_id", .text).notNull()
+                    t.column("title_ciphertext", .blob).notNull()
+                    t.column("text_ciphertext", .blob).notNull()
+                    t.column("is_on", .boolean).notNull().defaults(to: false)
+                    t.column("source_digest", .text)
+                    t.column("created_at", .datetime).notNull()
+                    t.column("updated_at", .datetime).notNull()
+                }
+                try db.create(index: "skills_user", on: "skills", columns: ["user_id"])
+                try db.execute(sql: """
+                CREATE UNIQUE INDEX skills_user_source ON skills (user_id, source_digest) WHERE source_digest IS NOT NULL
+                """)
+                for (event, name) in [("INSERT", "insert"), ("UPDATE OF user_id", "update")] {
+                    try db.execute(sql: """
+                    CREATE TRIGGER skills_require_user_id_\(name)
+                    BEFORE \(event) ON skills
+                    WHEN length(trim(NEW.user_id)) = 0
+                    BEGIN
+                        SELECT RAISE(ABORT, 'skills.user_id is required');
+                    END;
+                    """)
+                }
+            }
+
             try migrator.migrate(queue)
             dbQueue = queue
         } catch {
