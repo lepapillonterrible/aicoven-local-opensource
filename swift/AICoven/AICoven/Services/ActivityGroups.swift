@@ -77,11 +77,12 @@ nonisolated struct ActivityGroups: Equatable {
 
     /// What VoiceOver is told when the groups change while Activity is on
     /// screen: each thread that newly waits for the person, and each reply
-    /// that newly finished. What a turn under way says is not told as it
-    /// changes: its card reads it.
-    static func announcements(from old: ActivityGroups, to new: ActivityGroups) -> [String] {
+    /// that newly finished, in one announcement (several at once would
+    /// cut each other off). What a turn under way says is not told as it
+    /// changes: its card reads it. Nil where nothing is new.
+    static func announcement(from old: ActivityGroups, to new: ActivityGroups) -> String? {
         let before = Set((old.waiting + old.finished).map(\.id))
-        return (new.waiting + new.finished).filter { !before.contains($0.id) }.compactMap { item in
+        let said = (new.waiting + new.finished).filter { !before.contains($0.id) }.compactMap { item -> String? in
             let title = ThreadListRules.title(of: item.thread)
             return switch item {
             case .approval: "\(ConversationActivity.needsOKWords): \(title)"
@@ -91,6 +92,7 @@ nonisolated struct ActivityGroups: Equatable {
             case .moving: nil
             }
         }
+        return said.isEmpty ? nil : said.joined(separator: ". ")
     }
 
     /// Whether anything waits for the person.

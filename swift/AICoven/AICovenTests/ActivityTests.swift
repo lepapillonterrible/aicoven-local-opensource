@@ -85,16 +85,16 @@ final class ActivityTests: XCTestCase {
         let before = groups(["works": .moving("Reading"), "broke": .broken("x")])
         let after = groups(["works": .moving("Writing"), "broke": .broken("x"), "asks": .waiting("Needs your OK"), "replied": .unread])
         XCTAssertEqual(
-            ActivityGroups.announcements(from: before, to: after),
-            ["Needs your OK: Asks", "Strix replied: Replied"],
-            "What was already there is not said again, nor that a turn's words changed"
+            ActivityGroups.announcement(from: before, to: after),
+            "Needs your OK: Asks. Strix replied: Replied",
+            "In one announcement; what was already there is not said again, nor that a turn's words changed"
         )
-        XCTAssertEqual(ActivityGroups.announcements(from: after, to: after), [])
-        XCTAssertEqual(ActivityGroups.announcements(from: groups([:]), to: groups(["broke": .broken("x")])), ["Stopped on a problem: Broke"])
-        XCTAssertEqual(ActivityGroups.announcements(from: groups([:]), to: groups(["broke": .paused])), ["Paused: Broke"])
+        XCTAssertNil(ActivityGroups.announcement(from: after, to: after))
+        XCTAssertEqual(ActivityGroups.announcement(from: groups([:]), to: groups(["broke": .broken("x")])), "Stopped on a problem: Broke")
+        XCTAssertEqual(ActivityGroups.announcement(from: groups([:]), to: groups(["broke": .paused])), "Paused: Broke")
         // A turn that needed an OK and then stopped on a problem is another thing that waits.
         XCTAssertEqual(
-            ActivityGroups.announcements(from: groups(["asks": .waiting("x")]), to: groups(["asks": .broken("x")])), ["Stopped on a problem: Asks"]
+            ActivityGroups.announcement(from: groups(["asks": .waiting("x")]), to: groups(["asks": .broken("x")])), "Stopped on a problem: Asks"
         )
     }
 

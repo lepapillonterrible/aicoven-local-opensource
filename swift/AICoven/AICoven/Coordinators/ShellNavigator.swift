@@ -240,12 +240,25 @@ final class ShellNavigator: ObservableObject {
         personPlaceRequest += 1
     }
 
-    /// Whether the person has not moved since the navigator was at
-    /// `generation`: for what is asked for in a sheet and opened once the
-    /// sheet has gone, which must not cover where the person went
-    /// meanwhile.
-    func isStill(at generation: Int) -> Bool {
-        generation == placeGeneration
+    /// Where the person is and what they have asked of the shell, as one
+    /// value: it changes with every move (`placeGeneration`) and with
+    /// every ask that can leave the place as it is (the thread search, New
+    /// Thread asked again on its page).
+    nonisolated struct Stamp: Equatable {
+        let place: Int
+        let searches: Int
+        let newThreads: Int
+    }
+
+    var stamp: Stamp {
+        Stamp(place: placeGeneration, searches: searchAsked, newThreads: draftRequests)
+    }
+
+    /// Whether the person has neither moved nor asked for anything since
+    /// `stamp`: for what is asked for in a sheet and opened once the sheet
+    /// has gone, which must not cover what the person did meanwhile.
+    func isStill(at stamp: Stamp) -> Bool {
+        stamp == self.stamp
     }
 
     /// Opens the new-thread page in the selected scope: the thread is made

@@ -64,10 +64,8 @@ struct ActivityView: View {
         // Said to VoiceOver while the page is on screen: what newly waits
         // for the person, and each reply that newly finished.
         .onChange(of: groups) { old, new in
-            guard isOnScreen, let old, let new else { return }
-            for words in ActivityGroups.announcements(from: old, to: new) {
-                AccessibilityNotification.Announcement(words).post()
-            }
+            guard isOnScreen, let old, let new, let words = ActivityGroups.announcement(from: old, to: new) else { return }
+            AccessibilityNotification.Announcement(words).post()
         }
         .onChange(of: model.loadFailed) { _, failed in
             if isOnScreen, failed, model.shown == nil { AccessibilityNotification.Announcement(Self.loadFailure).post() }

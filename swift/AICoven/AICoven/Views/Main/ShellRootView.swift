@@ -55,9 +55,8 @@ struct ShellRootView: View {
     /// The phone's switcher, a sheet from the bar; and what it was asked
     /// to open, done once the sheet has gone so nothing opens under it.
     @State private var showSwitcher = false
-    /// What the switcher was asked for, and where the navigator was then
-    /// (`placeGeneration`).
-    @State private var switcherFollowUp: (kind: SwitcherFollowUp, askedAt: Int)?
+    /// What the switcher was asked for, and where the navigator was then.
+    @State private var switcherFollowUp: (kind: SwitcherFollowUp, askedAt: ShellNavigator.Stamp)?
 
     /// Whether the shell reports how it is used (a scope viewed, a place
     /// opened, New Thread, a thread made, the memory list opened), where
@@ -327,15 +326,15 @@ struct ShellRootView: View {
                 navigator.select(scope)
             },
             onCreateCoven: {
-                switcherFollowUp = (.createCoven, navigator.placeGeneration)
+                switcherFollowUp = (.createCoven, navigator.stamp)
                 showSwitcher = false
             },
             onOpenSettings: {
-                switcherFollowUp = (.settings, navigator.placeGeneration)
+                switcherFollowUp = (.settings, navigator.stamp)
                 showSwitcher = false
             },
             onOpenActivity: {
-                switcherFollowUp = (.activity, navigator.placeGeneration)
+                switcherFollowUp = (.activity, navigator.stamp)
                 showSwitcher = false
             },
             onMoveCoven: moveCoven
@@ -343,8 +342,8 @@ struct ShellRootView: View {
     }
 
     /// Opens what the switcher was asked for, now that its sheet has gone.
-    /// A place is not opened over where the person went meanwhile (New
-    /// Thread from a keyboard, say).
+    /// A place is not opened over what the person did meanwhile (New
+    /// Thread or Search Threads from a keyboard, say).
     private func runSwitcherFollowUp() {
         guard let followUp = switcherFollowUp else { return }
         switcherFollowUp = nil
