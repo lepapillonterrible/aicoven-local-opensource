@@ -34,7 +34,7 @@ final class SkillsToldTests: XCTestCase {
 
     private func keep(_ title: String, _ text: String, on: Bool) async throws {
         let skill = try await SkillRepository.shared.add(title: title, text: text, source: nil, as: account)
-        if on { try await SkillRepository.shared.setOn(true, id: skill.id, as: account) }
+        if on { try await SkillRepository.shared.setOn(true, skill, as: account) }
     }
 
     func testTheBlockIsTheCloudApps() {

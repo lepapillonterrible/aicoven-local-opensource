@@ -15,6 +15,12 @@ nonisolated struct Skill: Identifiable, Equatable {
     /// can be turned off and deleted.
     var isUnreadable = false
     let updatedAt: Date
+    /// What tells the title and text this skill had when it was listed
+    /// from any that take their place: a digest of what is stored of them,
+    /// which is sealed, so it says nothing of what they say. A skill is
+    /// turned on only as it was listed. Empty for a skill that was not
+    /// read from the store, which is none to turn on.
+    var version = ""
 }
 
 /// Why a skill was not kept, changed or read.
@@ -68,6 +74,14 @@ actor SkillRepository {
         SHA256.hash(data: Data("\(account)\n\(source)".utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
+    /// What tells a stored title and text from any other (`Skill.version`).
+    private static func version(title: Data, text: Data) -> String {
+        var digest = SHA256()
+        digest.update(data: title)
+        digest.update(data: text)
+        return digest.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
     private func opened(_ sealed: Data, purpose: String) async -> String? {
         guard let data = try? await DataEncryptionService.shared.decrypt(sealed, purpose: purpose) else { return nil }
         return String(decoding: data, as: UTF8.self)
@@ -85,11 +99,13 @@ actor SkillRepository {
             }
             var skills: [Skill] = []
             for row in rows {
-                let title = await self.opened(row["title_ciphertext"], purpose: Self.titlePurpose)
-                let text = await self.opened(row["text_ciphertext"], purpose: Self.textPurpose)
+                let sealedTitle: Data = row["title_ciphertext"], sealedText: Data = row["text_ciphertext"]
+                let title = await self.opened(sealedTitle, purpose: Self.titlePurpose)
+                let text = await self.opened(sealedText, purpose: Self.textPurpose)
                 let isUnreadable = title == nil || text == nil
                 skills.append(Skill(
-                    id: row["id"], title: isUnreadable ? "" : title ?? "", isOn: row["is_on"], isUnreadable: isUnreadable, updatedAt: row["updated_at"]
+                    id: row["id"], title: isUnreadable ? "" : title ?? "", isOn: row["is_on"], isUnreadable: isUnreadable,
+                    updatedAt: row["updated_at"], version: Self.version(title: sealedTitle, text: sealedText)
                 ))
             }
             return skills.sorted { one, other in
@@ -182,15 +198,17 @@ actor SkillRepository {
             )
             return (newID, false)
         }
-        return Skill(id: id, title: title, isOn: isOn, updatedAt: now)
+        return Skill(id: id, title: title, isOn: isOn, updatedAt: now, version: Self.version(title: sealedTitle, text: sealedText))
     }
 
     /// Turns a skill on or off. One that cannot be opened is not turned
     /// on: no agent could follow it. A skill is turned on only as it was
-    /// when it was looked at: if its title or text was replaced meanwhile,
-    /// nothing is done (`SkillError.changed`), so that no text is turned
-    /// on unseen.
-    func setOn(_ isOn: Bool, id: String, as account: String) async throws {
+    /// listed (`skill.version`): if its title or text was replaced since,
+    /// before this was asked or while it is done, nothing is done
+    /// (`SkillError.changed`), so that no text is turned on unseen.
+    /// Turning one off needs nothing of how it was listed.
+    func setOn(_ isOn: Bool, _ skill: Skill, as account: String) async throws {
+        let id = skill.id
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         guard isOn else {
             try await AccountSeal.requireKey(of: account, since: DataEncryptionService.shared.keyEpoch)
@@ -205,6 +223,7 @@ actor SkillRepository {
                 try Row.fetchOne(db, sql: "SELECT \(Kept.columns) FROM skills WHERE id = ? AND user_id = ?", arguments: [id, account])
             }
             guard let kept = row.map(Kept.init) else { throw SkillError.noSuchSkill }
+            guard Self.version(title: kept.title, text: kept.text) == skill.version else { throw SkillError.changed }
             guard await self.opened(kept.title, purpose: Self.titlePurpose) != nil,
                   await self.opened(kept.text, purpose: Self.textPurpose) != nil else { throw SkillError.unreadable }
             return kept
