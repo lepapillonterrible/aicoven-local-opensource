@@ -487,17 +487,14 @@ struct ShellRootView: View {
         }
     }
 
-    /// Opens the thread a tapped notification is about: only one of the
-    /// account signed in when it was tapped, and not over where the
-    /// person went while it was looked up.
+    /// Opens the thread a tapped notification is about, as the account
+    /// signed in when it was tapped.
     private func openThread(askedFor threadID: String) {
         let account = UserScope.currentUserID
-        let asked = navigator.personMoves
         Task {
-            guard let thread = try? await ThreadService.shared.getThread(threadId: threadID) else { return }
-            guard ShellNavigator.opensThread(thread, askedBy: account, signedIn: UserScope.currentUserID),
-                  navigator.isStill(at: asked) else { return }
-            navigator.open(thread)
+            await navigator.openThread(askedFor: threadID, as: account, signedIn: { UserScope.currentUserID }) {
+                try? await ThreadService.shared.getThread(threadId: $0)
+            }
         }
     }
 

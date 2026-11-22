@@ -251,11 +251,25 @@ final class ShellNavigator: ObservableObject {
     /// a thread made, renamed or deleted, a coven that is gone.
     private(set) var personMoves = 0
 
-    /// Whether a thread asked for from outside the shell (a notification
-    /// that was tapped) is opened: only one of the account that was
-    /// signed in when it was asked for, while that account still is.
-    nonisolated static func opensThread(_ thread: Thread, askedBy account: String, signedIn: String) -> Bool {
-        thread.userId == account && signedIn == account
+    /// Counts the threads asked for from outside the shell, so that only
+    /// the latest asked for is opened.
+    private var threadAsks = 0
+
+    /// Opens a thread asked for from outside the shell (a notification
+    /// that was tapped), once `lookUp` has found it: only a thread of
+    /// `account`, who was signed in when it was asked for and still is
+    /// (`signedIn`); not over where the person went while it was looked
+    /// up; and not if another thread was asked for since. One that is not
+    /// found opens nothing.
+    func openThread(
+        askedFor threadID: String, as account: String, signedIn: () -> String, lookUp: (String) async -> Thread?
+    ) async {
+        threadAsks += 1
+        let ask = threadAsks
+        let moves = personMoves
+        guard let thread = await lookUp(threadID),
+              ask == threadAsks, thread.userId == account, signedIn() == account, isStill(at: moves) else { return }
+        open(thread)
     }
 
     /// Whether the person has done nothing in the shell since it counted

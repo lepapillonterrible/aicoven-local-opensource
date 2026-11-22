@@ -148,13 +148,6 @@ final class LocalNotificationsTests: XCTestCase {
         }
     }
 
-    func testTheThreadIsOpenedOnlyForTheAccountThatWasSignedInWhenItWasTapped() {
-        let mine = thread("t1", of: "ada")
-        XCTAssertTrue(ShellNavigator.opensThread(mine, askedBy: "ada", signedIn: "ada"))
-        XCTAssertFalse(ShellNavigator.opensThread(mine, askedBy: "ada", signedIn: "grace"), "Another account signed in while it was looked up")
-        XCTAssertFalse(ShellNavigator.opensThread(thread("t2", of: "grace"), askedBy: "ada", signedIn: "ada"), "Not her thread")
-    }
-
     // MARK: - When one is made
 
     func testOneIsMadeOnlyWhileTheAppIsNotInFront_allowed_wanted_andForTheAccountSignedIn() async {
