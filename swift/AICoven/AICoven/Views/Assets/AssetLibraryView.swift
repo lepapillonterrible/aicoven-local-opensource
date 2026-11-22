@@ -2,12 +2,23 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// A scope's assets, as the cloud app's library. On the iPhone and iPad: a
-/// list with the system search field, a Filter menu, and what is proposed
-/// first under "Needs review". On the Mac: a table.
+/// list with the system search field, a Filter menu, what is proposed
+/// first under "Needs review", and each row pushing the asset. On the Mac:
+/// a table, with the selected asset in an inspector; double-click or
+/// Return opens it full size in a sheet and Space previews its file in
+/// Quick Look.
 struct AssetLibraryView: View {
     @StateObject private var model: AssetLibraryModel
+    /// Quick Look and the exporter for what a row's menu or Space opens.
+    @StateObject private var files = AssetFiles()
     @State private var isCreating = false
     @State private var isOnScreen = false
+    /// The asset open full size: pushed on the iPhone and iPad, a sheet on the Mac.
+    @State private var openID: Asset.ID?
+    #if os(macOS)
+    /// The row selected in the table, shown in the inspector.
+    @State private var selectedID: Asset.ID?
+    #endif
     /// Whether Try Again is reading: it says so, and is not pressed twice.
     @State private var isRetrying = false
     #if os(iOS)
@@ -26,11 +37,46 @@ struct AssetLibraryView: View {
             .searchable(text: $model.search, placement: searchPlacement, prompt: "Search assets")
             .toolbar { toolbarContent }
             .sheet(isPresented: $isCreating) {
-                NewAssetSheet(model: model)
+                NewAssetSheet(model: model) { made in
+                    #if os(macOS)
+                    selectedID = made.id
+                    #else
+                    openID = made.id
+                    #endif
+                }
             }
+            .presenting(files)
+        #if os(macOS)
+            .sheet(item: Binding(get: { openID.map(OpenAsset.init) }, set: { openID = $0?.id })) { open in
+                NavigationStack {
+                    page(of: open.id)
+                        .navigationTitle("Asset")
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { openID = nil }
+                            }
+                        }
+                }
+                .frame(minWidth: 560, idealWidth: 640, minHeight: 520, idealHeight: 600)
+            }
+        #else
+            .navigationDestination(item: $openID) { id in
+                page(of: id)
+                    .navigationTitle("Asset")
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+        #endif
             .task { await model.load() }
             .onAppear { isOnScreen = true }
             .onDisappear { isOnScreen = false }
+            .onChange(of: model.actionFailure) { _, failed in
+                // What went wrong with an asset is said to VoiceOver once,
+                // here, whether it was asked from a row's menu or from the
+                // asset's page (which covers this place on the iPhone).
+                if let failed, isOnScreen || openID != nil {
+                    AccessibilityNotification.Announcement(failed.words).post()
+                }
+            }
             .onChange(of: model.loadFailures) {
                 // Said to VoiceOver too, while the place is on screen: each
                 // failed reading, also one that fails after another did.
@@ -96,10 +142,63 @@ struct AssetLibraryView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(Spacing.md)
             }
+            .onKeyPress(.space) {
+                guard let file = selected?.files.first, selected?.isUnreadable == false else { return .ignored }
+                Task { await files.look(at: file) }
+                return .handled
+            }
+            .inspector(isPresented: Binding(get: { selected != nil }, set: { if !$0 { selectedID = nil } })) {
+                if let selected {
+                    AssetDetailView(asset: selected, model: model, sharing: files.turn)
+                        .id(selected.id)
+                        .inspectorColumnWidth(min: 260, ideal: 300, max: 420)
+                }
+            }
         #else
         list(now: now)
             .overlay { emptyState }
         #endif
+    }
+
+    /// An asset's page; one that is gone says so.
+    @ViewBuilder
+    private func page(of id: Asset.ID) -> some View {
+        if let asset = model.assets.first(where: { $0.id == id }) {
+            AssetDetailView(asset: asset, model: model, sharing: files.turn)
+        } else {
+            ContentUnavailableView("This asset is no longer here", systemImage: "tray")
+        }
+    }
+
+    #if os(macOS)
+    /// The asset selected in the table, as it is listed now.
+    private var selected: Asset? {
+        selectedID.flatMap { id in model.assets.first { $0.id == id } }
+    }
+    #endif
+
+    /// What a long press or a right click on an asset offers.
+    @ViewBuilder
+    private func menu(for asset: Asset) -> some View {
+        Button {
+            openID = asset.id
+        } label: {
+            Label("Open", systemImage: "arrow.up.forward.square")
+        }
+        ForEach(AssetLibraryRules.reviewActions(asset) + AssetLibraryRules.otherActions(asset)) { action in
+            Button {
+                if action == .download {
+                    guard let file = asset.files.first else { return }
+                    Task { await files.download(file) }
+                } else {
+                    let account = UserScope.currentUserID
+                    Task { await model.perform(action, on: asset, as: account) }
+                }
+            } label: {
+                Label(action.title, systemImage: action.iconSystemName)
+            }
+            .disabled(action == .download ? files.preparing != nil : model.changing.contains(asset.id))
+        }
     }
 
     /// An asset's title as a row shows it: one the key cannot open has none.
@@ -161,18 +260,29 @@ struct AssetLibraryView: View {
     }
 
     private func row(_ asset: Asset, now: Date) -> some View {
-        HStack(spacing: Spacing.sm) {
-            AssetThumbnail(type: asset.type, isLocked: asset.isUnreadable, width: 40, height: 40)
-            VStack(alignment: .leading, spacing: Spacing.xxxs) {
-                Text(title(asset))
-                    .foregroundStyle(Color.aicovenTextPrimary)
-                Text(AssetLibraryRules.quietLine(asset, now: now))
-                    .font(.aicovenBodySmall)
-                    .foregroundStyle(Color.aicovenTextSecondary)
+        Button {
+            openID = asset.id
+        } label: {
+            HStack(spacing: Spacing.sm) {
+                AssetThumbnail(type: asset.type, isLocked: asset.isUnreadable, width: 40, height: 40)
+                VStack(alignment: .leading, spacing: Spacing.xxxs) {
+                    Text(title(asset))
+                        .foregroundStyle(Color.aicovenTextPrimary)
+                    Text(AssetLibraryRules.quietLine(asset, now: now))
+                        .font(.aicovenBodySmall)
+                        .foregroundStyle(Color.aicovenTextSecondary)
+                }
+                Spacer(minLength: Spacing.xs)
+                Image(systemName: "chevron.right")
+                    .font(.aicovenCaption.weight(.semibold))
+                    .foregroundStyle(Color.aicovenTextTertiary)
             }
+            .opacity(asset.status == .archived ? 0.75 : 1)
+            .contentShape(Rectangle())
+            .accessibilityElement(children: .combine)
         }
-        .opacity(asset.status == .archived ? 0.75 : 1)
-        .accessibilityElement(children: .combine)
+        .buttonStyle(.plain)
+        .contextMenu { menu(for: asset) }
     }
     #endif
 
@@ -181,7 +291,7 @@ struct AssetLibraryView: View {
     #if os(macOS)
     private func table(now: Date) -> some View {
         let shown = model.shown
-        return Table(shown.needsReview + shown.others) {
+        return Table(shown.needsReview + shown.others, selection: $selectedID) {
             TableColumn("Asset") { asset in
                 HStack(spacing: Spacing.sm) {
                     AssetThumbnail(type: asset.type, isLocked: asset.isUnreadable, width: 28, height: 21)
@@ -213,6 +323,18 @@ struct AssetLibraryView: View {
         .alternatingRowBackgrounds(.disabled)
         .scrollContentBackground(.hidden)
         .background(Color.aicovenSurface)
+        .contextMenu(forSelectionType: Asset.ID.self) { ids in
+            if let asset = ids.first.flatMap({ id in model.assets.first { $0.id == id } }) {
+                menu(for: asset)
+            }
+        } primaryAction: { ids in
+            openID = ids.first
+        }
+    }
+
+    /// The asset open full size, as a sheet takes it.
+    private struct OpenAsset: Identifiable {
+        let id: Asset.ID
     }
     #endif
 
@@ -255,11 +377,16 @@ struct AssetLibraryView: View {
 
     @ViewBuilder
     private var footer: some View {
-        if model.loadFailed {
-            // The list stays as it was read before.
-            Text(AssetLibraryModel.couldNotRefresh)
-                .font(.aicovenBodySmall)
-                .foregroundStyle(Color.aicovenError)
+        if model.loadFailed || model.actionFailure != nil || files.said != nil {
+            // What failed: a refresh (the list stays as it was read
+            // before), the last thing asked of an asset, or a file.
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                ForEach([model.loadFailed ? AssetLibraryModel.couldNotRefresh : nil, model.actionFailure?.words, files.said].compactMap(\.self), id: \.self) {
+                    Text($0)
+                }
+            }
+            .font(.aicovenBodySmall)
+            .foregroundStyle(Color.aicovenError)
         } else {
             #if os(macOS)
             HStack(spacing: Spacing.sm) {
@@ -355,6 +482,8 @@ struct AssetThumbnail: View {
 /// and no "Who can read": nothing leaves this device.
 private struct NewAssetSheet: View {
     @ObservedObject var model: AssetLibraryModel
+    /// Told of the asset that was made, as the sheet is asked to close on it.
+    let onMade: (Asset) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var title = ""
@@ -364,6 +493,10 @@ private struct NewAssetSheet: View {
     @State private var isChoosingFile = false
     /// Whether the chosen file is being read: Create waits for it.
     @State private var isReadingFile = false
+    /// Whether the sheet is up: a file read after it has gone says nothing.
+    @State private var isShown = false
+    /// The account the file chooser was put up for.
+    @State private var choosingAs: String?
     @State private var failure: String?
 
     #if os(iOS)
@@ -394,6 +527,7 @@ private struct NewAssetSheet: View {
 
                 Section {
                     Button {
+                        choosingAs = UserScope.currentUserID
                         isChoosingFile = true
                     } label: {
                         Label(file.map { AssetFile.keptName($0.name) } ?? "Choose File…", systemImage: "plus.square.fill")
@@ -437,10 +571,16 @@ private struct NewAssetSheet: View {
         .frame(minWidth: 480, idealWidth: 520, minHeight: 360)
         #endif
         .interactiveDismissDisabled(model.isCreating)
+        .onAppear { isShown = true }
+        .onDisappear { isShown = false }
     }
 
     /// Takes the file the person chose, or says why it was not taken.
     private func receive(_ result: Result<[URL], Error>) {
+        // The chooser's answer is for whoever put it up, in this sheet:
+        // nothing of it is kept or said once either has gone.
+        let account = UserScope.currentUserID
+        guard isShown, choosingAs == account else { return }
         switch result {
         case let .success(files):
             guard let chosen = files.first else { return }
@@ -450,6 +590,9 @@ private struct NewAssetSheet: View {
             Task {
                 let read = await Task.detached { Result { try AssetFileChoice.read(chosen) } }.value
                 isReadingFile = false
+                // Read for whoever chose it, in the sheet they chose it in:
+                // nothing of it is kept or said once either has gone.
+                guard isShown, UserScope.currentUserID == account else { return }
                 switch read {
                 case let .success(read):
                     file = read
@@ -475,9 +618,10 @@ private struct NewAssetSheet: View {
         let new = AssetLibraryModel.NewAsset(type: type, title: title, details: details, file: file)
         Task {
             switch await model.create(new, as: account) {
-            case .made:
+            case let .made(asset):
                 AccessibilityNotification.Announcement("Asset created").post()
                 dismiss()
+                onMade(asset)
             case let .failed(words):
                 say(words)
             case nil:
