@@ -216,11 +216,22 @@ final class LocalNotificationsTests: XCTestCase {
         notifications.threadShown("t1")
         XCTAssertEqual(system.withdrawn, ["thread-t1"])
 
+        // The app is opened again as the same account: what it was notified of stays.
+        notifications.accountReported("ada")
         await notifications.offerIfUseful(agentName: "Scout", as: "ada")
         XCTAssertNotNil(notifications.offer)
-        notifications.accountChanged()
-        XCTAssertEqual(system.withdrewAll, 1, "Nothing notified to the first stays on the screen")
+        XCTAssertTrue(notifications.takeOfferAnnouncement(), "The line is told to VoiceOver")
+        XCTAssertFalse(notifications.takeOfferAnnouncement(), "Once, wherever it shows again")
+        notifications.accountReported("ada")
+        XCTAssertEqual(system.withdrewAll, 0)
+        XCTAssertNotNil(notifications.offer)
+
+        // Another account, or none: nothing notified to the first stays on the screen.
+        notifications.accountReported("grace")
+        XCTAssertEqual(system.withdrewAll, 1)
         XCTAssertNil(notifications.offer)
+        notifications.accountReported(nil)
+        XCTAssertEqual(system.withdrewAll, 2)
     }
 
     func testNotificationsTurnedOffWhileOneIsOnItsWay_isNotMade() async {

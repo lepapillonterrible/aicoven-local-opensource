@@ -147,8 +147,7 @@ struct ShellRootView: View {
             // when the app was first in front.
             .onChange(of: scenePhase, initial: true) { _, phase in
                 if phase == .active { navigator.appBecameActive() } else { navigator.appWentInactive() }
-                // Nothing is notified of while the app is in front. What
-                // tells of turns and approvals is started with the shell.
+                // Nothing is notified of while the app is in front.
                 LocalNotifications.shared.appIsInFront = phase == .active
                 // What tells of turns and approvals is started with the
                 // shell, so that what ends while the person is looking is

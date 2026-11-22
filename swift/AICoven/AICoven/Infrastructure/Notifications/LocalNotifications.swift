@@ -91,6 +91,10 @@ final class LocalNotifications: ObservableObject {
     /// Whether the app is in front: nothing is notified of while it is.
     var appIsInFront = true
 
+    /// Who the sign-in service last said is signed in (nobody: nil); not
+    /// set until it has said.
+    private var reported: String??
+    private var offerWasAnnounced = false
     /// Counts the readings of the permission, so that only the latest is kept.
     private var permissionReads = 0
     private let center: Center
@@ -202,7 +206,9 @@ final class LocalNotifications: ObservableObject {
         let declinedAt = defaults.object(forKey: Self.declinedKey(for: account)) as? Date
         if let declinedAt, now().timeIntervalSince(declinedAt) < Self.quietAfterDeclining { return }
         let named = agentName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        offer = Offer(agentName: named.isEmpty ? "Strix" : named)
+        let offered = Offer(agentName: named.isEmpty ? "Strix" : named)
+        if offer != offered { offerWasAnnounced = false }
+        offer = offered
     }
 
     // MARK: - Notifying
@@ -243,11 +249,26 @@ final class LocalNotifications: ObservableObject {
         center.withdraw([Self.id(forThread: threadID)])
     }
 
-    /// Another account is signed in, or none: nothing notified to the
-    /// first stays on the device's screen, and the line is not offered to
-    /// the next for what the first did.
-    func accountChanged() {
-        offer = nil
-        center.withdrawAll()
+    /// The sign-in service says who is signed in: as it starts, and at
+    /// every change. When that is another account than before, or none,
+    /// nothing notified to the first stays on the device's screen, and
+    /// the line is not offered to the next for what the first did. The
+    /// same account reported again (the app was opened again) keeps what
+    /// it was notified of.
+    func accountReported(_ account: String?) {
+        if let was = reported, was != account {
+            offer = nil
+            offerWasAnnounced = false
+            center.withdrawAll()
+        }
+        reported = .some(account)
+    }
+
+    /// Whether the line that is offered is yet to be told to VoiceOver:
+    /// true once for each offer.
+    func takeOfferAnnouncement() -> Bool {
+        guard offer != nil, !offerWasAnnounced else { return false }
+        offerWasAnnounced = true
+        return true
     }
 }

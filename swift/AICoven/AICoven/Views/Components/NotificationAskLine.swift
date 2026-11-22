@@ -33,8 +33,10 @@ struct NotificationAskLine: View {
             .background(RoundedRectangle(cornerRadius: BorderRadius.md).fill(Color.aicovenSurfaceElevated))
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("notification-ask-line")
-            // The line comes by itself, at the top: VoiceOver is told.
+            // The line comes by itself, at the top: VoiceOver is told,
+            // once for each offer, wherever it is first shown.
             .onAppear {
+                guard notifications.takeOfferAnnouncement() else { return }
                 AccessibilityNotification.Announcement("Get a notification when \(offer.agentName) finishes? Not now and Turn on are at the top.").post()
             }
         }
