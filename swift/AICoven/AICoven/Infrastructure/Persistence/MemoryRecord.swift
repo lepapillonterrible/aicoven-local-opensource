@@ -564,7 +564,7 @@ actor MemoryProposalRepository {
     /// coven the person's own. Optionally of one status. Newest first.
     /// Read with the account's own key in memory, and not at all while its
     /// data is locked.
-    func listProposals(covenId: String?, status: String?) async throws -> [MemoryProposalRecord] {
+    func listProposals(covenId: String?, status: String?, limit: Int? = nil) async throws -> [MemoryProposalRecord] {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
         // Get current user ID for data isolation
@@ -576,13 +576,22 @@ actor MemoryProposalRepository {
                 // Only fetch proposals belonging to the current user
                 var request = MemoryProposalRecord
                     .filter(MemoryProposalRecord.Columns.userId == currentUserId)
-                    .order(MemoryProposalRecord.Columns.createdAt.desc)
+                    // Those made at the same moment in a fixed order, so
+                    // that a limit always leaves the same ones out.
+                    .order(MemoryProposalRecord.Columns.createdAt.desc, MemoryProposalRecord.Columns.id)
 
                 // One scope's proposals: a coven's, or, for none, the person's
                 // own (those made in no coven), never every coven's together.
                 request = request.filter(MemoryProposalRecord.Columns.covenId == covenId)
                 if let status {
                     request = request.filter(MemoryProposalRecord.Columns.status == status)
+                }
+                // The latest only, where no more are wanted: the rest is
+                // not listed or opened. (What is still stored as text
+                // from before proposals were sealed was sealed above,
+                // all of it, the once.)
+                if let limit {
+                    request = request.limit(limit)
                 }
 
                 return try request.fetchAll(db)

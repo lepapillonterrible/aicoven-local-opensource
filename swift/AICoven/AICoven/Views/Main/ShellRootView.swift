@@ -35,6 +35,9 @@ struct ShellRootView: View {
     @StateObject private var threadActions = ThreadActions()
 
     @State private var covens: [Coven] = []
+    /// Whether the covens have been read: until then an empty list says
+    /// nothing of whether the person has any.
+    @State private var covensAreKnown = false
     /// Counts the readings of the covens, so that only the latest is kept.
     @State private var covensLoad = 0
     /// The person's own order for their covens, as kept on this device.
@@ -275,6 +278,7 @@ struct ShellRootView: View {
             drafts: drafts,
             coven: selectedCoven,
             covens: orderedCovens,
+            covensAreKnown: covensAreKnown,
             onNewThreadWithAgent: newThread(with:),
             onThreadCreated: threadCreated,
             onThreadAsked: threadMade,
@@ -306,7 +310,7 @@ struct ShellRootView: View {
             // Made anew for each ask, so it shows the pane now asked for.
             .id(navigator.personPlaceRequest)
         case .activity:
-            ActivityView(navigator: navigator, covens: orderedCovens)
+            ActivityView(navigator: navigator, covens: orderedCovens, covensAreKnown: covensAreKnown)
                 .navigationTitle("Activity")
             #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
@@ -381,6 +385,7 @@ struct ShellRootView: View {
                 drafts: drafts,
                 coven: selectedCoven,
                 covens: orderedCovens,
+                covensAreKnown: covensAreKnown,
                 onNewThreadWithAgent: newThread(with:),
                 onThreadCreated: threadCreated,
                 onThreadAsked: threadMade,
@@ -418,6 +423,7 @@ struct ShellRootView: View {
                 ScopeVisitStore().forget(.coven(covenID), for: account)
             }
             covens = loaded
+            covensAreKnown = true
             covenOrder = orderStore.ids(for: account)
         } catch {
             // The kind of failure only. The covens shown stay as they are.

@@ -10,8 +10,12 @@ import Foundation
 /// answered here (the app closes, the thread is gone, another account
 /// signs in) waits among the proposals of its scope's Memory.
 @MainActor
-final class MemoryProposalQuestions {
+final class MemoryProposalQuestions: ObservableObject {
     static let shared = MemoryProposalQuestions()
+
+    /// The proposals a question is being asked about, or is waiting to be:
+    /// what lists the proposals that wait leaves these to the question.
+    @Published private(set) var asked: Set<String> = []
 
     typealias Asking = (ToolApproval) async -> ApprovalAnswer
     typealias Reviewing = (_ proposalID: String, _ approve: Bool) async throws -> Void
@@ -61,9 +65,13 @@ final class MemoryProposalQuestions {
     /// the question is asked once more, saying so.
     func ask(_ proposal: MemoryProposalRecord, inThread threadID: String, as account: String) {
         guard questions[proposal.id] == nil else { return }
+        asked.insert(proposal.id)
         questions[proposal.id] = Task { [weak self] in
             guard let self else { return }
-            defer { questions[proposal.id] = nil }
+            defer {
+                questions[proposal.id] = nil
+                asked.remove(proposal.id)
+            }
             await turnEnding(threadID)
             for attempt in 1 ... 2 {
                 guard !Task.isCancelled, signedIn() == account else { return }

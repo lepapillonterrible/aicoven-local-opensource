@@ -198,15 +198,17 @@ actor MemoryService {
 
     /// List memory proposals from the local SQLite store. The default
     /// `status = "pending"` matches the UI's initial filter; passing "all"
-    /// disables status filtering.
+    /// disables status filtering. With a `limit`, the latest that many.
     func listProposals(
         covenId: String?,
-        status: String = "pending"
+        status: String = "pending",
+        limit: Int? = nil
     ) async throws -> [MemoryProposal] {
         let effectiveStatus: String? = (status == "all") ? nil : status
         let records = try await MemoryProposalRepository.shared.listProposals(
             covenId: covenId,
-            status: effectiveStatus
+            status: effectiveStatus,
+            limit: limit
         )
         return records.map(mapRecordToProposal)
     }

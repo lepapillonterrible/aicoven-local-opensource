@@ -180,6 +180,27 @@ final class MemoryProposalQuestionsTests: XCTestCase {
             .reviewProposal(proposalId: id, action: approve ? "approve" : "reject")
     }
 
+    func testWithALimitOnlyTheLatestOfAScopesProposalsAreRead() async throws {
+        let coven = try await newCoven()
+        var stored: [String] = []
+        for text in ["First", "Second", "Third"] {
+            try await stored.append(propose(text, in: coven).id)
+        }
+        // Each a moment after the one before, whatever the clock's grain.
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        let ids = stored
+        try await queue.write { db in
+            for (index, id) in ids.enumerated() {
+                try db.execute(sql: "UPDATE memory_proposals SET created_at = ? WHERE id = ?", arguments: [Date(timeIntervalSince1970: TimeInterval(1000 + index)), id])
+            }
+        }
+
+        let latest = try await MemoryService.shared.listProposals(covenId: coven, limit: 2)
+        XCTAssertEqual(latest.map(\.proposedContent), ["Third", "Second"])
+        let all = try await MemoryService.shared.listProposals(covenId: coven)
+        XCTAssertEqual(all.count, 3)
+    }
+
     func testApproveKeepsItWhereItWasProposed_denyDoesNot_andUnansweredItWaits() async throws {
         let coven = try await newCoven()
         var asked: [ToolApproval] = []
@@ -190,7 +211,9 @@ final class MemoryProposalQuestionsTests: XCTestCase {
             return .approved
         }
         approving.ask(approved, inThread: "thread-1", as: account)
+        XCTAssertEqual(approving.asked, [approved.id], "While it is asked, what lists the proposals that wait leaves it to the question")
         await approving.settled(approved.id)
+        XCTAssertEqual(approving.asked, [], "And no longer once it has its answer")
         XCTAssertEqual(asked.map(\.question), ["Remember this for the coven?"])
         XCTAssertEqual(asked.map(\.details), ["Ships on Fridays"], "The question shows what would be remembered, whole")
         XCTAssertEqual(asked.map(\.threadID), ["thread-1"])
@@ -214,6 +237,7 @@ final class MemoryProposalQuestionsTests: XCTestCase {
         let notAsking = questions { _ in .notAsked }
         notAsking.ask(unasked, inThread: "thread-1", as: account)
         await notAsking.settled(unasked.id)
+        XCTAssertEqual(notAsking.asked, [], "Nor once the question was given up: the proposal is then listed where it waits")
         let waiting = try await status(of: unasked.id)
         XCTAssertEqual(waiting, "pending")
         memories = try await kept(in: coven)

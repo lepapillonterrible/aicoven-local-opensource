@@ -13,8 +13,10 @@ struct ShellContentView: View {
     let drafts: DraftThreads
     /// The coven on screen; nil for Strix, or while the covens are not in.
     let coven: Coven?
-    /// The person's covens, which name the places of Activity's rows.
+    /// The person's covens, which name the places of Activity's rows, and
+    /// whether they have been read yet.
     let covens: [Coven]
+    let covensAreKnown: Bool
     /// Starts a thread with one of the coven's agents.
     let onNewThreadWithAgent: (Role) -> Void
     /// Told of a thread the new-thread page made, which takes the page's
@@ -40,7 +42,7 @@ struct ShellContentView: View {
                 SettingsWorkspaceView(initialPane: pane)
                     .id(navigator.personPlaceRequest)
             case .activity:
-                ActivityView(navigator: navigator, covens: covens)
+                ActivityView(navigator: navigator, covens: covens, covensAreKnown: covensAreKnown)
             case nil:
                 scopePlace
             }
