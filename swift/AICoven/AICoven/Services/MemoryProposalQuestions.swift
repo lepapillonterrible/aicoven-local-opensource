@@ -8,7 +8,7 @@ import Foundation
 /// The question is asked once the turn that proposed it has ended, and no
 /// turn waits on it. The proposal itself is stored: one that is not
 /// answered here (the app closes, the thread is gone, another account
-/// signs in) waits among the proposals of its scope's Memory.
+/// signs in) waits on Activity, under Waiting for you.
 @MainActor
 final class MemoryProposalQuestions: ObservableObject {
     static let shared = MemoryProposalQuestions()

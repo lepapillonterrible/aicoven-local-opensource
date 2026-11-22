@@ -17,7 +17,7 @@ struct MemoryProposal: Codable, Identifiable {
     let reviewedAt: Date?
     let title: String?
     /// Its text could not be opened with the account's key: it can be
-    /// rejected, or saved as other words, and not approved as it is.
+    /// rejected, and not approved.
     var isUnreadable = false
 
     enum CodingKeys: String, CodingKey {
@@ -196,9 +196,9 @@ actor MemoryService {
         )
     }
 
-    /// List memory proposals from the local SQLite store. The default
-    /// `status = "pending"` matches the UI's initial filter; passing "all"
-    /// disables status filtering. With a `limit`, the latest that many.
+    /// List a scope's memory proposals from the local SQLite store: those
+    /// still pending by default, which is what waits on Activity; "all"
+    /// for every status. With a `limit`, the latest that many.
     func listProposals(
         covenId: String?,
         status: String = "pending",
@@ -235,26 +235,12 @@ actor MemoryService {
         default:
             action
         }
-        return try await settle(proposalId: proposalId, as: newStatus, feedback: feedback, storing: newStatus == "approved" ? .itsContent : nil)
+        return try await settle(proposalId: proposalId, as: newStatus, feedback: feedback, keeping: newStatus == "approved")
     }
 
-    /// Saves a proposal's content, as the person edited it, as a memory,
-    /// and marks the proposal reviewed so it is no longer pending. The
-    /// memory is stored once. Under the same rules as `reviewProposal`.
-    func saveProposalAsMemory(proposalId: String, content: String) async throws -> MemoryProposal {
-        let text = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        return try await settle(
-            proposalId: proposalId, as: "rejected", feedback: "Saved as manual memory from Swift client", storing: .text(text)
-        )
-    }
-
-    /// What settling a proposal stores as a memory.
-    private enum Stored {
-        case itsContent
-        case text(String)
-    }
-
-    private func settle(proposalId: String, as status: String, feedback: String?, storing: Stored?) async throws -> MemoryProposal {
+    /// Settles a pending proposal as `status`; with `keeping`, its content
+    /// is stored as a memory where it was proposed.
+    private func settle(proposalId: String, as status: String, feedback: String?, keeping: Bool) async throws -> MemoryProposal {
         // Whose review it is, read before anything is waited for.
         let account = await currentAccount()
         // Reserved before the first wait on anything else: a second press
@@ -267,17 +253,11 @@ actor MemoryService {
         }
         guard existing.status == "pending" else { throw ProposalReviewError.alreadyReviewed }
 
-        guard let storing else {
+        guard keeping else {
             return try await mark(existing, as: status, feedback: feedback, for: account)
         }
-        let text: String
-        switch storing {
-        case .itsContent:
-            guard !existing.isUnreadable else { throw ProposalReviewError.unreadable }
-            text = existing.proposedContent
-        case let .text(edited):
-            text = edited
-        }
+        guard !existing.isUnreadable else { throw ProposalReviewError.unreadable }
+        let text = existing.proposedContent
         // Kept where it was proposed: in its coven's pages, or for one
         // proposed in no coven as the person's own.
         let place = existing.covenId.map(MemoryPlace.coven) ?? .aboutMe

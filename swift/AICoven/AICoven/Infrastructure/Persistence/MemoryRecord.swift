@@ -368,7 +368,7 @@ actor MemoryRepository {
 extension MemoryRepository: MemoryStore {}
 
 /// Low-level GRDB representation of a memory write proposal. This backs the
-/// local-only MemoryService proposal APIs and the MemoryProposalsView UI.
+/// local-only MemoryService proposal APIs.
 struct MemoryProposalRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "memory_proposals"
 

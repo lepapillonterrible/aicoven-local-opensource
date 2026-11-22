@@ -292,8 +292,7 @@ struct GradientButton: View {
                 Text(title)
                     .font(.aicovenBodyMedium)
                     // Keep the label on a single line. Without this, in
-                    // tight HStacks (e.g. the Memory Proposals card's
-                    // Approve / Reject / Edit / Delete row on iPhone) the
+                    // tight HStacks (several buttons in one row on iPhone) the
                     // available width per button shrinks enough that
                     // SwiftUI wraps the label character-by-character —
                     // you end up with "A / p / p / r / o / v / e" stacked
