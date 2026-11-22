@@ -132,15 +132,12 @@ private struct AddSkillsFromGitHubSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var address = ""
     @State private var outcome: SkillsModel.FromGitHub?
+    /// Whether this sheet has added a skill: it is then closed with Done,
+    /// whatever came of a later try.
+    @State private var addedSome = false
     /// The adding that is under way. Closing the sheet calls it off: what
     /// was added by then stays, and no more is.
     @State private var adding: Task<Void, Never>?
-
-    /// Whether something was added: the sheet is then closed with Done.
-    private var addedSome: Bool {
-        if case let .added(added, _) = outcome { return added > 0 }
-        return false
-    }
 
     var body: some View {
         NavigationStack {
@@ -156,9 +153,9 @@ private struct AddSkillsFromGitHubSheet: View {
                         .onSubmit(add)
                 } footer: {
                     Group {
-                        if let said = outcome.flatMap(SkillsModel.words(for:)) {
-                            Text(said)
-                                .foregroundStyle(addedSome ? Color.aicovenTextSecondary : Color.aicovenError)
+                        if let outcome {
+                            Text(SkillsModel.words(for: outcome))
+                                .foregroundStyle(SkillsModel.addedAny(outcome) ? Color.aicovenTextSecondary : Color.aicovenError)
                         } else {
                             Text(SkillsModel.fromGitHubHint)
                         }
@@ -201,13 +198,13 @@ private struct AddSkillsFromGitHubSheet: View {
         adding = Task {
             let result = await model.addFromGitHub(address, as: account)
             adding = nil
-            guard !Task.isCancelled else { return }
+            // Nothing is said of an adding that was called off, or to another account.
+            guard let result, !Task.isCancelled else { return }
             outcome = result
-            if let said = SkillsModel.words(for: result) {
-                AccessibilityNotification.Announcement(said).post()
-            } else {
-                dismiss()
-            }
+            addedSome = addedSome || SkillsModel.addedAny(result)
+            AccessibilityNotification.Announcement(SkillsModel.words(for: result)).post()
+            // With every file there added, there is nothing left to do here.
+            if case .added(_, notAdded: 0) = result { dismiss() }
         }
     }
 }

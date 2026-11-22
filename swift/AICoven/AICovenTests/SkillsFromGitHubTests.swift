@@ -159,7 +159,8 @@ final class SkillsFromGitHubTests: XCTestCase {
         let outcome = await model.addFromGitHub("https://github.com/ada/agent-skills", as: account)
 
         XCTAssertEqual(outcome, .added(2, notAdded: 0))
-        XCTAssertNil(SkillsModel.words(for: outcome))
+        XCTAssertEqual(SkillsModel.words(for: .added(2, notAdded: 0)), "Added 2 skills.", "Said aloud as the sheet closes")
+        XCTAssertEqual(SkillsModel.words(for: .added(1, notAdded: 0)), "Added 1 skill.")
         XCTAssertEqual(model.skills.map(\.title), ["house style", "Simplify code"])
         XCTAssertEqual(model.skills.map(\.isOn), [false, false], "Nothing from a repository is followed that the person did not turn on")
         let requests = asked.requests
@@ -194,7 +195,10 @@ final class SkillsFromGitHubTests: XCTestCase {
         let outcome = await model.addFromGitHub("github.com/ada/agent-skills", as: account)
 
         XCTAssertEqual(outcome, .added(1, notAdded: 3))
-        XCTAssertEqual(SkillsModel.words(for: outcome), "Added 1 skill. 3 files couldn't be added.")
+        XCTAssertEqual(SkillsModel.words(for: .added(1, notAdded: 3)), "Added 1 skill. 3 files couldn't be added.")
+        XCTAssertTrue(SkillsModel.addedAny(.added(1, notAdded: 3)))
+        XCTAssertFalse(SkillsModel.addedAny(.added(0, notAdded: 3)))
+        XCTAssertFalse(SkillsModel.addedAny(.notListed))
         XCTAssertEqual(model.skills.map(\.title), ["a"])
         XCTAssertEqual(SkillsModel.words(for: .added(0, notAdded: 1)), "1 file there couldn't be added.")
         XCTAssertEqual(SkillsModel.words(for: .added(3, notAdded: 2)), "Added 3 skills. 2 files couldn't be added.")
@@ -236,9 +240,93 @@ final class SkillsFromGitHubTests: XCTestCase {
 
         let outcome = await model.addFromGitHub("github.com/ada/agent-skills", as: account)
 
-        XCTAssertEqual(outcome, .added(1, notAdded: 0))
+        XCTAssertNil(outcome, "Nothing is said of the first account's adding to the other")
         XCTAssertEqual(asked.requests.compactMap { $0.url?.lastPathComponent }, ["contents", "a.md"], "The second file is not fetched")
         XCTAssertEqual(model.skills.count, 0, "And nothing of the first account is shown to the other")
+        let kept = try await SkillRepository.shared.skills(as: account)
+        XCTAssertEqual(kept.map(\.title), ["a"], "What was added before stays the first account's")
+    }
+
+    func testAFolderWithMoreFilesThanGitHubListsAddsNothing_andSaysSo() async throws {
+        let place = try XCTUnwrap(GitHubSkillsPlace("github.com/ada/agent-skills"))
+        let most = (1 ... SkillsOnGitHub.mostListed).map { entry(String(format: "n%04d.txt", $0)) }
+        XCTAssertThrowsError(try SkillsOnGitHub.files(listed: listing(most), in: place), "What was listed may not be all of it") {
+            XCTAssertEqual($0 as? SkillsOnGitHub.Failure, .notAllListed)
+        }
+        XCTAssertEqual(try SkillsOnGitHub.files(listed: listing(Array(most.dropLast())), in: place).files.count, 0, "One fewer is all of it")
+
+        let (session, asked) = try gitHub(listing: (200, listing(most + [entry("a.md")])), files: ["a.md": (200, "Be brief.")])
+        let outcome = await SkillsModel(session: session).addFromGitHub("github.com/ada/agent-skills", as: account)
+        XCTAssertEqual(outcome, .notAllListed)
+        XCTAssertEqual(asked.requests.count, 1, "No file is fetched")
+        XCTAssertEqual(
+            SkillsModel.words(for: .notAllListed),
+            "That folder holds more files than GitHub lists at once, so nothing was added. Name a smaller folder."
+        )
+    }
+
+    func testAnAddingCalledOffLeavesTheListAsItIs_andSaysNothing() async throws {
+        let account = account
+        _ = try await SkillRepository.shared.add(title: "Existing", text: "Be kind.", source: nil, as: account)
+        let held = Held()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let listed = try listing([entry("a.md"), entry("b.md")])
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            // The first file's request is held until the test lets it go.
+            if url.lastPathComponent == "a.md" { held.hold() }
+            let body = url.host == SkillsOnGitHub.listingHost ? listed : Data("Be brief.".utf8)
+            return try (XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)), body)
+        }
+        let model = SkillsModel(session: URLSession(configuration: config))
+        await model.load()
+        XCTAssertEqual(model.skills.map(\.title), ["Existing"])
+
+        let adding = Task { await model.addFromGitHub("github.com/ada/agent-skills", as: account) }
+        await held.reached()
+        adding.cancel()
+        held.release()
+        let outcome = await adding.value
+
+        XCTAssertNil(outcome, "Nothing is said of an adding that was called off")
+        XCTAssertFalse(model.loadFailed, "Calling it off is no failure to read the skills")
+        XCTAssertNil(model.announcement)
+        XCTAssertTrue(model.skills.map(\.title).contains("Existing"), "The list is still there")
+        XCTAssertFalse(model.skills.map(\.title).contains("b"), "No more was added")
+    }
+}
+
+/// Holds a server's answer until the test lets it go, and tells when it was reached.
+private final class Held: @unchecked Sendable {
+    private let lock = NSLock()
+    private let gate = DispatchSemaphore(value: 0)
+    private var wasReached = false
+    private var waiting: CheckedContinuation<Void, Never>?
+
+    /// Called by the server, on its own thread.
+    func hold() {
+        let waiting = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            wasReached = true
+            defer { self.waiting = nil }
+            return self.waiting
+        }
+        waiting?.resume()
+        gate.wait()
+    }
+
+    func reached() async {
+        await withCheckedContinuation { continuation in
+            let already = lock.withLock { () -> Bool in
+                if !wasReached { waiting = continuation }
+                return wasReached
+            }
+            if already { continuation.resume() }
+        }
+    }
+
+    func release() {
+        gate.signal()
     }
 }
 

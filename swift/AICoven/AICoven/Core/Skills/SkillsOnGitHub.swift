@@ -77,6 +77,9 @@ nonisolated enum SkillsOnGitHub {
     static let mostFiles = 50
     /// The largest listing read.
     static let largestListing = 2 * 1024 * 1024
+    /// The most entries GitHub lists of one folder: a listing of that
+    /// many may not be all of it.
+    static let mostListed = 1000
 
     /// A Markdown file in the place.
     struct File: Equatable {
@@ -92,6 +95,9 @@ nonisolated enum SkillsOnGitHub {
         /// GitHub did not list it: there is no such public place, it is
         /// not a folder, or GitHub did not answer as expected.
         case notListed
+        /// The folder holds more than GitHub lists of one: what it listed
+        /// may not be all of it, so nothing is taken from it.
+        case notAllListed
     }
 
     /// The Markdown files directly in `place`, by name, `mostFiles` at
@@ -118,6 +124,7 @@ nonisolated enum SkillsOnGitHub {
     /// The files of a listing as GitHub gives one (an array of entries).
     static func files(listed data: Data, in place: GitHubSkillsPlace) throws -> (files: [File], leftOut: Int) {
         guard let entries = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { throw Failure.notListed }
+        guard entries.count < mostListed else { throw Failure.notAllListed }
         let markdown = entries
             .filter { $0["type"] as? String == "file" }
             .compactMap { entry in (entry["name"] as? String).map { (name: $0, entry: entry) } }
