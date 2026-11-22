@@ -718,6 +718,7 @@ struct TurnProgress {
             ("google_docs.", "Using Google Workspace tools to work with your docs and files…"),
             ("google_sheets.", "Using Google Workspace tools to work with your docs and files…"),
             ("google_slides.", "Using Google Workspace tools to work with your docs and files…"),
+            ("asset.", "Looking at the assets kept here…"),
         ]
         return known.first { toolName.hasPrefix($0.prefix) }?.activity ?? "Using tool \(toolName)…"
     }

@@ -43,7 +43,7 @@ nonisolated enum AssetTools {
     }
 
     /// Runs one of the reading tools for a turn in `threadID`.
-    static func read(_ call: ParsedToolCall, threadID: String?, store: Store = .live, now: Date = Date()) async -> ToolExecutionResult {
+    static func read(_ call: ParsedToolCall, threadID: String?, store: Store = .live) async -> ToolExecutionResult {
         guard let threadID else {
             return .error(tool: call.name, message: "Assets are read only in a thread.", errorType: "asset_needs_a_thread")
         }
@@ -56,6 +56,10 @@ nonisolated enum AssetTools {
             assets = try await store.assets(covenID, account)
         } catch is CancellationError {
             return .error(tool: call.name, message: "Stopped before the assets were read.", errorType: "cancelled")
+        } catch is ThreadLookupError {
+            // Not a thread of the signed-in account's (or one that cannot
+            // be read): asking again would not help.
+            return .error(tool: call.name, message: "This thread's assets cannot be read.", errorType: "asset_thread_unreadable")
         } catch {
             // The kind of failure only.
             AppErrorReporter.log(message: "The assets could not be read for a tool (\(type(of: error)))", context: "AssetTools.read")
@@ -64,9 +68,9 @@ nonisolated enum AssetTools {
         guard await store.account() == account else { return accountChanged(call) }
         switch call.name {
         case "asset.search":
-            return search(call, among: assets, threadID: threadID, now: now)
+            return search(call, among: assets, threadID: threadID)
         case "asset.get":
-            return await get(call, among: assets, account: account, store: store, now: now)
+            return await get(call, among: assets, account: account, store: store)
         default:
             return .error(tool: call.name, message: "There is no such asset tool.", errorType: "unknown_tool")
         }
@@ -74,8 +78,9 @@ nonisolated enum AssetTools {
 
     // MARK: - asset.search
 
-    private static func search(_ call: ParsedToolCall, among assets: [Asset], threadID: String, now: Date) -> ToolExecutionResult {
-        let type = text(call.args["type"]).map(AssetType.init(rawValue:))
+    private static func search(_ call: ParsedToolCall, among assets: [Asset], threadID: String) -> ToolExecutionResult {
+        // A type's name is in lower case, as a status's is.
+        let type = text(call.args["type"]).map { AssetType(rawValue: $0.lowercased()) }
         var status: AssetStatus?
         if let named = text(call.args["status"]) {
             guard let known = AssetStatus(rawValue: named.lowercased()) else {
@@ -101,7 +106,7 @@ nonisolated enum AssetTools {
         let told = all.prefix(mostFound)
         var lines = ["[Assets] \(all.count) found.", dataNote]
         lines += told.map { asset in
-            "- " + AttachmentContext.plainName(asset.title) + " (" + facts(of: asset, now: now).joined(separator: "; ") + ")"
+            "- " + AttachmentContext.plainName(asset.title) + " (" + facts(of: asset).joined(separator: "; ") + ")"
         }
         if all.count > told.count {
             lines.append("\(all.count - told.count) more are not listed. Narrow the search to see them.")
@@ -111,7 +116,7 @@ nonisolated enum AssetTools {
 
     /// What is told of an asset beside its title: its id and what is kept
     /// of it as it is, and its files' names.
-    private static func facts(of asset: Asset, now _: Date) -> [String] {
+    private static func facts(of asset: Asset) -> [String] {
         var facts = [
             "asset_id: \(asset.id)",
             "type: \(asset.type.rawValue)",
@@ -129,7 +134,7 @@ nonisolated enum AssetTools {
 
     // MARK: - asset.get
 
-    private static func get(_ call: ParsedToolCall, among assets: [Asset], account: String, store: Store, now: Date) async -> ToolExecutionResult {
+    private static func get(_ call: ParsedToolCall, among assets: [Asset], account: String, store: Store) async -> ToolExecutionResult {
         guard let id = text(call.args["asset_id"]) else {
             return .validationError(tool: call.name, message: "Missing required argument: 'asset_id'", field: "asset_id")
         }
@@ -142,7 +147,7 @@ nonisolated enum AssetTools {
             return .error(tool: call.name, message: "That asset cannot be opened with the account's key.", errorType: "asset_locked")
         }
         var lines = ["[Asset]", dataNote, "title: " + AttachmentContext.plainName(asset.title)]
-        lines += facts(of: asset, now: now).filter { !$0.hasPrefix("files:") }
+        lines += facts(of: asset).filter { !$0.hasPrefix("files:") }
         if !asset.details.isEmpty {
             lines.append("description:")
             lines.append(fenced(asset.details))

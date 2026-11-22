@@ -95,7 +95,7 @@ final class AssetToolsTests: XCTestCase {
     }
 
     private func run(_ call: ParsedToolCall, in threadID: String? = "t-work", _ stand: Stand) async -> ToolExecutionResult {
-        await AssetTools.read(call, threadID: threadID, store: store(stand), now: now)
+        await AssetTools.read(call, threadID: threadID, store: store(stand))
     }
 
     // MARK: - asset.search
@@ -143,6 +143,8 @@ final class AssetToolsTests: XCTestCase {
         XCTAssertEqual(found, ["b"])
         found = await ids(["type": "dataset"])
         XCTAssertEqual(found, ["b"])
+        found = await ids(["type": "Dataset"])
+        XCTAssertEqual(found, ["b"], "A type's name, whatever its case")
         found = await ids(["status": "archived"])
         XCTAssertEqual(found, ["c"])
         found = await ids(["approved_only": true])
@@ -248,7 +250,8 @@ final class AssetToolsTests: XCTestCase {
         var result = await run(call("asset.search"), in: nil, stand)
         XCTAssertEqual(result.errorType, "asset_needs_a_thread")
         result = await run(call("asset.search"), in: "someone-elses-thread", stand)
-        XCTAssertEqual(result.errorType, "asset_store_unavailable")
+        XCTAssertEqual(result.errorType, "asset_thread_unreadable")
+        XCTAssertFalse(result.isRetryable, "Asking again would not help")
         XCTAssertNil(result.contextBlock)
         XCTAssertEqual(stand.asked.count, 0, "No place's assets are read for a thread that is not the account's")
     }
