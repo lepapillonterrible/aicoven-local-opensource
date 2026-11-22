@@ -28,6 +28,22 @@ final class MemoryPagesModel: ObservableObject {
     @Published private(set) var savingIds: Set<String> = []
     /// Entries being forgotten; a second Forget waits for the first.
     @Published private(set) var forgettingIds: Set<String> = []
+    /// The last failure of an action, by where it happened: an entry's id,
+    /// or a section's Add (`addKey`). It is kept here and not by a page,
+    /// so an action begun on a page that has since left the screen says
+    /// what it came to on the page that shows the place now. The next
+    /// action there clears it.
+    @Published private(set) var failures: [String: String] = [:]
+
+    static let couldNotAdd = "Couldn't add that. Try again."
+    static let couldNotSave = "Couldn't save that change. Try again."
+    static let couldNotForget = "Couldn't forget that. Try again."
+
+    /// Where a failed Add to a page of a place is said (`page` is nil for
+    /// About me).
+    static func addKey(_ page: MemoryPage?, in place: MemoryPlace) -> String {
+        "add:\(place):\(page?.rawValue ?? "about-me")"
+    }
 
     static let pageSize = 100
 
@@ -59,6 +75,7 @@ final class MemoryPagesModel: ObservableObject {
             loadFailed = []
             savingIds = []
             forgettingIds = []
+            failures = [:]
         }
         return now
     }
@@ -132,37 +149,78 @@ final class MemoryPagesModel: ObservableObject {
 
     // MARK: - Edits
 
-    /// Adds an entry to a page of a place.
-    func add(_ text: String, on page: MemoryPage?, in place: MemoryPlace) async throws {
-        let asked = currentAccount()
-        let added = try await manager.createMemory(in: place, content: text, tags: page?.tagsForNewEntry, as: asked)
-        guard account == asked else { return }
-        apply(in: place) { $0.append(added) }
+    /// Forgets what was last said to have failed at `key`.
+    func clearFailure(_ key: String) {
+        failures[key] = nil
     }
 
-    /// Saves new text for `memory`. Does nothing while an earlier edit of
-    /// `memory` is on its way.
-    func edit(_ memory: Memory, to text: String, in place: MemoryPlace) async throws {
+    /// Adds an entry to a page of a place. True once it is kept; if it
+    /// could not be, that is said at the page's Add (`failures`), unless
+    /// another account is signed in by then.
+    @discardableResult
+    func add(_ text: String, on page: MemoryPage?, in place: MemoryPlace) async -> Bool {
         let asked = currentAccount()
-        guard savingIds.insert(memory.id).inserted else { return }
+        let key = Self.addKey(page, in: place)
+        failures[key] = nil
+        do {
+            let added = try await manager.createMemory(in: place, content: text, tags: page?.tagsForNewEntry, as: asked)
+            guard account == asked else { return false }
+            apply(in: place) { $0.append(added) }
+        } catch {
+            if account == asked { failures[key] = Self.couldNotAdd }
+            return false
+        }
+        // A place whose entries have not been read (its first read failed,
+        // say) has nothing to add the entry to: it is read now, so that
+        // what was kept is shown.
+        if entriesByPlace[place] == nil {
+            await load(place)
+        }
+        return true
+    }
+
+    /// Saves new text for `memory`. True once it is saved; false, with
+    /// nothing said, while an earlier edit of `memory` is on its way; if
+    /// it could not be saved, that is said at the entry (`failures`).
+    @discardableResult
+    func edit(_ memory: Memory, to text: String, in place: MemoryPlace) async -> Bool {
+        let asked = currentAccount()
+        guard savingIds.insert(memory.id).inserted else { return false }
         defer { if account == asked { savingIds.remove(memory.id) } }
-        let updated = try await manager.updateMemory(memoryId: memory.id, content: text, tags: nil, as: asked)
-        guard account == asked else { return }
-        apply(in: place) { entries in
-            if let index = entries.firstIndex(where: { $0.id == updated.id }) {
-                entries[index] = updated
+        failures[memory.id] = nil
+        do {
+            let updated = try await manager.updateMemory(memoryId: memory.id, content: text, tags: nil, as: asked)
+            guard account == asked else { return false }
+            apply(in: place) { entries in
+                if let index = entries.firstIndex(where: { $0.id == updated.id }) {
+                    entries[index] = updated
+                }
             }
+            return true
+        } catch {
+            if account == asked { failures[memory.id] = Self.couldNotSave }
+            return false
         }
     }
 
-    /// Forgets `memory`. Does nothing while it is already being forgotten.
-    func forget(_ memory: Memory, in place: MemoryPlace) async throws {
+    /// Forgets `memory`. True once it is forgotten; false, with nothing
+    /// said, while it is already being forgotten; if it could not be,
+    /// that is said at the entry (`failures`).
+    @discardableResult
+    func forget(_ memory: Memory, in place: MemoryPlace) async -> Bool {
         let asked = currentAccount()
-        guard forgettingIds.insert(memory.id).inserted else { return }
+        guard forgettingIds.insert(memory.id).inserted else { return false }
         defer { if account == asked { forgettingIds.remove(memory.id) } }
-        try await manager.deleteMemory(memoryId: memory.id, as: asked)
-        guard account == asked else { return }
-        apply(in: place) { $0.removeAll { $0.id == memory.id } }
+        failures[memory.id] = nil
+        do {
+            try await manager.deleteMemory(memoryId: memory.id, as: asked)
+            guard account == asked else { return false }
+            apply(in: place) { $0.removeAll { $0.id == memory.id } }
+            return true
+        } catch {
+            if account == asked { failures[memory.id] = Self.couldNotForget }
+            return false
+        }
     }
 
     /// Applies an edit the store confirmed. Before the first read there is

@@ -136,7 +136,7 @@ final class MemoryPagesModelTests: XCTestCase {
         XCTAssertEqual(model.entries(on: nil, in: work).map(\.id), ["fact", "who", "earlier", "later"])
     }
 
-    func testALoadThatStartedBeforeAnEditDoesNotUndoIt() async throws {
+    func testALoadThatStartedBeforeAnEditDoesNotUndoIt() async {
         let store = FakeMemoryStore()
         let old = entry("m1", "Old")
         store.stored = [old]
@@ -144,16 +144,42 @@ final class MemoryPagesModelTests: XCTestCase {
         await model.load(work)
 
         let held = store.holdNext(.read)
-        let reload = Task { await model.load(work) }
+        let reload = Task { await model.load(self.work) }
         await held.reached()
-        try await model.edit(old, to: "New", in: work)
+        let saved = await model.edit(old, to: "New", in: work)
+        XCTAssertTrue(saved)
         held.release()
         await reload.value
 
         XCTAssertEqual(model.entries(in: work)?.map(\.content), ["New"])
     }
 
-    func testAnEditWhileAnEarlierOneIsOnItsWayIsIgnored() async throws {
+    func testTwoReadsOfAPlaceAtOnceAreOneRead() async {
+        let store = FakeMemoryStore()
+        store.stored = [entry("m1")]
+        let model = MemoryPagesModel(manager: store, signedIn: { "ada" })
+
+        let held = store.holdNext(.read)
+        let first = Task { await model.load(self.work) }
+        await held.reached()
+        let second = Task { await model.load(self.work) }
+        // The second has asked by the time the first is let go: it was
+        // queued on the main actor before this, and runs up to its wait.
+        for _ in 0 ..< 3 {
+            await Task.yield()
+        }
+        held.release()
+        await first.value
+        await second.value
+
+        XCTAssertEqual(store.offsets, [0], "The second shared the read under way")
+        XCTAssertEqual(model.entries(in: work)?.map(\.id), ["m1"])
+        // A read asked for once that one has landed is a read of its own.
+        await model.load(work)
+        XCTAssertEqual(store.offsets, [0, 0])
+    }
+
+    func testAnEditWhileAnEarlierOneIsOnItsWayIsIgnored() async {
         let store = FakeMemoryStore()
         let old = entry("m1", "Old")
         store.stored = [old]
@@ -161,39 +187,72 @@ final class MemoryPagesModelTests: XCTestCase {
         await model.load(work)
 
         let held = store.holdNext(.update)
-        let first = Task { try await model.edit(old, to: "First", in: self.work) }
+        let first = Task { await model.edit(old, to: "First", in: self.work) }
         await held.reached()
         XCTAssertTrue(model.savingIds.contains("m1"))
-        try await model.edit(old, to: "Second", in: work)
+        let second = await model.edit(old, to: "Second", in: work)
+        XCTAssertFalse(second)
+        XCTAssertNil(model.failures["m1"], "Nothing is said of a press that did nothing")
         held.release()
-        try await first.value
+        let saved = await first.value
+        XCTAssertTrue(saved)
 
         XCTAssertEqual(store.updates, ["First"])
         XCTAssertEqual(model.entries(in: work)?.map(\.content), ["First"])
         XCTAssertTrue(model.savingIds.isEmpty)
     }
 
-    func testAnEditThatFails_leavesTheEntryAsItWas_andCanBeTriedAgain() async throws {
+    func testAnActionThatFails_leavesThePageAsItWas_saysSoWhereItHappened_andCanBeTriedAgain() async {
         let store = FakeMemoryStore()
         let old = entry("m1", "Old")
         store.stored = [old]
         let model = MemoryPagesModel(manager: store, signedIn: { "ada" })
         await model.load(work)
+        let addKey = MemoryPagesModel.addKey(.facts, in: work)
 
         store.failsWrites = true
-        do {
-            try await model.edit(old, to: "New", in: work)
-            XCTFail("Reported a change that was not made")
-        } catch {}
+        let saved = await model.edit(old, to: "New", in: work)
+        XCTAssertFalse(saved)
+        XCTAssertEqual(model.failures["m1"], "Couldn't save that change. Try again.")
+        let forgotten = await model.forget(old, in: work)
+        XCTAssertFalse(forgotten)
+        XCTAssertEqual(model.failures["m1"], "Couldn't forget that. Try again.")
+        let added = await model.add("Another", on: .facts, in: work)
+        XCTAssertFalse(added)
+        XCTAssertEqual(model.failures[addKey], "Couldn't add that. Try again.")
         XCTAssertEqual(model.entries(in: work)?.map(\.content), ["Old"])
         XCTAssertTrue(model.savingIds.isEmpty)
+        XCTAssertTrue(model.forgettingIds.isEmpty)
+        // An Add to another section, or the same section of another place, has failed nowhere.
+        XCTAssertNil(model.failures[MemoryPagesModel.addKey(.people, in: work)])
+        XCTAssertNil(model.failures[MemoryPagesModel.addKey(.facts, in: .strix)])
 
+        // The next action there takes what was said away, and so does closing the row.
         store.failsWrites = false
-        try await model.edit(old, to: "New", in: work)
+        let savedThen = await model.edit(old, to: "New", in: work)
+        XCTAssertTrue(savedThen)
+        XCTAssertNil(model.failures["m1"])
         XCTAssertEqual(model.entries(in: work)?.map(\.content), ["New"])
+        model.clearFailure(addKey)
+        XCTAssertNil(model.failures[addKey])
     }
 
-    func testAForgetWhileTheSameOneIsOnItsWayIsIgnored() async throws {
+    func testAnEntryAddedToAPlaceThatWasNotRead_isShown() async {
+        let store = FakeMemoryStore()
+        store.failsReads = true
+        let model = MemoryPagesModel(manager: store, signedIn: { "ada" })
+        await model.load(.aboutMe)
+        XCTAssertTrue(model.didLoadFail(in: .aboutMe))
+
+        // The page offers Add under a section that could not be read; what is added there is kept.
+        store.failsReads = false
+        let added = await model.add("Lives in Lisbon", on: nil, in: .aboutMe)
+        XCTAssertTrue(added)
+        XCTAssertEqual(model.entries(in: .aboutMe)?.map(\.content), ["Lives in Lisbon"], "Shown, not only kept")
+        XCTAssertFalse(model.didLoadFail(in: .aboutMe))
+    }
+
+    func testAForgetWhileTheSameOneIsOnItsWayIsIgnored() async {
         let store = FakeMemoryStore()
         let gone = entry("m1")
         store.stored = [gone]
@@ -201,25 +260,27 @@ final class MemoryPagesModelTests: XCTestCase {
         await model.load(work)
 
         let held = store.holdNext(.delete)
-        let first = Task { try await model.forget(gone, in: self.work) }
+        let first = Task { await model.forget(gone, in: self.work) }
         await held.reached()
-        try await model.forget(gone, in: work)
+        let second = await model.forget(gone, in: work)
+        XCTAssertFalse(second)
         held.release()
-        try await first.value
+        let forgotten = await first.value
+        XCTAssertTrue(forgotten)
 
         XCTAssertEqual(store.deletes, ["m1"])
         XCTAssertEqual(model.entries(in: work)?.isEmpty, true)
         XCTAssertTrue(model.forgettingIds.isEmpty)
     }
 
-    func testAddPutsTheEntryOnItsPage_inItsPlace() async throws {
+    func testAddPutsTheEntryOnItsPage_inItsPlace() async {
         let store = FakeMemoryStore()
         let model = MemoryPagesModel(manager: store, signedIn: { "ada" })
         await model.load(work)
         await model.load(.aboutMe)
 
-        try await model.add("Send options as PDFs", on: .howWeWork, in: work)
-        try await model.add("Lives in Lisbon", on: nil, in: .aboutMe)
+        await model.add("Send options as PDFs", on: .howWeWork, in: work)
+        await model.add("Lives in Lisbon", on: nil, in: .aboutMe)
 
         XCTAssertEqual(model.entries(on: .howWeWork, in: work).map(\.content), ["Send options as PDFs"])
         XCTAssertEqual(model.entries(on: nil, in: .aboutMe).map(\.content), ["Lives in Lisbon"])
@@ -254,14 +315,31 @@ final class MemoryPagesModelTests: XCTestCase {
         await model.load(work)
         let old = try XCTUnwrap(model.entries(in: work)?.first)
         let update = store.holdNext(.update)
-        let edit = Task { try await model.edit(old, to: "Edited", in: self.work) }
+        let edit = Task { await model.edit(old, to: "Edited", in: self.work) }
         await update.reached()
         signedIn = "grace"
         await model.load(work)
         update.release()
-        try await edit.value
+        let saved = await edit.value
+        XCTAssertFalse(saved, "Nothing of it is Grace's to be told")
         XCTAssertEqual(model.entries(in: work)?.map(\.content), ["Grace's"])
         XCTAssertTrue(model.savingIds.isEmpty)
+
+        // Nor is a failure of something Ada began said to Grace.
+        signedIn = "ada"
+        await model.load(work)
+        let adasEntry = try XCTUnwrap(model.entries(in: work)?.first)
+        let failing = store.holdNext(.delete)
+        let forget = Task { await model.forget(adasEntry, in: self.work) }
+        await failing.reached()
+        signedIn = "grace"
+        await model.load(work)
+        store.failsNextHeld = true
+        failing.release()
+        let forgotten = await forget.value
+        XCTAssertFalse(forgotten)
+        XCTAssertTrue(model.failures.isEmpty)
+        XCTAssertTrue(model.forgettingIds.isEmpty)
     }
 }
 
@@ -302,6 +380,8 @@ private final class FakeMemoryStore: MemoryPagesManaging {
     var ignoresOffset = false
     var failsReads = false
     var failsWrites = false
+    /// The step held now fails once it is let go.
+    var failsNextHeld = false
     var insertBeforeSecondPage: Memory?
     private(set) var offsets: [Int] = []
     private(set) var askedAs: [String?] = []
@@ -365,6 +445,10 @@ private final class FakeMemoryStore: MemoryPagesManaging {
         if failsWrites { throw RepositoryError.databaseUnavailable }
         deletes.append(memoryId)
         await pass(.delete)
+        if failsNextHeld {
+            failsNextHeld = false
+            throw RepositoryError.databaseUnavailable
+        }
         stored.removeAll { $0.id == memoryId }
     }
 }

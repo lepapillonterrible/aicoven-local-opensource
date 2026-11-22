@@ -37,10 +37,9 @@ struct MemoryPagesView: View {
     @State private var addingTo: MemorySection?
     @State private var newEntry = ""
     @State private var isAdding = false
-    /// The last failure of an action, by where it happened: an entry's id, or
-    /// `addKey` for a section's Add. Each shows in its own row, and the next
-    /// action there clears it.
-    @State private var failures: [String: String] = [:]
+    /// False once the page has left the screen: what an action of its own
+    /// then comes to is said by the page that shows the place, not by it.
+    @State private var isOnScreen = false
 
     /// A section of the page; `page` is `nil` for About me.
     private struct MemorySection: Hashable {
@@ -109,6 +108,8 @@ struct MemoryPagesView: View {
                 withAnimation { proxy.scrollTo(addKey(section), anchor: .center) }
             }
         }
+        .onAppear { isOnScreen = true }
+        .onDisappear { isOnScreen = false }
         .task(id: scope) {
             async let aboutMe: Void = loadAboutMe()
             await model.load(pagesPlace)
@@ -273,7 +274,7 @@ struct MemoryPagesView: View {
     }
 
     private func failureLine(_ key: String) -> some View {
-        Text(failures[key] ?? "")
+        Text(model.failures[key] ?? "")
             .font(.aicovenBodySmall)
             .foregroundStyle(Color.aicovenError)
             .fixedSize(horizontal: false, vertical: true)
@@ -309,7 +310,7 @@ struct MemoryPagesView: View {
                 if isConfirming {
                     forgetQuestion(entry, in: place)
                 }
-                if failures[entry.id] != nil {
+                if model.failures[entry.id] != nil {
                     failureLine(entry.id)
                 }
             }
@@ -471,7 +472,7 @@ struct MemoryPagesView: View {
                         .controlSize(.small)
                 }
             }
-            if failures[entry.id] != nil {
+            if model.failures[entry.id] != nil {
                 failureLine(entry.id)
             }
         }
@@ -545,8 +546,10 @@ struct MemoryPagesView: View {
 
     // MARK: Add
 
+    /// Where a section's Add is found: its field's place in the list, and
+    /// where its failure is said.
     private func addKey(_ section: MemorySection) -> String {
-        "add:\(section.title)"
+        MemoryPagesModel.addKey(section.page, in: place(of: section))
     }
 
     /// Add, at the trailing end of the section's heading (under it at
@@ -598,7 +601,7 @@ struct MemoryPagesView: View {
                         .controlSize(.small)
                 }
             }
-            if failures[addKey(section)] != nil {
+            if model.failures[addKey(section)] != nil {
                 failureLine(addKey(section))
             }
         }
@@ -626,13 +629,13 @@ struct MemoryPagesView: View {
     private func startAdding(_ section: MemorySection) {
         guard !draftHeld else { return }
         closeOpenRows()
-        failures[addKey(section)] = nil
+        model.clearFailure(addKey(section))
         newEntry = ""
         addingTo = section
     }
 
     private func stopAdding() {
-        if let addingTo { failures[addKey(addingTo)] = nil }
+        if let addingTo { model.clearFailure(addKey(addingTo)) }
         addingTo = nil
         newEntry = ""
     }
@@ -641,15 +644,13 @@ struct MemoryPagesView: View {
         let text = trimmed(newEntry)
         guard !text.isEmpty, !isAdding else { return }
         isAdding = true
-        failures[addKey(section)] = nil
         let place = place(of: section)
         Task {
-            do {
-                try await model.add(text, on: section.page, in: place)
+            if await model.add(text, on: section.page, in: place) {
                 if addingTo == section { stopAdding() }
-                AccessibilityNotification.Announcement("Added to \(section.title)").post()
-            } catch {
-                fail(addKey(section), "Couldn't add that. Try again.")
+                announce("Added to \(section.title)")
+            } else {
+                announce(model.failures[addKey(section)])
             }
             isAdding = false
         }
@@ -661,7 +662,7 @@ struct MemoryPagesView: View {
         editDraft = entry.content
         editOriginal = entry.content
         editingId = entry.id
-        failures[entry.id] = nil
+        model.clearFailure(entry.id)
     }
 
     private func save(_ entry: Memory, in place: MemoryPlace) {
@@ -671,21 +672,19 @@ struct MemoryPagesView: View {
             stopEditing(restoringFocus: true)
             return
         }
-        failures[entry.id] = nil
         Task {
-            do {
-                try await model.edit(entry, to: text, in: place)
+            if await model.edit(entry, to: text, in: place) {
                 if editingId == entry.id { stopEditing(restoringFocus: true) }
-                AccessibilityNotification.Announcement("Saved").post()
-            } catch {
-                fail(entry.id, "Couldn't save that change. Try again.")
+                announce("Saved")
+            } else {
+                announce(model.failures[entry.id])
             }
         }
     }
 
     private func stopEditing(restoringFocus: Bool = false) {
         if restoringFocus, let editingId { focusedRow = editingId }
-        if let editingId { failures[editingId] = nil }
+        if let editingId { model.clearFailure(editingId) }
         editingId = nil
         editDraft = ""
         editOriginal = nil
@@ -694,19 +693,18 @@ struct MemoryPagesView: View {
     private func askToForget(_ entry: Memory) {
         guard !isLocked(entry) else { return }
         closeOpenRows()
-        failures[entry.id] = nil
+        model.clearFailure(entry.id)
         confirmingIds.insert(entry.id)
     }
 
     private func cancelForget(_ entry: Memory) {
         guard !model.forgettingIds.contains(entry.id) else { return }
-        failures[entry.id] = nil
+        model.clearFailure(entry.id)
         confirmingIds.remove(entry.id)
         focusedRow = entry.id
     }
 
     private func forget(_ entry: Memory, in place: MemoryPlace) {
-        failures[entry.id] = nil
         // Focus goes to the next row in the section, or its heading.
         let section = sections.first { section in
             model.entries(on: section.page, in: self.place(of: section)).contains { $0.id == entry.id }
@@ -717,28 +715,30 @@ struct MemoryPagesView: View {
             return ids[index + 1]
         }
         Task {
-            do {
-                try await model.forget(entry, in: place)
-                confirmingIds.remove(entry.id)
-                forgetFocus = nil
-                // Focus moves on only if the person isn't in a field by now.
-                if editingId == nil, addingTo == nil {
-                    if let following {
-                        focusedRow = following
-                    } else {
-                        headingFocus = section
-                    }
-                }
-                AccessibilityNotification.Announcement("Forgot it").post()
-            } catch {
-                fail(entry.id, "Couldn't forget that. Try again.")
+            guard await model.forget(entry, in: place) else {
+                announce(model.failures[entry.id])
+                return
             }
+            confirmingIds.remove(entry.id)
+            forgetFocus = nil
+            // Focus moves on only if the person isn't in a field by now.
+            if editingId == nil, addingTo == nil {
+                if let following {
+                    focusedRow = following
+                } else {
+                    headingFocus = section
+                }
+            }
+            announce("Forgot it")
         }
     }
 
-    /// Shows `message` where the action happened, and announces it.
-    private func fail(_ key: String, _ message: String) {
-        failures[key] = message
+    /// Says to VoiceOver what an action of this page came to, while the
+    /// page is still on screen: once it has left, the page that shows the
+    /// place says it in its row, and nothing is said over wherever the
+    /// person has gone.
+    private func announce(_ message: String?) {
+        guard isOnScreen, let message else { return }
         AccessibilityNotification.Announcement(message).post()
     }
 }
