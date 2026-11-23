@@ -202,7 +202,7 @@ actor TaskRepository {
         // A change that names nothing writes nothing.
         guard change != TaskChange() else { return }
         let newTitle = sealed
-        let moment = now()
+        let now = now
         await at?(.beforeWriting)
         // How it stood before, as it is stored, to put it back by, and
         // which writing of it this one is.
@@ -210,6 +210,9 @@ actor TaskRepository {
             guard let stored = try Row.fetchOne(db, sql: "SELECT * FROM tasks WHERE id = ? AND user_id = ?", arguments: [id, account]) else {
                 throw TaskError.noSuchTask
             }
+            // The time of the write itself: a pin that ran out while the
+            // change waited its turn is not kept.
+            let moment = now()
             let wasOpen = (stored["status"] as String) == TaskStatus.open.rawValue
             let isOpen = change.status.map { $0 == .open } ?? wasOpen
             if isOpen, !wasOpen {
@@ -315,14 +318,17 @@ actor TaskRepository {
                 let columns = "id, coven_id, title_ciphertext, status, stage, due_date, due_time, pin_period, pin_expires_at, created_at, updated_at"
                 let open = try Row.fetchAll(
                     db,
-                    sql: "SELECT \(columns) FROM tasks WHERE user_id = ? AND coven_id = ? AND status = ? ORDER BY updated_at DESC, rowid DESC",
+                    sql: """
+                    SELECT \(columns) FROM tasks WHERE user_id = ? AND coven_id = ? AND status = ?
+                    ORDER BY updated_at DESC, created_at DESC, rowid DESC
+                    """,
                     arguments: [account, coven, TaskStatus.open.rawValue]
                 )
                 let done = try Row.fetchAll(
                     db,
                     sql: """
                     SELECT \(columns) FROM tasks WHERE user_id = ? AND coven_id = ? AND status <> ?
-                    ORDER BY updated_at DESC, rowid DESC LIMIT ?
+                    ORDER BY updated_at DESC, created_at DESC, rowid DESC LIMIT ?
                     """,
                     arguments: [account, coven, TaskStatus.open.rawValue, Self.mostFinishedListed]
                 )

@@ -152,11 +152,38 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(listing.tasks.first?.stage, .inProgress)
         _ = second
 
-        // Of two changed in the same moment, the one made later comes first.
+        // Of two changed in the same moment, the one made later comes first,
+        // whichever was written first.
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
-        try await queue.write { db in try db.execute(sql: "UPDATE tasks SET updated_at = ?", arguments: [Date(timeIntervalSince1970: 0)]) }
+        try await queue.write { db in
+            try db.execute(sql: "UPDATE tasks SET updated_at = ?", arguments: [Date(timeIntervalSince1970: 0)])
+            try db.execute(sql: "UPDATE tasks SET created_at = ? WHERE id = ?", arguments: [Date(timeIntervalSince1970: 2_000_000_000), first.id])
+            try db.execute(sql: "UPDATE tasks SET created_at = ? WHERE id = ?", arguments: [Date(timeIntervalSince1970: 2_000_000_000), third.id])
+        }
         listing = try await store.tasks(inCoven: nil, as: account)
-        XCTAssertEqual(listing.tasks.map(\.title), ["Second", "First", "Fourth", "Third"])
+        XCTAssertEqual(listing.tasks.map(\.title), ["First", "Second", "Third", "Fourth"])
+    }
+
+    func testAPinThatRanOutWhileItsChangeWaitedIsNotKept() async throws {
+        // The clock is asked in the write itself: here it has moved on past the pin's end by then.
+        let clock = Clock()
+        let made = try await store.create(title: "Call the bank", inCoven: nil, as: account)
+        let gate = Gate()
+        let store = TaskRepository(at: { step in if step == .beforeWriting { await gate.wait() } }, now: { clock.next() })
+        let ends = clock.next().addingTimeInterval(2)
+        let account = account
+        let pinning = Task { try await store.change(made.id, TaskChange(pin: .to(TaskPin(period: .today, expiresAt: ends))), as: account) }
+        await gate.heard(arrivals: 1)
+        for _ in 0 ..< 5 {
+            _ = clock.next()
+        }
+        await gate.letThrough()
+        do {
+            try await pinning.value
+            XCTFail("A pin ends at a time still to come when it is written")
+        } catch TaskError.pinEnded {}
+        let raw = try await stored(made.id)
+        XCTAssertEqual(Array(raw[5 ... 6]), ["NULL", "NULL"])
     }
 
     func testAListingGivesEveryOpenTask_andOnlyTheFinishedOnesLastChanged_withHowManyThereAre() async throws {
@@ -241,6 +268,9 @@ final class TaskStoreTests: XCTestCase {
                 + "VALUES ('t-y', ' ', '', x'01', 'open', 'backlog', '2026-01-01', '2026-01-01')",
             "UPDATE tasks SET user_id = 'someone-else' WHERE id = '\(made.id)'",
             "UPDATE tasks SET coven_id = 'no-such-coven' WHERE id = '\(made.id)'",
+            // Nor does the coven leave its tasks behind by changing hands, or its id.
+            "UPDATE covens SET user_id = 'someone-else' WHERE id = '\(coven)'",
+            "UPDATE covens SET id = 'another-id' WHERE id = '\(coven)'",
         ] {
             do {
                 try await queue.write { db in try db.execute(sql: sql) }

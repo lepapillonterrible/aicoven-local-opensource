@@ -636,7 +636,10 @@ final class DatabaseManager {
                     t.column("created_at", .datetime).notNull()
                     t.column("updated_at", .datetime).notNull()
                 }
-                try db.create(index: "tasks_user_coven_status", on: "tasks", columns: ["user_id", "coven_id", "status"])
+                // A place's tasks in the order they are listed, with what
+                // tells the open ones from the finished: a listing of the
+                // finished ones last changed reads no further than it gives.
+                try db.create(index: "tasks_user_coven_changed", on: "tasks", columns: ["user_id", "coven_id", "updated_at", "status"])
                 for (event, name) in [("INSERT", "insert"), ("UPDATE OF user_id, coven_id", "update")] {
                     try db.execute(sql: """
                     CREATE TRIGGER tasks_match_coven_user_\(name)
@@ -655,6 +658,19 @@ final class DatabaseManager {
                 AFTER DELETE ON covens
                 BEGIN
                     DELETE FROM tasks WHERE user_id = OLD.user_id AND coven_id = OLD.id;
+                END;
+                """)
+                // A coven that holds tasks keeps its id and its account,
+                // whoever writes: its tasks are bound to both, and would
+                // otherwise be left in a coven of another account's, and
+                // behind when it is deleted.
+                try db.execute(sql: """
+                CREATE TRIGGER covens_with_tasks_keep_their_account
+                BEFORE UPDATE OF id, user_id ON covens
+                WHEN (NEW.id IS NOT OLD.id OR NEW.user_id IS NOT OLD.user_id)
+                    AND EXISTS (SELECT 1 FROM tasks WHERE tasks.coven_id = OLD.id AND tasks.user_id = OLD.user_id)
+                BEGIN
+                    SELECT RAISE(ABORT, 'a coven that holds tasks keeps its id and its account');
                 END;
                 """)
             }
