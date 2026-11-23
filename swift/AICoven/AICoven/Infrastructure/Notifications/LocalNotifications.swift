@@ -336,9 +336,13 @@ final class LocalNotifications: ObservableObject {
     /// over (whoever holds them reads again and hands them over anew).
     func setReminders(_ due: [TaskReminderDue], as account: String) async {
         guard signedIn() == account else { return }
+        // As the account and its choices stand now, from before the first
+        // wait: a change during any of them ends this handing over (the
+        // same account signing out and in again is one).
+        let choices = choicesMade
         await refreshPermission()
         let held = await Set(center.listed().compactMap(Self.taskID(ofNotification:)))
-        guard signedIn() == account else { return }
+        guard signedIn() == account, choicesMade == choices else { return }
         let shows = isOn(for: account) && permission == .allowed
         let moment = now()
         let toCome = shows ? Array(due.filter { $0.remindAt > moment }.sorted { $0.remindAt < $1.remindAt }.prefix(Self.mostReminders)) : []
@@ -346,7 +350,6 @@ final class LocalNotifications: ObservableObject {
         let stays = Set(toCome.map(\.taskID)).union(reminded)
         center.withdraw(held.subtracting(stays).sorted().map(Self.id(forTask:)))
         let details = showsDetails(for: account)
-        let choices = choicesMade
         for reminder in toCome {
             // Asked again before each: the system's answer can take a while.
             guard signedIn() == account, choicesMade == choices else { break }

@@ -86,10 +86,13 @@ final class TaskReminders {
         let account = signedIn()
         guard !account.isEmpty else { return }
         do {
-            // A title is opened only to be shown. (A change of the choice
-            // while they are read asks for another reading.)
-            let due = try await hands.reminders(hands.showsDetails(account), account)
-            guard signedIn() == account else { return }
+            // A title is opened only to be shown.
+            let withTitles = hands.showsDetails(account)
+            let due = try await hands.reminders(withTitles, account)
+            // A reading made for the other choice of details is not
+            // handed over (one read without titles would be shown without
+            // them): the change has asked for another reading.
+            guard signedIn() == account, hands.showsDetails(account) == withTitles else { return }
             await hands.hold(due, account)
         } catch {
             // Locked, or another account's by now: nothing is said of it.

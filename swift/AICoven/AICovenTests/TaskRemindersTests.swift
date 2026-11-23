@@ -134,6 +134,26 @@ final class TaskRemindersTests: XCTestCase {
         XCTAssertEqual(stand.held.count, 0)
     }
 
+    func testAReadingMadeForTheOtherChoiceOfDetailsIsNotHandedOver() async {
+        let stand = Stand()
+        stand.kept = [due]
+        let gate = Gate()
+        stand.readingWaits = gate
+        let reminders = reminders(stand)
+        // Read without titles; details are turned on while it is read.
+        let reading = reminders.refresh()
+        await gate.arrived()
+        stand.showsDetails = true
+        await gate.open()
+        await reading.value
+        XCTAssertEqual(stand.askedForTitles, [false])
+        XCTAssertEqual(stand.held.count, 0, "It would be shown without the titles the account now asks for")
+        // The change asks for another reading, which is handed over.
+        await reminders.refresh().value
+        XCTAssertEqual(stand.askedForTitles, [false, true])
+        XCTAssertEqual(stand.held.count, 1)
+    }
+
     func testSettingAReminderAsksTheSystemOnlyWhereItWasNeverAsked() async {
         let stand = Stand()
         stand.kept = [due]

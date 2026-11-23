@@ -705,6 +705,27 @@ final class LocalNotificationsTests: XCTestCase {
         await handing.value
         XCTAssertEqual(system.scheduled.map(\.notification.body), ["Renew the lease"], "The one in hand, composed before the change")
         XCTAssertEqual(system.held, [], "Taken back; none is handed over as things stood")
+        // Signed out and in again while this device's answer is read, before anything is handed over:
+        // everything was taken back, and this handing over is over (its reminders were read before).
+        var signedInAccount = "ada"
+        let returning = notifications(system, signedIn: { signedInAccount }, now: { self.noon })
+        returning.accountReported("ada")
+        system.scheduled = []
+        system.schedulingWaits = nil
+        let reading = Gate()
+        system.readingWaits = reading
+        let early = Task { await returning.setReminders([self.reminder("a", in: 60)], as: "ada") }
+        await reading.arrived()
+        signedInAccount = ""
+        returning.accountReported(nil)
+        signedInAccount = "ada"
+        returning.accountReported("ada")
+        await reading.open()
+        await early.value
+        XCTAssertEqual(system.scheduled.count, 0)
+        XCTAssertEqual(system.held, [])
+        system.readingWaits = nil
+
         // Handed over anew, as whoever holds the reminders does on the change: none names its task.
         system.schedulingWaits = nil
         await made.setReminders([reminder("a", in: 60), reminder("b", in: 120)], as: "ada")
