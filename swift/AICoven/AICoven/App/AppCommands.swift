@@ -34,6 +34,19 @@ struct ThreadCommandActions {
     let copyMarkdown: (() -> Void)?
 }
 
+/// The order of the Tasks in the front window, for the Tasks menu's Sort.
+struct TaskSortActions {
+    let selected: TaskSort
+    let select: (TaskSort) -> Void
+}
+
+/// What the task whose details are open in the front window can be
+/// offered, and the doing of it.
+struct TaskCommandActions {
+    let offered: [TaskCommand]
+    let perform: (TaskCommand) -> Void
+}
+
 /// What the menus decide, apart from how they are drawn.
 nonisolated enum ShellCommandRules {
     /// A place of the scope on screen, and the digit that opens it with ⌥⌘.
@@ -103,6 +116,14 @@ private struct StopTurnKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+private struct TaskSortActionsKey: FocusedValueKey {
+    typealias Value = TaskSortActions
+}
+
+private struct TaskCommandActionsKey: FocusedValueKey {
+    typealias Value = TaskCommandActions
+}
+
 extension FocusedValues {
     /// The front window's shell.
     var shellCommands: ShellCommandActions? {
@@ -116,6 +137,18 @@ extension FocusedValues {
         set { self[ThreadCommandActionsKey.self] = newValue }
     }
 
+    /// The front window's Tasks, where it is on screen.
+    var taskSort: TaskSortActions? {
+        get { self[TaskSortActionsKey.self] }
+        set { self[TaskSortActionsKey.self] = newValue }
+    }
+
+    /// The task whose details are open in the front window.
+    var taskCommands: TaskCommandActions? {
+        get { self[TaskCommandActionsKey.self] }
+        set { self[TaskCommandActionsKey.self] = newValue }
+    }
+
     /// Stops the turn running in the front window's thread; nil when
     /// there is none to stop.
     var stopTurn: (() -> Void)? {
@@ -125,7 +158,7 @@ extension FocusedValues {
 }
 
 /// The menus for the shell, as the cloud app's: New Thread, New Task and
-/// New Coven under File, a Go menu and a Thread menu. An item with nothing
+/// New Coven under File, a Go menu, a Thread menu and a Tasks menu. An item with nothing
 /// to act on in the front window is disabled, not hidden. The iPad's menu
 /// bar, and a keyboard on an iPad or iPhone, have them without the Mac's
 /// own (New Task, New Coven…, the scope's places, Rename… and Delete…), as
@@ -134,6 +167,8 @@ struct ShellCommands: Commands {
     @FocusedValue(\.shellCommands) private var shell
     @FocusedValue(\.threadCommands) private var thread
     @FocusedValue(\.stopTurn) private var stopTurn
+    @FocusedValue(\.taskSort) private var taskSort
+    @FocusedValue(\.taskCommands) private var taskCommands
 
     private var isMac: Bool {
         PlatformCapabilities.current.platform == .macOS
@@ -201,6 +236,44 @@ struct ShellCommands: Commands {
             Button("Stop") { stopTurn?() }
                 .keyboardShortcut(".")
                 .disabled(stopTurn == nil)
+        }
+        tasksMenu
+    }
+
+    /// The Tasks menu, as the cloud app's with what this app has: on the
+    /// Mac New Task, then Sort for the Tasks in front and what the task
+    /// whose details are open can be offered (the Mac's Tasks tells the
+    /// menu bar of both; elsewhere Sort is in the page's bar).
+    @CommandsBuilder
+    private var tasksMenu: some Commands {
+        CommandMenu("Tasks") {
+            if isMac {
+                Button("New Task") { shell?.newTask() }
+                    .disabled(shell == nil)
+                Divider()
+            }
+            // `.disabled` does not dim a Picker's title in the menu bar: with
+            // no Tasks in front the item is a plain disabled button.
+            if let taskSort {
+                Picker("Sort", selection: Binding(get: { taskSort.selected }, set: taskSort.select)) {
+                    ForEach(TaskSort.allCases) { Text($0.title).tag($0) }
+                }
+            } else {
+                Button("Sort") {}
+                    .disabled(true)
+            }
+            if let taskCommands, !taskCommands.offered.isEmpty {
+                Divider()
+                ForEach(taskCommands.offered) { command in
+                    if command == .pinToday {
+                        // Not Shift-Command-P: macOS keeps that for Page Setup.
+                        Button(command.title) { taskCommands.perform(command) }
+                            .keyboardShortcut("p", modifiers: [.command, .control])
+                    } else {
+                        Button(command.title) { taskCommands.perform(command) }
+                    }
+                }
+            }
         }
     }
 

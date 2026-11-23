@@ -201,6 +201,30 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(finished.count, TaskRepository.mostFinishedListed)
         XCTAssertEqual(finished.first?.id, latest.id, "The ones last changed")
         XCTAssertEqual(listing.tasks.prefix(4).map(\.isFinished), [false, false, false, false])
+
+        // A finished task that is not among them is listed too where it is asked for by name
+        // (its details are on screen), after the others; one that is listed already is listed once.
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        let account = account
+        let unlisted = try await queue.read { db in
+            try String.fetchOne(
+                db, sql: "SELECT id FROM tasks WHERE user_id = ? AND status = 'done' AND id NOT IN (\(finished.map { "'\($0.id)'" }.joined(separator: ",")))",
+                arguments: [account]
+            )
+        }
+        let named = try XCTUnwrap(unlisted)
+        let withIt = try await store.tasks(inCoven: nil, alsoListing: named, as: account)
+        XCTAssertEqual(withIt.tasks.filter(\.isFinished).count, TaskRepository.mostFinishedListed + 1)
+        XCTAssertEqual(withIt.tasks.last?.id, named)
+        XCTAssertEqual(withIt.finished, listing.finished)
+        let already = try await store.tasks(inCoven: nil, alsoListing: latest.id, as: account)
+        XCTAssertEqual(already.tasks.map(\.id), listing.tasks.map(\.id))
+        // Not one of another place, nor one that is not there.
+        let coven = try await newCoven()
+        let elsewhere = try await store.tasks(inCoven: coven, alsoListing: named, as: account)
+        XCTAssertEqual(elsewhere.tasks.count, 0)
+        let none = try await store.tasks(inCoven: nil, alsoListing: "no-such-task", as: account)
+        XCTAssertEqual(none.tasks.count, listing.tasks.count)
     }
 
     func testNothingATaskSaysIsKeptInTheClear() async throws {

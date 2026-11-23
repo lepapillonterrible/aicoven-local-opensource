@@ -9,7 +9,9 @@ import SwiftUI
 final class TasksModel: ObservableObject {
     /// The store's side, which a test replaces.
     struct Source {
-        var tasks: @Sendable (_ covenID: String?, _ account: String) async throws -> TaskListing
+        /// The place's listing, which also lists the task named (the one
+        /// whose details are on screen) where it would be left out.
+        var tasks: @Sendable (_ covenID: String?, _ alsoListing: String?, _ account: String) async throws -> TaskListing
         var create: @Sendable (_ title: String, _ covenID: String?, _ account: String) async throws -> TaskItem
         var change: @Sendable (_ id: String, _ change: TaskChange, _ account: String) async throws -> Void
         /// Keeps for today (until the time given) or clears the pins of
@@ -17,7 +19,7 @@ final class TasksModel: ObservableObject {
         var answerLapsedPins: @Sendable (_ ids: [String], _ keepUntil: Date?, _ account: String) async throws -> Set<String>
 
         static let live = Source(
-            tasks: { try await TaskRepository.shared.tasks(inCoven: $0, as: $1) },
+            tasks: { try await TaskRepository.shared.tasks(inCoven: $0, alsoListing: $1, as: $2) },
             create: { try await TaskRepository.shared.create(title: $0, inCoven: $1, as: $2) },
             change: { try await TaskRepository.shared.change($0, $1, as: $2) },
             answerLapsedPins: { try await TaskRepository.shared.answerLapsedPins(of: $0, keepUntil: $1, as: $2) }
@@ -34,6 +36,10 @@ final class TasksModel: ObservableObject {
     @Published private(set) var hasRead = false
     /// What went wrong with the last thing asked, in words.
     @Published private(set) var errorMessage: String?
+    /// The task whose details are on screen, by its id: every reading
+    /// lists it, also where it is finished and not among the ones last
+    /// changed. Closed by a reading that does not find it: it is gone.
+    @Published var detailsOf: String?
     /// Whether a task is being added: one at a time.
     @Published private(set) var isAdding = false
     /// The tasks whose change is on its way: one change at a time for a task.
@@ -93,6 +99,12 @@ final class TasksModel: ObservableObject {
         self.calendar = calendar ?? { .current }
     }
 
+    /// The task with this id, as it was last read; nil for one that is
+    /// gone, or among the finished ones no longer listed.
+    func task(_ id: String) -> TaskItem? {
+        (open + finished).first { $0.id == id }
+    }
+
     /// Whether there is no task at all, open or finished.
     var isEmpty: Bool {
         open.isEmpty && finishedCount == 0
@@ -108,7 +120,8 @@ final class TasksModel: ObservableObject {
         let reading = readings
         let account = signedIn()
         do {
-            let listing = try await source.tasks(covenID, account)
+            let shown = detailsOf
+            let listing = try await source.tasks(covenID, shown, account)
             guard signedIn() == account else { return false }
             // A later listing has landed: what is shown is newer than this.
             guard reading > read else { return true }
@@ -117,6 +130,17 @@ final class TasksModel: ObservableObject {
             finished = listing.tasks.filter(\.isFinished)
             finishedCount = listing.finished
             hasRead = true
+            if let open = detailsOf, !listing.tasks.contains(where: { $0.id == open }) {
+                // Asked for by name and not found: it is gone, not merely
+                // unlisted, and its details close.
+                if open == shown {
+                    detailsOf = nil
+                } else {
+                    // Its details were opened while this reading was under
+                    // way, which did not ask for it: read again, asking.
+                    return await load()
+                }
+            }
             // Unless a later reading has failed since: that is still so.
             if reading > landed {
                 landed = reading
@@ -185,6 +209,23 @@ final class TasksModel: ObservableObject {
     /// Closes a task without its being done.
     func close(_ task: TaskItem, as account: String) async {
         await change(task, TaskChange(status: .closed), saying: "Closed \(Self.name(of: task))", orElse: Self.couldNotSave(task), as: account)
+    }
+
+    /// Gives a task another title. Nothing is asked for a title that
+    /// says nothing, or the one it has.
+    func rename(_ task: TaskItem, to title: String, as account: String) async {
+        let title = TaskRepository.keptTitle(title)
+        guard !title.isEmpty, title != task.title || task.isUnreadable else { return }
+        await change(task, TaskChange(title: title), saying: "Renamed to \(title)", orElse: Self.couldNotSave(task), as: account)
+    }
+
+    /// Sets the day a task is due, with its time of day if it has one, or
+    /// takes the day away (nil).
+    func setDue(_ task: TaskItem, to due: TaskDue?, as account: String) async {
+        await change(
+            task, TaskChange(due: due.map { .to($0) } ?? .cleared), saying: due == nil ? "Due date removed" : "Due date set",
+            orElse: "Couldn't change the due date of \(Self.quoted(task)). Try again.", as: account
+        )
     }
 
     /// Pins an open task for today or for this week: until the end of the
