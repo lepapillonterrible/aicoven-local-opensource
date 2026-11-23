@@ -51,6 +51,44 @@ nonisolated enum TaskPinState: Equatable {
     }
 }
 
+/// Where a task handed to an agent stands, from the turn it was handed
+/// over in.
+nonisolated enum TaskHandoffState: Equatable {
+    /// The agent is working on it.
+    case working
+    /// The agent's own run goes on where it runs, and is not followed
+    /// here just now.
+    case paused
+    /// The turn waits for the person to allow something.
+    case needsOK
+    /// The agent's turn has ended with its reply.
+    case finished
+
+    /// The state in words, naming the agent where it is known.
+    func words(agent: String?) -> String {
+        switch self {
+        case .working: "\(agent ?? "An agent") is on it"
+        case .paused: agent.map { "\($0) is paused" } ?? "Paused"
+        case .needsOK: "Needs your OK"
+        case .finished: "\(agent ?? "An agent") finished"
+        }
+    }
+
+    /// Whether it waits for the person: to allow something, or to look at
+    /// what the agent did.
+    var waitsForThePerson: Bool {
+        self == .needsOK || self == .finished
+    }
+}
+
+/// The turn the app is running in a thread now, as far as a task follows it.
+nonisolated struct TaskLiveTurn: Equatable {
+    let turnID: String
+    /// Whether it waits to be allowed something.
+    var needsOK = false
+    var isStopping = false
+}
+
 /// When a task is due, in words: "Due today", "Due tomorrow", "Due Mon 3
 /// Nov", "Due 3 Nov 2028", with the time of day if it has one, and
 /// "Overdue · " before it for an open task whose day has passed.
@@ -158,27 +196,65 @@ nonisolated enum TaskRules {
         }.map(\.element)
     }
 
+    /// Where a task handed to an agent stands. `live` is the turn the app
+    /// runs in the task's thread now, if it runs one: where that is the
+    /// turn the task was handed over in, the task follows it; otherwise
+    /// it stands as that turn is stored. A turn that failed, was stopped,
+    /// was cut off, or is gone is no hand-off any more: the task is the
+    /// person's again. A finished task has none.
+    static func handoff(of task: TaskItem, live: TaskLiveTurn?) -> TaskHandoffState? {
+        guard !task.isFinished, let handoff = task.handoff else { return nil }
+        if let live, live.turnID == handoff.turnID {
+            // A Stop outranks the approval it interrupted.
+            return live.needsOK && !live.isStopping ? .needsOK : .working
+        }
+        return switch handoff.outcome {
+        case .completed: .finished
+        // Recorded as running, and not run here: an agent's own run went
+        // on; any other was lost when the app closed.
+        case .running: handoff.hasRun ? .paused : nil
+        case .failed, .cancelled, .interrupted, nil: nil
+        }
+    }
+
     /// The list's parts.
     struct Parts: Equatable {
         /// Pinned for a day that is over: asked about first. Each is also
-        /// in `open`.
+        /// in the part it belongs to below.
         var review: [TaskItem] = []
         var today: [TaskItem] = []
         var week: [TaskItem] = []
-        /// The open tasks not pinned now.
+        /// Not pinned now, and handed to an agent whose turn waits for the
+        /// person or has ended.
+        var needsYou: [TaskItem] = []
+        /// Not pinned now, and with an agent at work on them.
+        var agentsOnIt: [TaskItem] = []
+        /// The other open tasks not pinned now.
         var open: [TaskItem] = []
         var finished: [TaskItem] = []
     }
 
     /// The parts of the list at `now`, each in the order `sort` gives.
-    static func parts(open: [TaskItem], finished: [TaskItem], sort: TaskSort, now: Date) -> Parts {
+    /// `handoff` says where a task handed to an agent stands.
+    static func parts(
+        open: [TaskItem], finished: [TaskItem], sort: TaskSort, now: Date, handoff: (TaskItem) -> TaskHandoffState? = { _ in nil }
+    ) -> Parts {
         func those(_ state: TaskPinState) -> [TaskItem] {
             ordered(open.filter { pinState(of: $0, now: now) == state }, by: sort, now: now)
         }
+        let unpinned = open.filter { pinState(of: $0, now: now).activePeriod == nil }
+        var (needsYou, agentsOnIt, plain): ([TaskItem], [TaskItem], [TaskItem]) = ([], [], [])
+        for task in unpinned {
+            switch handoff(task) {
+            case let state? where state.waitsForThePerson: needsYou.append(task)
+            case .some: agentsOnIt.append(task)
+            case nil: plain.append(task)
+            }
+        }
         return Parts(
             review: those(.review), today: those(.today), week: those(.week),
-            open: ordered(open.filter { pinState(of: $0, now: now).activePeriod == nil }, by: sort, now: now),
-            finished: ordered(finished, by: sort, now: now)
+            needsYou: ordered(needsYou, by: sort, now: now), agentsOnIt: ordered(agentsOnIt, by: sort, now: now),
+            open: ordered(plain, by: sort, now: now), finished: ordered(finished, by: sort, now: now)
         )
     }
 
@@ -189,18 +265,71 @@ nonisolated enum TaskRules {
         case pin(String)
         /// Its due day, passed.
         case overdue(String)
+        /// The agent at work on it.
+        case agent(String)
     }
 
     /// The line under a task's title, which says only what helps: its pin,
     /// its due day, and that it was closed. Empty for a task with none.
-    static func context(of task: TaskItem, now: Date, calendar: Calendar = .current, locale: Locale = .current) -> [Context] {
+    /// `handoff` is where the task stands with the agent it was handed
+    /// to, and `agent` that agent's name; with no hand-off, an open task
+    /// with a lead agent says who leads it.
+    static func context(
+        of task: TaskItem, now: Date, handoff: TaskHandoffState? = nil, agent: String? = nil, calendar: Calendar = .current,
+        locale: Locale = .current
+    ) -> [Context] {
         var pieces: [Context] = []
         if let period = pinState(of: task, now: now).activePeriod { pieces.append(.pin(period.title)) }
         if let due = TaskDueLine(task: task, now: now, calendar: calendar, locale: locale) {
             pieces.append(due.isOverdue ? .overdue(due.text) : .plain(due.text))
         }
+        if let handoff {
+            pieces.append(handoff == .working ? .agent(handoff.words(agent: agent)) : .plain(handoff.words(agent: agent)))
+        } else if let words = leadWords(for: task, agent: agent) {
+            pieces.append(.plain(words))
+        }
         if task.status == .closed { pieces.append(.plain("Closed")) }
         return pieces
+    }
+
+    /// "Led by <agent>", for an open task with a lead agent whose name is
+    /// known.
+    static func leadWords(for task: TaskItem, agent: String?) -> String? {
+        guard !task.isFinished, task.leadAgentID != nil, let agent else { return nil }
+        return "Led by \(agent)"
+    }
+
+    /// The agents a task can be handed to: its lead agent first, or else
+    /// the agent last used in its coven, then the others as they come.
+    struct LeadChoices<Agent: Equatable>: Equatable {
+        enum Reason: Equatable { case lead, lastUsed }
+
+        /// Listed first and marked; chosen only when the person picks it.
+        var marked: Agent?
+        var reason: Reason?
+        var others: [Agent]
+    }
+
+    static func leadChoices<Agent: Equatable>(
+        among agents: [Agent], id: (Agent) -> String, leadAgentID: String?, lastUsedID: String?
+    ) -> LeadChoices<Agent> {
+        if let lead = agents.first(where: { id($0) == leadAgentID && leadAgentID != nil }) {
+            return LeadChoices(marked: lead, reason: .lead, others: agents.filter { id($0) != id(lead) })
+        }
+        if let last = agents.first(where: { id($0) == lastUsedID && lastUsedID != nil }) {
+            return LeadChoices(marked: last, reason: .lastUsed, others: agents.filter { id($0) != id(last) })
+        }
+        return LeadChoices(marked: nil, reason: nil, others: agents)
+    }
+
+    /// What an agent is told when a task is handed to it, and when the
+    /// person wants to talk one through, in the cloud app's words.
+    static func request(for task: TaskItem) -> String {
+        "Please do this for me: \(task.title)"
+    }
+
+    static func talkThrough(_ task: TaskItem) -> String {
+        "I'd like to talk this task through: \(task.title)"
     }
 }
 

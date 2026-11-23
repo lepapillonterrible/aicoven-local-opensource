@@ -18,6 +18,9 @@ struct TaskDetailView: View {
     let onUnpin: (TaskItem) -> Void
     /// Keeps a pin that has run out for today (true), or clears it.
     let onAnswer: (TaskItem, Bool) -> Void
+    /// Opens the task's thread, which is made for it if it has none.
+    let onTalk: (TaskItem) -> Void
+    let lead: (TaskItem) -> TaskLead
     /// Whether the due day's sheet is up: the Mac's Tasks menu opens it too.
     @Binding var editingDue: Bool
     /// Closes the pane.
@@ -106,7 +109,7 @@ struct TaskDetailView: View {
             VStack(alignment: .leading, spacing: Spacing.md) {
                 VStack(alignment: .leading, spacing: Spacing.xxs) {
                     title(task)
-                    if let words = Self.stateWords(for: task) {
+                    if let words = Self.stateWords(for: task, handoff: model.handoff(of: task), agent: model.agentName(for: task)) {
                         Text(words)
                             .font(.aicovenBodySmall)
                             .foregroundStyle(Color.aicovenTextSecondary)
@@ -121,12 +124,9 @@ struct TaskDetailView: View {
 
                 properties(task)
 
-                HStack(spacing: Spacing.xs) {
-                    if task.isFinished {
-                        Button("Reopen") { setDone(task, false) }
-                    } else {
-                        Button("Close") { close(task) }
-                    }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: Spacing.xs) { buttons(task) }
+                    VStack(alignment: .leading, spacing: Spacing.xs) { buttons(task) }
                 }
                 .buttonStyle(.bordered)
             }
@@ -168,9 +168,44 @@ struct TaskDetailView: View {
         .accessibilityAddTraits(.isHeader)
     }
 
-    /// Where the task stands, when that is more than open.
-    static func stateWords(for task: TaskItem) -> String? {
-        switch task.status {
+    /// The task's actions, by where it stands, as the cloud app's.
+    @ViewBuilder
+    private func buttons(_ task: TaskItem) -> some View {
+        let lead = lead(task)
+        if task.isFinished {
+            Button("Reopen") { setDone(task, false) }
+        } else {
+            switch model.handoff(of: task) {
+            case .finished:
+                Button("Mark done") { setDone(task, true) }
+                    .buttonStyle(.borderedProminent)
+                Button("Talk it through") { onTalk(task) }
+            case .working, .paused, .needsOK:
+                Button("Open thread") { onTalk(task) }
+            case nil:
+                Menu("Do it for me…") { LeadAgentChoices(lead: lead, onChoose: lead.onDoIt) }
+                    .menuStyle(.button)
+                    .buttonStyle(.borderedProminent)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                Button("Talk it through") { onTalk(task) }
+                Button("Close") { close(task) }
+            }
+            if lead.hasLead {
+                Menu("Change Lead Agent…") { LeadAgentChoices(lead: lead, onChoose: lead.onChange) }
+                    .menuStyle(.button)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+            }
+        }
+    }
+
+    /// Where the task stands, when that is more than open: the agent on
+    /// it, who leads it, or that it is done or closed.
+    static func stateWords(for task: TaskItem, handoff: TaskHandoffState? = nil, agent: String? = nil) -> String? {
+        if let handoff { return handoff.words(agent: agent) }
+        if let led = TaskRules.leadWords(for: task, agent: agent) { return led }
+        return switch task.status {
         case .open: nil
         case .done: "Done"
         case .closed: "Closed"

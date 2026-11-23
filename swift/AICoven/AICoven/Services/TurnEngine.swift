@@ -151,14 +151,16 @@ final class TurnEngine: ObservableObject {
     /// what they wrote and the thread shows. `context` is what the model is
     /// sent, which can carry more. Throws, with nothing started, if a turn
     /// is already running in the thread, or the message, or an earlier
-    /// ending still waiting to be stored, cannot be stored.
+    /// ending still waiting to be stored, cannot be stored. Answers with
+    /// the id of the turn it started.
+    @discardableResult
     func start(
         with userMessage: ChatMessage,
         context: String,
         roleID: String?,
         agentName: String?,
         attachments: [FileAttachmentDetail]?
-    ) async throws {
+    ) async throws -> String {
         let threadID = userMessage.threadId
         guard running[threadID] == nil else { throw TurnError.alreadyRunning }
         notSent[threadID] = nil
@@ -212,6 +214,7 @@ final class TurnEngine: ObservableObject {
                 )
             }
         }
+        return turnID
     }
 
     /// Asks the turn running in a thread to stop. The turn is shown as

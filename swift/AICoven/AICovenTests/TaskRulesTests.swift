@@ -107,6 +107,87 @@ final class TaskRulesTests: XCTestCase {
         )
     }
 
+    // MARK: - A task handed to an agent
+
+    func testWhereATaskHandedToAnAgentStands() {
+        func handed(_ outcome: TurnOutcome?, hasRun: Bool = false, status: TaskStatus = .open) -> TaskItem {
+            var task = task("a", status: status)
+            task.threadID = "thread"
+            task.handoff = TaskHandoff(turnID: "turn", outcome: outcome, hasRun: hasRun)
+            return task
+        }
+        let running = handed(.running)
+        // The turn the app runs in its thread now is the one it was handed over in: the task follows it.
+        XCTAssertEqual(TaskRules.handoff(of: running, live: TaskLiveTurn(turnID: "turn")), .working)
+        XCTAssertEqual(TaskRules.handoff(of: running, live: TaskLiveTurn(turnID: "turn", needsOK: true)), .needsOK)
+        XCTAssertEqual(TaskRules.handoff(of: running, live: TaskLiveTurn(turnID: "turn", needsOK: true, isStopping: true)), .working, "A Stop outranks the approval")
+        XCTAssertEqual(TaskRules.handoff(of: handed(.completed), live: TaskLiveTurn(turnID: "turn")), .working, "Running here, whatever is stored yet")
+        // Another turn runs there (the person went on talking): the hand-off stands as it is stored.
+        XCTAssertEqual(TaskRules.handoff(of: handed(.completed), live: TaskLiveTurn(turnID: "later", needsOK: true)), .finished)
+        XCTAssertEqual(TaskRules.handoff(of: handed(.completed), live: nil), .finished)
+        XCTAssertEqual(TaskRules.handoff(of: handed(.running, hasRun: true), live: nil), .paused, "An agent's own run goes on")
+        XCTAssertNil(TaskRules.handoff(of: running, live: nil), "Any other run was lost when the app closed")
+        for ended in [TurnOutcome.failed, .cancelled, .interrupted] {
+            XCTAssertNil(TaskRules.handoff(of: handed(ended), live: nil), "\(ended): the task is the person's again")
+        }
+        XCTAssertNil(TaskRules.handoff(of: handed(nil), live: nil), "A turn that is gone")
+        XCTAssertNil(TaskRules.handoff(of: handed(.completed, status: .done), live: nil), "A finished task has none")
+        XCTAssertNil(TaskRules.handoff(of: task("a"), live: TaskLiveTurn(turnID: "turn")), "Not handed over")
+
+        XCTAssertEqual(TaskHandoffState.working.words(agent: "Scout"), "Scout is on it")
+        XCTAssertEqual(TaskHandoffState.working.words(agent: nil), "An agent is on it")
+        XCTAssertEqual(TaskHandoffState.paused.words(agent: "Scout"), "Scout is paused")
+        XCTAssertEqual(TaskHandoffState.paused.words(agent: nil), "Paused")
+        XCTAssertEqual(TaskHandoffState.needsOK.words(agent: "Scout"), "Needs your OK")
+        XCTAssertEqual(TaskHandoffState.finished.words(agent: "Scout"), "Scout finished")
+        XCTAssertEqual(TaskHandoffState.finished.words(agent: nil), "An agent finished")
+        XCTAssertEqual([TaskHandoffState.working, .paused, .needsOK, .finished].map(\.waitsForThePerson), [false, false, true, true])
+    }
+
+    func testTheListsPartsForTasksHandedToAgents_andTheLineUnderThem() {
+        let later = wednesday.addingTimeInterval(3600)
+        let states: [String: TaskHandoffState] = ["working": .working, "paused": .paused, "asks": .needsOK, "finished": .finished, "pinned": .working]
+        let open = [
+            task("plain"), task("working"), task("paused"), task("asks"), task("finished"),
+            task("pinned", pin: TaskPin(period: .today, expiresAt: later)),
+        ]
+        let parts = TaskRules.parts(open: open, finished: [], sort: .recentlyUpdated, now: wednesday) { states[$0.id] }
+        XCTAssertEqual(parts.needsYou.map(\.id), ["asks", "finished"])
+        XCTAssertEqual(parts.agentsOnIt.map(\.id), ["working", "paused"])
+        XCTAssertEqual(parts.open.map(\.id), ["plain"])
+        XCTAssertEqual(parts.today.map(\.id), ["pinned"], "What is pinned is under its pin, whoever is on it")
+
+        func line(_ task: TaskItem, _ handoff: TaskHandoffState?, agent: String? = "Scout") -> [TaskRules.Context] {
+            TaskRules.context(of: task, now: wednesday, handoff: handoff, agent: agent, calendar: utc, locale: british)
+        }
+        XCTAssertEqual(line(task("a"), .working), [.agent("Scout is on it")])
+        XCTAssertEqual(line(task("a", due: "2027-01-14"), .finished), [.plain("Due tomorrow"), .plain("Scout finished")])
+        XCTAssertEqual(line(task("a"), .needsOK), [.plain("Needs your OK")])
+        var led = task("a")
+        led.leadAgentID = "scout"
+        XCTAssertEqual(line(led, nil), [.plain("Led by Scout")], "No run on it: who leads it")
+        XCTAssertEqual(line(led, nil, agent: nil), [], "An agent whose name is not known is not named")
+        XCTAssertEqual(line(led, .paused), [.plain("Scout is paused")], "A run on it says more than who leads")
+        var done = task("a", status: .done)
+        done.leadAgentID = "scout"
+        XCTAssertEqual(line(done, nil), [], "A finished task is led by nobody")
+        XCTAssertEqual(TaskRules.request(for: task("Call the bank")), "Please do this for me: Call the bank")
+        XCTAssertEqual(TaskRules.talkThrough(task("Call the bank")), "I'd like to talk this task through: Call the bank")
+    }
+
+    func testWhoATaskCanBeHandedTo() {
+        let agents = ["scout", "quill", "ember"]
+        func choices(lead: String?, last: String?) -> TaskRules.LeadChoices<String> {
+            TaskRules.leadChoices(among: agents, id: { $0 }, leadAgentID: lead, lastUsedID: last)
+        }
+        XCTAssertEqual(choices(lead: nil, last: nil), TaskRules.LeadChoices(marked: nil, reason: nil, others: agents))
+        XCTAssertEqual(choices(lead: "quill", last: "ember"), TaskRules.LeadChoices(marked: "quill", reason: .lead, others: ["scout", "ember"]), "Its lead agent first")
+        XCTAssertEqual(choices(lead: nil, last: "ember"), TaskRules.LeadChoices(marked: "ember", reason: .lastUsed, others: ["scout", "quill"]))
+        XCTAssertEqual(choices(lead: "gone", last: "ember").marked, "ember", "A lead agent that is gone gives way")
+        XCTAssertEqual(choices(lead: "gone", last: "gone-too"), TaskRules.LeadChoices(marked: nil, reason: nil, others: agents))
+        XCTAssertEqual(TaskRules.leadChoices(among: [String](), id: { $0 }, leadAgentID: "a", lastUsedID: nil).others, [])
+    }
+
     // MARK: - Order
 
     func testTheOrders() {
