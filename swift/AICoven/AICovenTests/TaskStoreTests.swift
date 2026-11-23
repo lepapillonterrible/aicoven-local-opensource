@@ -65,7 +65,10 @@ final class TaskStoreTests: XCTestCase {
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
         return try await queue.read { db in
             guard let row = try Row.fetchOne(db, sql: "SELECT * FROM tasks WHERE id = ?", arguments: [id]) else { return [] }
-            return ["title_ciphertext", "status", "stage", "due_date", "due_time", "pin_period", "pin_expires_at", "updated_at"].map {
+            return [
+                "title_ciphertext", "status", "stage", "due_date", "due_time", "pin_period", "pin_expires_at", "updated_at",
+                "thread_id", "lead_agent_id", "handoff_turn_id",
+            ].map {
                 (row[$0] as DatabaseValue).description
             }
         }
@@ -564,6 +567,175 @@ final class TaskStoreTests: XCTestCase {
         }
     }
 
+    // MARK: - Its thread, its lead agent, the turn it is handed over in
+
+    /// A thread of the signed-in account's in a coven (or in none),
+    /// deleted when the test ends.
+    private func newThread(inCoven coven: String?) async throws -> String {
+        let thread = try await ThreadService.shared.createThread(title: "Task \(UUID().uuidString)", covenId: coven).id
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await DatabaseManager.shared.dbQueue?.write { db in try db.execute(sql: "DELETE FROM threads WHERE id = ?", arguments: [thread]) }
+        }
+        return thread
+    }
+
+    /// Rows written as the app writes them: an agent of a coven, and a turn of a thread.
+    private func insertAgent(_ id: String, inCoven coven: String, of owner: String) async throws {
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        try await queue.write { db in
+            try db.execute(
+                sql: "INSERT INTO roles (id, coven_id, name, created_at, updated_at, user_id) VALUES (?, ?, 'Scout', ?, ?, ?)",
+                arguments: [id, coven, Date(), Date(), owner]
+            )
+        }
+        addTeardownBlock {
+            try? await queue.write { db in try db.execute(sql: "DELETE FROM roles WHERE id = ?", arguments: [id]) }
+        }
+    }
+
+    private func insertTurn(_ id: String, inThread thread: String, status: String) async throws {
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        let account = account
+        try await queue.write { db in
+            try db.execute(
+                sql: "INSERT INTO turns (id, user_id, thread_id, status, started_at) VALUES (?, ?, ?, ?, ?)", arguments: [id, account, thread, status, Date()]
+            )
+        }
+    }
+
+    private func read(_ id: String, inCoven coven: String?) async throws -> TaskItem {
+        let listing = try await store.tasks(inCoven: coven, as: account)
+        return try XCTUnwrap(listing.tasks.first { $0.id == id })
+    }
+
+    func testATaskIsGivenAThreadOnce_andOnlyAThreadOfItsOwnPlace() async throws {
+        let coven = try await newCoven()
+        let covens = try await store.create(title: "The coven's", inCoven: coven, as: account)
+        let strixs = try await store.create(title: "Strix's", inCoven: nil, as: account)
+        let covenThread = try await newThread(inCoven: coven), strixThread = try await newThread(inCoven: nil)
+        let before = try await stored(covens.id)
+
+        await expect(.noSuchThread, "A thread of another place") {
+            try await self.store.change(covens.id, TaskChange(threadID: strixThread), as: self.account)
+        }
+        await expect(.noSuchThread, "Nor Strix's task a coven's thread") {
+            try await self.store.change(strixs.id, TaskChange(threadID: covenThread), as: self.account)
+        }
+        await expect(.noSuchThread, "No such thread") {
+            try await self.store.change(covens.id, TaskChange(threadID: "no-such-thread"), as: self.account)
+        }
+        await expect(.noSuchThread, "Not the row the account's unsent files wait under") {
+            try await self.store.change(strixs.id, TaskChange(threadID: AttachmentStore.holdingThreadID(for: self.account)), as: self.account)
+        }
+        await expect(.noSuchTask, "No such task") {
+            try await self.store.change("no-such-task", TaskChange(threadID: covenThread), as: self.account)
+        }
+        let unchanged = try await stored(covens.id)
+        XCTAssertEqual(unchanged, before)
+
+        try await store.change(covens.id, TaskChange(threadID: covenThread), as: account)
+        try await store.change(strixs.id, TaskChange(threadID: strixThread), as: account)
+        var task = try await read(covens.id, inCoven: coven)
+        XCTAssertEqual(task.threadID, covenThread)
+        XCTAssertGreaterThanOrEqual(task.updatedAt, covens.updatedAt)
+        let strixTask = try await read(strixs.id, inCoven: nil)
+        XCTAssertEqual(strixTask.threadID, strixThread)
+
+        // It keeps the thread it has; given the same again, nothing is refused.
+        let another = try await newThread(inCoven: coven)
+        await expect(.hasThread, "Given once") { try await self.store.change(covens.id, TaskChange(threadID: another), as: self.account) }
+        try await store.change(covens.id, TaskChange(threadID: covenThread), as: account)
+
+        // Whoever writes: a thread that is not the task's account's is refused by the database.
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        do {
+            try await queue.write { db in try db.execute(sql: "UPDATE tasks SET thread_id = 'no-such-thread' WHERE id = ?", arguments: [strixs.id]) }
+            XCTFail("Refused by the database")
+        } catch let error as DatabaseError {
+            XCTAssertEqual(error.resultCode, .SQLITE_CONSTRAINT)
+        }
+
+        // A thread that is deleted leaves its task with no thread, and no hand-off.
+        try await insertTurn("turn-of-\(covenThread)", inThread: covenThread, status: "completed")
+        try await store.change(covens.id, TaskChange(handoffTurnID: "turn-of-\(covenThread)"), as: account)
+        try await queue.write { db in try db.execute(sql: "DELETE FROM threads WHERE id = ?", arguments: [covenThread]) }
+        task = try await read(covens.id, inCoven: coven)
+        XCTAssertNil(task.threadID)
+        XCTAssertNil(task.handoff)
+        // And can be given another.
+        try await store.change(covens.id, TaskChange(threadID: another), as: account)
+    }
+
+    func testATasksLeadAgentIsAnAgentOfItsCoven() async throws {
+        let coven = try await newCoven(), other = try await newCoven()
+        let made = try await store.create(title: "Led", inCoven: coven, as: account)
+        let strixs = try await store.create(title: "Strix's", inCoven: nil, as: account)
+        let scout = "scout-\(UUID().uuidString)", elsewhere = "elsewhere-\(UUID().uuidString)"
+        try await insertAgent(scout, inCoven: coven, of: account)
+        try await insertAgent(elsewhere, inCoven: other, of: account)
+
+        await expect(.noSuchAgent, "An agent of another coven") {
+            try await self.store.change(made.id, TaskChange(leadAgentID: .to(elsewhere)), as: self.account)
+        }
+        await expect(.noSuchAgent, "No such agent") {
+            try await self.store.change(made.id, TaskChange(leadAgentID: .to("no-such-agent")), as: self.account)
+        }
+        await expect(.noSuchAgent, "Strix's tasks have no agent to name") {
+            try await self.store.change(strixs.id, TaskChange(leadAgentID: .to(scout)), as: self.account)
+        }
+
+        try await store.change(made.id, TaskChange(leadAgentID: .to(scout)), as: account)
+        var task = try await read(made.id, inCoven: coven)
+        XCTAssertEqual(task.leadAgentID, scout)
+        try await store.change(made.id, TaskChange(leadAgentID: .cleared), as: account)
+        task = try await read(made.id, inCoven: coven)
+        XCTAssertNil(task.leadAgentID)
+
+        // An agent that is deleted leaves its tasks with no lead agent.
+        try await store.change(made.id, TaskChange(leadAgentID: .to(scout)), as: account)
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        try await queue.write { db in try db.execute(sql: "DELETE FROM roles WHERE id = ?", arguments: [scout]) }
+        task = try await read(made.id, inCoven: coven)
+        XCTAssertNil(task.leadAgentID)
+    }
+
+    func testATaskIsHandedOverInATurnOfItsThread_andSaysHowThatTurnStands() async throws {
+        let made = try await store.create(title: "Handed over", inCoven: nil, as: account)
+        let thread = try await newThread(inCoven: nil), other = try await newThread(inCoven: nil)
+        try await insertTurn("turn-1-\(thread)", inThread: thread, status: "running")
+        try await insertTurn("turn-2-\(other)", inThread: other, status: "completed")
+
+        await expect(.noSuchTurn, "A task with no thread has no turn") {
+            try await self.store.change(made.id, TaskChange(handoffTurnID: "turn-1-\(thread)"), as: self.account)
+        }
+        // Given its thread and the turn in one change.
+        await expect(.noSuchTurn, "A turn of another thread") {
+            try await self.store.change(made.id, TaskChange(threadID: thread, handoffTurnID: "turn-2-\(other)"), as: self.account)
+        }
+        var task = try await read(made.id, inCoven: nil)
+        XCTAssertNil(task.threadID, "Nothing of a change that was refused is kept")
+        try await store.change(made.id, TaskChange(threadID: thread, handoffTurnID: "turn-1-\(thread)"), as: account)
+        task = try await read(made.id, inCoven: nil)
+        XCTAssertEqual(task.threadID, thread)
+        XCTAssertEqual(task.handoff, TaskHandoff(turnID: "turn-1-\(thread)", outcome: .running, hasRun: false))
+
+        // As the turn goes on, the task says so: read from the turn as it is stored.
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        try await queue.write { db in
+            try db.execute(sql: "UPDATE turns SET status = 'completed', run_ciphertext = x'01' WHERE id = ?", arguments: ["turn-1-\(thread)"])
+        }
+        task = try await read(made.id, inCoven: nil)
+        XCTAssertEqual(task.handoff, TaskHandoff(turnID: "turn-1-\(thread)", outcome: .completed, hasRun: true))
+        await expect(.noSuchTurn, "No such turn") { try await self.store.change(made.id, TaskChange(handoffTurnID: "no-such-turn"), as: self.account) }
+
+        // A later turn of the thread takes its place.
+        try await insertTurn("turn-3-\(thread)", inThread: thread, status: "failed")
+        try await store.change(made.id, TaskChange(handoffTurnID: "turn-3-\(thread)"), as: account)
+        task = try await read(made.id, inCoven: nil)
+        XCTAssertEqual(task.handoff?.outcome, .failed)
+    }
+
     func testAPlaceKeepsNoMoreOpenTasksThanItMay_countedAsATaskIsMadeOrOpenedAgain() async throws {
         let coven = try await newCoven()
         let first = try await store.create(title: "First", inCoven: nil, as: account)
@@ -656,6 +828,40 @@ final class TaskStoreTests: XCTestCase {
             let after = try await stored(made.id)
             XCTAssertEqual(after, before, "Its title, status, stage, due day, pin and when it was changed, as they were")
         }
+    }
+
+    func testAThreadAnAgentOrATurnGivenAfterTheDataWasLockedIsTakenBack() async throws {
+        let coven = try await newCoven()
+        let covens = try await store.create(title: "The coven's", inCoven: coven, as: account)
+        let strixs = try await store.create(title: "Strix's", inCoven: nil, as: account)
+        let scout = "scout-\(UUID().uuidString)"
+        try await insertAgent(scout, inCoven: coven, of: account)
+        // A thread in no coven that needs no key to be placed: a row with nothing sealed in it.
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        let thread = UUID().uuidString, account = account
+        try await queue.write { db in
+            try db.execute(sql: "INSERT INTO threads (id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?)", arguments: [thread, account, Date(), Date()])
+        }
+        addTeardownBlock {
+            try? await queue.write { db in try db.execute(sql: "DELETE FROM threads WHERE id = ?", arguments: [thread]) }
+        }
+        try await insertTurn("turn-\(thread)", inThread: thread, status: "running")
+        let before = try await [stored(covens.id), stored(strixs.id)]
+
+        let late = TaskRepository(at: { step in if step == .beforeWriting { await DataEncryptionService.shared.lock() } })
+        for (id, change) in [
+            (covens.id, TaskChange(leadAgentID: .to(scout))),
+            (strixs.id, TaskChange(threadID: thread, handoffTurnID: "turn-\(thread)")),
+        ] {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            do {
+                try await late.change(id, change, as: account)
+                XCTFail("Nothing is changed once the account's data is locked")
+            } catch RepositoryError.dataLocked {}
+        }
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        let after = try await [stored(covens.id), stored(strixs.id)]
+        XCTAssertEqual(after, before, "No lead agent, thread or turn of theirs, and changed when they were")
     }
 
     /// Holds whoever comes to it until the test lets them through, and

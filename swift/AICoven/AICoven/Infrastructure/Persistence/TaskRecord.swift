@@ -15,6 +15,14 @@ enum TaskError: Error, Equatable {
     case finished
     /// A pin ends at a time still to come.
     case pinEnded
+    /// The task has a thread already: it keeps the one it has.
+    case hasThread
+    /// The thread is not a thread of the account's in the task's place.
+    case noSuchThread
+    /// The agent is not an agent of the task's coven.
+    case noSuchAgent
+    /// The turn is not a turn of the task's thread.
+    case noSuchTurn
 }
 
 /// A coven's tasks (or Strix's) as a listing gives them.
@@ -176,7 +184,10 @@ actor TaskRepository {
     private var lastChange: Task<Void, Never>?
 
     /// What a change writes of a task, in the order it is put back by.
-    private static let changed = ["title_ciphertext", "status", "stage", "due_date", "due_time", "pin_period", "pin_expires_at", "updated_at"]
+    private static let changed = [
+        "title_ciphertext", "status", "stage", "due_date", "due_time", "pin_period", "pin_expires_at", "updated_at",
+        "thread_id", "lead_agent_id", "handoff_turn_id",
+    ]
 
     /// Changes one of `account`'s tasks: what `change` names, and nothing
     /// else. What it comes to is decided in the write itself, against the
@@ -187,7 +198,14 @@ actor TaskRepository {
     /// - a task is opened again only while its place has room for one
     ///   more open task (`TaskError.tooMany`);
     /// - a pin set or taken away leaves when the task was last changed as
-    ///   it is: a list ordered by that does not move for a pin.
+    ///   it is: a list ordered by that does not move for a pin;
+    /// - a task is given a thread once (`TaskError.hasThread`), and only a
+    ///   thread of the account's in the task's own place: its coven's, or
+    ///   for Strix's a thread in no coven (`TaskError.noSuchThread`);
+    /// - its lead agent is an agent of its coven (`TaskError.noSuchAgent`;
+    ///   Strix's tasks have none to name);
+    /// - the turn it is handed over in is a turn of its thread
+    ///   (`TaskError.noSuchTurn`).
     /// A new title is sealed with the account's key, also for a task whose
     /// title could not be opened. It takes its turn among the changes to
     /// stored tasks (`inTurn`).
@@ -203,8 +221,24 @@ actor TaskRepository {
         if let title { sealed = try await AccountSeal.seal(title, purpose: Self.titlePurpose, for: account) }
         // A change that names nothing writes nothing.
         guard change != TaskChange() else { return }
+        if let threadID = change.threadID {
+            // A thread's coven is read from the thread as it is stored,
+            // and the task's from the task: neither changes afterwards.
+            let place = try await dbQueue.read { db in
+                try String.fetchOne(db, sql: "SELECT coven_id FROM tasks WHERE id = ? AND user_id = ?", arguments: [id, account])
+            }
+            guard let place else { throw TaskError.noSuchTask }
+            let threadsCoven: String?
+            do {
+                threadsCoven = try await ThreadRepository.shared.covenID(ofThread: threadID, for: account)
+            } catch is ThreadLookupError {
+                throw TaskError.noSuchThread
+            }
+            guard (threadsCoven ?? "") == place else { throw TaskError.noSuchThread }
+        }
         let newTitle = sealed
         let now = now
+        let holding = AttachmentStore.holdingThreadID(for: account)
         await at?(.beforeWriting)
         // How it stood before, as it is stored, to put it back by, and
         // which writing of it this one is.
@@ -237,19 +271,49 @@ actor TaskRepository {
             }
             // Finishing a task takes its pin, as in the cloud app.
             if !isOpen { pin = (nil, .null) }
+            var thread: String? = stored["thread_id"]
+            if let given = change.threadID, given != thread {
+                guard thread == nil else { throw TaskError.hasThread }
+                // A thread of the account's: not the row its unsent files wait under.
+                let isTheirs = try Bool.fetchOne(
+                    db, sql: "SELECT 1 FROM threads WHERE id = ? AND user_id = ? AND id <> ?", arguments: [given, account, holding]
+                ) ?? false
+                guard isTheirs else { throw TaskError.noSuchThread }
+                thread = given
+            }
+            var lead: String? = stored["lead_agent_id"]
+            switch change.leadAgentID {
+            case let .to(agent):
+                let coven: String = stored["coven_id"]
+                let isOfTheCoven = try !coven.isEmpty && Bool.fetchOne(
+                    db, sql: "SELECT 1 FROM roles WHERE id = ? AND user_id = ? AND coven_id = ?", arguments: [agent, account, coven]
+                ) ?? false
+                guard isOfTheCoven else { throw TaskError.noSuchAgent }
+                lead = agent
+            case .cleared: lead = nil
+            case nil: break
+            }
+            var handoff: String? = stored["handoff_turn_id"]
+            if let turn = change.handoffTurnID {
+                let isOfTheThread = try thread != nil && Bool.fetchOne(
+                    db, sql: "SELECT 1 FROM turns WHERE id = ? AND user_id = ? AND thread_id = ?", arguments: [turn, account, thread]
+                ) ?? false
+                guard isOfTheThread else { throw TaskError.noSuchTurn }
+                handoff = turn
+            }
             // A pin alone is no change to the task.
-            let touches = change.title != nil || change.status != nil || change.stage != nil || change.due != nil
+            let touches = change != TaskChange(pin: change.pin)
             let revision: Int = stored["revision"]
             try db.execute(
                 sql: """
                 UPDATE tasks SET title_ciphertext = ?, status = ?, stage = ?, due_date = ?, due_time = ?, pin_period = ?, pin_expires_at = ?,
-                                 updated_at = ?, revision = ?
+                                 updated_at = ?, thread_id = ?, lead_agent_id = ?, handoff_turn_id = ?, revision = ?
                 WHERE id = ? AND user_id = ?
                 """,
                 arguments: [
                     newTitle ?? (stored["title_ciphertext"] as Data), change.status?.rawValue ?? (stored["status"] as String),
                     change.stage?.rawValue ?? (stored["stage"] as String), due.date, due.time, pin.period, pin.ends,
-                    touches ? moment.databaseValue : (stored["updated_at"] as DatabaseValue), revision + 1, id, account,
+                    touches ? moment.databaseValue : (stored["updated_at"] as DatabaseValue), thread, lead, handoff, revision + 1, id, account,
                 ]
             )
             return (Self.changed.map { stored[$0] as DatabaseValue }, revision + 1)
@@ -350,6 +414,11 @@ actor TaskRepository {
         let dueTime: String?
         let pinPeriod: String?
         let pinEnds: Date?
+        let threadID: String?
+        let leadAgentID: String?
+        let handoffTurnID: String?
+        let handoffStatus: String?
+        let handoffHasRun: Bool
         let createdAt: Date
         let updatedAt: Date
 
@@ -365,6 +434,11 @@ actor TaskRepository {
             // A time that does not read as one (written by a later
             // version, say) is no pin's end, and the earliest of times: the
             // rest of the listing is still read.
+            threadID = row["thread_id"]
+            leadAgentID = row["lead_agent_id"]
+            handoffTurnID = row["handoff_turn_id"]
+            handoffStatus = row["handoff_status"]
+            handoffHasRun = row["handoff_has_run"] ?? false
             pinEnds = Self.time(row["pin_expires_at"])
             createdAt = Self.time(row["created_at"]) ?? .distantPast
             updatedAt = Self.time(row["updated_at"]) ?? .distantPast
@@ -390,27 +464,34 @@ actor TaskRepository {
         return try await AccountSeal.reading(as: account) {
             // All in one read, so that what is listed and what is counted are of one moment.
             let (stored, finished): ([Stored], Int) = try await dbQueue.read { db in
-                let columns = "id, coven_id, title_ciphertext, status, stage, due_date, due_time, pin_period, pin_expires_at, created_at, updated_at"
+                // Each task with the turn it was handed over in, as that turn stands.
+                let columns = """
+                tasks.id, tasks.coven_id, tasks.title_ciphertext, tasks.status, tasks.stage, tasks.due_date, tasks.due_time, tasks.pin_period,
+                tasks.pin_expires_at, tasks.thread_id, tasks.lead_agent_id, tasks.handoff_turn_id, tasks.created_at, tasks.updated_at,
+                turns.status AS handoff_status, (turns.run_ciphertext IS NOT NULL) AS handoff_has_run
+                """
+                let from = "tasks LEFT JOIN turns ON turns.id = tasks.handoff_turn_id AND turns.user_id = tasks.user_id"
                 let open = try Row.fetchAll(
                     db,
                     sql: """
-                    SELECT \(columns) FROM tasks WHERE user_id = ? AND coven_id = ? AND status = ?
-                    ORDER BY updated_at DESC, created_at DESC, rowid DESC
+                    SELECT \(columns) FROM \(from) WHERE tasks.user_id = ? AND tasks.coven_id = ? AND tasks.status = ?
+                    ORDER BY tasks.updated_at DESC, tasks.created_at DESC, tasks.rowid DESC
                     """,
                     arguments: [account, coven, TaskStatus.open.rawValue]
                 )
                 let done = try Row.fetchAll(
                     db,
                     sql: """
-                    SELECT \(columns) FROM tasks WHERE user_id = ? AND coven_id = ? AND status <> ?
-                    ORDER BY updated_at DESC, created_at DESC, rowid DESC LIMIT ?
+                    SELECT \(columns) FROM \(from) WHERE tasks.user_id = ? AND tasks.coven_id = ? AND tasks.status <> ?
+                    ORDER BY tasks.updated_at DESC, tasks.created_at DESC, tasks.rowid DESC LIMIT ?
                     """,
                     arguments: [account, coven, TaskStatus.open.rawValue, Self.mostFinishedListed]
                 )
                 var also: [Row] = []
                 if let shown, !(open + done).contains(where: { ($0["id"] as String) == shown }) {
                     also = try Row.fetchAll(
-                        db, sql: "SELECT \(columns) FROM tasks WHERE id = ? AND user_id = ? AND coven_id = ?", arguments: [shown, account, coven]
+                        db, sql: "SELECT \(columns) FROM \(from) WHERE tasks.id = ? AND tasks.user_id = ? AND tasks.coven_id = ?",
+                        arguments: [shown, account, coven]
                     )
                 }
                 let count = try Int.fetchOne(
@@ -435,7 +516,11 @@ actor TaskRepository {
                     title: title.map { String(decoding: $0, as: UTF8.self) } ?? "",
                     status: status, stage: TaskStage(rawValue: stored.stage) ?? .backlog,
                     due: stored.dueDate.flatMap(TaskDueDate.init).flatMap { TaskDue(date: $0, time: stored.dueTime) ?? TaskDue(date: $0) },
-                    pin: pin, isUnreadable: title == nil, createdAt: stored.createdAt, updatedAt: stored.updatedAt
+                    pin: pin, isUnreadable: title == nil, threadID: stored.threadID, leadAgentID: stored.leadAgentID,
+                    handoff: stored.handoffTurnID.map {
+                        TaskHandoff(turnID: $0, outcome: stored.handoffStatus.flatMap(TurnOutcome.init), hasRun: stored.handoffHasRun)
+                    },
+                    createdAt: stored.createdAt, updatedAt: stored.updatedAt
                 ))
             }
             return TaskListing(tasks: tasks, finished: finished)

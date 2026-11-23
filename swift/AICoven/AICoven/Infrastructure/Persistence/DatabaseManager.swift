@@ -688,6 +688,47 @@ final class DatabaseManager {
                 """)
             }
 
+            // v20: a task's thread, the agent that leads it, and the turn it
+            // was handed over in. A thread that is deleted leaves its tasks
+            // with no thread and no hand-off; an agent that is deleted
+            // leaves its tasks with no lead agent. Each such change is a
+            // writing of the task (`revision`).
+            migrator.registerMigration("v20_task_threads") { db in
+                try db.alter(table: "tasks") { t in
+                    t.add(column: "thread_id", .text)
+                    t.add(column: "lead_agent_id", .text)
+                    t.add(column: "handoff_turn_id", .text)
+                }
+                try db.create(index: "tasks_thread", on: "tasks", columns: ["thread_id"])
+                try db.create(index: "tasks_lead_agent", on: "tasks", columns: ["lead_agent_id"])
+                for (event, name) in [("INSERT", "insert"), ("UPDATE OF thread_id, user_id", "update")] {
+                    try db.execute(sql: """
+                    CREATE TRIGGER tasks_match_thread_user_\(name)
+                    BEFORE \(event) ON tasks
+                    WHEN NEW.thread_id IS NOT NULL AND NOT EXISTS (
+                        SELECT 1 FROM threads WHERE threads.id = NEW.thread_id AND threads.user_id = NEW.user_id
+                    )
+                    BEGIN
+                        SELECT RAISE(ABORT, 'tasks.thread_id must reference a thread owned by the same user');
+                    END;
+                    """)
+                }
+                try db.execute(sql: """
+                CREATE TRIGGER threads_leave_their_tasks
+                AFTER DELETE ON threads
+                BEGIN
+                    UPDATE tasks SET thread_id = NULL, handoff_turn_id = NULL, revision = revision + 1 WHERE thread_id = OLD.id;
+                END;
+                """)
+                try db.execute(sql: """
+                CREATE TRIGGER roles_leave_their_tasks
+                AFTER DELETE ON roles
+                BEGIN
+                    UPDATE tasks SET lead_agent_id = NULL, revision = revision + 1 WHERE lead_agent_id = OLD.id;
+                END;
+                """)
+            }
+
             try migrator.migrate(queue)
             dbQueue = queue
         } catch {
