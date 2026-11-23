@@ -66,10 +66,20 @@ struct AssetHandoffSheet: View {
                         }
                     }
                 } footer: {
-                    if let note = model.agentNote {
-                        Text(note)
-                            .font(.aicovenBodySmall)
-                            .foregroundStyle(Color.aicovenError)
+                    if let note = model.agentNote, model.hasRead {
+                        VStack(alignment: .leading, spacing: Spacing.xxs) {
+                            Text(note)
+                                .font(.aicovenBodySmall)
+                                .foregroundStyle(Color.aicovenError)
+                            // No model was found for it: reading again can find one.
+                            if model.offersTryAgain {
+                                Button("Try Again") {
+                                    let account = UserScope.currentUserID
+                                    Task { await model.load(as: account) }
+                                }
+                                .font(.aicovenBodySmall)
+                            }
+                        }
                     }
                 }
                 .disabled(model.isSending)

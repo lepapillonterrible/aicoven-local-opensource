@@ -16,8 +16,26 @@ final class AssetHandoffModel: ObservableObject {
         let name: String
         /// Whether its turns are offered the asset tools, as it is set up
         /// now: a cloud model's turn is; one on this device, Hermes or
-        /// OpenClaw is not, and could not open what it is sent.
-        var readsAssets = true
+        /// OpenClaw is not, and could not open what it is sent. Where no
+        /// model could be found to answer for it just now (nothing is
+        /// connected, or what is connected could not be read), that
+        /// cannot be told.
+        enum Tools: Equatable {
+            case offered
+            case notOffered
+            case unknown
+
+            /// As the chat service answers: nil where no model can answer.
+            init(_ offered: Bool?) {
+                self = offered.map { $0 ? .offered : .notOffered } ?? .unknown
+            }
+        }
+
+        var tools = Tools.offered
+
+        var readsAssets: Bool {
+            tools == .offered
+        }
 
         /// Strix, which answers in its own place and in a coven with no
         /// agents: no stored agent.
@@ -36,8 +54,9 @@ final class AssetHandoffModel: ObservableObject {
         /// The place's threads that are not archived, the one last used first.
         var threads: @MainActor (_ covenID: String?, _ account: String) async throws -> [Thread]
         /// Whether a turn for the agent would be offered the asset tools,
-        /// as the agent and the connections are set up now.
-        var readsAssets: @MainActor (_ agent: Agent, _ account: String) async -> Bool
+        /// as the agent and the connections are set up now; nil where
+        /// the account is no longer the one signed in.
+        var tools: @MainActor (_ agent: Agent, _ account: String) async -> Agent.Tools?
         /// Whether a turn is under way in the thread: one this app runs,
         /// or a run an agent of the person's own was making when the app
         /// was closed, which goes on without it until the thread is opened.
@@ -69,7 +88,7 @@ final class AssetHandoffModel: ObservableObject {
                     return nil
                 }
                 for (index, reads) in zip(agents.indices, offered) {
-                    agents[index].readsAssets = reads
+                    agents[index].tools = Agent.Tools(reads)
                 }
                 guard UserScope.currentUserID == account else { return nil }
                 return agents
@@ -79,8 +98,8 @@ final class AssetHandoffModel: ObservableObject {
                 let threads = try await ThreadService.shared.loadThreads(covenId: covenID)
                 return ThreadListRules.ordered(threads)
             },
-            readsAssets: { agent, account in
-                await ChatService.shared.offersPlaceTools(toAgents: [agent.isStrix ? nil : agent.id], as: account)?.first ?? false
+            tools: { agent, account in
+                await ChatService.shared.offersPlaceTools(toAgents: [agent.isStrix ? nil : agent.id], as: account)?.first.map(Agent.Tools.init)
             },
             isBusy: { threadID, account in
                 if TurnEngine.shared.running[threadID] != nil { return true }
@@ -140,6 +159,12 @@ final class AssetHandoffModel: ObservableObject {
         "\(agent.name) can't open assets: only an agent that runs on a cloud model is given the asset tools. Choose another agent."
     }
 
+    /// Why an agent cannot be sent an asset just now: no model could be
+    /// found to answer for it, which says nothing of where it runs.
+    static func cannotTell(_ agent: Agent) -> String {
+        "AICoven couldn't find a model to answer for \(agent.name) just now. Check your AI connections, or try again."
+    }
+
     /// What the agent is told, as the cloud server writes it: the brief
     /// and the asset by their ids, where the asset's review stands, and
     /// what the person adds.
@@ -172,9 +197,25 @@ final class AssetHandoffModel: ObservableObject {
     @Published private(set) var isSending = false
     /// What went wrong with the last thing asked, in words.
     @Published private(set) var failure: String?
-    @Published var agentID: String?
-    @Published var threadID: String?
-    @Published var startsNewThread = false
+    /// The choices. A choice changed takes away what went wrong with the
+    /// last thing asked, which was said of the choice before; an agent
+    /// that cannot be sent the asset is told to VoiceOver with why.
+    @Published var agentID: String? {
+        didSet {
+            guard agentID != oldValue else { return }
+            failure = nil
+            if let note = agentNote { hands.say(note) }
+        }
+    }
+
+    @Published var threadID: String? {
+        didSet { if threadID != oldValue { failure = nil } }
+    }
+
+    @Published var startsNewThread = false {
+        didSet { if startsNewThread != oldValue { failure = nil } }
+    }
+
     @Published var newThreadTitle = ""
     @Published var direction = ""
     private var loads = 0
@@ -192,9 +233,20 @@ final class AssetHandoffModel: ObservableObject {
         threads.first { $0.id == threadID }
     }
 
-    /// What is said under the agent chosen where it could not open the asset.
+    /// What is said under the agent chosen where it cannot be sent the asset.
     var agentNote: String? {
-        agent.flatMap { $0.readsAssets ? nil : Self.cannotRead($0) }
+        guard let agent else { return nil }
+        switch agent.tools {
+        case .offered: return nil
+        case .notOffered: return Self.cannotRead(agent)
+        case .unknown: return Self.cannotTell(agent)
+        }
+    }
+
+    /// Whether reading again could help the agent chosen: no model was
+    /// found for it, which a connection that answers again changes.
+    var offersTryAgain: Bool {
+        agent?.tools == .unknown
     }
 
     /// Whether Send sends: an agent that can read the asset, and a thread
@@ -213,8 +265,10 @@ final class AssetHandoffModel: ObservableObject {
         let load = loads
         isLoading = true
         failure = nil
-        let agents = await hands.agents(asset.covenID, account)
-        let threads = try? await hands.threads(asset.covenID, account)
+        // Read together: neither waits for the other.
+        async let readAgents = hands.agents(asset.covenID, account)
+        async let readThreads: [Thread]? = try? await hands.threads(asset.covenID, account)
+        let (agents, threads) = await (readAgents, readThreads)
         guard load == loads, hands.signedIn() == account else { return }
         isLoading = false
         guard let agents, let threads else {
@@ -224,6 +278,7 @@ final class AssetHandoffModel: ObservableObject {
         hasRead = true
         self.agents = agents
         self.threads = threads
+        failure = nil
         if thread == nil { threadID = (threads.first { $0.id == asset.threadID } ?? threads.first)?.id }
         if threads.isEmpty { startsNewThread = true }
         if agent == nil { agentID = (agents.first { $0.id == thread?.agentId } ?? agents.first)?.id }
@@ -250,7 +305,8 @@ final class AssetHandoffModel: ObservableObject {
     func send(as account: String) async -> Thread? {
         guard hands.signedIn() == account, !isSending, !isLoading else { return nil }
         guard let agent, agent.readsAssets, startsNewThread || thread != nil else {
-            fail(agentNote ?? Self.chooseBoth)
+            // What is wrong with the agent is under it already.
+            if let note = agentNote { hands.say(note) } else { fail(Self.chooseBoth) }
             return nil
         }
         isSending = true
@@ -268,14 +324,15 @@ final class AssetHandoffModel: ObservableObject {
                     return nil
                 }
             }
-            guard await hands.readsAssets(agent, account) else {
-                guard hands.signedIn() == account else { return nil }
-                // Set up otherwise since the sheet read it: it says so from here on.
-                if let index = agents.firstIndex(where: { $0.id == agent.id }) { agents[index].readsAssets = false }
-                fail(Self.cannotRead(agent))
+            guard let tools = await hands.tools(agent, account), hands.signedIn() == account else { return nil }
+            guard tools == .offered else {
+                // Set up otherwise since the sheet read it (or no model
+                // can be found for it now): the sheet says so under the
+                // agent from here on, and VoiceOver is told.
+                if let index = agents.firstIndex(where: { $0.id == agent.id }) { agents[index].tools = tools }
+                if let note = agentNote { hands.say(note) }
                 return nil
             }
-            guard hands.signedIn() == account else { return nil }
             let handed = try await hands.brief(asset.id, account)
             guard hands.signedIn() == account else { return nil }
             // An asset that has a brief can have been archived or sent

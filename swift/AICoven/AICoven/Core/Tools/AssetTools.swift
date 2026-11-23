@@ -256,7 +256,7 @@ nonisolated enum AssetTools {
         // number, a list) is refused, not read as none given.
         let parent = call.args["parent_asset_id"]
         let parentID = text(parent)
-        if let parent, parent != .null, parentID == nil, !((parent.value as? String).map { $0.allSatisfy(\.isWhitespace) } ?? false) {
+        if let parent, parent != .null, !(parent.value is String) {
             return .validationError(tool: call.name, message: "'parent_asset_id' is an asset's id, as asset.search gives it.", field: "parent_asset_id")
         }
         let new: Store.New

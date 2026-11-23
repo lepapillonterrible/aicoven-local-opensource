@@ -18,6 +18,8 @@ final class AssetHandoffTests: XCTestCase {
         var whenBusyAsked: [Int: () -> Void] = [:]
         /// The agents whose turns are no longer offered the asset tools, as things are set up by the time Send asks.
         var noLongerReads: Set<String> = []
+        /// The agents no model can be found for by the time Send asks.
+        var noModelFor: Set<String> = []
         /// How the asset stands as the store looks when the brief is asked for.
         var sourceStatus = AssetStatus.approved
         /// Where reading the agents waits, if anywhere.
@@ -95,10 +97,11 @@ final class AssetHandoffTests: XCTestCase {
                 if stand.threadsFail { throw RepositoryError.databaseUnavailable }
                 return stand.threads
             },
-            readsAssets: { agent, _ in
+            tools: { agent, _ in
                 stand.steps.append("reads")
                 stand.whenAsked["reads"]?()
-                return !stand.noLongerReads.contains(agent.id)
+                if stand.noModelFor.contains(agent.id) { return .unknown }
+                return stand.noLongerReads.contains(agent.id) ? .notOffered : .offered
             },
             isBusy: { threadID, _ in
                 stand.busyAsked.append(threadID)
@@ -206,22 +209,37 @@ final class AssetHandoffTests: XCTestCase {
 
     func testAnAgentThatIsNotGivenTheAssetToolsIsNotSentAnAsset() async {
         let stand = Stand()
-        stand.agents = [.init(id: "local", name: "Pip", readsAssets: false), .init(id: "scout", name: "Scout")]
+        stand.agents = [.init(id: "local", name: "Pip", tools: .notOffered), .init(id: "scout", name: "Scout"), .init(id: "lost", name: "Wren", tools: .unknown)]
         let sending = model(asset(), stand)
         await sending.load(as: "ada")
         XCTAssertEqual(sending.agentID, "local")
         XCTAssertFalse(sending.canSend)
-        XCTAssertEqual(
-            sending.agentNote,
-            "Pip can't open assets: only an agent that runs on a cloud model is given the asset tools. Choose another agent."
-        )
+        let note = "Pip can't open assets: only an agent that runs on a cloud model is given the asset tools. Choose another agent."
+        XCTAssertEqual(sending.agentNote, note)
+        XCTAssertEqual(stand.said, [note], "Told to VoiceOver as the agent is chosen: it is why Send is off")
+        XCTAssertFalse(sending.offersTryAgain)
         let sent = await sending.send(as: "ada")
         XCTAssertNil(sent)
         XCTAssertEqual(stand.steps, [], "Nothing is made for it")
-        XCTAssertEqual(sending.failure, sending.agentNote)
+        XCTAssertNil(sending.failure, "Said under the agent, once")
         sending.agentID = "scout"
         XCTAssertNil(sending.agentNote)
         XCTAssertTrue(sending.canSend)
+
+        // An agent no model could be found for (nothing connected, or the connections could not be read):
+        // that says nothing of where it runs, and reading again can find one.
+        sending.agentID = "lost"
+        XCTAssertEqual(sending.agentNote, "AICoven couldn't find a model to answer for Wren just now. Check your AI connections, or try again.")
+        XCTAssertTrue(sending.offersTryAgain)
+        XCTAssertFalse(sending.canSend)
+        stand.agents = [.init(id: "local", name: "Pip", tools: .notOffered), .init(id: "scout", name: "Scout"), .init(id: "lost", name: "Wren")]
+        await sending.load(as: "ada")
+        XCTAssertEqual(sending.agentID, "lost", "The choice is kept")
+        XCTAssertNil(sending.agentNote)
+        XCTAssertTrue(sending.canSend)
+        XCTAssertEqual(AssetHandoffModel.Agent.Tools(nil), .unknown)
+        XCTAssertEqual(AssetHandoffModel.Agent.Tools(false), .notOffered)
+        XCTAssertEqual(AssetHandoffModel.Agent.Tools(true), .offered)
 
         // Which turns are given the place's tools, as the chat service decides for an agent as it is set up.
         final class Silent: LLMClient, @unchecked Sendable {
@@ -253,7 +271,7 @@ final class AssetHandoffTests: XCTestCase {
         let offeredOnThisDevice = await chat(answeredBy: "mlx").offersPlaceTools(toAgents: [nil], as: account)
         XCTAssertEqual(offeredOnThisDevice, [false])
         let offeredByNothing = await chat(answeredBy: nil).offersPlaceTools(toAgents: [nil], as: account)
-        XCTAssertEqual(offeredByNothing, [false], "No model can answer: its turn would be offered nothing")
+        XCTAssertEqual(offeredByNothing, [nil], "No model can be found to answer: that says nothing of where the agent runs")
         let asAnother = await chat(answeredBy: "anthropic").offersPlaceTools(toAgents: [nil], as: "someone-else")
         XCTAssertNil(asAnother, "Nothing is answered for an account that is not the one signed in")
 
@@ -513,9 +531,42 @@ final class AssetHandoffTests: XCTestCase {
         let sent = await sending.send(as: "ada")
         XCTAssertNil(sent)
         XCTAssertEqual(stand.steps, ["reads"], "Nothing is made for it")
-        XCTAssertEqual(sending.failure, AssetHandoffModel.cannotRead(.init(id: "scout", name: "Scout")))
+        XCTAssertEqual(sending.agentNote, AssetHandoffModel.cannotRead(.init(id: "scout", name: "Scout")))
+        XCTAssertEqual(stand.said.last, sending.agentNote)
+        XCTAssertNil(sending.failure, "Said under the agent, once")
         XCTAssertFalse(sending.canSend)
-        XCTAssertNotNil(sending.agentNote)
+        // Or no model can be found for it by then (the device went offline): said as that, with the way to read again.
+        let offline = Stand()
+        offline.noModelFor = ["scout"]
+        let later = model(asset(), offline)
+        await later.load(as: "ada")
+        let notSent = await later.send(as: "ada")
+        XCTAssertNil(notSent)
+        XCTAssertEqual(later.agentNote, AssetHandoffModel.cannotTell(.init(id: "scout", name: "Scout")))
+        XCTAssertTrue(later.offersTryAgain)
+        XCTAssertEqual(offline.steps, ["reads"])
+    }
+
+    func testAChoiceChangedTakesAwayWhatWasSaidOfTheChoiceBefore() async {
+        let stand = Stand()
+        stand.threads = [thread("its-own", agent: "scout"), thread("other")]
+        stand.busy = ["its-own"]
+        let sending = model(asset(thread: "its-own"), stand)
+        await sending.load(as: "ada")
+        _ = await sending.send(as: "ada")
+        XCTAssertEqual(sending.failure, AssetHandoffModel.threadIsBusy)
+        sending.threadID = "other"
+        XCTAssertNil(sending.failure, "Said of the thread chosen before")
+        sending.threadID = "its-own"
+        _ = await sending.send(as: "ada")
+        XCTAssertNotNil(sending.failure)
+        sending.startsNewThread = true
+        XCTAssertNil(sending.failure)
+        sending.startsNewThread = false
+        _ = await sending.send(as: "ada")
+        XCTAssertNotNil(sending.failure)
+        sending.agentID = "quill"
+        XCTAssertNil(sending.failure)
     }
 
     func testOnlyTheLatestReadingIsTaken_andOneSendingAtATime() async {

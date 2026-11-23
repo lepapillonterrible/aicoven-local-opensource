@@ -289,10 +289,14 @@ actor ChatService {
     /// for all of them, as `account`: an agent's settings and the
     /// connections are the signed-in account's, so nothing is answered
     /// (nil) once another account is signed in, before or after the wait.
-    func offersPlaceTools(toAgents roleIDs: [String?], as account: String) async -> [Bool]? {
+    /// For an agent no model can answer for just now the answer is nil:
+    /// nothing is connected, or what is connected could not be read (the
+    /// device is offline, a provider did not list its models), and that
+    /// says nothing of where the agent runs.
+    func offersPlaceTools(toAgents roleIDs: [String?], as account: String) async -> [Bool?]? {
         guard await signedIn() == account else { return nil }
         await ensureEnvironment()
-        var offered: [Bool] = []
+        var offered: [Bool?] = []
         for roleID in roleIDs {
             guard await signedIn() == account else { return nil }
             let preferred = await preferredProviderAndModel(roleId: roleID)
@@ -304,7 +308,7 @@ actor ChatService {
                 let provider = answering.descriptor.providerID
                 offered.append(Self.givesPlaceTools(provider: provider, isLocal: isLocalDeployment(providerID: provider)))
             } else {
-                offered.append(false)
+                offered.append(nil)
             }
         }
         guard await signedIn() == account else { return nil }
