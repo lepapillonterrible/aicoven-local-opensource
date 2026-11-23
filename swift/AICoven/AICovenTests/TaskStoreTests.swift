@@ -260,6 +260,11 @@ final class TaskStoreTests: XCTestCase {
 
         // Whoever writes: a row for a coven that is not its account's is refused by the database.
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        // A coven's columns as they are now, to write a whole row of one by.
+        let columns = try await queue.read { db in
+            try String.fetchAll(db, sql: "SELECT name FROM pragma_table_info('covens')").joined(separator: ", ")
+        }
+        XCTAssertTrue(columns.contains("user_id"))
         let made = try await store.create(title: "In the coven", inCoven: coven, as: account)
         for sql in [
             "INSERT INTO tasks (id, user_id, coven_id, title_ciphertext, status, stage, created_at, updated_at) "
@@ -268,9 +273,12 @@ final class TaskStoreTests: XCTestCase {
                 + "VALUES ('t-y', ' ', '', x'01', 'open', 'backlog', '2026-01-01', '2026-01-01')",
             "UPDATE tasks SET user_id = 'someone-else' WHERE id = '\(made.id)'",
             "UPDATE tasks SET coven_id = 'no-such-coven' WHERE id = '\(made.id)'",
-            // Nor does the coven leave its tasks behind by changing hands, or its id.
+            // Nor does the coven leave its tasks behind by changing hands, or its id,
+            // or by being replaced outright with another account's row.
             "UPDATE covens SET user_id = 'someone-else' WHERE id = '\(coven)'",
             "UPDATE covens SET id = 'another-id' WHERE id = '\(coven)'",
+            "INSERT OR REPLACE INTO covens (\(columns)) SELECT \(columns.replacingOccurrences(of: "user_id", with: "'someone-else'")) "
+                + "FROM covens WHERE id = '\(coven)'",
         ] {
             do {
                 try await queue.write { db in try db.execute(sql: sql) }
@@ -279,6 +287,10 @@ final class TaskStoreTests: XCTestCase {
                 XCTAssertEqual(error.resultCode, .SQLITE_CONSTRAINT)
             }
         }
+        // The coven is still the account's, with its task; and replaced by a row of the same account it keeps it.
+        try await queue.write { db in try db.execute(sql: "INSERT OR REPLACE INTO covens (\(columns)) SELECT \(columns) FROM covens WHERE id = ?", arguments: [coven]) }
+        let kept = try await store.tasks(inCoven: coven, as: account)
+        XCTAssertEqual(kept.tasks.map(\.id), [made.id])
     }
 
     func testATaskIsReadAndChangedOnlyAsItsOwnAccount() async throws {

@@ -636,9 +636,8 @@ final class DatabaseManager {
                     t.column("created_at", .datetime).notNull()
                     t.column("updated_at", .datetime).notNull()
                 }
-                // A place's tasks in the order they are listed, with what
-                // tells the open ones from the finished: a listing of the
-                // finished ones last changed reads no further than it gives.
+                // A place's tasks by when they were last changed, with what
+                // tells the open ones from the finished, for its listing.
                 try db.create(index: "tasks_user_coven_changed", on: "tasks", columns: ["user_id", "coven_id", "updated_at", "status"])
                 for (event, name) in [("INSERT", "insert"), ("UPDATE OF user_id, coven_id", "update")] {
                     try db.execute(sql: """
@@ -671,6 +670,17 @@ final class DatabaseManager {
                     AND EXISTS (SELECT 1 FROM tasks WHERE tasks.coven_id = OLD.id AND tasks.user_id = OLD.user_id)
                 BEGIN
                     SELECT RAISE(ABORT, 'a coven that holds tasks keeps its id and its account');
+                END;
+                """)
+                // Nor is a coven made, or put in another's place (a
+                // replacing insert takes the row out without the triggers
+                // above), under an id another account's tasks are kept under.
+                try db.execute(sql: """
+                CREATE TRIGGER covens_are_not_made_over_anothers_tasks
+                BEFORE INSERT ON covens
+                WHEN EXISTS (SELECT 1 FROM tasks WHERE tasks.coven_id = NEW.id AND tasks.user_id IS NOT NEW.user_id)
+                BEGIN
+                    SELECT RAISE(ABORT, 'a coven is not made under an id that holds another account''s tasks');
                 END;
                 """)
             }
