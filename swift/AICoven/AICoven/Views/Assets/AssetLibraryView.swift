@@ -696,6 +696,10 @@ struct AssetThumbnail: View {
             // when the thumbnails were forgotten.
             .task(id: key) {
                 let asked = key
+                // A picture drawn for something else (another file, or
+                // before the thumbnails were forgotten) is let go of, not
+                // only hidden: the view holds nothing it does not show.
+                if drawn?.key != asked { drawn = nil }
                 guard let picture = await thumbnails.picture(of: asset, as: UserScope.currentUserID), !Task.isCancelled else { return }
                 drawn = (asked, picture)
             }
