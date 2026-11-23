@@ -382,5 +382,23 @@ final class AssetLineageTests: XCTestCase {
         // Nothing read as one account is shown once another is signed in.
         await model.read("brief", as: "ada", signedIn: { "grace" }, relations: { _, _ in [self.relation("Ada's")] })
         XCTAssertEqual(model.relations, [])
+
+        // The asset can no longer be opened: what was read of it is forgotten, and a reading under way is not taken.
+        await model.read("brief", as: "ada", signedIn: { "ada" }, relations: { _, _ in [self.relation("Logo")] })
+        XCTAssertEqual(model.relations.count, 1)
+        let slow = Gate()
+        let underWay = Task {
+            await model.read("brief", as: "ada", signedIn: { "ada" }, relations: { _, _ in
+                await slow.wait()
+                return [self.relation("Read before it was locked")]
+            })
+        }
+        await slow.arrived()
+        model.forget()
+        XCTAssertEqual(model.relations, [])
+        XCTAssertFalse(model.failed)
+        await slow.open()
+        await underWay.value
+        XCTAssertEqual(model.relations, [])
     }
 }

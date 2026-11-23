@@ -45,7 +45,10 @@ struct AssetDetailView: View {
     /// in. Not for an asset the key cannot open: its page shows no
     /// lineage, so nothing is read, shown or said of one.
     private func readLineage() async {
-        guard !asset.isUnreadable else { return }
+        guard !asset.isUnreadable else {
+            lineage.forget()
+            return
+        }
         await lineage.read(asset.id, as: UserScope.currentUserID)
     }
 
@@ -194,7 +197,9 @@ struct AssetDetailView: View {
             }
         }
         .presenting(files)
-        .task(id: asset.id) { await readLineage() }
+        // Read for the asset as it is listed: again when the key that
+        // could not open it can, and forgotten when it no longer can.
+        .task(id: "\(asset.id)|\(asset.isUnreadable)") { await readLineage() }
         // A hand-off made while the page is open (by an agent's turn, or
         // from another page) is read for.
         .onReceive(NotificationCenter.default.publisher(for: Asset.didChange).receive(on: RunLoop.main)) { _ in
@@ -367,6 +372,13 @@ final class AssetLineageModel: ObservableObject {
     @Published private(set) var relations: [AssetRelation] = []
     @Published private(set) var failed = false
     private var readings = 0
+
+    /// Holds nothing any more, and takes nothing from a reading under
+    /// way: for an asset the key can no longer open.
+    func forget() {
+        readings += 1
+        (relations, failed) = ([], false)
+    }
 
     func read(
         _ assetID: String, as account: String, signedIn: () -> String = { UserScope.currentUserID },

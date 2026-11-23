@@ -140,7 +140,9 @@ nonisolated enum AssetTools {
     /// without it nothing is made.
     static func write(_ call: ParsedToolCall, threadID: String?, turn: TurnAssets?, store: Store = .live) async -> ToolExecutionResult {
         let result = await written(call, threadID: threadID, turn: turn, store: store)
-        if result.status == "ok" {
+        // Told to whatever shows assets, where something was made or
+        // changed: not for a hand-off brief that was there already.
+        if result.status == "ok", (result.result?["is_new"]?.value as? Bool) != false {
             NotificationCenter.default.post(name: Asset.didChange, object: nil)
         }
         return result
