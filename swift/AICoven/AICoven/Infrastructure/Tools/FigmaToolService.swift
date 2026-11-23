@@ -109,6 +109,126 @@ nonisolated extension FigmaToolService {
         return isKey(text, atLeast: 1) ? text : nil
     }
 
+    /// A Figma file or a project, as its link names it.
+    enum Link: Equatable {
+        case file(key: String)
+        case folder(id: String)
+    }
+
+    /// Whether this reads as a project's id: digits, as Figma writes them.
+    static func isFolderID(_ id: String) -> Bool {
+        (1 ... 32).contains(id.utf8.count) && id.utf8.allSatisfy { (UInt8(ascii: "0") ... UInt8(ascii: "9")).contains($0) }
+    }
+
+    /// The file or project a pasted link names, as the cloud app reads
+    /// one: a file's link (figma.com/<editor>/<key>/…), or a project's
+    /// (figma.com/files/folder/<id>, and the older
+    /// figma.com/files/project/<id> and figma.com/files/team/<id>/project/<id>),
+    /// on figma.com over https. Nil for anything else.
+    static func link(_ pasted: String) -> Link? {
+        let text = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let link = URLComponents(string: text), link.scheme == "https", let host = link.host?.lowercased(), host == "figma.com" || host == "www.figma.com",
+              link.user == nil, link.password == nil, link.port == nil else { return nil }
+        let steps = link.path.split(separator: "/").map(String.init)
+        if steps.first.map(fileEditors.contains) == true {
+            return fileKey(text).map { .file(key: $0) }
+        }
+        guard steps.first == "files" else { return nil }
+        for word in ["folder", "project"] {
+            if let index = steps.firstIndex(of: word), steps.indices.contains(index + 1), isFolderID(steps[index + 1]) {
+                return .folder(id: steps[index + 1])
+            }
+        }
+        return nil
+    }
+
+    /// A file as Figma lists it: its key, its name on one line, and when
+    /// it was last changed, as Figma writes the time.
+    struct ListedFile: Equatable {
+        let key: String
+        let name: String
+        let lastChanged: String?
+    }
+
+    /// A name from Figma on one line, 200 characters at most; "Untitled"
+    /// for none.
+    static func listedName(_ given: Any?) -> String {
+        let name = oneLine(given as? String ?? "").trimmingCharacters(in: .whitespaces)
+        return name.isEmpty ? "Untitled" : String(name.prefix(200))
+    }
+
+    /// A time from Figma, only where it reads as one, as Figma writes
+    /// them (`2026-11-20T10:00:00Z`): it is told to a model.
+    static func listedTime(_ given: Any?) -> String? {
+        guard let time = given as? String, time.utf8.count <= 40,
+              time.wholeMatch(of: /[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})/) != nil else { return nil }
+        return time
+    }
+
+    /// A file's name and last change, as Figma has them now.
+    static func fileMeta(key: String, token: String, session: URLSession = .shared) async throws -> ListedFile {
+        let found = try await ask("GET", ["v1", "files", key, "meta"], token: token, session: session)
+        let file = found["file"] as? [String: Any] ?? [:]
+        return ListedFile(key: key, name: listedName(file["name"]), lastChanged: listedTime(file["last_touched_at"]))
+    }
+
+    /// A project's name and its files, all that Figma lists now: what is
+    /// decided by them is decided by the whole list. (The project's own
+    /// page answers a personal access token with 401, so its name comes
+    /// with its files, as in the cloud app.)
+    static func folderFiles(id: String, token: String, session: URLSession = .shared) async throws -> (name: String, files: [ListedFile]) {
+        let found = try await ask("GET", ["v2", "folders", id, "files"], token: token, session: session)
+        let files: [ListedFile] = (found["files"] as? [[String: Any]] ?? []).compactMap { file in
+            guard let key = file["key"] as? String, fileKey(key) == key else { return nil }
+            return ListedFile(key: key, name: listedName(file["name"]), lastChanged: listedTime(file["last_modified"]))
+        }
+        return (listedName(found["name"]), files)
+    }
+
+    /// Whether a coven's Figma choice reaches a file, as the cloud app
+    /// decides it: the file is chosen, or is in a chosen project now. The
+    /// chosen projects' files are read from Figma, together, at every
+    /// asking. A refused token or a rate limit is thrown even where
+    /// another project has the file: no project's answer can be trusted
+    /// then. A project Figma does not list does not hide a file in
+    /// another; where no project has the file and one could not be read,
+    /// its error is thrown, so that a failed reading never counts as "not
+    /// in the project".
+    static func reaches(_ file: String, in choice: CovenConnections.FigmaChoice, token: String, session: URLSession = .shared) async throws -> Bool {
+        if choice.files.contains(where: { $0.id == file }) { return true }
+        let read = await withTaskGroup(of: Result<Set<String>, Error>.self) { group in
+            for folder in choice.folders {
+                group.addTask {
+                    do {
+                        return try await .success(Set(folderFiles(id: folder.id, token: token, session: session).files.map(\.key)))
+                    } catch {
+                        return .failure(error)
+                    }
+                }
+            }
+            var all: [Result<Set<String>, Error>] = []
+            for await result in group {
+                all.append(result)
+            }
+            return all
+        }
+        var failed: Error?
+        var isThere = false
+        for result in read {
+            switch result {
+            case let .success(keys):
+                if keys.contains(file) { isThere = true }
+            case let .failure(error):
+                if case FigmaError.tokenRefused = error { throw error }
+                if case FigmaError.rateLimited = error { throw error }
+                failed = failed ?? error
+            }
+        }
+        if isThere { return true }
+        if let failed { throw failed }
+        return false
+    }
+
     /// Whether this reads as the id of a node, as Figma writes them
     /// (`3:21`, or `I5:2;1:8` for one inside an instance).
     static func isNodeID(_ id: String) -> Bool {

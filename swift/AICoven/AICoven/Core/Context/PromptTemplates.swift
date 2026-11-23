@@ -336,6 +336,12 @@ enum PromptTemplates {
 
         // Figma tools. A file is named by its key or its link.
         ToolDefinition(
+            name: "figma.listFiles",
+            description: "List the Figma files this coven may use: the files chosen in its Connections, and the files in its chosen projects as Figma lists them now, with each file's key, name, and last change.",
+            parameters: [],
+            example: #"{"tool": "figma.listFiles", "input": {}, "reason": "See which Figma files can be opened here"}"#
+        ),
+        ToolDefinition(
             name: "figma.readFile",
             description: "Read the structure of a Figma file: its pages, frames and layers, each with its name, id and kind. Use node to read under one node, and depth to go deeper.",
             parameters: [
@@ -903,7 +909,7 @@ enum PromptTemplates {
     ]
 
     /// Figma tools, offered where Figma is connected.
-    static let figmaTools: Set<String> = ["figma.readFile", "figma.readComments", "figma.addComment"]
+    static let figmaTools: Set<String> = ["figma.listFiles", "figma.readFile", "figma.readComments", "figma.addComment"]
 
     /// Figma's tool that makes pictures for the model to look at, offered
     /// where Figma is connected to a turn whose model can be sent

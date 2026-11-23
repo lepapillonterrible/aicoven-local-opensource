@@ -16,15 +16,85 @@ nonisolated struct CovenConnections: Codable, Hashable {
     var apps: [String: Access] = [:]
     /// The MCP servers that are on, by the server's id.
     var mcpServers: [String: Access] = [:]
+    /// The Figma files and projects the coven's agents may open, where
+    /// Figma is on: as in the cloud app, a coven that has made its choice
+    /// reaches only these.
+    var figma = FigmaChoice()
+
+    /// A Figma file or project a coven chose: its id (a file's key, a
+    /// project's number) and the name it had when it was chosen.
+    struct Chosen: Codable, Hashable, Identifiable {
+        let id: String
+        var name: String
+
+        init(id: String, name: String) {
+            self.id = id
+            self.name = FigmaToolService.listedName(name)
+        }
+
+        /// A stored name is read as a name is kept: on one line, and
+        /// "Untitled" for none.
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            try self.init(id: container.decode(String.self, forKey: .id), name: (try? container.decodeIfPresent(String.self, forKey: .name)) ?? "")
+        }
+    }
+
+    /// A coven's Figma files and projects. A project reaches the files it
+    /// holds now, also those added to it later.
+    struct FigmaChoice: Codable, Hashable {
+        var files: [Chosen] = []
+        var folders: [Chosen] = []
+
+        /// The most of each one coven keeps.
+        static let mostFiles = 50
+        static let mostFolders = 20
+
+        var isEmpty: Bool {
+            files.isEmpty && folders.isEmpty
+        }
+
+        init(files: [Chosen] = [], folders: [Chosen] = []) {
+            self.files = files
+            self.folders = folders
+        }
+
+        /// One stored entry, or nil for what is not one: it is left out
+        /// by itself, and the entries beside it are still read.
+        private struct Entry: Decodable {
+            let chosen: Chosen?
+
+            init(from decoder: Decoder) {
+                chosen = try? Chosen(from: decoder)
+            }
+        }
+
+        /// What was stored, leaving out what does not read as a file's
+        /// key or a project's id, what is there twice, and what is past
+        /// the most a coven keeps: an entry this app does not understand
+        /// reaches nothing, and takes no other entry with it.
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            func read(_ key: CodingKeys, most: Int, isID: (String) -> Bool) -> [Chosen] {
+                var seen: Set<String> = []
+                let stored = ((try? container.decodeIfPresent([Entry].self, forKey: key)) ?? []).compactMap(\.chosen)
+                return Array(stored.filter { isID($0.id) && seen.insert($0.id).inserted }.prefix(most))
+            }
+            files = read(.files, most: Self.mostFiles) { FigmaToolService.fileKey($0) == $0 }
+            folders = read(.folders, most: Self.mostFolders, isID: FigmaToolService.isFolderID)
+        }
+    }
 
     enum CodingKeys: String, CodingKey {
         case apps
         case mcpServers = "mcp_servers"
+        case figma
     }
 
-    init(apps: [String: Access] = [:], mcpServers: [String: Access] = [:]) {
+    init(apps: [String: Access] = [:], mcpServers: [String: Access] = [:], figma: FigmaChoice = FigmaChoice()) {
         self.apps = apps
         self.mcpServers = mcpServers
+        self.figma = figma
     }
 
     /// What was stored, leaving out any entry that does not read as an
@@ -37,6 +107,7 @@ nonisolated struct CovenConnections: Codable, Hashable {
         }
         apps = read(.apps)
         mcpServers = read(.mcpServers)
+        figma = (try? container.decodeIfPresent(FigmaChoice.self, forKey: .figma)) ?? FigmaChoice()
     }
 }
 
@@ -73,6 +144,43 @@ nonisolated extension CovenConnections {
     func turning(mcpServer id: String, on: Bool) -> CovenConnections {
         var changed = self
         changed.mcpServers[id] = on ? (mcpServers[id] ?? .readOnly) : nil
+        return changed
+    }
+
+    /// Why a Figma file or project was not added to a coven's choice.
+    enum FigmaRefusal: Error, Equatable {
+        case alreadyChosen
+        case tooMany
+    }
+
+    /// This choice with a Figma file added, named as Figma names it.
+    func addingFigma(file: Chosen) throws -> CovenConnections {
+        guard !figma.files.contains(where: { $0.id == file.id }) else { throw FigmaRefusal.alreadyChosen }
+        guard figma.files.count < FigmaChoice.mostFiles else { throw FigmaRefusal.tooMany }
+        var changed = self
+        changed.figma.files.append(file)
+        return changed
+    }
+
+    /// This choice with a Figma project added.
+    func addingFigma(folder: Chosen) throws -> CovenConnections {
+        guard !figma.folders.contains(where: { $0.id == folder.id }) else { throw FigmaRefusal.alreadyChosen }
+        guard figma.folders.count < FigmaChoice.mostFolders else { throw FigmaRefusal.tooMany }
+        var changed = self
+        changed.figma.folders.append(folder)
+        return changed
+    }
+
+    /// This choice without a Figma file, or without a project.
+    func removingFigma(file id: String) -> CovenConnections {
+        var changed = self
+        changed.figma.files.removeAll { $0.id == id }
+        return changed
+    }
+
+    func removingFigma(folder id: String) -> CovenConnections {
+        var changed = self
+        changed.figma.folders.removeAll { $0.id == id }
         return changed
     }
 
@@ -165,7 +273,9 @@ nonisolated enum CovenConnectionRules {
     /// on to read keeps only its tools marked read-only (and is left out
     /// if it marks none).
     static func offered(tools: Set<String>, servers: [MCPServerAccount], in connections: CovenConnections?) -> (tools: Set<String>, servers: [MCPServerAccount]) {
-        guard let connections else { return (tools, servers) }
+        // Where no choice is made (a thread in no coven, a coven that has
+        // made none) there is nothing chosen for `figma.listFiles` to tell.
+        guard let connections else { return (tools.subtracting(["figma.listFiles"]), servers) }
         let kept = tools.filter { decision(forAppTool: $0, in: connections) == .allowed }
         let on: [MCPServerAccount] = servers.compactMap { server in
             guard let access = connections.mcpServers[server.id] else { return nil }

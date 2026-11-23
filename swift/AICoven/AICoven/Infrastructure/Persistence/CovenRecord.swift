@@ -338,6 +338,47 @@ actor CovenRepository {
         }
     }
 
+    /// Changes which connections the coven's agents may use, in one
+    /// write: `change` is given the choice as it is stored then (or
+    /// `unchosen`, what the coven lives by, where it has made none), and
+    /// what it gives back is kept and returned. So a change is made to
+    /// the choice as it is, not as whoever asked last read it: two
+    /// screens changing different things undo nothing of each other's.
+    /// What `change` throws is thrown, and nothing is written. Only the
+    /// signed-in account's coven is changed, and settings that cannot be
+    /// read are not written over.
+    func changeConnections(
+        ofCoven id: String, unchosen: CovenConnections, _ change: @escaping @Sendable (CovenConnections) throws -> CovenConnections
+    ) async throws -> CovenConnections {
+        let uid = await MainActor.run { UserScope.currentUserID }
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        // The account can have changed while the database was waited for.
+        guard await MainActor.run(body: { UserScope.currentUserID }) == uid else { throw RepositoryError.accountChanged }
+        return try await dbQueue.write { db in
+            guard var record = try CovenRecord
+                .filter(CovenRecord.Columns.id == id)
+                .filter(CovenRecord.Columns.userId == uid)
+                .fetchOne(db) else {
+                throw CovenRepositoryError.covenNotFound
+            }
+            var settings = try Self.storedSettings(of: record)
+            let after = try change(Self.connections(in: settings) ?? unchosen)
+            settings["connections"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(after))
+            record.settings = try String(data: JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys]), encoding: .utf8)
+            record.updatedAt = Date()
+            try record.update(db)
+            return after
+        }
+    }
+
+    /// The choice of connections in a coven's settings: nil if it has
+    /// made none. Throws if what is stored there is not a choice.
+    private static func connections(in settings: [String: Any]) throws -> CovenConnections? {
+        guard let stored = settings["connections"], !(stored is NSNull) else { return nil }
+        guard stored is [String: Any] else { throw CovenRepositoryError.settingsUnreadable }
+        return try JSONDecoder().decode(CovenConnections.self, from: JSONSerialization.data(withJSONObject: stored))
+    }
+
     /// Sets the coven's icon, keeping everything else in its settings as
     /// it is stored. Whose coven it is is read once, when this is called:
     /// only that account's coven is changed, whoever is signed in by the
@@ -419,18 +460,15 @@ actor CovenRepository {
     /// choice.
     func connections(ofCoven id: String, for userID: String) async throws -> CovenConnections? {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-        let stored: Any? = try await dbQueue.read { db in
+        return try await dbQueue.read { db in
             guard let record = try CovenRecord
                 .filter(CovenRecord.Columns.id == id)
                 .filter(CovenRecord.Columns.userId == userID)
                 .fetchOne(db) else {
                 throw CovenRepositoryError.covenNotFound
             }
-            return try Self.storedSettings(of: record)["connections"]
+            return try Self.connections(in: Self.storedSettings(of: record))
         }
-        guard let stored, !(stored is NSNull) else { return nil }
-        guard stored is [String: Any] else { throw CovenRepositoryError.settingsUnreadable }
-        return try JSONDecoder().decode(CovenConnections.self, from: JSONSerialization.data(withJSONObject: stored))
     }
 
     /// A coven's settings as they are stored: an object, empty if none

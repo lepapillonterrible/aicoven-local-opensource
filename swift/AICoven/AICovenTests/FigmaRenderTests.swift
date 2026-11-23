@@ -211,6 +211,7 @@ final class FigmaRenderTests: XCTestCase {
 
     private struct World {
         let executor: ToolExecutionService
+        let accounts: ConnectedAccountsService
         let asked: Asked
         let covens: Covens
         let defaults: UserDefaults
@@ -264,7 +265,7 @@ final class FigmaRenderTests: XCTestCase {
             appSession: URLSession(configuration: config)
         )
         await executor.setWhitelist(for: "chat", tools: PromptTemplates.figmaTools.union(PromptTemplates.figmaPictureTools))
-        return World(executor: executor, asked: asked, covens: covens, defaults: defaults, suite: suite)
+        return World(executor: executor, accounts: accounts, asked: asked, covens: covens, defaults: defaults, suite: suite)
     }
 
     private static func links(_ nodes: [String: String?]) -> String {
@@ -432,6 +433,71 @@ final class FigmaRenderTests: XCTestCase {
         let refused = await off.render(["file": AnyJSONValue("AbCdEfGhIjKl"), "nodes": AnyJSONValue("3:21")], pictures: TurnPictures())
         XCTAssertNotEqual(refused.status, "ok")
         XCTAssertEqual(off.asked.requests.count, 0)
+    }
+
+    func testAFileTheCovenDoesNotUse_isNotRendered_andOneItStoppedUsingMeanwhileIsNotGiven() async throws {
+        let frame = try Self.png(width: 400, height: 200)
+        let chosen = CovenConnections(apps: ["figma": .readWrite], figma: .init(files: [.init(id: "AbCdEfGhIjKl", name: "Home")]))
+        let notChosen = CovenConnections(apps: ["figma": .readWrite])
+
+        // Not one of the coven's files: Figma is not asked, and the render is the turn's still.
+        let world = try await world(images: { _ in (200, Self.links(["3:21": "https://\(Self.storage)/a"])) }, picture: { _ in (200, frame, [:]) })
+        defer { world.forget() }
+        world.covens.connections = notChosen
+        let pictures = TurnPictures()
+        for _ in 0 ... TurnPictures.mostRenders {
+            let refused = await world.render(["file": AnyJSONValue("AbCdEfGhIjKl"), "nodes": AnyJSONValue("3:21")], pictures: pictures)
+            XCTAssertEqual(refused.errorType, "connected_app_resource_not_allowed")
+        }
+        XCTAssertEqual(world.asked.requests.count, 0)
+        world.covens.connections = chosen
+        let rendered = await world.render(["file": AnyJSONValue("AbCdEfGhIjKl"), "nodes": AnyJSONValue("3:21")], pictures: pictures)
+        XCTAssertEqual(rendered.status, "ok", "A refusal was none of the turn's renders")
+        XCTAssertEqual(pictures.images.count, 1)
+
+        // Taken out of the coven's files while Figma rendered: no picture is given.
+        let changing = try await self.world(
+            images: { _ in (200, Self.links(["3:21": "https://\(Self.storage)/a"])) },
+            picture: { _ in (200, frame, [:]) },
+            whileRendering: { $0.connections = notChosen }
+        )
+        defer { changing.forget() }
+        changing.covens.connections = chosen
+        let taken = TurnPictures()
+        let late = await changing.render(["file": AnyJSONValue("AbCdEfGhIjKl"), "nodes": AnyJSONValue("3:21")], pictures: taken)
+        XCTAssertEqual(late.errorType, "connected_app_resource_not_allowed")
+        XCTAssertNil(late.contextBlock)
+        XCTAssertEqual(taken.images, [], "No picture reaches the model")
+    }
+
+    func testATokenRefusedAfterTheRender_waitsForANewOne_andNoPictureIsGiven() async throws {
+        let frame = try Self.png(width: 400, height: 200)
+        // The file is in a chosen project; the project is read before the render and again after it.
+        let reads = Covens()
+        let world = try await world(
+            images: { request in
+                switch request.url?.path {
+                case "/v2/folders/1/files":
+                    // The second reading finds the token refused.
+                    let first = reads.connections == nil
+                    reads.connections = CovenConnections()
+                    return first ? (200, #"{"name": "Site", "files": [{"key": "AbCdEfGhIjKl", "name": "Home"}]}"#) : (401, "{}")
+                case "/v1/me": return (401, "{}")
+                default: return (200, Self.links(["3:21": "https://\(Self.storage)/a"]))
+                }
+            },
+            picture: { _ in (200, frame, [:]) }
+        )
+        defer { world.forget() }
+        world.covens.connections = CovenConnections(apps: ["figma": .readWrite], figma: .init(folders: [.init(id: "1", name: "Site")]))
+        let pictures = TurnPictures()
+
+        let refused = await world.render(["file": AnyJSONValue("AbCdEfGhIjKl"), "nodes": AnyJSONValue("3:21")], pictures: pictures)
+
+        XCTAssertEqual(refused.errorType, "figma_token_refused")
+        XCTAssertEqual(pictures.images, [], "No picture reaches the model")
+        let waiting = await world.accounts.accountWaitingForAToken(for: .figma)
+        XCTAssertNotNil(waiting, "The connection waits for a new token, as after any refusal")
     }
 
     func testAStoppedRender_isToldAsStopped_andIsNotOneOfTheTurnsTwo() async throws {

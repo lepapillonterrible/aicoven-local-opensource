@@ -66,6 +66,15 @@ actor CovenService {
         try await CovenRepository.shared.setConnections(connections, forCoven: id)
     }
 
+    /// Changes which connections the coven's agents may use, to the
+    /// choice as it is stored when it is written (`unchosen` where the
+    /// coven has made none), and gives back what was kept.
+    func changeConnections(
+        ofCoven id: String, unchosen: CovenConnections, _ change: @escaping @Sendable (CovenConnections) throws -> CovenConnections
+    ) async throws -> CovenConnections {
+        try await CovenRepository.shared.changeConnections(ofCoven: id, unchosen: unchosen, change)
+    }
+
     /// Which connections may be used in a thread: nil for a thread in no
     /// coven (a personal thread, or an agent run's own thread), or in a
     /// coven that has made no choice yet, where everything connected is
