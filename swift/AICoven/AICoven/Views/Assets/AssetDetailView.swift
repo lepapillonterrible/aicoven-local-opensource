@@ -352,7 +352,7 @@ struct AssetDetailView: View {
             return
         }
         if action == .copyReference {
-            _ = ThreadMarkdownExport.writeClipboard(AssetLibraryRules.reference(to: asset))
+            AssetLibraryRules.copyReference(to: asset)
             return
         }
         let account = UserScope.currentUserID

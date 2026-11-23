@@ -23,6 +23,9 @@ struct AssetLibraryView: View {
     @SceneStorage(AssetLibraryRules.layoutKey) private var layout = AssetLibraryLayout.list
     /// How many cards a row of the grid holds, as it is laid out now.
     @State private var gridColumns = 1
+    /// Whether the grid has the keyboard: a click on a card gives it, so
+    /// that the arrows, Return and Space act on the card just clicked.
+    @FocusState private var gridHasFocus: Bool
     #endif
     #if os(macOS)
     /// The row selected in the table, shown in the inspector.
@@ -258,7 +261,7 @@ struct AssetLibraryView: View {
                 case .sendToAgent:
                     sending = asset
                 case .copyReference:
-                    _ = ThreadMarkdownExport.writeClipboard(AssetLibraryRules.reference(to: asset))
+                    AssetLibraryRules.copyReference(to: asset)
                 default:
                     let account = UserScope.currentUserID
                     Task { await model.perform(action, on: asset, as: account) }
@@ -468,6 +471,7 @@ struct AssetLibraryView: View {
         }
         .background(Color.aicovenSurface)
         .focusable()
+        .focused($gridHasFocus)
         .focusEffectDisabled()
     }
 
@@ -499,7 +503,10 @@ struct AssetLibraryView: View {
         .opacity(asset.status == .archived ? 0.75 : 1)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { openID = asset.id }
-        .simultaneousGesture(TapGesture().onEnded { selectedID = asset.id })
+        .simultaneousGesture(TapGesture().onEnded {
+            selectedID = asset.id
+            gridHasFocus = true
+        })
         .contextMenu { menu(for: asset) }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)

@@ -347,6 +347,13 @@ final class AssetThumbnailsTests: XCTestCase {
         let page = try XCTUnwrap(AssetThumbnails.draw(pdf(width: 612, height: 792), mimeType: "application/pdf"))
         XCTAssertEqual(page.height, AssetThumbnails.longestEdge, "The first page, its longest edge a thumbnail's")
         XCTAssertLessThan(page.width, page.height)
+        // No page comes out a pixel past the longest edge, whatever its size (591 points times 720/591 is a hair over 720).
+        for edge in [591.0, 609, 651, 676, 678, 715] {
+            let wide = try XCTUnwrap(AssetThumbnails.draw(pdf(width: edge, height: 300), mimeType: "application/pdf"))
+            XCTAssertEqual(wide.width, AssetThumbnails.longestEdge, "\(edge)")
+            let tall = try XCTUnwrap(AssetThumbnails.draw(pdf(width: 300, height: edge), mimeType: "application/pdf"))
+            XCTAssertEqual(tall.height, AssetThumbnails.longestEdge, "\(edge)")
+        }
         // A page turned a quarter is drawn as it is shown: a 200 by 100 page turned is taller than wide.
         let turned = try XCTUnwrap(AssetThumbnails.draw(turnedPDF(), mimeType: "application/pdf"))
         XCTAssertEqual(turned.height, AssetThumbnails.longestEdge)

@@ -1,5 +1,6 @@
 internal import Combine
 import Foundation
+import SwiftUI
 
 /// What the person can do with an asset, in the cloud app's words.
 nonisolated enum AssetAction: String, Identifiable {
@@ -103,6 +104,14 @@ nonisolated enum AssetLibraryRules {
     /// `asset.get` takes. (The address itself opens nothing here.)
     static func reference(to asset: Asset) -> String {
         "aicoven://assets/\(asset.id) " + AttachmentContext.plainName(asset.title)
+    }
+
+    /// Copies an asset's reference, and tells VoiceOver whether it was
+    /// copied: nothing on screen changes for a copy.
+    @MainActor
+    static func copyReference(to asset: Asset) {
+        let copied = ThreadMarkdownExport.writeClipboard(reference(to: asset))
+        AccessibilityNotification.Announcement(copied ? "Reference copied" : "Couldn't copy the reference").post()
     }
 
     /// Where the Mac's library keeps its layout, for each window.

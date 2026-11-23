@@ -192,7 +192,10 @@ final class AssetThumbnails: ObservableObject {
         let isTurned = (page.rotationAngle / 90) % 2 != 0
         let shown = isTurned ? CGSize(width: box.height, height: box.width) : box.size
         let scale = min(CGFloat(longestEdge) / max(shown.width, shown.height), 4)
-        let size = CGSize(width: (shown.width * scale).rounded(.up), height: (shown.height * scale).rounded(.up))
+        // Whole pixels, and never past the longest edge: the product can
+        // come out a hair above it before it is rounded up.
+        let longest = CGFloat(longestEdge)
+        let size = CGSize(width: min(longest, (shown.width * scale).rounded(.up)), height: min(longest, (shown.height * scale).rounded(.up)))
         guard let context = CGContext(
             data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8, bytesPerRow: 0,
             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
