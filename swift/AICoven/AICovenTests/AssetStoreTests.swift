@@ -822,6 +822,53 @@ final class AssetStoreTests: XCTestCase {
         XCTAssertEqual(after, before, "Neither the rejected title nor the proposal is left")
     }
 
+    func testAChangeAskedBeforeTheDataWasLockedIsNotMadeAfterItIsUnlockedAgain() async throws {
+        let made = try await store.create(type: .report, title: "Kept", details: "As it was.", files: [file("k.md")], inCoven: nil, as: account)
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        func stored() async throws -> [Data] {
+            try await queue.read { db in
+                let asset = try Row.fetchOne(db, sql: "SELECT status, title_ciphertext, updated_at FROM assets WHERE id = ?", arguments: [made.id])
+                let files = try String.fetchAll(db, sql: "SELECT id FROM asset_files WHERE asset_id = ? ORDER BY rowid", arguments: [made.id])
+                let (status, changed): (String, String) = (asset?["status"] ?? "", asset?["updated_at"] ?? "")
+                return [Data(status.utf8), asset?["title_ciphertext"] ?? Data(), Data(changed.utf8), Data(files.joined(separator: ",").utf8)]
+            }
+        }
+        let before = try await stored()
+
+        // The first change waits just before its write; three more are asked and wait their turn behind it.
+        let gate = Gate()
+        let late = AssetRepository(at: { step in
+            switch step {
+            case .asked: await gate.note()
+            case .beforeWriting: await gate.wait()
+            }
+        })
+        let account = account
+        let first = Task { try await late.update(made.id, title: "Rejected title", as: account) }
+        await gate.heard(arrivals: 1)
+        let queued = [
+            Task { try await late.update(made.id, title: "Queued title", as: account) },
+            Task { _ = try await late.addFile(AssetRepository.NewFile(name: "queued.md", data: Data([1])), to: made.id, as: account) },
+            Task { _ = try await late.move(made.id, to: .proposed, as: account) },
+        ]
+        await gate.heard(noted: 4)
+        // Locked, and unlocked again, while they wait: the session they were asked in is over.
+        await DataEncryptionService.shared.lock()
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        await gate.letThrough()
+
+        for (change, what) in [(first, "The change under way")] + queued.enumerated().map { ($0.element, "Queued change \($0.offset + 1)") } {
+            do {
+                try await change.value
+                XCTFail("\(what) is not made in a later session")
+            } catch RepositoryError.accountChanged {}
+        }
+        let arrivals = await gate.arrivals
+        XCTAssertEqual(arrivals, 1, "None of those that waited came to write")
+        let after = try await stored()
+        XCTAssertEqual(after, before, "As it stood: no title, no file and no status of theirs")
+    }
+
     func testTwoStatusChangesThatOverlapALockLeaveTheAssetAsItStood() async throws {
         let made = try await store.create(type: .image, title: "Kept", files: [file("k.png")], inCoven: nil, as: account)
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)

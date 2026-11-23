@@ -275,12 +275,23 @@ actor AssetRepository {
     /// written and, if it must be, put back. Two that overlapped while the
     /// data was being locked could otherwise put back each other's
     /// rejected write in place of how the asset stood.
-    private func inTurn<Done: Sendable>(_ change: @escaping @Sendable () async throws -> Done) async throws -> Done {
+    ///
+    /// A change is `account`'s as its data stood when the change was asked
+    /// for: the key's epoch is read then, before the change waits, and the
+    /// change is made only if the same key is still in memory when its
+    /// turn comes (and until it has been written). One asked for before
+    /// the data was locked is not made after it was unlocked again.
+    private func inTurn<Done: Sendable>(
+        as account: String, _ change: @escaping @Sendable (_ epoch: Int) async throws -> Done
+    ) async throws -> Done {
+        let epoch = await DataEncryptionService.shared.keyEpoch
+        try await AccountSeal.requireKey(of: account, since: epoch)
         let before = lastChange
         let changing = Task { () throws -> Done in
             await self.at?(.asked)
             await before?.value
-            return try await change()
+            try await AccountSeal.requireKey(of: account, since: epoch)
+            return try await change(epoch)
         }
         lastChange = Task { _ = try? await changing.value }
         return try await changing.value
@@ -292,12 +303,12 @@ actor AssetRepository {
     /// Changes a draft's title, or what says what it is, or both (nil
     /// leaves one as it is). Only a draft is changed.
     func update(_ id: String, title newTitle: String? = nil, details newDetails: String? = nil, as account: String) async throws {
-        try await inTurn { try await self.updateInTurn(id, title: newTitle, details: newDetails, as: account) }
+        try await inTurn(as: account) { epoch in
+            try await self.updateInTurn(id, title: newTitle, details: newDetails, as: account, since: epoch)
+        }
     }
 
-    private func updateInTurn(_ id: String, title newTitle: String?, details newDetails: String?, as account: String) async throws {
-        let epoch = await DataEncryptionService.shared.keyEpoch
-        try await AccountSeal.requireKey(of: account, since: epoch)
+    private func updateInTurn(_ id: String, title newTitle: String?, details newDetails: String?, as account: String, since epoch: Int) async throws {
         let title = newTitle.map(Self.keptTitle)
         if let title, title.isEmpty { throw AssetError.noTitle }
         let details = newDetails?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -348,12 +359,10 @@ actor AssetRepository {
     /// changed, and an asset has only so many files (counted in the write).
     @discardableResult
     func addFile(_ file: NewFile, to id: String, as account: String) async throws -> AssetFile {
-        try await inTurn { try await self.addFileInTurn(file, to: id, as: account) }
+        try await inTurn(as: account) { epoch in try await self.addFileInTurn(file, to: id, as: account, since: epoch) }
     }
 
-    private func addFileInTurn(_ file: NewFile, to id: String, as account: String) async throws -> AssetFile {
-        let epoch = await DataEncryptionService.shared.keyEpoch
-        try await AccountSeal.requireKey(of: account, since: epoch)
+    private func addFileInTurn(_ file: NewFile, to id: String, as account: String, since epoch: Int) async throws -> AssetFile {
         let name = AssetFile.keptName(file.name)
         guard file.data.count <= Self.largestFile else { throw AssetError.fileTooLarge(name: name) }
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
@@ -549,13 +558,11 @@ actor AssetRepository {
     /// It takes its turn among the changes to stored assets (`inTurn`).
     @discardableResult
     func move(_ id: String, to next: AssetStatus, listedAs version: String? = nil, as account: String) async throws -> Date {
-        try await inTurn { try await self.moveInTurn(id, to: next, listedAs: version, as: account) }
+        try await inTurn(as: account) { epoch in try await self.moveInTurn(id, to: next, listedAs: version, as: account, since: epoch) }
     }
 
-    private func moveInTurn(_ id: String, to next: AssetStatus, listedAs version: String?, as account: String) async throws -> Date {
+    private func moveInTurn(_ id: String, to next: AssetStatus, listedAs version: String?, as account: String, since epoch: Int) async throws -> Date {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-        let epoch = await DataEncryptionService.shared.keyEpoch
-        try await AccountSeal.requireKey(of: account, since: epoch)
         let now = Date()
         await at?(.beforeWriting)
         // How it stood before, as it is stored, to put it back by.
