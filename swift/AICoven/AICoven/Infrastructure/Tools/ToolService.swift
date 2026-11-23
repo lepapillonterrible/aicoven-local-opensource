@@ -22,7 +22,6 @@ extension ToolService: ChatToolService {}
 /// level services (agents, chat):
 /// - Timezone-aware current time
 /// - Web search (stubbed for now)
-/// - File generation with download links
 /// - Image analysis (vision)
 /// - File analysis (summaries / QA)
 ///
@@ -49,30 +48,6 @@ actor ToolService {
     // Marked `nonisolated` because it does not touch any actor state and can
     // be safely called without hopping onto the ToolService actor.
     // Implementation moved up to satisfy ChatToolService; kept here for docs.
-
-    // MARK: - File generation
-
-    struct GeneratedFile {
-        let id: String
-        let url: URL
-        let mimeType: String
-    }
-
-    /// Stores arbitrary text content as a file on disk and returns a download
-    /// URL. This does not require any external API.
-    func generateFile(name: String, mimeType: String, contents: Data) throws -> GeneratedFile {
-        let fileManager = FileManager.default
-        let baseDir = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
-        let filesDir = baseDir.appendingPathComponent("GeneratedFiles", isDirectory: true)
-        try fileManager.createDirectory(at: filesDir, withIntermediateDirectories: true)
-
-        let id = UUID().uuidString
-        let fileURL = filesDir.appendingPathComponent(name.isEmpty ? id : name)
-        try contents.write(to: fileURL)
-
-        return GeneratedFile(id: id, url: fileURL, mimeType: mimeType)
-    }
 
     // MARK: - Image / file analysis stubs
 
