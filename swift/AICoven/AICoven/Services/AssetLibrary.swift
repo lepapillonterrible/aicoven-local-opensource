@@ -90,8 +90,21 @@ nonisolated enum AssetLibraryRules {
     static let noStatusChosen = "Not Archived"
 
     /// Who made an asset, as its row says it.
-    static func madeBy(_ asset: Asset) -> String {
-        asset.madeByAgentID == nil ? "You" : "Agent"
+    static func madeBy(_ asset: Asset, agents: [String: String] = [:]) -> String {
+        guard let agentID = asset.madeByAgentID else { return "You" }
+        // Strix is no stored agent; an agent that is gone has no name left.
+        let name = agentID == TurnAssets.strix ? "Strix" : agents[agentID]
+        return name.map { "\($0), agent" } ?? "Agent"
+    }
+
+    /// What an asset's card in a thread says under its title: where it
+    /// stands, what it is, and how many files it has.
+    static func cardLine(_ asset: Asset) -> String {
+        var parts = [statusLabel(asset), asset.type.displayName]
+        if !asset.isUnreadable, !asset.files.isEmpty {
+            parts.append(asset.files.count == 1 ? "1 file" : "\(asset.files.count) files")
+        }
+        return parts.joined(separator: " · ")
     }
 
     /// An asset's status as its row says it: one the key cannot open is
@@ -121,8 +134,8 @@ nonisolated enum AssetLibraryRules {
 
     /// The quiet line under an asset's title: "status · type · who made it
     /// · when".
-    static func quietLine(_ asset: Asset, now: Date, calendar: Calendar = .current) -> String {
-        [statusLabel(asset), asset.type.displayName, madeBy(asset), shortTime(asset.updatedAt, now: now, calendar: calendar)]
+    static func quietLine(_ asset: Asset, agents: [String: String] = [:], now: Date, calendar: Calendar = .current) -> String {
+        [statusLabel(asset), asset.type.displayName, madeBy(asset, agents: agents), shortTime(asset.updatedAt, now: now, calendar: calendar)]
             .joined(separator: " · ")
     }
 
@@ -193,6 +206,9 @@ final class AssetLibraryModel: ObservableObject {
         var create: @Sendable (_ new: NewAsset, _ covenID: String?, _ account: String) async throws -> Asset
         /// Moves the asset, as it was listed, to another status.
         var move: @Sendable (_ asset: Asset, _ next: AssetStatus, _ account: String) async throws -> Void
+        /// The names of the coven's agents, by id (none for Strix's
+        /// place); nil where they could not be read.
+        var agents: @Sendable (_ covenID: String?) async -> [String: String]? = { _ in [:] }
 
         static let live = Source(
             assets: { try await AssetRepository.shared.assets(inCoven: $0, as: $1) },
@@ -201,7 +217,12 @@ final class AssetLibraryModel: ObservableObject {
                     type: new.type, title: new.title, details: new.details, files: [new.file], inCoven: covenID, as: account
                 )
             },
-            move: { try await AssetRepository.shared.move($0.id, to: $1, listedAs: $0.version, as: $2) }
+            move: { try await AssetRepository.shared.move($0.id, to: $1, listedAs: $0.version, as: $2) },
+            agents: { covenID in
+                guard let covenID else { return [:] }
+                guard let roles = try? await RoleService.shared.loadRoles(covenId: covenID) else { return nil }
+                return Dictionary(roles.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+            }
         )
     }
 
@@ -227,6 +248,8 @@ final class AssetLibraryModel: ObservableObject {
     @Published var search = ""
     @Published var typeFilter: AssetType?
     @Published var statusFilter: AssetStatus?
+    /// The names of the place's agents, by id, for who made an asset.
+    @Published private(set) var agents: [String: String] = [:]
     /// Whether a new asset is being made: one at a time.
     @Published private(set) var isCreating = false
     /// The assets whose status is on its way: one change at a time for an asset.
@@ -292,9 +315,12 @@ final class AssetLibraryModel: ObservableObject {
         let account = signedIn()
         do {
             let read = try await source.assets(covenID, account)
+            let names = await source.agents(covenID)
             guard reading > landed, signedIn() == account else { return }
             landed = reading
             assets = read
+            // Names that could not be read again stay as they were read last.
+            if let names { agents = names }
             hasRead = true
             loadFailed = false
         } catch is CancellationError {
@@ -358,6 +384,8 @@ final class AssetLibraryModel: ObservableObject {
         actionFailure = nil
         do {
             try await source.move(asset, next, account)
+            // Its card in a thread, if it has one, says so too.
+            NotificationCenter.default.post(name: Asset.didChange, object: nil)
         } catch AssetError.noSuchAsset {
             // Gone, with its coven or its account.
         } catch {

@@ -1,3 +1,4 @@
+internal import Combine
 import SwiftUI
 
 /// An asset's page, as the cloud app's: what it is, what can be done with
@@ -11,10 +12,65 @@ struct AssetDetailView: View {
     /// library's and the other pages'.
     @StateObject private var files: AssetFiles
 
-    init(asset: Asset, model: AssetLibraryModel, sharing turn: AssetFiles.Turn) {
+    /// Opens the thread the asset was made in.
+    private let onOpenThread: ((Thread) -> Void)?
+    /// The thread the asset was made in, once looked up.
+    @StateObject private var originFound = AssetOriginModel()
+
+    private var origin: Origin {
+        originFound.origin
+    }
+
+    /// What is known of the thread an asset was made in.
+    enum Origin: Equatable {
+        case unknown
+        case thread(Thread)
+        /// It was made in a thread that is no longer there.
+        case gone
+    }
+
+    static let threadGone = "The thread this was made in has been deleted."
+
+    init(asset: Asset, model: AssetLibraryModel, sharing turn: AssetFiles.Turn, onOpenThread: ((Thread) -> Void)? = nil) {
         self.asset = asset
         self.model = model
+        self.onOpenThread = onOpenThread
         _files = StateObject(wrappedValue: AssetFiles(turn: turn))
+    }
+
+    /// Looks up the thread the asset was made in, as the account signed in.
+    private func findOrigin() async {
+        let threadID = asset.threadID
+        await originFound.find {
+            await Self.origin(
+                ofThread: threadID, as: UserScope.currentUserID,
+                thread: { try await ThreadService.shared.getThread(threadId: $0) },
+                isThread: { try await ThreadRepository.shared.isThread($0, of: $1) }
+            )
+        }
+    }
+
+    /// What is known of the thread an asset was made in: the thread, where
+    /// it is the account's; gone only where the store says the account has
+    /// no such thread; unknown where that cannot be read (the row is then
+    /// left out, and nothing is said of a deletion). Nil if another
+    /// account is signed in by then.
+    static func origin(
+        ofThread threadID: String?, as account: String,
+        thread: (String) async throws -> Thread,
+        isThread: (String, String) async throws -> Bool,
+        signedIn: () -> String = { UserScope.currentUserID }
+    ) async -> Origin? {
+        guard let threadID else { return .unknown }
+        let found: Origin = if let read = try? await thread(threadID), read.userId == account {
+            .thread(read)
+        } else if let isThere = try? await isThread(threadID, account) {
+            // There, but not read: nothing is said of it.
+            isThere ? .unknown : .gone
+        } else {
+            .unknown
+        }
+        return signedIn() == account ? found : nil
     }
 
     static let proposedNote = "Proposed for review."
@@ -67,8 +123,25 @@ struct AssetDetailView: View {
                 }
             }
 
+            if origin == .gone {
+                Section {
+                    Label(Self.threadGone, systemImage: "info.circle")
+                        .foregroundStyle(Color.aicovenTextSecondary)
+                }
+            }
+
             Section {
-                LabeledContent("Made by", value: AssetLibraryRules.madeBy(asset))
+                LabeledContent("Made by", value: AssetLibraryRules.madeBy(asset, agents: model.agents))
+                if case let .thread(thread) = origin {
+                    LabeledContent("Thread") {
+                        if let onOpenThread {
+                            Button(ThreadListRules.title(of: thread)) { onOpenThread(thread) }
+                                .buttonStyle(.borderless)
+                        } else {
+                            Text(ThreadListRules.title(of: thread))
+                        }
+                    }
+                }
                 LabeledContent("Updated", value: AssetLibraryRules.fullTime(asset.updatedAt))
             }
 
@@ -97,6 +170,11 @@ struct AssetDetailView: View {
             }
         }
         .presenting(files)
+        .task(id: asset.threadID) { await findOrigin() }
+        // Its thread deleted while the page is open: the way to it goes.
+        .onReceive(NotificationCenter.default.publisher(for: .didDeleteThread).receive(on: RunLoop.main)) { _ in
+            Task { await findOrigin() }
+        }
     }
 
     private var header: some View {
@@ -224,5 +302,27 @@ struct AssetDetailView: View {
         }
         let account = UserScope.currentUserID
         Task { await model.perform(action, on: asset, as: account) }
+    }
+}
+
+/// The thread an asset was made in, as the asset's page shows it. It is
+/// looked up when the page comes and again when a thread is deleted, and
+/// two lookups can be under way at once: only the latest one's answer is
+/// shown, so that an earlier one landing late does not bring back the way
+/// to a thread that has since been deleted.
+@MainActor
+final class AssetOriginModel: ObservableObject {
+    @Published private(set) var origin = AssetDetailView.Origin.unknown
+    private var lookups = 0
+
+    /// Looks the origin up with `lookUp` (nil for an answer that is not
+    /// to be shown) and shows what it finds, unless a later lookup was
+    /// asked for meanwhile.
+    func find(_ lookUp: () async -> AssetDetailView.Origin?) async {
+        lookups += 1
+        let lookup = lookups
+        let found = await lookUp()
+        guard lookup == lookups, let found else { return }
+        origin = found
     }
 }

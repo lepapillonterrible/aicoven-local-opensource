@@ -10,6 +10,8 @@ struct RichMessageBubble: View {
     let message: EnhancedChatMessage
     var onApproveToolCall: ((String) -> Void)?
     var onRejectToolCall: ((String) -> Void)?
+    /// Opens an asset made in the reply's turn, from its card.
+    var onOpenAsset: ((Asset) -> Void)?
 
     private var isUser: Bool {
         message.role == "user"
@@ -44,6 +46,12 @@ struct RichMessageBubble: View {
                 // Attachments
                 if let atts = message.attachments, !atts.isEmpty {
                     MessageAttachmentsView(attachments: atts, alignment: isUser ? .trailing : .leading)
+                }
+
+                // The assets the reply's turn made, each as a card.
+                if !message.assetIDs.isEmpty {
+                    AssetCardsView(assetIDs: message.assetIDs, onOpen: onOpenAsset)
+                        .id(message.assetIDs)
                 }
 
                 // Generated files (e.g., from file.generate)

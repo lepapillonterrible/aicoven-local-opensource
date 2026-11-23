@@ -584,6 +584,7 @@ actor ChatService {
                         AnalyticsService.shared.trackToolUsed(toolName: invocation.tool, threadId: threadId)
                         let (_, contextBlock, files) = try await executeChatToolCall(invocation, threadID: threadId, pictures: turnPictures, assets: turnAssets)
                         state.generatedFiles += files
+                        state.madeAssets = turnAssets?.made ?? []
 
                         state.toolsInProgress[toolID]?.status = "completed"
                         state.toolsInProgress[toolID]?.result = contextBlock
@@ -631,6 +632,7 @@ actor ChatService {
                     AnalyticsService.shared.trackToolUsed(toolName: forcedNative.tool, threadId: threadId)
                     let (_, contextBlock, files) = try await executeChatToolCall(forcedNative, threadID: threadId, pictures: turnPictures, assets: turnAssets)
                     state.generatedFiles += files
+                    state.madeAssets = turnAssets?.made ?? []
 
                     state.toolsInProgress[toolID]?.status = "completed"
                     state.toolsInProgress[toolID]?.result = contextBlock
@@ -662,6 +664,7 @@ actor ChatService {
                     AnalyticsService.shared.trackToolUsed(toolName: forcedMCP.tool, threadId: threadId)
                     let (_, contextBlock, files) = try await executeChatToolCall(forcedMCP, threadID: threadId, pictures: turnPictures, assets: turnAssets)
                     state.generatedFiles += files
+                    state.madeAssets = turnAssets?.made ?? []
 
                     state.toolsInProgress[toolID]?.status = "completed"
                     state.toolsInProgress[toolID]?.result = contextBlock
@@ -869,6 +872,7 @@ actor ChatService {
 
                     let (summary, contextBlock, files) = try await executeChatToolCall(toolCall, threadID: threadId, pictures: turnPictures, assets: turnAssets)
                     state.generatedFiles += files
+                    state.madeAssets = turnAssets?.made ?? []
 
                     state.toolsInProgress[toolID]?.status = "completed"
                     state.toolsInProgress[toolID]?.result = contextBlock
@@ -919,6 +923,7 @@ actor ChatService {
 
                         let (summary, contextBlock, files) = try await executeChatToolCall(forcedCall, threadID: threadId, pictures: turnPictures, assets: turnAssets)
                         state.generatedFiles += files
+                        state.madeAssets = turnAssets?.made ?? []
 
                         state.toolsInProgress[toolID]?.status = "completed"
                         state.toolsInProgress[toolID]?.result = contextBlock
@@ -1002,6 +1007,7 @@ actor ChatService {
 
                             let (summary, contextBlock, files) = try await executeChatToolCall(forcedCall, threadID: threadId, pictures: turnPictures, assets: turnAssets)
                             state.generatedFiles += files
+                            state.madeAssets = turnAssets?.made ?? []
 
                             state.toolsInProgress[toolID]?.status = "completed"
                             state.toolsInProgress[toolID]?.result = contextBlock

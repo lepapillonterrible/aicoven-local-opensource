@@ -346,6 +346,34 @@ final class AssetStoreTests: XCTestCase {
         XCTAssertEqual(listed.first?.files.count, 1)
     }
 
+    func testAssetsAreReadByTheirIds_whereverTheyAreKept_inTheOrderAsked_andOnlyTheAccounts() async throws {
+        let coven = try await newCoven()
+        let strixs = try await store.create(type: .image, title: "Strix's", files: [file("s.png")], inCoven: nil, as: account)
+        let covens = try await store.create(type: .chart, title: "The coven's", files: [], inCoven: coven, as: account)
+        let theirs = try await store.create(type: .chart, title: "Not mine soon", files: [], inCoven: nil, as: account)
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        try await queue.write { db in
+            try db.execute(sql: "UPDATE assets SET user_id = 'someone-else' WHERE id = ?", arguments: [theirs.id])
+        }
+
+        let found = try await store.assets(withIDs: [covens.id, "no-such-asset", theirs.id, strixs.id], as: account)
+        XCTAssertEqual(found.map(\.id), [covens.id, strixs.id], "In the order asked, without what is not there or not the account's")
+        XCTAssertEqual(found.map(\.covenID), [coven, nil], "Each says where it is kept")
+        XCTAssertEqual(found.map(\.title), ["The coven's", "Strix's"])
+        XCTAssertEqual(found.last?.files.map(\.name), ["s.png"])
+        let none = try await store.assets(withIDs: [], as: account)
+        XCTAssertEqual(none.count, 0)
+
+        // However many are asked for, each is looked up, and one asked for twice is answered twice, where it was asked.
+        let many = [strixs.id] + (0 ..< AssetRepository.idsInOneRead * 2).map { "no-such-asset-\($0)" } + [strixs.id, covens.id]
+        let ofMany = try await store.assets(withIDs: many, as: account)
+        XCTAssertEqual(ofMany.map(\.id), [strixs.id, strixs.id, covens.id])
+        do {
+            _ = try await store.assets(withIDs: [strixs.id], as: "someone-else")
+            XCTFail("Nothing is read as an account that is not signed in")
+        } catch RepositoryError.accountChanged {}
+    }
+
     // MARK: - Whose it is
 
     func testAnAssetIsReadAndChangedOnlyAsItsOwnAccount() async throws {

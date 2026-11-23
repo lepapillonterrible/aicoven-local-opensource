@@ -640,7 +640,11 @@ struct TurnProgress {
         trace.finishedAt = now
         // What the turn's tools made for the person (a generated image)
         // goes with its message however the turn ended: it was made.
-        let made = FileAttachmentDetail.messageMetadata(for: last?.generatedFiles ?? []) ?? [:]
+        var made = FileAttachmentDetail.messageMetadata(for: last?.generatedFiles ?? []) ?? [:]
+        // So do the assets its agent made: the reply shows a card for each.
+        if let assets = last?.madeAssets, !assets.isEmpty {
+            made[Asset.messageMetadataKey] = .array(assets.map { .string($0) })
+        }
         // However the turn ended, its message is shown under the name it
         // was started with.
         var named: [String: AnyJSONValue]? = made.merging(agentName.map { ["role_name": AnyJSONValue($0)] } ?? [:]) { _, name in name }

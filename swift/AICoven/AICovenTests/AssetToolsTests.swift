@@ -72,6 +72,22 @@ final class AssetToolsTests: XCTestCase {
                     return stand.assets[covenID ?? ""] ?? []
                 }
             },
+            asset: { id, _ in
+                await MainActor.run {
+                    // One asset by its id, saying where it is kept.
+                    for (coven, kept) in stand.assets {
+                        guard let found = kept.first(where: { $0.id == id }) else { continue }
+                        stand.afterReading?()
+                        return Asset(
+                            id: found.id, covenID: coven.isEmpty ? nil : coven, type: found.type, status: found.status, title: found.title,
+                            details: found.details, madeByAgentID: found.madeByAgentID, threadID: found.threadID,
+                            sourceMessageID: found.sourceMessageID, files: found.files, isUnreadable: found.isUnreadable,
+                            version: found.version, createdAt: found.createdAt, updatedAt: found.updatedAt
+                        )
+                    }
+                    return nil
+                }
+            },
             data: { fileID, _ in
                 try await MainActor.run {
                     stand.filesAsked.append(fileID)
@@ -738,7 +754,21 @@ final class AssetToolsTests: XCTestCase {
             hermesAgent: { nil },
             openClawTurn: { _ in nil }
         )
-        try await chat.streamMessage(threadId: thread.id, message: "Keep this as an asset: ship on Friday.", onStateChange: { _ in })
+        // What the turn reports as it goes: the last report is what its reply is made from.
+        final class Reports: @unchecked Sendable {
+            private let lock = NSLock()
+            private var states: [TurnState] = []
+
+            func add(_ state: TurnState) {
+                lock.withLock { states.append(state) }
+            }
+
+            var last: TurnState? {
+                lock.withLock { states.last }
+            }
+        }
+        let reports = Reports()
+        try await chat.streamMessage(threadId: thread.id, message: "Keep this as an asset: ship on Friday.", onStateChange: { reports.add($0) })
 
         let kept = try await AssetRepository.shared.assets(inCoven: nil, as: account).filter { $0.threadID == thread.id }
         XCTAssertEqual(kept.count, 1, "With Strix's assets, where the thread is")
@@ -748,6 +778,7 @@ final class AssetToolsTests: XCTestCase {
         XCTAssertEqual(asset.status, .proposed, "Proposed for the person's review; not approved")
         XCTAssertEqual(asset.madeByAgentID, TurnAssets.strix, "Made by the turn's agent: Strix, in a thread of no agent's")
         XCTAssertEqual(asset.files.map(\.name), ["brief.md"])
+        XCTAssertEqual(reports.last?.madeAssets, [asset.id], "The turn says which assets it made: its reply shows a card for each")
         let bytes = try await AssetRepository.shared.data(ofFile: XCTUnwrap(asset.files.first).id, as: account)
         XCTAssertEqual(String(decoding: bytes, as: UTF8.self), "Ship on Friday.")
     }

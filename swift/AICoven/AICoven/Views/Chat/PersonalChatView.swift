@@ -3,6 +3,8 @@ import SwiftUI
 /// Personal chat view using the same enhanced streaming tooling as coven chats
 struct PersonalChatView: View {
     let thread: Thread
+    /// Opens an asset made in the thread, from its card.
+    var onOpenAsset: ((Asset) -> Void)?
 
     @State private var messages: [ChatMessage] = []
     @State private var messageText = ""
@@ -102,7 +104,8 @@ struct PersonalChatView: View {
                             RichMessageBubble(
                                 message: em,
                                 onApproveToolCall: { _ in },
-                                onRejectToolCall: { _ in }
+                                onRejectToolCall: { _ in },
+                                onOpenAsset: onOpenAsset
                             )
                             .id(em.id)
                             // What it took: opens the steps behind the reply.
