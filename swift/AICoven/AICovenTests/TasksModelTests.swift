@@ -577,6 +577,40 @@ final class TasksModelTests: XCTestCase {
         XCTAssertNil(tasks.errorMessage)
     }
 
+    func testKeptJustBeforeMidnight_thePinsAreKeptForTheDayThatHasBegun() async {
+        let stand = Stand()
+        let over = TaskPin(period: .today, expiresAt: now.addingTimeInterval(-60))
+        stand.kept = [task("a", pin: over)]
+        // The clock moves from a second before midnight to a second after it between the two askings.
+        let midnight = Date(timeIntervalSince1970: 1_799_884_800)
+        var clock = [midnight.addingTimeInterval(-1), midnight.addingTimeInterval(-1), midnight.addingTimeInterval(1)]
+        var asked: [Date?] = []
+        let tasks = TasksModel(
+            covenID: nil,
+            source: TasksModel.Source(
+                tasks: { _, _ in await MainActor.run { TaskListing(tasks: stand.kept, finished: 0) } },
+                create: { _, _, _ in throw TaskError.tooMany },
+                change: { _, _, _ in },
+                answerLapsedPins: { ids, keepUntil, _ in
+                    try await MainActor.run {
+                        asked.append(keepUntil)
+                        // The first end asked for has passed by the time it is written.
+                        if asked.count == 1 { throw TaskError.pinEnded }
+                        return Set(ids)
+                    }
+                }
+            ),
+            signedIn: { "ada" }, announce: { stand.heard.append($0) }, now: { clock.count > 1 ? clock.removeFirst() : clock[0] },
+            calendar: { self.calendar }
+        )
+        await tasks.load()
+
+        await tasks.answerLapsedPins(of: tasks.open, keep: true, as: "ada")
+        XCTAssertEqual(asked, [midnight, midnight.addingTimeInterval(86400)], "Asked once more, until the end of the day that has begun")
+        XCTAssertEqual(stand.heard.last, "Kept for today 1 task")
+        XCTAssertNil(tasks.errorMessage)
+    }
+
     func testWhileAnAnswerForPinsIsOnItsWay_itsTasksAreNotChanged_andNothingIsSaidToAnotherAccount() async {
         let stand = Stand()
         let over = TaskPin(period: .today, expiresAt: now.addingTimeInterval(-60))

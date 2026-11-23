@@ -219,7 +219,7 @@ final class TasksModel: ObservableObject {
         defer { saving.subtract(ids) }
         errorMessage = nil
         do {
-            let answered = try await source.answerLapsedPins(ids, keep ? TaskRules.pinEnd(for: .today, now: moment, calendar: calendar()) : nil, account)
+            let answered = try await answer(ids, keep: keep, account)
             if signedIn() == account, !answered.isEmpty {
                 say("\(keep ? "Kept for today" : "Cleared") \(answered.count) \(answered.count == 1 ? "task" : "tasks")")
             }
@@ -236,6 +236,19 @@ final class TasksModel: ObservableObject {
         }
         guard signedIn() == account else { return }
         await Task { await self.load() }.value
+    }
+
+    /// Keeps the pins until the end of today as it is when asked, or
+    /// clears them. Asked just before midnight, the end of that day can
+    /// have passed by the time it is written: it is then asked once more,
+    /// for the day that has begun.
+    private func answer(_ ids: [String], keep: Bool, _ account: String) async throws -> Set<String> {
+        guard keep else { return try await source.answerLapsedPins(ids, nil, account) }
+        do {
+            return try await source.answerLapsedPins(ids, TaskRules.pinEnd(for: .today, now: now(), calendar: calendar()), account)
+        } catch TaskError.pinEnded {
+            return try await source.answerLapsedPins(ids, TaskRules.pinEnd(for: .today, now: now(), calendar: calendar()), account)
+        }
     }
 
     /// Makes one change to a task for `account`, who asked, and reads the
