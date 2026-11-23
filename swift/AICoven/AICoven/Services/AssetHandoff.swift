@@ -270,6 +270,7 @@ final class AssetHandoffModel: ObservableObject {
         let load = loads
         isLoading = true
         failure = nil
+        let chosenBefore = agentID
         // Read together: neither waits for the other.
         async let readAgents = hands.agents(asset.covenID, account)
         async let readThreads: [Thread]? = try? await hands.threads(asset.covenID, account)
@@ -289,6 +290,9 @@ final class AssetHandoffModel: ObservableObject {
         if thread == nil { threadID = (threads.first { $0.id == asset.threadID } ?? threads.first)?.id }
         if threads.isEmpty { startsNewThread = true }
         if agent == nil { agentID = (agents.first { $0.id == thread?.agentId } ?? agents.first)?.id }
+        // Read again for the agent already chosen (Try Again): what stands
+        // in its way now is said, also where that is the same as before.
+        if agentID == chosenBefore, let note = agentNote { hands.say(note) }
     }
 
     private func fail(_ words: String) {

@@ -238,7 +238,7 @@ final class AssetHandoffTests: XCTestCase {
         XCTAssertEqual(closed.agents, [])
     }
 
-    func testAnAgentThatIsNotGivenTheAssetToolsIsNotSentAnAsset() async {
+    func testAnAgentThatIsNotGivenTheAssetToolsIsNotSentAnAsset() async throws {
         let stand = Stand()
         stand.agents = [.init(id: "local", name: "Pip", tools: .notOffered), .init(id: "scout", name: "Scout"), .init(id: "lost", name: "Wren", tools: .unknown)]
         let sending = model(asset(), stand)
@@ -263,6 +263,11 @@ final class AssetHandoffTests: XCTestCase {
         XCTAssertEqual(sending.agentNote, "AICoven couldn't find a model to answer for Wren just now. Check your AI connections, or try again.")
         XCTAssertTrue(sending.offersTryAgain)
         XCTAssertFalse(sending.canSend)
+        // Read again and still none: said again, so that Try Again is answered aloud.
+        let saidBefore = stand.said.count
+        await sending.load(as: "ada")
+        XCTAssertEqual(stand.said.count, saidBefore + 1)
+        XCTAssertEqual(stand.said.last, sending.agentNote)
         stand.agents = [.init(id: "local", name: "Pip", tools: .notOffered), .init(id: "scout", name: "Scout"), .init(id: "lost", name: "Wren")]
         await sending.load(as: "ada")
         XCTAssertEqual(sending.agentID, "lost", "The choice is kept")
@@ -305,6 +310,36 @@ final class AssetHandoffTests: XCTestCase {
         XCTAssertEqual(offeredByNothing, [nil], "No model can be found to answer: that says nothing of where the agent runs")
         let asAnother = await chat(answeredBy: "anthropic").offersPlaceTools(toAgents: [nil], as: "someone-else")
         XCTAssertNil(asAnother, "Nothing is answered for an account that is not the one signed in")
+
+        // Strix set to the person's own Hermes agent: its turns are handed to Hermes, which is given none of this app's tools.
+        let defaults = UserDefaults.standard
+        let keys = ["llm_provider", "hermes_model_connections_converted.v1"].map(UserScope.scopedKey)
+        let saved = keys.map { defaults.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                defaults.set(value, forKey: key)
+            }
+        }
+        defaults.set("hermes", forKey: keys[0])
+        defaults.set(true, forKey: keys[1])
+        let hermes = try XCTUnwrap(URL(string: "http://127.0.0.1:8642")).map { HermesAgentClient(baseURL: $0, apiKey: "KEY") }
+        let withHermes = ChatService(
+            contextBuilder: ContextBuilder(limits: .init(maxRecentMessages: 4, maxRecentMemories: 4)),
+            modelRouter: HeuristicModelRouter(availableModels: [ModelDescriptor(
+                providerID: "anthropic", modelID: "model", maxContextTokens: 128_000, supportsTools: false, supportsEmbeddings: false, costClass: .cheap
+            )]),
+            llmClients: ["anthropic": Silent()],
+            threadStore: ThreadRepository.shared,
+            toolService: ToolService.shared,
+            shouldAutoRefreshEnvironment: false,
+            hermesAgent: { hermes },
+            openClawTurn: { _ in nil }
+        )
+        let handedToHermes = await withHermes.offersPlaceTools(toAgents: [nil], as: account)
+        XCTAssertEqual(handedToHermes, [false], "Though a cloud model is connected too")
+        defaults.set("anthropic", forKey: keys[0])
+        let backOnAModel = await withHermes.offersPlaceTools(toAgents: [nil], as: account)
+        XCTAssertEqual(backOnAModel, [true])
 
         XCTAssertTrue(ChatService.givesPlaceTools(provider: "anthropic", isLocal: false))
         XCTAssertTrue(ChatService.givesPlaceTools(provider: "openai_compatible", isLocal: false))

@@ -6,6 +6,10 @@ import SwiftUI
 struct AssetHandoffSheet: View {
     @StateObject private var model: AssetHandoffModel
     private let onSent: (Thread) -> Void
+    /// Counts the readings asked for: each is the sheet's own task, which
+    /// closing the sheet calls off, so that nothing of it lands or is said
+    /// for a sheet that is gone. Try Again asks for another.
+    @State private var readings = 0
     @Environment(\.dismiss) private var dismiss
 
     init(asset: Asset, onSent: @escaping (Thread) -> Void) {
@@ -37,10 +41,7 @@ struct AssetHandoffSheet: View {
                         // threads there are, and the reading is offered again.
                         Text(AssetHandoffModel.couldNotLoad)
                             .foregroundStyle(Color.aicovenError)
-                        Button("Try Again") {
-                            let account = UserScope.currentUserID
-                            Task { await model.load(as: account) }
-                        }
+                        Button("Try Again") { readings += 1 }
                     } else {
                         Picker("Agent", selection: $model.agentID) {
                             Text("Choose an agent").tag(String?.none)
@@ -73,11 +74,8 @@ struct AssetHandoffSheet: View {
                                 .foregroundStyle(Color.aicovenError)
                             // No model was found for it: reading again can find one.
                             if model.offersTryAgain {
-                                Button("Try Again") {
-                                    let account = UserScope.currentUserID
-                                    Task { await model.load(as: account) }
-                                }
-                                .font(.aicovenBodySmall)
+                                Button("Try Again") { readings += 1 }
+                                    .font(.aicovenBodySmall)
                             }
                         }
                     }
@@ -129,7 +127,7 @@ struct AssetHandoffSheet: View {
         .frame(minWidth: 480, idealWidth: 520, minHeight: 420)
         #endif
         .interactiveDismissDisabled(model.isSending)
-        .task { await model.load(as: UserScope.currentUserID) }
+        .task(id: readings) { await model.load(as: UserScope.currentUserID) }
     }
 
     /// A field with its name shown: an iOS form shows only a field's
