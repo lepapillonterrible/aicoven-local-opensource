@@ -28,6 +28,8 @@ struct CovenSwitcherList: View {
     /// no sidebar to hold it. With whether anything waits for the person
     /// and whether a reply is not yet seen, for the row's mark.
     var activity: (isWaiting: Bool, hasUnread: Bool, open: () -> Void)?
+    /// Opens On me, where this list has its row: on a phone, like Activity's.
+    var onOpenOnMe: (() -> Void)?
     /// Moves a coven to a place among the covens.
     let onMoveCoven: (_ covenID: String, _ index: Int) -> Void
 
@@ -67,6 +69,10 @@ struct CovenSwitcherList: View {
                     .accessibilityElement(children: .combine)
                     .accessibilityValue(ActivityRowMark.words(isWaiting: activity.isWaiting, hasUnread: activity.hasUnread))
                     .accessibilityIdentifier("switcher-activity")
+                }
+                if let onOpenOnMe {
+                    action(title: "On me", systemImage: "checkmark.circle", action: onOpenOnMe)
+                        .accessibilityIdentifier("switcher-on-me")
                 }
                 action(title: personName, systemImage: "person.crop.circle", action: onOpenSettings)
                     .accessibilityHint("Opens Settings")

@@ -74,6 +74,7 @@ struct ShellRootView: View {
         case createCoven
         case settings
         case activity
+        case onMe
     }
 
     /// The covens in the person's order.
@@ -334,6 +335,13 @@ struct ShellRootView: View {
                 .navigationBarTitleDisplayMode(.inline)
             #endif
                 .stoneBackButton()
+        case .onMe:
+            TasksView(scope: .onMe, navigator: navigator, covens: orderedCovens)
+                .navigationTitle("On me")
+            #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+            #endif
+                .stoneBackButton()
         case nil:
             EmptyView()
         }
@@ -360,6 +368,10 @@ struct ShellRootView: View {
                 switcherFollowUp = (.activity, navigator.personMoves)
                 showSwitcher = false
             },
+            onOpenOnMe: {
+                switcherFollowUp = (.onMe, navigator.personMoves)
+                showSwitcher = false
+            },
             onMoveCoven: moveCoven
         )
     }
@@ -374,6 +386,7 @@ struct ShellRootView: View {
         case .createCoven: showCreateCoven = true
         case .settings: if navigator.isStill(at: followUp.askedAt) { openSettings(.settings) }
         case .activity: if navigator.isStill(at: followUp.askedAt) { navigator.openPersonPlace(.activity) }
+        case .onMe: if navigator.isStill(at: followUp.askedAt) { navigator.openPersonPlace(.onMe) }
         }
     }
 
@@ -595,6 +608,7 @@ private struct PhoneSwitcherSheet: View {
     let onCreateCoven: () -> Void
     let onOpenSettings: () -> Void
     let onOpenActivity: () -> Void
+    let onOpenOnMe: () -> Void
     let onMoveCoven: (_ covenID: String, _ index: Int) -> Void
     @ObservedObject private var activities = ThreadActivities.shared
 
@@ -616,6 +630,8 @@ private struct PhoneSwitcherSheet: View {
                 hasUnread: !activities.scopesWithUnread.isEmpty,
                 open: onOpenActivity
             ),
+            // And On me's.
+            onOpenOnMe: onOpenOnMe,
             onMoveCoven: onMoveCoven
         )
         .padding(.top, Spacing.md)

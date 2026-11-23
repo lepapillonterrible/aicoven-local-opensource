@@ -8,10 +8,11 @@ import XCTest
 @MainActor
 final class TasksModelTests: XCTestCase {
     private func task(
-        _ id: String, _ title: String? = nil, status: TaskStatus = .open, due: TaskDue? = nil, pin: TaskPin? = nil, unreadable: Bool = false
+        _ id: String, _ title: String? = nil, status: TaskStatus = .open, due: TaskDue? = nil, pin: TaskPin? = nil, unreadable: Bool = false,
+        coven: String? = nil
     ) -> TaskItem {
         TaskItem(
-            id: id, covenID: nil, title: unreadable ? "" : title ?? id.capitalized, status: status, stage: .backlog, due: due, pin: pin,
+            id: id, covenID: coven, title: unreadable ? "" : title ?? id.capitalized, status: status, stage: .backlog, due: due, pin: pin,
             isUnreadable: unreadable, createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
         )
     }
@@ -79,13 +80,19 @@ final class TasksModelTests: XCTestCase {
         var changingWaits: Gate?
         /// What VoiceOver was told, in order.
         var heard: [String] = []
-        // The threads' and the agents' side.
+        /// The threads' and the agents' side.
         var agents: [TasksModel.Agent]? = []
+        /// A coven's own agents, where a test of every place's tasks gives them; nil for a coven whose agents cannot be read.
+        var agentsIn: [String: [TasksModel.Agent]?] = [:]
+        var agentsAsked: [String] = []
         var agentsWait: Gate?
         var agentReadings = 0
         var strix = TasksModel.Agent.strix
         /// The agent the place's latest hand-off went to, as the store says it.
         var lastHandedTo: String?
+        /// The same for each place, where a test of every place's tasks gives it.
+        var lastHandedToIn: [String: String] = [:]
+        var scopes: [TasksModel.Scope] = []
         var threads: [String: AICoven.Thread] = [:]
         var threadFails: Error?
         var threadWaits: Gate?
@@ -104,14 +111,17 @@ final class TasksModelTests: XCTestCase {
         var answeringWaits: Gate?
     }
 
-    private func model(_ stand: Stand, covenID: String? = nil) -> TasksModel {
+    private func model(_ stand: Stand, covenID: String? = nil, onMe: Bool = false) -> TasksModel {
         let tasks = TasksModel(
-            covenID: covenID,
+            scope: onMe ? .onMe : .place(covenID: covenID),
             source: TasksModel.Source(
-                tasks: { covenID, also, account in
+                tasks: { scope, also, account in
                     // What is kept is read, or fails to be, as the reading is asked;
                     // what came of it is given once it is let through.
                     let outcome: Result<TaskListing, Error> = await MainActor.run {
+                        var covenID: String?
+                        if case let .place(place) = scope { covenID = place }
+                        stand.scopes.append(scope)
                         stand.readings.append((covenID, account))
                         stand.alsoAsked.append(also)
                         if let error = stand.readFails { return .failure(error) }
@@ -123,7 +133,8 @@ final class TasksModelTests: XCTestCase {
                             listed.append(named)
                         }
                         return .success(TaskListing(
-                            tasks: open + listed, finished: stand.finishedInAll ?? finished.count, lastHandedTo: stand.lastHandedTo
+                            tasks: open + listed, finished: stand.finishedInAll ?? finished.count,
+                            lastHandedTo: scope == .onMe ? stand.lastHandedToIn : stand.lastHandedTo.map { [covenID ?? "": $0] } ?? [:]
                         ))
                     }
                     await MainActor.run { stand.readingWaits }?.wait()
@@ -158,7 +169,9 @@ final class TasksModelTests: XCTestCase {
                             case .cleared: due = nil
                             case nil: break
                             }
-                            var changed = self.task(kept.id, change.title ?? kept.title, status: change.status ?? kept.status, due: due, pin: pin)
+                            var changed = self.task(
+                                kept.id, change.title ?? kept.title, status: change.status ?? kept.status, due: due, pin: pin, coven: kept.covenID
+                            )
                             changed.threadID = change.threadID ?? kept.threadID
                             changed.leadAgentID = kept.leadAgentID
                             switch change.leadAgentID {
@@ -185,10 +198,13 @@ final class TasksModelTests: XCTestCase {
                 }
             ),
             hands: TasksModel.Hands(
-                agents: { _ in
-                    await MainActor.run { stand.agentReadings += 1 }
+                agents: { covenID in
+                    await MainActor.run {
+                        stand.agentReadings += 1
+                        stand.agentsAsked.append(covenID)
+                    }
                     await MainActor.run { stand.agentsWait }?.wait()
-                    return await MainActor.run { stand.agents }
+                    return await MainActor.run { stand.agentsIn[covenID] ?? stand.agents }
                 },
                 strix: { _ in stand.strix },
                 thread: { id, _ in
@@ -683,7 +699,7 @@ final class TasksModelTests: XCTestCase {
         var clock = [midnight.addingTimeInterval(-1), midnight.addingTimeInterval(-1), midnight.addingTimeInterval(1)]
         var asked: [Date?] = []
         let tasks = TasksModel(
-            covenID: nil,
+            scope: .place(covenID: nil),
             source: TasksModel.Source(
                 tasks: { _, _, _ in await MainActor.run { TaskListing(tasks: stand.kept, finished: 0) } },
                 create: { _, _, _ in throw TaskError.tooMany },
@@ -904,28 +920,28 @@ final class TasksModelTests: XCTestCase {
         let stand = Stand()
         stand.agents = [scout, quill]
         let tasks = model(stand, covenID: "work")
-        XCTAssertNil(tasks.agents, "Not read yet")
+        XCTAssertNil(tasks.agentsByPlace["work"], "Not read yet")
         XCTAssertNil(tasks.leadChoices(for: task("a")))
         await tasks.loadAgents()
-        XCTAssertEqual(tasks.agents, [scout, quill])
-        XCTAssertFalse(tasks.agentsFailed)
+        XCTAssertEqual(tasks.agentsByPlace["work"], [scout, quill])
+        XCTAssertFalse(tasks.placesWhoseAgentsFailed.contains("work"))
 
         // They could not be read again: those read last stay, and it says so.
         stand.agents = nil
         await tasks.loadAgents()
-        XCTAssertEqual(tasks.agents, [scout, quill])
-        XCTAssertTrue(tasks.agentsFailed)
+        XCTAssertEqual(tasks.agentsByPlace["work"], [scout, quill])
+        XCTAssertTrue(tasks.placesWhoseAgentsFailed.contains("work"))
         // A coven with none, and Strix's own place: Strix answers.
         stand.agents = []
         await tasks.loadAgents()
-        XCTAssertEqual(tasks.agents, [.strix])
-        XCTAssertFalse(tasks.agentsFailed)
+        XCTAssertEqual(tasks.agentsByPlace["work"], [.strix])
+        XCTAssertFalse(tasks.placesWhoseAgentsFailed.contains("work"))
         // Strix says where it runs, like any agent.
         stand.strix.runsOn = "Anthropic"
         let strixs = model(stand)
         await strixs.loadAgents()
-        XCTAssertEqual(strixs.agents?.map(\.runsOn), ["Anthropic"])
-        XCTAssertEqual(strixs.agents?.first?.isStrix, true)
+        XCTAssertEqual(strixs.agentsByPlace[""]?.map(\.runsOn), ["Anthropic"])
+        XCTAssertEqual(strixs.agentsByPlace[""]?.first?.isStrix, true)
         XCTAssertFalse(scout.isStrix)
     }
 
@@ -934,7 +950,7 @@ final class TasksModelTests: XCTestCase {
         stand.agents = nil
         let tasks = model(stand, covenID: "work")
         await tasks.loadAgents()
-        XCTAssertTrue(tasks.agentsFailed)
+        XCTAssertTrue(tasks.placesWhoseAgentsFailed.contains("work"))
 
         // Asked for again while they are read (Try Again pressed twice, or Talk it through, which
         // needs them): nothing more is read, and whoever asked waits for the reading under way.
@@ -953,8 +969,8 @@ final class TasksModelTests: XCTestCase {
         await first.value
         let thread = await talking.value
         XCTAssertEqual(stand.agentReadings, 2)
-        XCTAssertEqual(tasks.agents, [scout])
-        XCTAssertFalse(tasks.agentsFailed)
+        XCTAssertEqual(tasks.agentsByPlace["work"], [scout])
+        XCTAssertFalse(tasks.placesWhoseAgentsFailed.contains("work"))
         XCTAssertEqual(thread?.id, "thread-1")
         XCTAssertEqual(stand.madeThreads.map(\.agent), [scout])
 
@@ -965,7 +981,7 @@ final class TasksModelTests: XCTestCase {
         stand.account = "grace"
         await gate.letOneThrough()
         await anothers.value
-        XCTAssertEqual(tasks.agents, [scout])
+        XCTAssertEqual(tasks.agentsByPlace["work"], [scout])
     }
 
     func testWhoAnswersATurnStartedFromATask() {
@@ -1464,6 +1480,141 @@ final class TasksModelTests: XCTestCase {
         XCTAssertEqual(stand.changed.count, changes + 1, "Its thread was given before; the turn is not kept after")
         XCTAssertEqual(stand.heard.count, heard)
         XCTAssertEqual(tasks.saving, [])
+    }
+
+    // MARK: - On me
+
+    func testOnMeShowsEveryPlacesTasks_andEachIsHandedToAnAgentOfItsOwnPlace() async {
+        let stand = Stand()
+        stand.kept = [
+            task("a", "Call the bank", coven: "work"), task("b", "Book the flights", coven: "home"), task("c", "Renew the lease"),
+            task("d", "File the return", coven: "work"), task("done", status: .done, coven: "home"),
+        ]
+        stand.agentsIn = ["work": [scout], "home": [quill]]
+        stand.lastHandedToIn = ["home": "quill"]
+        let tasks = model(stand, onMe: true)
+        XCTAssertNil(tasks.leadChoices(for: stand.kept[0]), "Not read yet")
+        await tasks.load()
+        XCTAssertEqual(stand.scopes, [.onMe])
+        XCTAssertEqual(tasks.open.map(\.id), ["a", "b", "c", "d"])
+        XCTAssertEqual(tasks.finished.map(\.id), ["done"])
+
+        // The places are known once the tasks are read: each coven's agents are read once, and Strix is Strix's.
+        XCTAssertEqual(stand.agentsAsked, ["work", "home"])
+        XCTAssertEqual(tasks.leadChoices(for: tasks.open[0]), TaskRules.LeadChoices(marked: nil, reason: nil, others: [scout]))
+        XCTAssertEqual(tasks.leadChoices(for: tasks.open[1]), TaskRules.LeadChoices(marked: quill, reason: .lastUsed, others: []), "Last used, of its own place")
+        XCTAssertEqual(tasks.leadChoices(for: tasks.open[2]), TaskRules.LeadChoices(marked: nil, reason: nil, others: [.strix]))
+        await tasks.load()
+        XCTAssertEqual(stand.agentsAsked, ["work", "home"], "Not read again with each listing")
+
+        // A task is made in a place: On me adds none.
+        let added = await tasks.add(title: "Something new", as: "ada")
+        XCTAssertFalse(added)
+        XCTAssertEqual(stand.created.count, 0)
+
+        // A thread made for a task is made in the task's own place, for an agent of that place.
+        let thread = await tasks.talkItThrough(tasks.open[1], as: "ada")
+        XCTAssertEqual(thread?.covenId, "home")
+        XCTAssertEqual(stand.madeThreads.last?.agent, quill)
+        let handed = await tasks.doItForMe(tasks.open[0], agent: scout, as: "ada")
+        XCTAssertEqual(handed, .started)
+        XCTAssertEqual(stand.madeThreads.last?.covenID, "work")
+        stand.live = ["thread-2": TaskLiveTurn(turnID: "turn-2")]
+        tasks.turnsChanged()
+        XCTAssertEqual(tasks.agentName(for: tasks.open[0]), "Scout")
+        let strixs = await tasks.talkItThrough(tasks.open[2], as: "ada")
+        XCTAssertNil(strixs?.covenId, "Strix's task, in no coven")
+        XCTAssertNil(stand.madeThreads.last?.agent)
+    }
+
+    func testInOnMeACovenWhoseAgentsCouldNotBeReadSaysSoForItsOwnTasksOnly() async {
+        let stand = Stand()
+        stand.kept = [task("a", "Call the bank", coven: "work"), task("b", "Book the flights", coven: "home")]
+        stand.agentsIn = ["work": nil, "home": [quill]]
+        let tasks = model(stand, onMe: true)
+        await tasks.load()
+        XCTAssertTrue(tasks.agentsFailed(for: tasks.open[0]))
+        XCTAssertNil(tasks.leadChoices(for: tasks.open[0]))
+        XCTAssertFalse(tasks.agentsFailed(for: tasks.open[1]))
+        XCTAssertEqual(tasks.leadChoices(for: tasks.open[1])?.others, [quill])
+
+        // A reading that failed waits to be asked for again: not with each listing.
+        await tasks.load()
+        XCTAssertEqual(stand.agentsAsked, ["work", "home"])
+        // Try Again reads the places shown again.
+        stand.agentsIn["work"] = [scout]
+        await tasks.loadAgents()
+        XCTAssertEqual(stand.agentsAsked, ["work", "home", "work", "home"])
+        XCTAssertFalse(tasks.agentsFailed(for: tasks.open[0]))
+        XCTAssertEqual(tasks.leadChoices(for: tasks.open[0])?.others, [scout])
+
+        // A place that comes to have a task is read when it does.
+        stand.kept.append(task("c", "Renew the lease", coven: "club"))
+        stand.agentsIn["club"] = []
+        await tasks.load()
+        XCTAssertEqual(stand.agentsAsked.last, "club")
+        XCTAssertEqual(tasks.leadChoices(for: tasks.open[2])?.others.map(\.isStrix), [true], "A coven with no agents: Strix answers there")
+    }
+
+    func testOnMeNamesEachTasksPlace() {
+        let covens = [Coven(id: "work", name: "Work", createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0))]
+        XCTAssertEqual(TasksView.placeName(ofCoven: nil, among: covens), "Strix")
+        XCTAssertEqual(TasksView.placeName(ofCoven: "work", among: covens), "Work")
+        XCTAssertEqual(TasksView.placeName(ofCoven: "gone", among: covens), "Another coven")
+
+        // First on the row's line, and in the details.
+        var led = task("a", "Call the bank", pin: TaskPin(period: .today, expiresAt: now.addingTimeInterval(3600)), coven: "work")
+        led.leadAgentID = "scout"
+        XCTAssertEqual(
+            TaskRules.context(of: led, now: now, agent: "Scout", place: "Work", calendar: calendar),
+            [.plain("Work"), .pin("Today"), .plain("Led by Scout")]
+        )
+        XCTAssertEqual(TaskRules.context(of: task("b"), now: now, place: "Strix", calendar: calendar), [.plain("Strix")])
+        XCTAssertEqual(TaskRules.context(of: task("b"), now: now, calendar: calendar), [], "A place's own page names no place")
+        XCTAssertEqual(TaskDetailView.stateWords(for: led, agent: "Scout", place: "Work"), "Work · Led by Scout")
+        XCTAssertEqual(TaskDetailView.stateWords(for: task("b"), place: "Strix"), "Strix")
+        XCTAssertEqual(TaskDetailView.stateWords(for: task("c", status: .done), place: "Work"), "Work · Done")
+        XCTAssertNil(TaskDetailView.stateWords(for: task("b")))
+    }
+
+    func testOnMeIsAPlaceOfThePersonsOwn_overWhateverScopeIsOnScreen() {
+        let navigator = ShellNavigator()
+        navigator.select(.coven("work"))
+        navigator.openPlace(.tasks)
+        let generation = navigator.placeGeneration
+
+        navigator.openPlace(.onMe)
+        XCTAssertEqual(navigator.personPlace, .onMe)
+        XCTAssertEqual(navigator.sidebarItem, .onMe, "Its own row")
+        XCTAssertEqual(navigator.placeTitle, "On me")
+        XCTAssertEqual(navigator.place, .tasks(covenId: "work"), "The scope's place waits underneath")
+        XCTAssertGreaterThan(navigator.placeGeneration, generation)
+        XCTAssertEqual(
+            shellWindowTitle(covenName: "Work", personPlace: navigator.personPlace, covenPlaceTitle: "Tasks"), "On me", "Of every scope: titled by itself"
+        )
+        XCTAssertEqual(shellWindowTitle(covenName: nil, personPlace: .onMe, covenPlaceTitle: nil), "On me")
+        XCTAssertEqual(navigator.phonePath, [.place, .personPlace])
+
+        // New Task is the scope's: it leaves On me for the scope's Tasks, whose line takes the cursor.
+        navigator.requestNewTask()
+        XCTAssertNil(navigator.personPlace)
+        XCTAssertEqual(navigator.sidebarItem, .tasks)
+        XCTAssertTrue(navigator.takeNewTaskRequest())
+        // While On me is open, an ask for New Task is not its to take.
+        navigator.requestNewTask()
+        navigator.openPlace(.onMe)
+        XCTAssertFalse(navigator.takeNewTaskRequest())
+
+        // Any move of the person leaves it.
+        navigator.select(.strix)
+        XCTAssertNil(navigator.personPlace)
+        navigator.openPlace(.onMe)
+        navigator.showOverview()
+        XCTAssertNil(navigator.personPlace)
+        navigator.openPlace(.onMe)
+        navigator.openPlace(.activity)
+        XCTAssertEqual(navigator.personPlace, .activity)
+        XCTAssertEqual(navigator.sidebarItem, .activity)
     }
 
     // MARK: - New Task

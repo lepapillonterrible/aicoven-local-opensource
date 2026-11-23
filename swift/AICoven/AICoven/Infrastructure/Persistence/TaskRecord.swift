@@ -25,7 +25,7 @@ enum TaskError: Error, Equatable {
     case noSuchTurn
 }
 
-/// A coven's tasks (or Strix's) as a listing gives them.
+/// A coven's tasks (or Strix's), or those of every place, as a listing gives them.
 nonisolated struct TaskListing: Equatable {
     /// Those still open, all of them, and after them the finished ones
     /// last changed, as many as a listing gives; within each, the one
@@ -33,11 +33,12 @@ nonisolated struct TaskListing: Equatable {
     let tasks: [TaskItem]
     /// How many are finished in all, listed or not.
     let finished: Int
-    /// The agent the place last handed a task to, as the cloud app tells
-    /// it: of the tasks handed to an agent that is still there, listed or
-    /// not, the one last changed says which. A later hand-off to Strix,
-    /// or to an agent deleted since, does not take its place.
-    var lastHandedTo: String?
+    /// The agent each place last handed a task to, by the coven's id, as
+    /// the cloud app tells it: of the place's tasks handed to an agent
+    /// that is still there, listed or not, the one last changed says
+    /// which. A later hand-off to Strix, or to an agent deleted since,
+    /// does not take its place. A place that handed none has no entry.
+    var lastHandedTo: [String: String] = [:]
 }
 
 /// The account's tasks, kept on the device: each in a coven of the
@@ -475,11 +476,24 @@ actor TaskRepository {
     /// ones last changed (the one whose details are on screen): it then
     /// comes after them.
     func tasks(inCoven covenID: String?, alsoListing shown: String? = nil, as account: String) async throws -> TaskListing {
+        try await listing(inPlace: covenID ?? "", alsoListing: shown, as: account)
+    }
+
+    /// Every task of `account`'s, in whichever coven or with Strix, as On
+    /// me shows them: listed by the same rule as one place's, over all of
+    /// them (every open one, then the finished ones last changed, as many
+    /// as a listing gives, and how many are finished in all).
+    func allTasks(alsoListing shown: String? = nil, as account: String) async throws -> TaskListing {
+        try await listing(inPlace: nil, alsoListing: shown, as: account)
+    }
+
+    /// The listing of one place's tasks (a coven's id, or none for
+    /// Strix's), or of every place's for nil.
+    private func listing(inPlace place: String?, alsoListing shown: String?, as account: String) async throws -> TaskListing {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-        let coven = covenID ?? ""
         return try await AccountSeal.reading(as: account) {
             // All in one read, so that what is listed and what is counted are of one moment.
-            let (stored, finished, lastHandedTo): ([Stored], Int, String?) = try await dbQueue.read { db in
+            let (stored, finished, lastHandedTo): ([Stored], Int, [String: String]) = try await dbQueue.read { db in
                 // Each task with the turn it was handed over in, as that turn stands.
                 let columns = """
                 tasks.id, tasks.coven_id, tasks.title_ciphertext, tasks.status, tasks.stage, tasks.due_date, tasks.due_time, tasks.pin_period,
@@ -487,48 +501,57 @@ actor TaskRepository {
                 tasks.updated_at, turns.status AS handoff_status, (turns.run_ciphertext IS NOT NULL) AS handoff_has_run
                 """
                 let from = "tasks LEFT JOIN turns ON turns.id = tasks.handoff_turn_id AND turns.user_id = tasks.user_id"
+                // The account's, in the place asked for or in any.
+                let theirs = "tasks.user_id = ?" + (place == nil ? "" : " AND tasks.coven_id = ?")
+                let whose: [(any DatabaseValueConvertible)?] = [account] + (place.map { [$0] } ?? [])
                 let open = try Row.fetchAll(
                     db,
                     sql: """
-                    SELECT \(columns) FROM \(from) WHERE tasks.user_id = ? AND tasks.coven_id = ? AND tasks.status = ?
+                    SELECT \(columns) FROM \(from) WHERE \(theirs) AND tasks.status = ?
                     ORDER BY tasks.updated_at DESC, tasks.created_at DESC, tasks.rowid DESC
                     """,
-                    arguments: [account, coven, TaskStatus.open.rawValue]
+                    arguments: StatementArguments(whose + [TaskStatus.open.rawValue])
                 )
                 let done = try Row.fetchAll(
                     db,
                     sql: """
-                    SELECT \(columns) FROM \(from) WHERE tasks.user_id = ? AND tasks.coven_id = ? AND tasks.status <> ?
+                    SELECT \(columns) FROM \(from) WHERE \(theirs) AND tasks.status <> ?
                     ORDER BY tasks.updated_at DESC, tasks.created_at DESC, tasks.rowid DESC LIMIT ?
                     """,
-                    arguments: [account, coven, TaskStatus.open.rawValue, Self.mostFinishedListed]
+                    arguments: StatementArguments(whose + [TaskStatus.open.rawValue, Self.mostFinishedListed])
                 )
                 var also: [Row] = []
                 if let shown, !(open + done).contains(where: { ($0["id"] as String) == shown }) {
                     also = try Row.fetchAll(
-                        db, sql: "SELECT \(columns) FROM \(from) WHERE tasks.id = ? AND tasks.user_id = ? AND tasks.coven_id = ?",
-                        arguments: [shown, account, coven]
+                        db, sql: "SELECT \(columns) FROM \(from) WHERE \(theirs) AND tasks.id = ?", arguments: StatementArguments(whose + [shown])
                     )
                 }
                 let count = try Int.fetchOne(
-                    db, sql: "SELECT COUNT(*) FROM tasks WHERE user_id = ? AND coven_id = ? AND status <> ?",
-                    arguments: [account, coven, TaskStatus.open.rawValue]
+                    db, sql: "SELECT COUNT(*) FROM tasks WHERE \(theirs) AND status <> ?",
+                    arguments: StatementArguments(whose + [TaskStatus.open.rawValue])
                 ) ?? 0
-                // Of the place's tasks handed to an agent that is still
-                // there, listed or not: who the one last changed went to.
-                let lastHandedTo = try String.fetchOne(
+                // For each place: of its tasks handed to an agent that is
+                // still there, listed or not, who the one last changed went to.
+                let lastHandedTo = try Row.fetchAll(
                     db,
                     sql: """
-                    SELECT tasks.handoff_agent_id FROM tasks
-                    WHERE tasks.user_id = ? AND tasks.coven_id = ? AND tasks.handoff_turn_id IS NOT NULL AND EXISTS (
-                        SELECT 1 FROM roles
-                        WHERE roles.id = tasks.handoff_agent_id AND roles.user_id = tasks.user_id AND roles.coven_id = tasks.coven_id
-                    )
-                    ORDER BY tasks.updated_at DESC, tasks.created_at DESC, tasks.rowid DESC LIMIT 1
+                    SELECT coven_id, handoff_agent_id FROM (
+                        SELECT tasks.coven_id, tasks.handoff_agent_id, ROW_NUMBER() OVER (
+                            PARTITION BY tasks.coven_id ORDER BY tasks.updated_at DESC, tasks.created_at DESC, tasks.rowid DESC
+                        ) AS place_rank
+                        FROM tasks
+                        WHERE \(theirs) AND tasks.handoff_turn_id IS NOT NULL AND EXISTS (
+                            SELECT 1 FROM roles
+                            WHERE roles.id = tasks.handoff_agent_id AND roles.user_id = tasks.user_id AND roles.coven_id = tasks.coven_id
+                        )
+                    ) WHERE place_rank = 1
                     """,
-                    arguments: [account, coven]
+                    arguments: StatementArguments(whose)
                 )
-                return ((open + done + also).map(Stored.init), count, lastHandedTo)
+                return (
+                    (open + done + also).map(Stored.init), count,
+                    Dictionary(lastHandedTo.map { ($0["coven_id"] as String, $0["handoff_agent_id"] as String) }) { first, _ in first }
+                )
             }
             var tasks: [TaskItem] = []
             for stored in stored {

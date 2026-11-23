@@ -1,7 +1,8 @@
 internal import Combine
 import SwiftUI
 
-/// A place's Tasks, as the cloud app's List: what is pinned for today and
+/// A place's Tasks, or On me (every place's tasks, each row naming its
+/// place, with no New task line), as the cloud app's List: what is pinned for today and
 /// for this week first (and before them "Still on today?", for pins whose
 /// day is over), then the open tasks under "Open", which starts with the
 /// New task line, and the finished ones under "Done · N", closed until
@@ -10,6 +11,8 @@ import SwiftUI
 struct TasksView: View {
     @ObservedObject var navigator: ShellNavigator
     @StateObject private var model: TasksModel
+    /// The person's covens, which name each task's place in On me.
+    private let covens: [Coven]
 
     @State private var newTaskTitle = ""
     @FocusState private var newTaskFocused: Bool
@@ -40,9 +43,29 @@ struct TasksView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.isPadLayout) private var isPadLayout
 
-    init(covenID: String?, navigator: ShellNavigator) {
+    /// A place's tasks (`.place`), or every place's (`.onMe`), where
+    /// `covens` names each task's place.
+    init(scope: TasksModel.Scope, navigator: ShellNavigator, covens: [Coven] = []) {
         self.navigator = navigator
-        _model = StateObject(wrappedValue: TasksModel(covenID: covenID))
+        self.covens = covens
+        _model = StateObject(wrappedValue: TasksModel(scope: scope))
+    }
+
+    private var isOnMe: Bool {
+        model.scope == .onMe
+    }
+
+    /// The name of the place a task is in, as On me says it on each row:
+    /// Strix for the person's own, a coven's name, and "Another coven"
+    /// for a coven that is not known. Nil on a place's own page.
+    private func placeName(of task: TaskItem) -> String? {
+        guard isOnMe else { return nil }
+        return Self.placeName(ofCoven: task.covenID, among: covens)
+    }
+
+    static func placeName(ofCoven covenID: String?, among covens: [Coven]) -> String {
+        guard let covenID else { return "Strix" }
+        return covens.first { $0.id == covenID }?.name ?? "Another coven"
     }
 
     /// The page's own reading column, centred.
@@ -113,6 +136,7 @@ struct TasksView: View {
             .navigationDestination(item: Binding(get: { showsPane ? nil : model.detailsOf }, set: { if !showsPane { model.detailsOf = $0 } })) { id in
                 details(of: id, host: .page)
                     .navigationBarTitleDisplayMode(.inline)
+                    .stoneBackButton()
                     // A screen of the place's own: what is said of a hand-off is still said here.
                     .onAppear { model.cameOnScreen() }
                     .onDisappear { model.leftScreen() }
@@ -134,6 +158,7 @@ struct TasksView: View {
             onAnswer: { task, keep in answer([task], keep: keep) },
             onTalk: talkItThrough,
             lead: lead,
+            placeName: placeName,
             editingDue: $editingDue,
             onClose: { model.detailsOf = nil }
         )
@@ -178,7 +203,7 @@ struct TasksView: View {
         TaskLead(
             hasLead: task.leadAgentID != nil,
             choices: model.leadChoices(for: task),
-            failedToLoad: model.agentsFailed,
+            failedToLoad: model.agentsFailed(for: task),
             onRetry: { Task { await model.loadAgents() } },
             onDoIt: { agent in
                 let account = UserScope.currentUserID
@@ -257,7 +282,8 @@ struct TasksView: View {
                 now = Date()
             }
         }
-        // New Task asked for the cursor in the New task line.
+        // New Task asked for the cursor in the New task line (of a place's
+        // own page: the ask is never On me's to take).
         .onChange(of: navigator.newTaskAsked, initial: true) { _, _ in
             guard navigator.takeNewTaskRequest() else { return }
             focusesNewTaskWhenShown = true
@@ -275,7 +301,7 @@ struct TasksView: View {
         // title is drawn once.
         Group {
             if horizontalSizeClass != .compact {
-                Text("Tasks")
+                Text(isOnMe ? "On me" : "Tasks")
                     .font(.aicovenDisplayLarge)
                     .foregroundStyle(Color.aicovenTextPrimary)
                     .padding(.top, Spacing.lg)
@@ -370,9 +396,12 @@ struct TasksView: View {
     private var listRows: some View {
         if model.hasRead {
             if model.isEmpty {
-                ContentUnavailableView("No tasks", systemImage: "checklist", description: Text("Add one with New task."))
-                    .frame(maxWidth: .infinity)
-                    .taskListRow()
+                ContentUnavailableView(
+                    "No tasks", systemImage: "checklist",
+                    description: Text(isOnMe ? "Tasks from your threads in every coven show here." : "Add one with New task.")
+                )
+                .frame(maxWidth: .infinity)
+                .taskListRow()
             }
             let parts = TaskRules.parts(open: model.open, finished: model.finished, sort: sort, now: now, handoff: model.handoff)
             if !parts.review.isEmpty {
@@ -402,10 +431,17 @@ struct TasksView: View {
                     row(task).taskListRow(vertical: 0)
                 }
             }
-            heading("Open")
-            newTaskField
-                .id(Self.newTaskLineID)
-                .taskListRow(vertical: 0)
+            // A place's own page has the New task line under Open, also
+            // with no open task; On me, which adds none, has Open only
+            // where there is one.
+            if !isOnMe {
+                heading("Open")
+                newTaskField
+                    .id(Self.newTaskLineID)
+                    .taskListRow(vertical: 0)
+            } else if !parts.open.isEmpty {
+                heading("Open")
+            }
             ForEach(parts.open) { task in
                 row(task).taskListRow(vertical: 0)
             }
@@ -508,7 +544,7 @@ struct TasksView: View {
             task: task,
             pin: TaskRules.pinState(of: task, now: now),
             handoff: handoff,
-            context: TaskRules.context(of: task, now: now, handoff: handoff, agent: model.agentName(for: task)),
+            context: TaskRules.context(of: task, now: now, handoff: handoff, agent: model.agentName(for: task), place: placeName(of: task)),
             isSaving: model.saving.contains(task.id),
             onTick: { done in
                 let account = UserScope.currentUserID

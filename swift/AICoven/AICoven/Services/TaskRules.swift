@@ -273,12 +273,14 @@ nonisolated enum TaskRules {
     /// its due day, and that it was closed. Empty for a task with none.
     /// `handoff` is where the task stands with the agent it was handed
     /// to, and `agent` that agent's name; with no hand-off, an open task
-    /// with a lead agent says who leads it.
+    /// with a lead agent says who leads it. `place` names the place the
+    /// task is in, first, where the list is of every place's (On me).
     static func context(
-        of task: TaskItem, now: Date, handoff: TaskHandoffState? = nil, agent: String? = nil, calendar: Calendar = .current,
-        locale: Locale = .current
+        of task: TaskItem, now: Date, handoff: TaskHandoffState? = nil, agent: String? = nil, place: String? = nil,
+        calendar: Calendar = .current, locale: Locale = .current
     ) -> [Context] {
         var pieces: [Context] = []
+        if let place { pieces.append(.plain(place)) }
         if let period = pinState(of: task, now: now).activePeriod { pieces.append(.pin(period.title)) }
         if let due = TaskDueLine(task: task, now: now, calendar: calendar, locale: locale) {
             pieces.append(due.isOverdue ? .overdue(due.text) : .plain(due.text))

@@ -21,6 +21,9 @@ struct TaskDetailView: View {
     /// Opens the task's thread, which is made for it if it has none.
     let onTalk: (TaskItem) -> Void
     let lead: (TaskItem) -> TaskLead
+    /// The name of the place a task is in, where the page is of every
+    /// place's (On me); nil on a place's own page.
+    let placeName: (TaskItem) -> String?
     /// Whether the due day's sheet is up: the Mac's Tasks menu opens it too.
     @Binding var editingDue: Bool
     /// Closes the pane.
@@ -109,7 +112,9 @@ struct TaskDetailView: View {
             VStack(alignment: .leading, spacing: Spacing.md) {
                 VStack(alignment: .leading, spacing: Spacing.xxs) {
                     title(task)
-                    if let words = Self.stateWords(for: task, handoff: model.handoff(of: task), agent: model.agentName(for: task)) {
+                    if let words = Self.stateWords(
+                        for: task, handoff: model.handoff(of: task), agent: model.agentName(for: task), place: placeName(task)
+                    ) {
                         Text(words)
                             .font(.aicovenBodySmall)
                             .foregroundStyle(Color.aicovenTextSecondary)
@@ -205,14 +210,21 @@ struct TaskDetailView: View {
 
     /// Where the task stands, when that is more than open: the agent on
     /// it, who leads it, or that it is done or closed.
-    static func stateWords(for task: TaskItem, handoff: TaskHandoffState? = nil, agent: String? = nil) -> String? {
-        if let handoff { return handoff.words(agent: agent) }
-        if let led = TaskRules.leadWords(for: task, agent: agent) { return led }
-        return switch task.status {
-        case .open: nil
-        case .done: "Done"
-        case .closed: "Closed"
+    static func stateWords(for task: TaskItem, handoff: TaskHandoffState? = nil, agent: String? = nil, place: String? = nil) -> String? {
+        let state: String? = if let handoff {
+            handoff.words(agent: agent)
+        } else if let led = TaskRules.leadWords(for: task, agent: agent) {
+            led
+        } else {
+            switch task.status {
+            case .open: nil
+            case .done: "Done"
+            case .closed: "Closed"
+            }
         }
+        // In On me, the place it is in comes first.
+        let words = [place, state].compactMap(\.self)
+        return words.isEmpty ? nil : words.joined(separator: " · ")
     }
 
     // MARK: Properties

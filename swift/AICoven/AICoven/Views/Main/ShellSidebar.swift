@@ -477,28 +477,25 @@ struct ShellSidebar: View {
 
     // MARK: - Bottom: the person
 
-    /// Activity's row: drawn by hand like the Overview's, and selected as
-    /// the list draws a selected row, with the waiting mark while
-    /// anything waits for the person, else the dot while a reply is not
-    /// yet seen.
-    private var activityRow: some View {
-        let isSelected = navigator.sidebarItem == .activity
-        let isWaiting = ActivityGroups.isAnythingWaiting(in: activities.activity)
-        let hasUnread = !activities.scopesWithUnread.isEmpty
+    /// A row of the person's own (Activity, On me): drawn by hand like
+    /// the Overview's, and selected as the list draws a selected row,
+    /// with its mark, if it has one, at its end.
+    private func personRow(_ item: ShellSidebarItem, title: String, symbol: String, @ViewBuilder mark: () -> some View) -> some View {
+        let isSelected = navigator.sidebarItem == item
         return Button {
-            navigate(to: .activity)
+            navigate(to: item)
         } label: {
             HStack(spacing: Spacing.xs) {
                 Label {
-                    Text("Activity")
+                    Text(title)
                         .foregroundStyle(SidebarSelection.ink(.aicovenTextPrimary, selected: isSelected, isKey: isKeyWindow))
                 } icon: {
-                    Image(systemName: "bell")
+                    Image(systemName: symbol)
                         .foregroundStyle(SidebarSelection.ink(.accentColor, selected: isSelected, isKey: isKeyWindow))
                 }
                 .lineLimit(1)
                 Spacer(minLength: 0)
-                ActivityRowMark(isWaiting: isWaiting, hasUnread: hasUnread)
+                mark()
                     .environment(\.backgroundProminence, isSelected && isKeyWindow ? .increased : .standard)
             }
             .frame(maxWidth: .infinity, minHeight: pinnedRowHeight, alignment: .leading)
@@ -511,6 +508,16 @@ struct ShellSidebar: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    /// Activity's row, with the waiting mark while anything waits for the
+    /// person, else the dot while a reply is not yet seen.
+    private var activityRow: some View {
+        let isWaiting = ActivityGroups.isAnythingWaiting(in: activities.activity)
+        let hasUnread = !activities.scopesWithUnread.isEmpty
+        return personRow(.activity, title: "Activity", symbol: "bell") {
+            ActivityRowMark(isWaiting: isWaiting, hasUnread: hasUnread)
+        }
         .accessibilityValue(ActivityRowMark.words(isWaiting: isWaiting, hasUnread: hasUnread))
         .accessibilityIdentifier("sidebar-activity")
     }
@@ -521,6 +528,9 @@ struct ShellSidebar: View {
             activityRow
                 .padding(.horizontal, Spacing.sm)
                 .padding(.top, Spacing.xxs)
+            personRow(.onMe, title: "On me", symbol: "checkmark.circle") { EmptyView() }
+                .accessibilityIdentifier("sidebar-on-me")
+                .padding(.horizontal, Spacing.sm)
             // Settings has no sidebar item, so this row opens it without
             // being selectable.
             Button {
