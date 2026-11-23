@@ -194,12 +194,17 @@ actor AssetRepository {
                 inThread: threadID, fromMessage: nil, parent: source.id, handingOver: source.id, as: account
             )
             // Made only for an asset that was proposed or approved in that write.
-            return (made.asset, true, made.handedOverAs.flatMap(AssetStatus.init(rawValue:)) ?? source.status)
+            return (made.asset, true, Self.status(made.handedOverAs))
         } catch let has as HasABrief {
             guard let brief = try await assets(withIDs: [has.briefID], as: account).first else { throw AssetError.noSuchAsset }
-            // A status this version does not know is read as a draft, as in a listing.
-            return (brief, false, AssetStatus(rawValue: has.status) ?? .draft)
+            return (brief, false, Self.status(has.status))
         }
+    }
+
+    /// A status as it is stored: one this version does not know is read
+    /// as a draft, as in a listing.
+    private static func status(_ stored: String?) -> AssetStatus {
+        stored.flatMap(AssetStatus.init(rawValue:)) ?? .draft
     }
 
     /// Keeps a new asset: `create`, and for `handingOver` the hand-off

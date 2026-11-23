@@ -83,8 +83,12 @@ final class AssetHandoffModel: ObservableObject {
                     agents = roles.map { Agent(id: $0.id, name: $0.name) }
                 }
                 if agents.isEmpty { agents = [Agent(id: Agent.strixID, name: "Strix")] }
-                // One refresh of what is connected for all of them, as the account that asked.
-                guard let offered = await ChatService.shared.offersPlaceTools(toAgents: agents.map { $0.isStrix ? nil : $0.id }, as: account) else {
+                // One refresh of what is connected for all of them, as the
+                // account that asked. In a task of its own: a sheet closed
+                // meanwhile calls this reading off, and the refresh, called
+                // off halfway, would leave the app with no models to route to.
+                let asked = agents.map { $0.isStrix ? nil : $0.id }
+                guard let offered = await Task(operation: { await ChatService.shared.offersPlaceTools(toAgents: asked, as: account) }).value else {
                     return nil
                 }
                 for (index, reads) in zip(agents.indices, offered) {
@@ -99,7 +103,8 @@ final class AssetHandoffModel: ObservableObject {
                 return ThreadListRules.ordered(threads)
             },
             tools: { agent, account in
-                await ChatService.shared.offersPlaceTools(toAgents: [agent.isStrix ? nil : agent.id], as: account)?.first.map(Agent.Tools.init)
+                let asked = [agent.isStrix ? nil : agent.id]
+                return await Task { await ChatService.shared.offersPlaceTools(toAgents: asked, as: account) }.value?.first.map(Agent.Tools.init)
             },
             isBusy: { threadID, account in
                 if TurnEngine.shared.running[threadID] != nil { return true }
@@ -269,7 +274,9 @@ final class AssetHandoffModel: ObservableObject {
         async let readAgents = hands.agents(asset.covenID, account)
         async let readThreads: [Thread]? = try? await hands.threads(asset.covenID, account)
         let (agents, threads) = await (readAgents, readThreads)
-        guard load == loads, hands.signedIn() == account else { return }
+        // A reading that was called off (its sheet was closed) lands
+        // nothing and says nothing.
+        guard !Task.isCancelled, load == loads, hands.signedIn() == account else { return }
         isLoading = false
         guard let agents, let threads else {
             fail(Self.couldNotLoad)

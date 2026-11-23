@@ -207,6 +207,37 @@ final class AssetHandoffTests: XCTestCase {
         XCTAssertTrue(other.isLoading)
     }
 
+    func testAReadingCalledOffLandsNothingAndSaysNothing() async {
+        // The sheet is closed while its agents and threads are read, and the reading then comes to nothing.
+        let stand = Stand()
+        let gate = Gate()
+        stand.agentsWait = gate
+        stand.agents = nil
+        let sending = model(asset(), stand)
+        let reading = Task { await sending.load(as: "ada") }
+        await gate.arrived()
+        reading.cancel()
+        await gate.open()
+        await reading.value
+        XCTAssertEqual(stand.said, [], "Nothing is told to VoiceOver for a sheet that is gone")
+        XCTAssertNil(sending.failure)
+        XCTAssertFalse(sending.hasRead)
+        // Nor one that read something: nothing of it is chosen or announced.
+        let other = Stand()
+        let second = Gate()
+        other.agentsWait = second
+        other.agents = [.init(id: "local", name: "Pip", tools: .notOffered)]
+        let closed = model(asset(), other)
+        let late = Task { await closed.load(as: "ada") }
+        await second.arrived()
+        late.cancel()
+        await second.open()
+        await late.value
+        XCTAssertEqual(other.said, [])
+        XCTAssertNil(closed.agentID)
+        XCTAssertEqual(closed.agents, [])
+    }
+
     func testAnAgentThatIsNotGivenTheAssetToolsIsNotSentAnAsset() async {
         let stand = Stand()
         stand.agents = [.init(id: "local", name: "Pip", tools: .notOffered), .init(id: "scout", name: "Scout"), .init(id: "lost", name: "Wren", tools: .unknown)]
