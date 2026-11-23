@@ -490,7 +490,10 @@ actor ChatService {
                 deliversFiles: true, seesPictures: descriptor.takesImages, usesAssets: Self.usesAssets(provider: descriptor.providerID),
                 connections: connections
             )
-        await ToolExecutionService.shared.setWhitelist(for: "chat", tools: toolConfig.enabledTools)
+        // The tools this turn was offered are the ones it may call: they
+        // go with each of its calls (`executeChatToolCall(allowed:)`).
+        // Nothing is kept for chat turns as a kind: two turns running at
+        // once, in threads of different covens, are offered different tools.
         // The pictures this turn's tools make for its model, where the
         // model can be sent pictures: they go with its later requests.
         let turnPictures: TurnPictures? = descriptor.takesImages ? TurnPictures() : nil
@@ -586,7 +589,7 @@ actor ChatService {
                         onStateChange(state)
 
                         AnalyticsService.shared.trackToolUsed(toolName: invocation.tool, threadId: threadId)
-                        let (_, contextBlock, files) = try await executeChatToolCall(invocation, threadID: threadId, pictures: turnPictures, assets: turnAssets, tasks: turnTasks)
+                        let (_, contextBlock, files) = try await executeChatToolCall(invocation, threadID: threadId, allowed: toolConfig.enabledTools, pictures: turnPictures, assets: turnAssets, tasks: turnTasks)
                         state.generatedFiles += files
                         state.madeAssets = turnAssets?.made ?? []
 
@@ -634,7 +637,7 @@ actor ChatService {
                     onStateChange(state)
 
                     AnalyticsService.shared.trackToolUsed(toolName: forcedNative.tool, threadId: threadId)
-                    let (_, contextBlock, files) = try await executeChatToolCall(forcedNative, threadID: threadId, pictures: turnPictures, assets: turnAssets, tasks: turnTasks)
+                    let (_, contextBlock, files) = try await executeChatToolCall(forcedNative, threadID: threadId, allowed: toolConfig.enabledTools, pictures: turnPictures, assets: turnAssets, tasks: turnTasks)
                     state.generatedFiles += files
                     state.madeAssets = turnAssets?.made ?? []
 
@@ -666,7 +669,7 @@ actor ChatService {
                     onStateChange(state)
 
                     AnalyticsService.shared.trackToolUsed(toolName: forcedMCP.tool, threadId: threadId)
-                    let (_, contextBlock, files) = try await executeChatToolCall(forcedMCP, threadID: threadId, pictures: turnPictures, assets: turnAssets, tasks: turnTasks)
+                    let (_, contextBlock, files) = try await executeChatToolCall(forcedMCP, threadID: threadId, allowed: toolConfig.enabledTools, pictures: turnPictures, assets: turnAssets, tasks: turnTasks)
                     state.generatedFiles += files
                     state.madeAssets = turnAssets?.made ?? []
 
@@ -874,7 +877,7 @@ actor ChatService {
                     state.bumpVersion()
                     onStateChange(state)
 
-                    let (summary, contextBlock, files) = try await executeChatToolCall(toolCall, threadID: threadId, pictures: turnPictures, assets: turnAssets, tasks: turnTasks)
+                    let (summary, contextBlock, files) = try await executeChatToolCall(toolCall, threadID: threadId, allowed: toolConfig.enabledTools, pictures: turnPictures, assets: turnAssets, tasks: turnTasks)
                     state.generatedFiles += files
                     state.madeAssets = turnAssets?.made ?? []
 
@@ -925,7 +928,7 @@ actor ChatService {
                         state.bumpVersion()
                         onStateChange(state)
 
-                        let (summary, contextBlock, files) = try await executeChatToolCall(forcedCall, threadID: threadId, pictures: turnPictures, assets: turnAssets, tasks: turnTasks)
+                        let (summary, contextBlock, files) = try await executeChatToolCall(forcedCall, threadID: threadId, allowed: toolConfig.enabledTools, pictures: turnPictures, assets: turnAssets, tasks: turnTasks)
                         state.generatedFiles += files
                         state.madeAssets = turnAssets?.made ?? []
 
@@ -1009,7 +1012,7 @@ actor ChatService {
                             state.bumpVersion()
                             onStateChange(state)
 
-                            let (summary, contextBlock, files) = try await executeChatToolCall(forcedCall, threadID: threadId, pictures: turnPictures, assets: turnAssets, tasks: turnTasks)
+                            let (summary, contextBlock, files) = try await executeChatToolCall(forcedCall, threadID: threadId, allowed: toolConfig.enabledTools, pictures: turnPictures, assets: turnAssets, tasks: turnTasks)
                             state.generatedFiles += files
                             state.madeAssets = turnAssets?.made ?? []
 
@@ -1967,7 +1970,8 @@ extension ChatService {
     /// plus an optional context block that can be fed back into the context sandwich.
     /// This enhanced version routes through the central ToolExecutionService for all tools.
     nonisolated func executeChatToolCall(
-        _ call: ChatToolInvocation, threadID: String?, pictures: TurnPictures? = nil, assets: TurnAssets? = nil, tasks: TurnTasks? = nil
+        _ call: ChatToolInvocation, threadID: String?, allowed: Set<String>? = nil, pictures: TurnPictures? = nil, assets: TurnAssets? = nil,
+        tasks: TurnTasks? = nil
     ) async throws -> (summary: String, contextBlock: String?, files: [FileAttachmentDetail]) {
         // A stopped turn starts no tool.
         try Task.checkCancellation()
@@ -1998,6 +2002,8 @@ extension ChatService {
         let result = await ToolExecutionService.shared.execute(
             toolCall: parsedCall,
             agentType: "chat", // Chat context uses "chat" agent type
+            // What the turn was offered, which is what it may call.
+            allowed: allowed,
             threadID: threadID,
             // Where the turn's model sees pictures, those a tool makes for it.
             pictures: pictures,
@@ -2021,16 +2027,6 @@ extension ChatService {
             let summary = "⚠️ \(Self.friendlyToolName(call.tool)): error"
             return (summary, result.toldToAModel, [])
         }
-    }
-
-    /// Execute a parsed tool call directly (used by enhanced streamMessage).
-    /// Returns a ToolExecutionResult for more detailed handling.
-    nonisolated func executeParsedToolCall(_ call: ParsedToolCall, threadID: String?) async -> ToolExecutionResult {
-        await ToolExecutionService.shared.execute(
-            toolCall: call,
-            agentType: "chat",
-            threadID: threadID
-        )
     }
 
     /// What tells one call of a tool from another when repeats are looked

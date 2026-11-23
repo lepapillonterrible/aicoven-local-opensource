@@ -318,9 +318,14 @@ actor ToolExecutionService {
 
     // MARK: - Execution
 
+    /// `allowed` is what the caller was itself offered: a turn gives the
+    /// tools it was offered, and those are what it may call, whatever is
+    /// kept for its kind (`setWhitelist`), which is one set for every
+    /// caller of that kind. A caller that gives none is allowed what is
+    /// kept for its kind.
     func execute(
-        toolCall called: ParsedToolCall, agentType: String, threadID: String? = nil, pictures: TurnPictures? = nil, assets: TurnAssets? = nil,
-        tasks: TurnTasks? = nil
+        toolCall called: ParsedToolCall, agentType: String, allowed: Set<String>? = nil, threadID: String? = nil, pictures: TurnPictures? = nil,
+        assets: TurnAssets? = nil, tasks: TurnTasks? = nil
     ) async -> ToolExecutionResult {
         // A tool called by a name it had before is the tool as it is named
         // now: allowed, refused and run as that one.
@@ -336,8 +341,9 @@ actor ToolExecutionService {
             )
         }
 
-        // 2. Permission Check
-        if !isToolAllowed(toolCall.name, for: agentType) {
+        // 2. Permission Check: by what the caller was itself offered,
+        // where it says; else by what is kept for its kind.
+        if !(allowed.map { $0.contains(toolCall.name) } ?? isToolAllowed(toolCall.name, for: agentType)) {
             return await .permissionDenied(
                 tool: toolCall.name,
                 message: "Tool '\(toolCall.name)' is not allowed for this agent type.",
