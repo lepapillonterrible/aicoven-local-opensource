@@ -827,9 +827,15 @@ final class AssetToolsTests: XCTestCase {
         XCTAssertEqual(result.status, "ok")
         XCTAssertEqual(stand.created.first?.new.parentID, "logo")
         XCTAssertTrue(result.contextBlock?.contains("Made from asset_id: logo.") == true)
-        result = await write(call("asset.create", ["type": "design_mockup", "title": "Plain"]), turn: turn, stand)
-        XCTAssertNil(stand.created.last?.new.parentID)
+        result = await write(call("asset.create", ["type": "design_mockup", "title": "Plain", "parent_asset_id": "  "]), turn: turn, stand)
+        XCTAssertNil(stand.created.last?.new.parentID, "None given, or one of no words")
         XCTAssertFalse(result.contextBlock?.contains("Made from") == true)
+        // A parent that is given and is no id is refused: the asset is not made with none.
+        for given in [123, ["logo"]] as [Any] {
+            result = await write(call("asset.create", ["type": "design_mockup", "title": "From what?", "parent_asset_id": given]), turn: turn, stand)
+            XCTAssertEqual(result.field, "parent_asset_id")
+        }
+        XCTAssertEqual(stand.created.count, 2)
 
         // The store says where a parent is no asset of the place: the model is told which argument.
         stand.writeFails = AssetError.noSuchParent

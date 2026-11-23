@@ -104,6 +104,14 @@ enum ToolIntentDecision {
     static func heuristic(for message: String) -> ToolIntentDecision {
         let lower = message.lowercased()
 
+        // A message that names a tool by its name asks for tools, whatever
+        // else it says: an asset's hand-off tells the agent to read it
+        // with `asset.get`, and what the person adds to it ("draft the
+        // plan") must not take the tool away.
+        if PromptTemplates.toolDefinitions.contains(where: { lower.contains($0.name.lowercased()) }) {
+            return .useTools(suggested: [])
+        }
+
         // Obvious no-tool patterns (conversational, opinion, summarization).
         // NOTE: broad phrases like "what is" were intentionally narrowed
         // (e.g. "what is a ", "what is the meaning") so they don't block
@@ -233,6 +241,23 @@ actor ChatService {
     /// still their own server, which is offered none).
     nonisolated static func usesAssets(provider: String) -> Bool {
         provider.lowercased() != "openclaw"
+    }
+
+    /// Whether a turn answered through `provider` is offered the tools of
+    /// its thread's place (the asset tools, the task tools): a cloud
+    /// model's turn is; one handed to Hermes or to OpenClaw, or answered
+    /// by a model on this device or this network, is not.
+    nonisolated static func givesPlaceTools(provider: String, isLocal: Bool) -> Bool {
+        provider.lowercased() != AgentRun.hermes && usesAssets(provider: provider) && !isLocal
+    }
+
+    /// Whether a turn for this agent (Strix for nil) would be offered the
+    /// tools of its thread's place, as the agent and the connections are
+    /// set up now: asked before an asset is sent to an agent, which reads
+    /// it with those tools.
+    func offersPlaceTools(toAgent roleID: String?) async -> Bool {
+        let provider = await preferredProviderAndModel(roleId: roleID).provider
+        return Self.givesPlaceTools(provider: provider, isLocal: isLocalDeployment(providerID: provider))
     }
 
     /// What a turn that was cut off this way says in its thread.

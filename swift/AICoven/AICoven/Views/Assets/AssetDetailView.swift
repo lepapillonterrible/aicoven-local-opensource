@@ -18,6 +18,8 @@ struct AssetDetailView: View {
     @StateObject private var originFound = AssetOriginModel()
     /// How the asset is related to others, once read.
     @StateObject private var lineage = AssetLineageModel()
+    /// Whether the asset is being sent to an agent from this page.
+    @State private var isSendingToAgent = false
 
     private var origin: Origin {
         originFound.origin
@@ -197,6 +199,12 @@ struct AssetDetailView: View {
             }
         }
         .presenting(files)
+        .sheet(isPresented: $isSendingToAgent) {
+            AssetHandoffSheet(asset: asset) { thread in
+                isSendingToAgent = false
+                onOpenThread?(thread)
+            }
+        }
         // Read for the asset as it is listed: again when the key that
         // could not open it can, and forgotten when it no longer can.
         .task(id: "\(asset.id)|\(asset.isUnreadable)") { await readLineage() }
@@ -324,7 +332,11 @@ struct AssetDetailView: View {
     /// Whether an action cannot be asked for just now: a change of status
     /// while one is on its way, a download while one is being read.
     private func isBusy(with action: AssetAction) -> Bool {
-        action == .download ? files.preparing != nil : isChanging
+        switch action {
+        case .download: files.preparing != nil
+        case .sendToAgent: false
+        default: isChanging
+        }
     }
 
     /// Does an action for the account that pressed it. Download… saves the
@@ -333,6 +345,10 @@ struct AssetDetailView: View {
         if action == .download {
             guard let file = asset.files.first else { return }
             Task { await files.download(file) }
+            return
+        }
+        if action == .sendToAgent {
+            isSendingToAgent = true
             return
         }
         let account = UserScope.currentUserID

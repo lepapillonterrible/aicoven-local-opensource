@@ -1,0 +1,147 @@
+import SwiftUI
+
+/// "Send to Agent", as the cloud app's sheet for one agent: the asset,
+/// the agent and the thread it is sent in (one of the place's, or a new
+/// one), and what the person adds. Sent, the thread is opened.
+struct AssetHandoffSheet: View {
+    @StateObject private var model: AssetHandoffModel
+    private let onSent: (Thread) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    init(asset: Asset, onSent: @escaping (Thread) -> Void) {
+        _model = StateObject(wrappedValue: AssetHandoffModel(asset: asset))
+        self.onSent = onSent
+    }
+
+    private var asset: Asset {
+        model.asset
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    source
+                }
+
+                Section {
+                    if model.isLoading {
+                        HStack(spacing: Spacing.sm) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text(AssetHandoffModel.loading)
+                                .foregroundStyle(Color.aicovenTextSecondary)
+                        }
+                    } else {
+                        Picker("Agent", selection: $model.agentID) {
+                            Text("Choose an agent").tag(String?.none)
+                            ForEach(model.agents) { agent in
+                                Text(agent.name).tag(String?.some(agent.id))
+                            }
+                        }
+                        Toggle("Start a new thread", isOn: $model.startsNewThread)
+                        if model.startsNewThread {
+                            TextField("Thread title", text: $model.newThreadTitle, prompt: Text("Optional"))
+                        } else if model.threads.isEmpty {
+                            Text(AssetHandoffModel.noThreads)
+                                .foregroundStyle(Color.aicovenTextSecondary)
+                        } else {
+                            Picker("Thread", selection: $model.threadID) {
+                                Text("Choose a thread").tag(String?.none)
+                                ForEach(model.threads) { thread in
+                                    Text(ThreadListRules.title(of: thread)).tag(String?.some(thread.id))
+                                }
+                            }
+                        }
+                    }
+                } footer: {
+                    if let note = model.agentNote {
+                        Text(note)
+                            .font(.aicovenBodySmall)
+                            .foregroundStyle(Color.aicovenError)
+                    }
+                }
+                .disabled(model.isSending)
+
+                Section {
+                    // iOS forms show only a field's prompt, so there it names the field too.
+                    TextField("Instructions", text: $model.direction, prompt: Text("Anything the agent should know"), axis: .vertical)
+                        .lineLimit(3 ... 8)
+                        .disabled(model.isSending)
+                } footer: {
+                    Group {
+                        if let failure = model.failure {
+                            Text(failure)
+                                .foregroundStyle(Color.aicovenError)
+                        } else {
+                            Text(AssetHandoffModel.footer)
+                        }
+                    }
+                    .font(.aicovenBodySmall)
+                }
+            }
+            .formStyle(.grouped)
+            .navigationTitle("Send to Agent")
+            #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+            #endif
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
+                            .disabled(model.isSending)
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        if model.isSending {
+                            ProgressView()
+                                .controlSize(.small)
+                                .accessibilityLabel("Sending the asset")
+                        } else {
+                            Button("Send", action: send)
+                                .disabled(!model.canSend)
+                        }
+                    }
+                }
+        }
+        #if os(macOS)
+        .frame(minWidth: 480, idealWidth: 520, minHeight: 420)
+        #endif
+        .interactiveDismissDisabled(model.isSending)
+        .task { await model.load(as: UserScope.currentUserID) }
+    }
+
+    /// The asset being sent, and where its review stands.
+    private var source: some View {
+        HStack(spacing: Spacing.sm) {
+            AssetThumbnail(type: asset.type, isLocked: asset.isUnreadable, width: 40, height: 40)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(asset.title)
+                    .font(.aicovenBody.weight(.semibold))
+                    .foregroundStyle(Color.aicovenTextPrimary)
+                    .lineLimit(2)
+                Text(asset.type.displayName)
+                    .font(.aicovenBodySmall)
+                    .foregroundStyle(Color.aicovenTextSecondary)
+                if asset.status == .approved {
+                    Label("Approved", systemImage: "checkmark.seal.fill")
+                        .font(.aicovenBodySmall)
+                        .foregroundStyle(Color.aicovenTextSecondary)
+                } else {
+                    Label("Proposed — not reviewed", systemImage: "exclamationmark.triangle.fill")
+                        .font(.aicovenBodySmall)
+                        .foregroundStyle(Color.aicovenTextSecondary)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Sends for the account that pressed Send, and opens the thread it
+    /// was sent in.
+    private func send() {
+        let account = UserScope.currentUserID
+        Task {
+            guard let thread = await model.send(as: account) else { return }
+            onSent(thread)
+        }
+    }
+}

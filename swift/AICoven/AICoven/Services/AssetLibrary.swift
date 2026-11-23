@@ -7,6 +7,7 @@ nonisolated enum AssetAction: String, Identifiable {
     case approve
     case sendBack
     case unarchive
+    case sendToAgent
     case download
     case archive
 
@@ -20,6 +21,7 @@ nonisolated enum AssetAction: String, Identifiable {
         case .approve: "Approve"
         case .sendBack: "Send Back"
         case .unarchive: "Unarchive"
+        case .sendToAgent: "Send to Agent…"
         case .download: "Download…"
         case .archive: "Archive"
         }
@@ -31,6 +33,7 @@ nonisolated enum AssetAction: String, Identifiable {
         case .approve: "checkmark.seal"
         case .sendBack: "arrow.uturn.backward"
         case .unarchive: "tray.and.arrow.up"
+        case .sendToAgent: "arrowshape.turn.up.right"
         case .download: "arrow.down.circle"
         case .archive: "archivebox"
         }
@@ -43,7 +46,7 @@ nonisolated enum AssetAction: String, Identifiable {
         case .approve: .approved
         case .sendBack, .unarchive: .draft
         case .archive: .archived
-        case .download: nil
+        case .download, .sendToAgent: nil
         }
     }
 }
@@ -67,10 +70,19 @@ nonisolated enum AssetLibraryRules {
         }
     }
 
-    /// What else can be done with an asset: its file saved somewhere (one
-    /// that can be opened and has a file), and the asset put out of the way.
+    /// What else can be done with an asset: it is sent to an agent (one
+    /// that is proposed or approved, as the cloud app has it), its file
+    /// saved somewhere (one that can be opened and has a file), and the
+    /// asset put out of the way.
     static func otherActions(_ asset: Asset) -> [AssetAction] {
-        (asset.isUnreadable || asset.files.isEmpty ? [] : [.download]) + (asset.status == .archived ? [] : [.archive])
+        (canBeSentToAnAgent(asset) ? [.sendToAgent] : []) + (asset.isUnreadable || asset.files.isEmpty ? [] : [.download])
+            + (asset.status == .archived ? [] : [.archive])
+    }
+
+    /// Whether an asset can be sent to an agent: one that is proposed or
+    /// approved, and that the key can open.
+    static func canBeSentToAnAgent(_ asset: Asset) -> Bool {
+        !asset.isUnreadable && (asset.status == .proposed || asset.status == .approved)
     }
 
     /// When something was last changed, in full: the day and the time.

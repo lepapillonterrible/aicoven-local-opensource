@@ -249,14 +249,20 @@ nonisolated enum AssetTools {
         guard let title = text(call.args["title"]) else {
             return .validationError(tool: call.name, message: "Missing required argument: 'title'", field: "title")
         }
+        // A parent that is given is an asset's id: one that is none (a
+        // number, a list) is refused, not read as none given.
+        let parent = call.args["parent_asset_id"]
+        let parentID = text(parent)
+        if let parent, parent != .null, parentID == nil, !((parent.value as? String).map { $0.allSatisfy(\.isWhitespace) } ?? false) {
+            return .validationError(tool: call.name, message: "'parent_asset_id' is an asset's id, as asset.search gives it.", field: "parent_asset_id")
+        }
         let new: Store.New
         switch file(from: call) {
         case let .failure(refusal):
             return .validationError(tool: call.name, message: refusal.message, field: refusal.field)
         case let .success(file):
             new = Store.New(
-                type: type, title: title, details: (call.args["description"]?.value as? String) ?? "", file: file,
-                parentID: text(call.args["parent_asset_id"])
+                type: type, title: title, details: (call.args["description"]?.value as? String) ?? "", file: file, parentID: parentID
             )
         }
         guard turn.takeAMaking() else {
