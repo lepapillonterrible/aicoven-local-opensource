@@ -1542,6 +1542,8 @@ final class TasksModelTests: XCTestCase {
         await tasks.move(tasks.open[0], to: .done, as: "ada")
         XCTAssertEqual(stand.changed.count, asked, "Nothing is asked")
         XCTAssertEqual(tasks.open.map(\.id), ["b"])
+        XCTAssertEqual(tasks.errorMessage, "Strix is on “Renew the lease”. Open its thread to see where it stands.", "A card dropped there just goes back: why is said")
+        XCTAssertEqual(stand.heard.last, tasks.errorMessage)
         // Its agent has finished: it is moved to Done like any other. Here it is first given back, to go on.
         stand.live = [:]
         stand.kept = stand.kept.map { $0.id == "b" ? self.task("b", "Renew the lease", stage: .review) : $0 }

@@ -90,7 +90,9 @@ struct TasksView: View {
     }
 
     private func show(_ chosen: Layout) {
+        guard chosen != layout else { return }
         storedLayout = chosen.rawValue
+        AccessibilityNotification.Announcement("Showing the \(chosen.rawValue)").post()
     }
 
     /// Whether the New task line is built. Counted, not flagged: going
@@ -492,10 +494,12 @@ struct TasksView: View {
             scrollsToNewTask: scrollsToNewTask,
             onDrop: { taskID, column in
                 // Not a card of this Board, or a column it cannot go to
-                // (Done, while an agent is on it): the drop is refused.
-                guard let task = model.task(taskID), model.canMove(task, to: column) else { return false }
+                // (Done, while an agent is on it, which the model says):
+                // the drop is refused.
+                guard let task = model.task(taskID) else { return false }
+                let moves = model.canMove(task, to: column)
                 move(task, to: column)
-                return true
+                return moves
             },
             card: card,
             newTaskLine: { newTaskField }

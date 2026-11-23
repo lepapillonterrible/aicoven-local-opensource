@@ -385,7 +385,13 @@ final class TasksModel: ObservableObject {
     /// to be open, whatever the card showed: the store decides against
     /// the task as it is then, also one finished since the card was drawn.
     func move(_ task: TaskItem, to column: TaskBoardColumn, as account: String) async {
-        guard canMove(task, to: column) else { return }
+        guard canMove(task, to: column) else {
+            // Said, since a card dropped on Done just goes back: an agent is on it.
+            if column == .done, !task.isFinished, signedIn() == account {
+                report("\(agentName(for: task) ?? "An agent") is on \(Self.quoted(task)). Open its thread to see where it stands.")
+            }
+            return
+        }
         let moved = switch column {
         case let .stage(stage): TaskChange(status: .open, stage: stage)
         case .done: TaskChange(status: .done)
