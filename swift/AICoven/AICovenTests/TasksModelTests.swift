@@ -1548,12 +1548,59 @@ final class TasksModelTests: XCTestCase {
         XCTAssertFalse(tasks.agentsFailed(for: tasks.open[0]))
         XCTAssertEqual(tasks.leadChoices(for: tasks.open[0])?.others, [scout])
 
+        // A reading that fails after one that worked keeps the agents read before, and says so
+        // over them, with Try Again, for that place's tasks only.
+        stand.agentsIn["home"] = .some(nil)
+        await tasks.loadAgents()
+        XCTAssertTrue(tasks.agentsFailed(for: tasks.open[1]))
+        XCTAssertEqual(tasks.leadChoices(for: tasks.open[1])?.others, [quill], "Those read before stay")
+        XCTAssertFalse(tasks.agentsFailed(for: tasks.open[0]))
+        XCTAssertEqual(LeadAgentChoices.note(hasChoices: true, failedToLoad: true), .failed, "Said over the agents read before")
+        XCTAssertEqual(LeadAgentChoices.note(hasChoices: false, failedToLoad: true), .failed)
+        XCTAssertEqual(LeadAgentChoices.note(hasChoices: false, failedToLoad: false), .loading)
+        XCTAssertNil(LeadAgentChoices.note(hasChoices: true, failedToLoad: false))
+        stand.agentsIn["home"] = [quill]
+        await tasks.loadAgents()
+        XCTAssertFalse(tasks.agentsFailed(for: tasks.open[1]))
+
         // A place that comes to have a task is read when it does.
         stand.kept.append(task("c", "Renew the lease", coven: "club"))
         stand.agentsIn["club"] = []
         await tasks.load()
         XCTAssertEqual(stand.agentsAsked.last, "club")
         XCTAssertEqual(tasks.leadChoices(for: tasks.open[2])?.others.map(\.isStrix), [true], "A coven with no agents: Strix answers there")
+    }
+
+    func testWhatIsSaidOfAHandOffAsTheTasksAreFirstReadNamesItsAgent() async {
+        // The agents are read with the tasks, before anything is said: on a place's own page
+        // and in On me, where the places are known only once the tasks are read.
+        for onMe in [false, true] {
+            let stand = Stand()
+            var waits = task("a", "Call the bank", coven: "work")
+            waits.threadID = "thread-1"
+            waits.handoff = TaskHandoff(turnID: "turn-1", outcome: .running, agentID: "scout")
+            var ended = task("b", "Book the flights", coven: "work")
+            ended.threadID = "thread-2"
+            ended.handoff = TaskHandoff(turnID: "turn-2", outcome: .running, agentID: "scout")
+            stand.kept = [waits, ended]
+            stand.agentsIn = ["work": [scout]]
+            stand.live = ["thread-1": TaskLiveTurn(turnID: "turn-1", needsOK: true)]
+            let tasks = model(stand, covenID: "work", onMe: onMe)
+
+            // The second task's turn ends while the tasks are read.
+            let gate = Gate()
+            stand.readingWaits = gate
+            let reading = Task { await tasks.load() }
+            await gate.arrived(1)
+            ended.handoff?.outcome = .completed
+            stand.kept = [waits, ended]
+            await gate.letOneThrough()
+            await gate.arrived(2)
+            await gate.letOneThrough()
+            await reading.value
+            XCTAssertEqual(stand.heard, ["Scout needs your OK on Call the bank", "Scout finished Book the flights"], onMe ? "On me" : "A place's own page")
+            XCTAssertEqual(stand.agentsAsked, ["work"], "Read once")
+        }
     }
 
     func testOnMeNamesEachTasksPlace() {
@@ -1575,6 +1622,9 @@ final class TasksModelTests: XCTestCase {
         XCTAssertEqual(TaskDetailView.stateWords(for: task("b"), place: "Strix"), "Strix")
         XCTAssertEqual(TaskDetailView.stateWords(for: task("c", status: .done), place: "Work"), "Work · Done")
         XCTAssertNil(TaskDetailView.stateWords(for: task("b")))
+        // And under the title of a task asked about under "Still on today?", for VoiceOver too.
+        XCTAssertEqual(TaskReviewRow.label(for: led, place: "Work"), "Still on today: Call the bank, Work")
+        XCTAssertEqual(TaskReviewRow.label(for: led, place: nil), "Still on today: Call the bank")
     }
 
     func testOnMeIsAPlaceOfThePersonsOwn_overWhateverScopeIsOnScreen() {

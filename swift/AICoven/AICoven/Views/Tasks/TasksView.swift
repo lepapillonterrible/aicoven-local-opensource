@@ -119,7 +119,6 @@ struct TasksView: View {
             pendingTalk = nil
             model.leftScreen()
         }
-        .task { await model.loadAgents() }
         // The tasks handed to an agent follow the turns the app runs: told
         // once the change has been made, not as it is about to be.
         .onReceive(Self.turns.receive(on: RunLoop.main)) { _ in model.turnsChanged() }
@@ -527,7 +526,8 @@ struct TasksView: View {
         // apart from that one, or the list takes the two for one row.
         ForEach(tasks, id: \.reviewRowID) { task in
             TaskReviewRow(
-                task: task, isSaving: model.saving.contains(task.id), onKeep: { answer([task], keep: true) }, onClear: { answer([task], keep: false) }
+                task: task, place: placeName(of: task), isSaving: model.saving.contains(task.id), onKeep: { answer([task], keep: true) },
+                onClear: { answer([task], keep: false) }
             )
             .taskListRow()
         }
@@ -707,9 +707,13 @@ struct TaskPinActions: View {
     }
 }
 
-/// A task pinned for a day that is over, with the two answers.
-private struct TaskReviewRow: View {
+/// A task pinned for a day that is over, with the two answers. In On me
+/// it names the task's place under its title, so that two tasks of one
+/// title in two places are told apart.
+struct TaskReviewRow: View {
     let task: TaskItem
+    /// The name of the task's place, where the page is of every place's.
+    let place: String?
     let isSaving: Bool
     let onKeep: () -> Void
     let onClear: () -> Void
@@ -735,13 +739,25 @@ private struct TaskReviewRow: View {
             Button("Not today", action: onClear)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Still on today: \(TasksModel.name(of: task))")
+        .accessibilityLabel(Self.label(for: task, place: place))
+    }
+
+    /// What VoiceOver calls the row: the task, and its place where it is named.
+    static func label(for task: TaskItem, place: String?) -> String {
+        "Still on today: \(TasksModel.name(of: task))" + (place.map { ", \($0)" } ?? "")
     }
 
     private var title: some View {
-        Text(task.isUnreadable ? TasksModel.unreadable : task.title)
-            .font(.aicovenH2)
-            .foregroundStyle(Color.aicovenTextPrimary)
+        VStack(alignment: .leading, spacing: 1) {
+            Text(task.isUnreadable ? TasksModel.unreadable : task.title)
+                .font(.aicovenH2)
+                .foregroundStyle(Color.aicovenTextPrimary)
+            if let place {
+                Text(place)
+                    .font(.aicovenBodySmall)
+                    .foregroundStyle(Color.aicovenTextSecondary)
+            }
+        }
     }
 
     private var answers: some View {
@@ -785,7 +801,30 @@ struct LeadAgentChoices: View {
     let lead: TaskLead
     let onChoose: (TasksModel.Agent) -> Void
 
+    /// What the menu says besides the agents.
+    enum Note: Equatable {
+        /// They could not be read: said also over those read before,
+        /// which stay, with Try Again.
+        case failed
+        /// They are being read, and none was read before.
+        case loading
+    }
+
+    static func note(hasChoices: Bool, failedToLoad: Bool) -> Note? {
+        if failedToLoad { return .failed }
+        return hasChoices ? nil : .loading
+    }
+
     var body: some View {
+        switch Self.note(hasChoices: lead.choices != nil, failedToLoad: lead.failedToLoad) {
+        case .failed:
+            Text("Couldn't load the agents")
+            Button("Try Again", action: lead.onRetry)
+        case .loading:
+            Text("Loading agents…")
+        case nil:
+            EmptyView()
+        }
         if let choices = lead.choices {
             if let marked = choices.marked {
                 Section(choices.reason == .lead ? "Lead agent" : "Last used") { choice(marked) }
@@ -793,11 +832,6 @@ struct LeadAgentChoices: View {
             Section {
                 ForEach(choices.others) { choice($0) }
             }
-        } else if lead.failedToLoad {
-            Text("Couldn't load the agents")
-            Button("Try Again", action: lead.onRetry)
-        } else {
-            Text("Loading agents…")
         }
     }
 

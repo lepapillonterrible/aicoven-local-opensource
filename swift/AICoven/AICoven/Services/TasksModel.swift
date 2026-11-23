@@ -294,19 +294,20 @@ final class TasksModel: ObservableObject {
                 landed = reading
                 if errorMessage == Self.couldNotLoad { errorMessage = nil }
             }
+            // The agents of the places shown are read once the tasks are
+            // (in On me the places are known only then), before anything
+            // is said of a hand-off, so that it is said by its agent's
+            // name. A place whose reading failed waits to be asked for
+            // again.
+            for place in placesShown where agentsByPlace[place] == nil && !placesWhoseAgentsFailed.contains(place) {
+                await loadAgents(in: place)
+            }
+            guard signedIn() == account else { return false }
             // The turns the tasks follow are those of the tasks as read.
             // One that ended while they were read is read again for.
             let again = turnsChanged()
             tellEndings()
             await again?.value
-            // In On me the places are known once the tasks are read: the
-            // agents of those not read yet are read (one whose reading
-            // failed waits to be asked for again).
-            if scope == .onMe {
-                for place in placesShown where agentsByPlace[place] == nil && !placesWhoseAgentsFailed.contains(place) {
-                    await loadAgents(in: place)
-                }
-            }
             return true
         } catch is CancellationError {
             // Whoever asked was called off: nothing was read, and what is shown stays.
@@ -509,8 +510,9 @@ final class TasksModel: ObservableObject {
         return task.covenID
     }
 
-    /// The places whose tasks are shown: the page's own, or in On me
-    /// those of the open tasks listed.
+    /// The places whose agents the page needs: its own, or in On me
+    /// those of the open tasks listed (only an open task is handed over,
+    /// led or talked through with an agent).
     private var placesShown: [String] {
         switch scope {
         case let .place(covenID): return [covenID ?? ""]
@@ -520,8 +522,9 @@ final class TasksModel: ObservableObject {
         }
     }
 
-    /// Reads the agents of the places shown: each coven's, or Strix alone
-    /// where the place has none of its own. One reading at a time for a
+    /// Reads the agents of the places shown again (the tasks' own reading
+    /// reads those not read yet; this is Try Again's): each coven's, or
+    /// Strix alone where the place has none of its own. One reading at a time for a
     /// place: asked again while one is under way, it waits for that one
     /// and reads nothing more, so no earlier answer lands over a later
     /// one, and whoever asked has the agents when it returns. Nothing
