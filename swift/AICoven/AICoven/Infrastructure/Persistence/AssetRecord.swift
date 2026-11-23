@@ -416,6 +416,7 @@ actor AssetRepository {
     /// An asset's row as it is stored: what is kept as it is, and what is sealed.
     private struct Stored {
         let id: String
+        let covenID: String
         let type: String
         let status: String
         let title: Data
@@ -428,6 +429,7 @@ actor AssetRepository {
 
         init(_ row: Row) {
             id = row["id"]
+            covenID = row["coven_id"]
             type = row["type"]
             status = row["status"]
             title = row["title_ciphertext"]
@@ -446,19 +448,36 @@ actor AssetRepository {
     /// anything cannot be opened with the account's key is listed as
     /// unreadable, with no title and no files.
     func assets(inCoven covenID: String?, as account: String) async throws -> [Asset] {
+        try await assets(where: "assets.coven_id = ?", [covenID ?? ""], as: account)
+    }
+
+    /// Those of `account`'s assets that have these ids, wherever each is
+    /// kept, in the order of the ids; an id that is no asset of the
+    /// account's is left out. At most 50 ids are looked up.
+    func assets(withIDs ids: [String], as account: String) async throws -> [Asset] {
+        let asked = Array(ids.prefix(50))
+        guard !asked.isEmpty else { return [] }
+        let marks = Array(repeating: "?", count: asked.count).joined(separator: ", ")
+        let found = try await assets(where: "assets.id IN (\(marks))", asked, as: account)
+        return asked.compactMap { id in found.first { $0.id == id } }
+    }
+
+    /// The account's assets that `condition` holds for (it speaks of the
+    /// `assets` table), as a listing gives them.
+    private func assets(where condition: String, _ values: [String], as account: String) async throws -> [Asset] {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-        let coven = covenID ?? ""
         return try await AccountSeal.reading(as: account) {
             // Both in one read, so that an asset is listed with the files it has then.
             let (stored, storedFiles): ([Stored], [(id: String, assetID: String, meta: Data)]) = try await dbQueue.read { db in
+                let arguments = StatementArguments([account] + values)
                 let assets = try Row.fetchAll(
                     db,
                     sql: """
-                    SELECT id, type, status, title_ciphertext, details_ciphertext, made_by_agent_id, thread_id,
+                    SELECT id, coven_id, type, status, title_ciphertext, details_ciphertext, made_by_agent_id, thread_id,
                            source_message_id, created_at, updated_at
-                    FROM assets WHERE user_id = ? AND coven_id = ? ORDER BY updated_at DESC, rowid DESC
+                    FROM assets WHERE assets.user_id = ? AND \(condition) ORDER BY updated_at DESC, rowid DESC
                     """,
-                    arguments: [account, coven]
+                    arguments: arguments
                 ).map(Stored.init)
                 // Never the bytes: only what says what each file is.
                 let files = try Row.fetchAll(
@@ -466,9 +485,9 @@ actor AssetRepository {
                     sql: """
                     SELECT asset_files.id, asset_files.asset_id, asset_files.meta_ciphertext FROM asset_files
                     JOIN assets ON assets.id = asset_files.asset_id
-                    WHERE assets.user_id = ? AND assets.coven_id = ? ORDER BY asset_files.rowid
+                    WHERE assets.user_id = ? AND \(condition) ORDER BY asset_files.rowid
                     """,
-                    arguments: [account, coven]
+                    arguments: arguments
                 ).map { (id: $0["id"] as String, assetID: $0["asset_id"] as String, meta: $0["meta_ciphertext"] as Data) }
                 return (assets, files)
             }
@@ -497,7 +516,7 @@ actor AssetRepository {
                 let files = filesByAsset[stored.id, default: []]
                 let isReadable = title != nil && details != nil && files != nil
                 assets.append(Asset(
-                    id: stored.id, covenID: covenID, type: AssetType(rawValue: stored.type),
+                    id: stored.id, covenID: stored.covenID.isEmpty ? nil : stored.covenID, type: AssetType(rawValue: stored.type),
                     // A status this version does not know is read as a
                     // draft: nothing takes a draft for reviewed.
                     status: AssetStatus(rawValue: stored.status) ?? .draft,

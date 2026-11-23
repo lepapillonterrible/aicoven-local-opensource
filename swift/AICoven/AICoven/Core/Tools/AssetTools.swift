@@ -40,6 +40,9 @@ nonisolated enum AssetTools {
         /// Throws if the account has no such thread.
         var covenOfThread: @Sendable (_ threadID: String, _ account: String) async throws -> String?
         var assets: @Sendable (_ covenID: String?, _ account: String) async throws -> [Asset]
+        /// One asset of the account's by its id, wherever it is kept; nil
+        /// if the account has none by that id.
+        var asset: @Sendable (_ id: String, _ account: String) async throws -> Asset?
         var data: @Sendable (_ fileID: String, _ account: String) async throws -> Data
         var create: @Sendable (_ new: New, _ covenID: String?, _ agentID: String, _ threadID: String, _ account: String) async throws -> Asset
         var update: @Sendable (_ assetID: String, _ title: String?, _ details: String?, _ account: String) async throws -> Void
@@ -58,6 +61,7 @@ nonisolated enum AssetTools {
             account: { await MainActor.run { UserScope.currentUserID } },
             covenOfThread: { try await ThreadRepository.shared.covenID(ofThread: $0, for: $1) },
             assets: { try await AssetRepository.shared.assets(inCoven: $0, as: $1) },
+            asset: { try await AssetRepository.shared.assets(withIDs: [$0], as: $1).first },
             data: { try await AssetRepository.shared.data(ofFile: $0, as: $1) },
             create: { new, covenID, agentID, threadID, account in
                 try await AssetRepository.shared.create(
@@ -82,10 +86,26 @@ nonisolated enum AssetTools {
         // A turn can outlive the account it was started as: the assets
         // are read as whoever is signed in now, of a thread that is theirs.
         let account = await store.account()
-        let assets: [Asset]
         do {
             let covenID = try await store.covenOfThread(threadID, account)
-            assets = try await store.assets(covenID, account)
+            switch call.name {
+            case "asset.search":
+                let assets = try await store.assets(covenID, account)
+                guard await store.account() == account else { return accountChanged(call) }
+                return search(call, among: assets, threadID: threadID)
+            case "asset.get":
+                guard let id = text(call.args["asset_id"]) else {
+                    return .validationError(tool: call.name, message: "Missing required argument: 'asset_id'", field: "asset_id")
+                }
+                let asset = try await store.asset(id, account)
+                guard await store.account() == account else { return accountChanged(call) }
+                // Only an asset of the place the thread is in: one kept
+                // elsewhere is not there for this turn.
+                guard let asset, asset.covenID == covenID else { return notFound(call) }
+                return await get(call, asset, account: account, store: store)
+            default:
+                return .error(tool: call.name, message: "There is no such asset tool.", errorType: "unknown_tool")
+            }
         } catch is CancellationError {
             return .error(tool: call.name, message: "Stopped before the assets were read.", errorType: "cancelled")
         } catch is ThreadLookupError {
@@ -93,26 +113,18 @@ nonisolated enum AssetTools {
             // be read): asking again would not help.
             return .error(tool: call.name, message: "This thread's assets cannot be read.", errorType: "asset_thread_unreadable")
         } catch {
+            guard await store.account() == account else { return accountChanged(call) }
             // The kind of failure only.
             AppErrorReporter.log(message: "The assets could not be read for a tool (\(type(of: error)))", context: "AssetTools.read")
             return .error(tool: call.name, message: "The assets could not be read.", errorType: "asset_store_unavailable", isRetryable: true)
         }
-        guard await store.account() == account else { return accountChanged(call) }
-        switch call.name {
-        case "asset.search":
-            return search(call, among: assets, threadID: threadID)
-        case "asset.get":
-            return await get(call, among: assets, account: account, store: store)
-        default:
-            return .error(tool: call.name, message: "There is no such asset tool.", errorType: "unknown_tool")
-        }
+    }
+
+    private static func notFound(_ call: ParsedToolCall) -> ToolExecutionResult {
+        .error(tool: call.name, message: "There is no asset with that id here. Find its id with asset.search.", errorType: "asset_not_found")
     }
 
     // MARK: - Making and changing
-
-    /// Posted when a tool has made or changed an asset, so that a place
-    /// showing assets reads them again.
-    static let changedAssets = Notification.Name("AssetToolsChangedAssets")
 
     /// Runs one of the writing tools for a turn in `threadID`. `turn` is
     /// the turn's own count of what it makes and changes, and says who its
@@ -121,7 +133,7 @@ nonisolated enum AssetTools {
     static func write(_ call: ParsedToolCall, threadID: String?, turn: TurnAssets?, store: Store = .live) async -> ToolExecutionResult {
         let result = await written(call, threadID: threadID, turn: turn, store: store)
         if result.status == "ok" {
-            NotificationCenter.default.post(name: changedAssets, object: nil)
+            NotificationCenter.default.post(name: Asset.didChange, object: nil)
         }
         return result
     }
@@ -150,11 +162,10 @@ nonisolated enum AssetTools {
             guard let id = text(call.args["asset_id"]) else {
                 return .validationError(tool: call.name, message: "Missing required argument: 'asset_id'", field: "asset_id")
             }
-            let assets = try await store.assets(covenID, account)
+            let found = try await store.asset(id, account)
             guard await store.account() == account else { return accountChanged(call) }
-            guard let asset = assets.first(where: { $0.id == id }) else {
-                return .error(tool: call.name, message: "There is no asset with that id here. Find its id with asset.search.", errorType: "asset_not_found")
-            }
+            // Only an asset of the place the thread is in.
+            guard let asset = found, asset.covenID == covenID else { return notFound(call) }
             // What the key cannot open is not changed or proposed: nobody
             // can see what it holds.
             guard !asset.isUnreadable else {
@@ -372,15 +383,7 @@ nonisolated enum AssetTools {
 
     // MARK: - asset.get
 
-    private static func get(_ call: ParsedToolCall, among assets: [Asset], account: String, store: Store) async -> ToolExecutionResult {
-        guard let id = text(call.args["asset_id"]) else {
-            return .validationError(tool: call.name, message: "Missing required argument: 'asset_id'", field: "asset_id")
-        }
-        // Only an asset of the place the thread is in: one kept elsewhere
-        // is not there for this turn.
-        guard let asset = assets.first(where: { $0.id == id }) else {
-            return .error(tool: call.name, message: "There is no asset with that id here. Find its id with asset.search.", errorType: "asset_not_found")
-        }
+    private static func get(_ call: ParsedToolCall, _ asset: Asset, account: String, store: Store) async -> ToolExecutionResult {
         guard !asset.isUnreadable else {
             return .error(tool: call.name, message: "That asset cannot be opened with the account's key.", errorType: "asset_locked")
         }

@@ -98,7 +98,7 @@ struct ShellContentView: View {
                 // Strix's, or the coven's on screen; while that coven is
                 // not in, or it is another's, the Overview.
                 if covenID == nil || coven?.id == covenID {
-                    AssetLibraryView(covenID: covenID)
+                    AssetLibraryView(covenID: covenID, navigator: navigator)
                         .id(covenID)
                 } else {
                     overview
@@ -157,8 +157,11 @@ struct ShellContentView: View {
     /// title's menu; the phone's bar does, its title opening the switcher.
     @ViewBuilder
     private func threadPlace(_ thread: Thread) -> some View {
-        let chat = PersonalChatView(thread: thread)
-            .id(thread.id)
+        // An asset's card in the thread opens it in the Assets of where it is kept.
+        let chat = PersonalChatView(thread: thread, onOpenAsset: { asset in
+            navigator.showAsset(asset.id, in: ShellScope(covenID: asset.covenID))
+        })
+        .id(thread.id)
         #if os(iOS)
         if let onOpenSwitcher {
             chat.phoneConversationBar(

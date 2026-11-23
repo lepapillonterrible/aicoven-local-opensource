@@ -149,4 +149,23 @@ nonisolated struct Asset: Identifiable, Equatable {
     var version = ""
     let createdAt: Date
     let updatedAt: Date
+
+    /// Posted when an asset was made or changed (by an agent's tool, or by
+    /// the person somewhere else on screen), so that whatever shows assets
+    /// reads them again.
+    static let didChange = Notification.Name("AICovenAssetsDidChange")
+
+    /// Where a reply's metadata keeps the ids of the assets made in its turn.
+    static let messageMetadataKey = "asset_ids"
+
+    /// The ids of the assets a stored message says were made in its turn,
+    /// in order, each once; none for a message that names none.
+    static func ids(in metadata: [String: AnyJSONValue]) -> [String] {
+        guard case let .array(kept)? = metadata[messageMetadataKey] else { return [] }
+        var seen: Set<String> = []
+        return kept.compactMap { id in
+            guard case let .string(id) = id, !id.isEmpty, seen.insert(id).inserted else { return nil }
+            return id
+        }
+    }
 }

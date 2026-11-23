@@ -29,8 +29,40 @@ struct AssetLibraryView: View {
     /// What the search reads, said before a search starts.
     static let searchScope = "Search runs on this device. It reads titles, descriptions, and file names."
 
-    init(covenID: String?) {
+    /// Asks this place to show an asset (from its card in a thread), and
+    /// opens the thread an asset was made in.
+    @ObservedObject private var navigator: ShellNavigator
+    private let covenID: String?
+
+    init(covenID: String?, navigator: ShellNavigator) {
+        self.covenID = covenID
+        self.navigator = navigator
         _model = StateObject(wrappedValue: AssetLibraryModel(covenID: covenID))
+    }
+
+    /// Shows the asset this place was asked for, once its assets are
+    /// read: a search or a filter that hides it is cleared.
+    private func showWhatWasAsked() {
+        guard model.hasRead, let id = navigator.takeAssetAsk(in: ShellScope(covenID: covenID)) else { return }
+        guard let asset = model.assets.first(where: { $0.id == id }) else { return }
+        let shown = model.shown
+        if !(shown.needsReview + shown.others).contains(where: { $0.id == id }) {
+            model.clearSearchAndFilters()
+            // What is archived is shown only where it is asked for.
+            if asset.status == .archived { model.statusFilter = .archived }
+        }
+        #if os(macOS)
+        selectedID = id
+        #else
+        openID = id
+        #endif
+    }
+
+    /// Opens the thread an asset was made in, leaving whatever of this
+    /// place is over it.
+    private func open(_ thread: Thread) {
+        openID = nil
+        navigator.open(thread)
     }
 
     var body: some View {
@@ -67,9 +99,15 @@ struct AssetLibraryView: View {
                     .navigationBarTitleDisplayMode(.inline)
             }
         #endif
-            .task { await model.load() }
-            // An agent made or changed an asset while this place is open.
-            .onReceive(NotificationCenter.default.publisher(for: AssetTools.changedAssets).receive(on: RunLoop.main)) { _ in
+            .task {
+                await model.load()
+                showWhatWasAsked()
+            }
+            .onChange(of: navigator.assetAsked) { showWhatWasAsked() }
+            .onChange(of: model.hasRead) { showWhatWasAsked() }
+            // An agent made or changed an asset, or the person approved one
+            // from its card in a thread, while this place is open.
+            .onReceive(NotificationCenter.default.publisher(for: Asset.didChange).receive(on: RunLoop.main)) { _ in
                 Task { await model.load() }
             }
             .onAppear { isOnScreen = true }
@@ -154,7 +192,7 @@ struct AssetLibraryView: View {
             }
             .inspector(isPresented: Binding(get: { selected != nil }, set: { if !$0 { selectedID = nil } })) {
                 if let selected {
-                    AssetDetailView(asset: selected, model: model, sharing: files.turn)
+                    AssetDetailView(asset: selected, model: model, sharing: files.turn, onOpenThread: open)
                         .id(selected.id)
                         .inspectorColumnWidth(min: 260, ideal: 300, max: 420)
                 }
@@ -169,7 +207,7 @@ struct AssetLibraryView: View {
     @ViewBuilder
     private func page(of id: Asset.ID) -> some View {
         if let asset = model.assets.first(where: { $0.id == id }) {
-            AssetDetailView(asset: asset, model: model, sharing: files.turn)
+            AssetDetailView(asset: asset, model: model, sharing: files.turn, onOpenThread: open)
         } else {
             ContentUnavailableView("This asset is no longer here", systemImage: "tray")
         }
@@ -273,7 +311,7 @@ struct AssetLibraryView: View {
                 VStack(alignment: .leading, spacing: Spacing.xxxs) {
                     Text(title(asset))
                         .foregroundStyle(Color.aicovenTextPrimary)
-                    Text(AssetLibraryRules.quietLine(asset, now: now))
+                    Text(AssetLibraryRules.quietLine(asset, agents: model.agents, now: now))
                         .font(.aicovenBodySmall)
                         .foregroundStyle(Color.aicovenTextSecondary)
                 }
@@ -310,7 +348,7 @@ struct AssetLibraryView: View {
             }
             .width(min: 90, ideal: 120)
             TableColumn("Made by") { asset in
-                Text(AssetLibraryRules.madeBy(asset))
+                Text(AssetLibraryRules.madeBy(asset, agents: model.agents))
                     .foregroundStyle(Color.aicovenTextSecondary)
             }
             .width(min: 80, ideal: 110)

@@ -346,6 +346,23 @@ final class ShellNavigator: ObservableObject {
         }
     }
 
+    /// The asset the Assets place is asked to show, until it has.
+    @Published private(set) var assetAsked: String?
+
+    /// Opens the Assets place of `scope` and asks it to show an asset.
+    func showAsset(_ id: String, in scope: ShellScope) {
+        open(.assets(covenId: scope.covenID), in: scope)
+        assetAsked = id
+    }
+
+    /// The asset the place showing `scope`'s assets is asked to show;
+    /// answered by this, once, and only to the place on screen.
+    func takeAssetAsk(in scope: ShellScope) -> String? {
+        guard scope == selected, let asked = assetAsked else { return nil }
+        assetAsked = nil
+        return asked
+    }
+
     /// Asks for the thread search: the sidebar's, or in the phone layout
     /// the Overview's.
     func requestSearch() {

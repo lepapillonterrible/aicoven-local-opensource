@@ -118,6 +118,8 @@ struct EnhancedChatMessage: Identifiable, Hashable {
     let attachments: [FileAttachmentDetail]?
     let images: [ParsedImage]?
     let generatedFiles: [GeneratedFile]?
+    /// The assets made in the reply's turn, by id: each is shown as a card.
+    var assetIDs: [String] = []
 
     let createdAt: Date?
 }

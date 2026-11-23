@@ -45,6 +45,9 @@ struct TurnState: Codable, Equatable, Identifiable {
     /// kept in the attachment store: they go with the reply. Not coded:
     /// they are told from one report to the next, not stored with a state.
     var generatedFiles: [FileAttachmentDetail] = []
+    /// The assets the turn's agent made, by id, in the order it made them:
+    /// each is shown with the reply, as a card. Not coded, as the files.
+    var madeAssets: [String] = []
 
     enum CodingKeys: String, CodingKey {
         case id = "turn_id"

@@ -176,6 +176,7 @@ enum MessageAdapter {
             attachments: attachments,
             images: nil,
             generatedFiles: generatedFiles,
+            assetIDs: Asset.ids(in: meta),
             createdAt: chatMessage.createdAt
         )
     }
