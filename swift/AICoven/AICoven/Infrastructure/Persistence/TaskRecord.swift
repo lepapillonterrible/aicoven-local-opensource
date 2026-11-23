@@ -297,9 +297,16 @@ actor TaskRepository {
             dueDate = row["due_date"]
             dueTime = row["due_time"]
             pinPeriod = row["pin_period"]
-            pinEnds = row["pin_expires_at"]
-            createdAt = row["created_at"]
-            updatedAt = row["updated_at"]
+            // A time that does not read as one (written by a later
+            // version, say) is no pin's end, and the earliest of times: the
+            // rest of the listing is still read.
+            pinEnds = Self.time(row["pin_expires_at"])
+            createdAt = Self.time(row["created_at"]) ?? .distantPast
+            updatedAt = Self.time(row["updated_at"]) ?? .distantPast
+        }
+
+        private static func time(_ stored: DatabaseValue) -> Date? {
+            Date.fromDatabaseValue(stored)
         }
     }
 

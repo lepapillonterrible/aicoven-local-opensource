@@ -495,6 +495,25 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(read.stage, .backlog)
         XCTAssertNil(read.due, "A day that does not exist is no day")
         XCTAssertNil(read.pin)
+
+        // Times that do not read as times do not stop the listing: the rest is still read.
+        let other = try await store.create(title: "Read all the same", inCoven: nil, as: account)
+        try await queue.write { db in
+            try db.execute(
+                sql: """
+                UPDATE tasks SET status = 'open', pin_period = 'today', pin_expires_at = 'soon', created_at = 'once', updated_at = 'lately'
+                WHERE id = ?
+                """,
+                arguments: [made.id]
+            )
+        }
+        let again = try await store.tasks(inCoven: nil, as: account)
+        XCTAssertEqual(Set(again.tasks.map(\.id)), [made.id, other.id])
+        let odd = try XCTUnwrap(again.tasks.first { $0.id == made.id })
+        XCTAssertNil(odd.pin, "No end, no pin")
+        XCTAssertEqual(odd.updatedAt, .distantPast)
+        XCTAssertEqual(odd.createdAt, .distantPast)
+        XCTAssertEqual(odd.title, "From later")
     }
 
     // MARK: - A write that lands after the data was locked

@@ -639,6 +639,9 @@ final class DatabaseManager {
                 // A place's tasks by when they were last changed, with what
                 // tells the open ones from the finished, for its listing.
                 try db.create(index: "tasks_user_coven_changed", on: "tasks", columns: ["user_id", "coven_id", "updated_at", "status"])
+                // A coven's tasks whoever's they are, for the trigger that
+                // keeps a coven from being made over another account's.
+                try db.create(index: "tasks_coven", on: "tasks", columns: ["coven_id"])
                 for (event, name) in [("INSERT", "insert"), ("UPDATE OF user_id, coven_id", "update")] {
                     try db.execute(sql: """
                     CREATE TRIGGER tasks_match_coven_user_\(name)

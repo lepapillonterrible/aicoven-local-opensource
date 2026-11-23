@@ -2,14 +2,14 @@ import Foundation
 
 /// Whether a task is still to do, as in the cloud app: open, done, or
 /// closed without being done.
-nonisolated enum TaskStatus: String, CaseIterable {
+nonisolated enum TaskStatus: String {
     case open
     case done
     case closed
 }
 
 /// How far along a task is, as the cloud app's board has it.
-nonisolated enum TaskStage: String, CaseIterable {
+nonisolated enum TaskStage: String {
     case backlog
     case inProgress = "in_progress"
     case review
@@ -55,7 +55,7 @@ nonisolated struct TaskDueDate: Equatable, Comparable {
 }
 
 /// How long a task is pinned for: today, or this week.
-nonisolated enum TaskPinPeriod: String, CaseIterable {
+nonisolated enum TaskPinPeriod: String {
     case today
     case week
 }
