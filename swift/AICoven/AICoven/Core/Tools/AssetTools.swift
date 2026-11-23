@@ -79,7 +79,10 @@ nonisolated enum AssetTools {
             addFile: { try await AssetRepository.shared.addFile($0, to: $1, as: $2) },
             propose: { _ = try await AssetRepository.shared.move($0, to: .proposed, as: $1) },
             relations: { try await AssetRepository.shared.relations(ofAsset: $0, as: $1) },
-            handoff: { try await AssetRepository.shared.handoffBrief(of: $0, madeBy: $1, inThread: $2, as: $3) }
+            handoff: {
+                let made = try await AssetRepository.shared.handoffBrief(of: $0, madeBy: $1, inThread: $2, as: $3)
+                return (made.brief, made.isNew)
+            }
         )
     }
 

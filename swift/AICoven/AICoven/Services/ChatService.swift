@@ -98,6 +98,26 @@ enum ToolIntentDecision {
     /// Ambiguous — fall through to the LLM with tool instructions.
     case ambiguous
 
+    /// Whether `text` holds `name` as a whole name: not as the start or
+    /// the end of a longer one ("file.reading" does not name `file.read`,
+    /// nor "asset.get.all" `asset.get`; "use asset.get." does).
+    static func names(_ name: String, in text: String) -> Bool {
+        func isOfAName(_ character: Character?) -> Bool {
+            character.map { $0.isLetter || $0.isNumber || $0 == "_" } ?? false
+        }
+        var from = text.startIndex
+        while let found = text.range(of: name, range: from ..< text.endIndex) {
+            let before = found.lowerBound > text.startIndex ? text[text.index(before: found.lowerBound)] : nil
+            let after = found.upperBound < text.endIndex ? text[found.upperBound] : nil
+            let afterThat = after == nil ? nil : (text.index(after: found.upperBound) < text.endIndex ? text[text.index(after: found.upperBound)] : nil)
+            // A dot goes on with a name only where a name's character follows it.
+            let goesOn = isOfAName(after) || (after == "." && isOfAName(afterThat))
+            if !isOfAName(before), before != ".", !goesOn { return true }
+            from = found.upperBound
+        }
+        return false
+    }
+
     /// Heuristic fast-path: classify a user message without an LLM call.
     /// Returns `.noTools` for obviously conversational requests and
     /// `.useTools` for obvious tool requests; `.ambiguous` otherwise.
@@ -108,7 +128,7 @@ enum ToolIntentDecision {
         // else it says: an asset's hand-off tells the agent to read it
         // with `asset.get`, and what the person adds to it ("draft the
         // plan") must not take the tool away.
-        if PromptTemplates.toolDefinitions.contains(where: { lower.contains($0.name.lowercased()) }) {
+        if PromptTemplates.toolDefinitions.contains(where: { names($0.name.lowercased(), in: lower) }) {
             return .useTools(suggested: [])
         }
 
@@ -254,10 +274,32 @@ actor ChatService {
     /// Whether a turn for this agent (Strix for nil) would be offered the
     /// tools of its thread's place, as the agent and the connections are
     /// set up now: asked before an asset is sent to an agent, which reads
-    /// it with those tools.
+    /// it with those tools. Decided as a turn decides it: after the same
+    /// refresh of what is connected, by the model that would in fact
+    /// answer (the agent's own where it is there, else the one the turn
+    /// would fall back to), and not for a turn that would be handed to
+    /// Hermes or an OpenClaw Gateway, or that no model can answer.
     func offersPlaceTools(toAgent roleID: String?) async -> Bool {
-        let provider = await preferredProviderAndModel(roleId: roleID).provider
+        await ensureEnvironment()
+        let preferred = await preferredProviderAndModel(roleId: roleID)
+        if preferred.provider == AgentRun.hermes, hermesAgent() != nil { return false }
+        if preferred.provider == AgentRun.openClaw, openClawTurn("") != nil { return false }
+        guard let answering = answeringModel(provider: preferred.provider, model: preferred.model) else { return false }
+        let provider = answering.descriptor.providerID
         return Self.givesPlaceTools(provider: provider, isLocal: isLocalDeployment(providerID: provider))
+    }
+
+    /// The model that answers a turn whose agent prefers `provider` and
+    /// `model`: that one where its connection and the model are there,
+    /// else the one the router gives; nil where none can answer.
+    private func answeringModel(provider: String, model: String) -> (descriptor: ModelDescriptor, client: LLMClient)? {
+        if let client = llmClients[provider], let match = modelRouter.findExact(providerID: provider, modelID: model) {
+            return (match, client)
+        }
+        // Fall back to heuristic routing.
+        let routing = RoutingContext(task: .chat, requireLocalOnly: false, requireLongContext: false, preferHighQuality: true)
+        guard let descriptor = modelRouter.route(for: routing), let client = llmClients[descriptor.providerID] else { return nil }
+        return (descriptor, client)
     }
 
     /// What a turn that was cut off this way says in its thread.
@@ -430,33 +472,14 @@ actor ChatService {
         }
         threadsLastAnsweredByAnAgent.remove(threadId)
 
-        let descriptor: ModelDescriptor
-        let client: LLMClient
-
-        if let prefClient = llmClients[prefProvider],
-           let match = modelRouter.findExact(providerID: prefProvider, modelID: prefModel) {
-            descriptor = match
-            client = prefClient
-        } else {
-            // Fall back to heuristic routing.
-            let routingContext = RoutingContext(
-                task: .chat,
-                requireLocalOnly: false,
-                requireLongContext: false,
-                preferHighQuality: true
-            )
-            guard let fallbackDescriptor = modelRouter.route(for: routingContext),
-                  let fallbackClient = llmClients[fallbackDescriptor.providerID] else {
-                let msg = "No configured providers/models available for chat. Add provider keys in Settings."
-                state.phase = .finalizing
-                state.status = .failed
-                state.answer = msg
-                state.bumpVersion()
-                onStateChange(state)
-                return
-            }
-            descriptor = fallbackDescriptor
-            client = fallbackClient
+        guard let (descriptor, client) = answeringModel(provider: prefProvider, model: prefModel) else {
+            let msg = "No configured providers/models available for chat. Add provider keys in Settings."
+            state.phase = .finalizing
+            state.status = .failed
+            state.answer = msg
+            state.bumpVersion()
+            onStateChange(state)
+            return
         }
 
         // Give the UI an immediate hint that we're contacting the provider.

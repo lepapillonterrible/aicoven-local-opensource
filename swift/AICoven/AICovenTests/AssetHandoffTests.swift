@@ -13,6 +13,15 @@ final class AssetHandoffTests: XCTestCase {
         var threads: [AICoven.Thread] = []
         var threadsFail = false
         var busy: Set<String> = []
+        var busyAsked: [String] = []
+        /// The agents whose turns are no longer offered the asset tools, as things are set up by the time Send asks.
+        var noLongerReads: Set<String> = []
+        /// How the asset stands as the store looks when the brief is asked for.
+        var sourceStatus = AssetStatus.approved
+        /// Where reading the agents waits, if anywhere.
+        var agentsWait: Gate?
+        /// Where making the brief waits, if anywhere.
+        var briefWaits: Gate?
         var briefFails: Error?
         var briefsAsked: [(assetID: String, account: String)] = []
         var threadFails: Error?
@@ -40,23 +49,64 @@ final class AssetHandoffTests: XCTestCase {
         )
     }
 
+    /// Holds whoever waits at it until the test opens it, and tells when someone has come.
+    private actor Gate {
+        private var isOpen = false
+        private var held: [CheckedContinuation<Void, Never>] = []
+        private var arrivals = 0
+        private var hearing: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+
+        func wait() async {
+            arrivals += 1
+            let due = hearing.filter { $0.count <= arrivals }
+            hearing.removeAll { $0.count <= arrivals }
+            due.forEach { $0.continuation.resume() }
+            if !isOpen { await withCheckedContinuation { held.append($0) } }
+        }
+
+        func arrived(_ count: Int = 1) async {
+            if arrivals < count { await withCheckedContinuation { hearing.append((count, $0)) } }
+        }
+
+        func open() {
+            isOpen = true
+            held.forEach { $0.resume() }
+            held = []
+        }
+    }
+
     private func model(_ asset: Asset, _ stand: Stand) -> AssetHandoffModel {
         AssetHandoffModel(asset: asset, hands: AssetHandoffModel.Hands(
-            agents: { _, _ in stand.agents },
+            agents: { _, _ in
+                // As they are when asked for, however long the answer takes.
+                let agents = stand.agents
+                await stand.agentsWait?.wait()
+                return agents
+            },
             threads: { _, _ in
                 if stand.threadsFail { throw RepositoryError.databaseUnavailable }
                 return stand.threads
             },
-            isBusy: { stand.busy.contains($0) },
+            readsAssets: { agent, _ in
+                stand.steps.append("reads")
+                stand.whenAsked["reads"]?()
+                return !stand.noLongerReads.contains(agent.id)
+            },
+            isBusy: { threadID, _ in
+                stand.busyAsked.append(threadID)
+                return stand.busy.contains(threadID)
+            },
             brief: { assetID, account in
                 stand.steps.append("brief")
                 stand.briefsAsked.append((assetID, account))
                 if let error = stand.briefFails { throw error }
                 stand.whenAsked["brief"]?()
-                return Asset(
+                await stand.briefWaits?.wait()
+                let brief = Asset(
                     id: "brief", covenID: nil, type: .implementationBrief, status: .draft, title: "Handoff: Logo", details: "", madeByAgentID: nil,
                     threadID: nil, sourceMessageID: nil, parentID: assetID, files: [], createdAt: Date(), updatedAt: Date()
                 )
+                return (brief, stand.sourceStatus)
             },
             createThread: { title, covenID, agent, account in
                 stand.steps.append("thread")
@@ -177,7 +227,8 @@ final class AssetHandoffTests: XCTestCase {
         sending.direction = "  Build it for the web first.\n"
         let sent = await sending.send(as: "ada")
         XCTAssertEqual(sent?.id, "its-own", "The thread to open")
-        XCTAssertEqual(stand.steps, ["brief", "turn"])
+        XCTAssertEqual(stand.steps, ["reads", "brief", "turn"])
+        XCTAssertEqual(stand.busyAsked, ["its-own", "its-own"], "Asked before anything is made, and again before the turn is started")
         XCTAssertEqual(stand.briefsAsked.first?.assetID, "logo")
         XCTAssertEqual(stand.briefsAsked.first?.account, "ada")
         XCTAssertEqual(stand.started.first?.threadID, "its-own")
@@ -222,13 +273,14 @@ final class AssetHandoffTests: XCTestCase {
     func testANewThreadIsMadeForTheAgentChosen_namedAsThePersonSaysOrAsTheCloudAppNamesIt() async {
         let stand = Stand()
         stand.threads = [thread("its-own", agent: "quill")]
+        stand.sourceStatus = .proposed
         var sending = model(asset(.proposed, coven: "work"), stand)
         await sending.load(as: "ada")
         sending.startsNewThread = true
         sending.agentID = "quill"
         var sent = await sending.send(as: "ada")
         XCTAssertEqual(sent?.id, "made-1")
-        XCTAssertEqual(stand.steps, ["brief", "thread", "turn"], "The brief first: a thread is made only for an asset that is handed over")
+        XCTAssertEqual(stand.steps, ["reads", "brief", "thread", "turn"], "The brief first: a thread is made only for an asset that is handed over")
         XCTAssertEqual(stand.madeThreads.first?.title, "Asset handoff")
         XCTAssertEqual(stand.madeThreads.first?.covenID, "work", "In the asset's place")
         XCTAssertEqual(stand.madeThreads.first?.agent, "quill")
@@ -272,7 +324,7 @@ final class AssetHandoffTests: XCTestCase {
         stand.whenAsked["brief"] = { stand.busy = ["its-own"] }
         sent = await sending.send(as: "ada")
         XCTAssertNil(sent)
-        XCTAssertEqual(stand.steps, ["brief"])
+        XCTAssertEqual(stand.steps, ["reads", "brief"])
         XCTAssertEqual(sending.failure, AssetHandoffModel.threadIsBusy)
         // A new thread is the way round it.
         sending.startsNewThread = true
@@ -319,7 +371,7 @@ final class AssetHandoffTests: XCTestCase {
     }
 
     func testNothingMoreIsDoneOrSaidOnceAnotherAccountHasSignedIn() async {
-        for step in ["brief", "thread", "turn"] {
+        for step in ["reads", "brief", "thread", "turn"] {
             let stand = Stand()
             let sending = model(asset(), stand)
             await sending.load(as: "ada")
@@ -329,11 +381,24 @@ final class AssetHandoffTests: XCTestCase {
             XCTAssertNil(sending.failure, step)
             XCTAssertEqual(stand.said, [], step)
             switch step {
-            case "brief": XCTAssertEqual(stand.steps, ["brief"], "No thread is made")
-            case "thread": XCTAssertEqual(stand.steps, ["brief", "thread"], "No turn is started")
-            default: XCTAssertEqual(stand.steps, ["brief", "thread", "turn"])
+            case "reads": XCTAssertEqual(stand.steps, ["reads"], "No brief is made")
+            case "brief": XCTAssertEqual(stand.steps, ["reads", "brief"], "No thread is made")
+            case "thread": XCTAssertEqual(stand.steps, ["reads", "brief", "thread"], "No turn is started")
+            default: XCTAssertEqual(stand.steps, ["reads", "brief", "thread", "turn"])
             }
         }
+        // Signed in before Send's task began: nothing is looked at or said, though the thread chosen is busy.
+        let late = Stand()
+        late.threads = [thread("its-own")]
+        late.busy = ["its-own"]
+        let pressed = model(asset(thread: "its-own"), late)
+        await pressed.load(as: "ada")
+        late.account = "grace"
+        let sentLate = await pressed.send(as: "ada")
+        XCTAssertNil(sentLate)
+        XCTAssertEqual(late.busyAsked, [])
+        XCTAssertEqual(late.said, [])
+        XCTAssertNil(pressed.failure)
         // A failure after the account changed is not said to the next account either.
         let stand = Stand()
         let sending = model(asset(), stand)
@@ -342,6 +407,97 @@ final class AssetHandoffTests: XCTestCase {
         stand.startFails = RepositoryError.accountChanged
         _ = await sending.send(as: "ada")
         XCTAssertNil(sending.failure)
+    }
+
+    func testAnAssetIsSentAsItStandsNow_notAsTheSheetReadIt() async {
+        // Archived or sent back since the sheet was opened: it has a brief, and is not sent on.
+        for status in [AssetStatus.archived, .draft] {
+            let stand = Stand()
+            stand.sourceStatus = status
+            let sending = model(asset(.approved), stand)
+            await sending.load(as: "ada")
+            let sent = await sending.send(as: "ada")
+            XCTAssertNil(sent, "\(status)")
+            XCTAssertEqual(sending.failure, AssetHandoffModel.cannotBeSent)
+            XCTAssertEqual(stand.steps, ["reads", "brief"], "No thread is made and no turn started")
+        }
+        // Approved since it was listed as proposed, and the other way round: the agent is told how it stands now.
+        for (listed, now, words) in [
+            (AssetStatus.proposed, AssetStatus.approved, "Source review state: APPROVED."),
+            (.approved, .proposed, "Source review state: PROPOSED — this source has not been approved."),
+        ] {
+            let stand = Stand()
+            stand.sourceStatus = now
+            let sending = model(asset(listed), stand)
+            await sending.load(as: "ada")
+            _ = await sending.send(as: "ada")
+            XCTAssertTrue(stand.started.first?.text.contains(words) == true, "\(listed) listed, \(now) now")
+        }
+        // An agent set up otherwise since the sheet read it is not sent the asset, and the sheet says so from then on.
+        let stand = Stand()
+        stand.noLongerReads = ["scout"]
+        let sending = model(asset(), stand)
+        await sending.load(as: "ada")
+        XCTAssertTrue(sending.canSend)
+        let sent = await sending.send(as: "ada")
+        XCTAssertNil(sent)
+        XCTAssertEqual(stand.steps, ["reads"], "Nothing is made for it")
+        XCTAssertEqual(sending.failure, AssetHandoffModel.cannotRead(.init(id: "scout", name: "Scout")))
+        XCTAssertFalse(sending.canSend)
+        XCTAssertNotNil(sending.agentNote)
+    }
+
+    func testOnlyTheLatestReadingIsTaken_andOneSendingAtATime() async {
+        // Two readings under way: the earlier one, landing last, is not taken over the later one.
+        let stand = Stand()
+        let gate = Gate()
+        stand.agentsWait = gate
+        stand.agents = [.init(id: "old", name: "Old")]
+        let sending = model(asset(), stand)
+        let early = Task { await sending.load(as: "ada") }
+        await gate.arrived()
+        stand.agents = [.init(id: "new", name: "New")]
+        let later = Task { await sending.load(as: "ada") }
+        await gate.arrived(2)
+        await gate.open()
+        await early.value
+        await later.value
+        XCTAssertEqual(sending.agents.map(\.id), ["new"])
+        XCTAssertEqual(sending.agentID, "new")
+        XCTAssertFalse(sending.isLoading)
+
+        // A second Send while one is on its way does nothing.
+        let making = Gate()
+        stand.briefWaits = making
+        let first = Task { await sending.send(as: "ada") }
+        await making.arrived()
+        XCTAssertTrue(sending.isSending)
+        XCTAssertFalse(sending.canSend)
+        let again = await sending.send(as: "ada")
+        XCTAssertNil(again)
+        XCTAssertNil(sending.failure, "Nor is anything said of it")
+        await making.open()
+        let sent = await first.value
+        XCTAssertEqual(sent?.id, "made-1")
+        XCTAssertEqual(stand.started.count, 1)
+        XCTAssertEqual(stand.madeThreads.count, 1)
+        XCTAssertFalse(sending.isSending)
+    }
+
+    func testAToolIsNamedByItsWholeName() {
+        XCTAssertTrue(ToolIntentDecision.names("asset.get", in: "use asset.get to read it"))
+        XCTAssertTrue(ToolIntentDecision.names("asset.get", in: "read it with asset.get."))
+        XCTAssertTrue(ToolIntentDecision.names("asset.get", in: "(asset.get)"))
+        XCTAssertFalse(ToolIntentDecision.names("asset.get", in: "an asset.getter"))
+        XCTAssertFalse(ToolIntentDecision.names("asset.get", in: "asset.get.all"))
+        XCTAssertFalse(ToolIntentDecision.names("file.read", in: "explain how file.reading works"))
+        XCTAssertFalse(ToolIntentDecision.names("file.read", in: "my.file.read"))
+        XCTAssertFalse(ToolIntentDecision.names("web_search", in: "a web_searching habit"))
+        XCTAssertTrue(ToolIntentDecision.names("file.read", in: "file.reading is not file.read"), "A later whole mention counts")
+        guard case .noTools = ToolIntentDecision.heuristic(for: "Explain how file.reading would open the file /tmp/example") else {
+            XCTFail("A longer name names no tool")
+            return
+        }
     }
 
     // MARK: - Offered

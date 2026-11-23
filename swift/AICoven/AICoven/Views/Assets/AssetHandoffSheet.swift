@@ -41,7 +41,9 @@ struct AssetHandoffSheet: View {
                         }
                         Toggle("Start a new thread", isOn: $model.startsNewThread)
                         if model.startsNewThread {
-                            TextField("Thread title", text: $model.newThreadTitle, prompt: Text("Optional"))
+                            labelled("Thread title") {
+                                TextField("Thread title", text: $model.newThreadTitle, prompt: Text("Optional"))
+                            }
                         } else if model.threads.isEmpty {
                             Text(AssetHandoffModel.noThreads)
                                 .foregroundStyle(Color.aicovenTextSecondary)
@@ -64,10 +66,11 @@ struct AssetHandoffSheet: View {
                 .disabled(model.isSending)
 
                 Section {
-                    // iOS forms show only a field's prompt, so there it names the field too.
-                    TextField("Instructions", text: $model.direction, prompt: Text("Anything the agent should know"), axis: .vertical)
-                        .lineLimit(3 ... 8)
-                        .disabled(model.isSending)
+                    labelled("Instructions") {
+                        TextField("Instructions", text: $model.direction, prompt: Text("Anything the agent should know"), axis: .vertical)
+                            .lineLimit(3 ... 8)
+                            .disabled(model.isSending)
+                    }
                 } footer: {
                     Group {
                         if let failure = model.failure {
@@ -107,6 +110,24 @@ struct AssetHandoffSheet: View {
         #endif
         .interactiveDismissDisabled(model.isSending)
         .task { await model.load(as: UserScope.currentUserID) }
+    }
+
+    /// A field with its name shown: an iOS form shows only a field's
+    /// prompt, which goes once something is typed, so there the name is
+    /// written over the field; the Mac's form writes it itself.
+    @ViewBuilder
+    private func labelled(_ name: String, @ViewBuilder field: () -> some View) -> some View {
+        #if os(iOS)
+        VStack(alignment: .leading, spacing: Spacing.xxs) {
+            Text(name)
+                .font(.aicovenBodySmall)
+                .foregroundStyle(Color.aicovenTextSecondary)
+                .accessibilityHidden(true)
+            field()
+        }
+        #else
+        field()
+        #endif
     }
 
     /// The asset being sent, and where its review stands.

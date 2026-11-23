@@ -35,10 +35,16 @@ final class AssetHandoffModel: ObservableObject {
         var agents: @MainActor (_ covenID: String?, _ account: String) async -> [Agent]?
         /// The place's threads that are not archived, the one last used first.
         var threads: @MainActor (_ covenID: String?, _ account: String) async throws -> [Thread]
-        /// Whether a turn is running in the thread now.
-        var isBusy: @MainActor (_ threadID: String) -> Bool
-        /// The asset's hand-off brief: the one it has, or a new one.
-        var brief: @MainActor (_ assetID: String, _ account: String) async throws -> Asset
+        /// Whether a turn for the agent would be offered the asset tools,
+        /// as the agent and the connections are set up now.
+        var readsAssets: @MainActor (_ agent: Agent, _ account: String) async -> Bool
+        /// Whether a turn is under way in the thread: one this app runs,
+        /// or a run an agent of the person's own was making when the app
+        /// was closed, which goes on without it until the thread is opened.
+        var isBusy: @MainActor (_ threadID: String, _ account: String) async throws -> Bool
+        /// The asset's hand-off brief (the one it has, or a new one), and
+        /// how the asset stood as the store looked.
+        var brief: @MainActor (_ assetID: String, _ account: String) async throws -> (brief: Asset, sourceStatus: AssetStatus)
         var createThread: @MainActor (_ title: String, _ covenID: String?, _ agent: Agent, _ account: String) async throws -> Thread
         /// Starts a turn in the thread with these words as the person's
         /// message, answered by the agent given.
@@ -69,8 +75,18 @@ final class AssetHandoffModel: ObservableObject {
                 let threads = try await ThreadService.shared.loadThreads(covenId: covenID)
                 return ThreadListRules.ordered(threads)
             },
-            isBusy: { TurnEngine.shared.running[$0] != nil },
-            brief: { try await AssetRepository.shared.handoffBrief(of: $0, as: $1).brief },
+            readsAssets: { agent, _ in await ChatService.shared.offersPlaceTools(toAgent: agent.isStrix ? nil : agent.id) },
+            isBusy: { threadID, account in
+                if TurnEngine.shared.running[threadID] != nil { return true }
+                // A turn stored as running that has an agent's own run is
+                // still under way though this app runs nothing in it.
+                guard let marks = try await ThreadRepository.shared.threadMarks(for: account)[threadID] else { return false }
+                return marks.latestTurn == .running && marks.latestTurnHasRun
+            },
+            brief: {
+                let handed = try await AssetRepository.shared.handoffBrief(of: $0, as: $1)
+                return (handed.brief, handed.sourceStatus)
+            },
             createThread: { title, covenID, agent, account in
                 try await ThreadService.shared.createThread(
                     title: title, covenId: covenID, agentId: agent.isStrix ? nil : agent.id, agentName: agent.isStrix ? nil : agent.name, as: account
@@ -209,18 +225,20 @@ final class AssetHandoffModel: ObservableObject {
     /// Sends the asset to the agent chosen, for the account that pressed
     /// Send, and answers with the thread it was sent in, to be opened;
     /// nil where it was not sent, with why in `failure`. One sending at a
-    /// time. The brief is asked for first, so that a thread is made only
-    /// for an asset that is handed over; a thread made for a hand-off
-    /// whose turn did not start is deleted again.
+    /// time, and nothing is looked at, said or done for an account that
+    /// is no longer the one signed in. Everything is decided as things
+    /// stand now, not as the sheet read them: the agent's turns are still
+    /// offered the asset tools, the thread has no turn under way (one
+    /// that has is not sent into: the engine would refuse it), and the
+    /// asset is still proposed or approved as the store looks, which is
+    /// also what the agent is told of its review. The brief is asked for
+    /// before a thread is made, so that a thread is made only for an
+    /// asset that is handed over; a thread made for a hand-off whose turn
+    /// did not start is deleted again.
     func send(as account: String) async -> Thread? {
-        guard !isSending, !isLoading else { return nil }
+        guard hands.signedIn() == account, !isSending, !isLoading else { return nil }
         guard let agent, agent.readsAssets, startsNewThread || thread != nil else {
             fail(agentNote ?? Self.chooseBoth)
-            return nil
-        }
-        // A thread whose turn is under way would only queue the words.
-        if !startsNewThread, let thread, hands.isBusy(thread.id) {
-            fail(Self.threadIsBusy)
             return nil
         }
         isSending = true
@@ -228,20 +246,41 @@ final class AssetHandoffModel: ObservableObject {
         defer { isSending = false }
         var made: Thread?
         do {
-            let brief = try await hands.brief(asset.id, account)
+            let existing = startsNewThread ? nil : thread
+            if let existing, try await hands.isBusy(existing.id, account) {
+                if hands.signedIn() == account { fail(Self.threadIsBusy) }
+                return nil
+            }
+            guard await hands.readsAssets(agent, account) else {
+                guard hands.signedIn() == account else { return nil }
+                // Set up otherwise since the sheet read it: it says so from here on.
+                if let index = agents.firstIndex(where: { $0.id == agent.id }) { agents[index].readsAssets = false }
+                fail(Self.cannotRead(agent))
+                return nil
+            }
             guard hands.signedIn() == account else { return nil }
-            var target = startsNewThread ? nil : thread
+            let handed = try await hands.brief(asset.id, account)
+            guard hands.signedIn() == account else { return nil }
+            // An asset that has a brief can have been archived or sent
+            // back since the sheet was opened: it is not sent on.
+            guard handed.sourceStatus == .proposed || handed.sourceStatus == .approved else {
+                fail(Self.cannotBeSent)
+                return nil
+            }
+            var target = existing
             if target == nil {
                 let title = ThreadInputValidator.normalizedTitle(newThreadTitle, defaultTitle: Self.threadTitle)
                 made = try await hands.createThread(title, asset.covenID, agent, account)
                 target = made
             }
             guard let target, hands.signedIn() == account else { return nil }
-            guard made != nil || !hands.isBusy(target.id) else {
-                fail(Self.threadIsBusy)
+            if made == nil, try await hands.isBusy(target.id, account) {
+                if hands.signedIn() == account { fail(Self.threadIsBusy) }
                 return nil
             }
-            let words = Self.message(briefID: brief.id, sourceID: asset.id, isApproved: asset.status == .approved, direction: direction)
+            let words = Self.message(
+                briefID: handed.brief.id, sourceID: asset.id, isApproved: handed.sourceStatus == .approved, direction: direction
+            )
             try await hands.startTurn(target, words, agent)
             return hands.signedIn() == account ? target : nil
         } catch {
