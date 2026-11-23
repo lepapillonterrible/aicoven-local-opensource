@@ -173,6 +173,15 @@ final class TasksModelTests: XCTestCase {
                                 kept.id, change.title ?? kept.title, status: change.status ?? kept.status, due: due, pin: pin, coven: kept.covenID,
                                 stage: change.stage ?? kept.stage
                             )
+                            // A reminder as the store would keep it: a preset an hour from now, a picked time as picked.
+                            changed.reminder = kept.reminder
+                            switch change.reminder {
+                            case let .to(.preset(preset, zone)):
+                                changed.reminder = TaskReminder(preset: preset, remindAt: self.now.addingTimeInterval(3600), timeZone: zone)
+                            case let .to(.at(at, zone)): changed.reminder = TaskReminder(preset: nil, remindAt: at, timeZone: zone)
+                            case .cleared: changed.reminder = nil
+                            case nil: break
+                            }
                             changed.threadID = change.threadID ?? kept.threadID
                             changed.leadAgentID = kept.leadAgentID
                             switch change.leadAgentID {
@@ -1481,6 +1490,71 @@ final class TasksModelTests: XCTestCase {
         XCTAssertEqual(stand.changed.count, changes + 1, "Its thread was given before; the turn is not kept after")
         XCTAssertEqual(stand.heard.count, heard)
         XCTAssertEqual(tasks.saving, [])
+    }
+
+    // MARK: - Reminders
+
+    func testATasksReminderIsSetByAPresetOrAtAPickedTime_andRemoved() async {
+        let stand = Stand()
+        stand.kept = [task("a", "Call the bank")]
+        let tasks = model(stand)
+        await tasks.load()
+
+        // By a preset, in the time zone of the person's calendar.
+        await tasks.setReminder(tasks.open[0], preset: .hourBefore, as: "ada")
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(reminder: .to(.preset(.hourBefore, timeZone: "GMT"))))
+        XCTAssertEqual(tasks.open[0].reminder?.preset, .hourBefore, "Read again")
+        XCTAssertEqual(stand.heard.last, "Reminder set")
+        // At a time they picked.
+        let picked = now.addingTimeInterval(86400)
+        await tasks.setReminder(tasks.open[0], at: picked, as: "ada")
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(reminder: .to(.at(picked, timeZone: "GMT"))))
+        XCTAssertEqual(stand.heard.last, "Reminder set")
+        // Removed; and nothing is asked for a task that has none.
+        await tasks.setReminder(tasks.open[0], as: "ada")
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(reminder: .cleared))
+        XCTAssertEqual(stand.heard.last, "Reminder removed")
+        XCTAssertNil(tasks.open[0].reminder)
+        let asked = stand.changed.count
+        await tasks.setReminder(tasks.open[0], as: "ada")
+        XCTAssertEqual(stand.changed.count, asked)
+
+        // One that cannot be set says why, in the cloud app's words; any other failure says so.
+        for refusal in [TaskError.reminderPassed, .reminderNeedsDue] {
+            stand.changeFails = refusal
+            await tasks.setReminder(tasks.open[0], preset: .atDue, as: "ada")
+            XCTAssertEqual(tasks.errorMessage, "That reminder can't be set: its time has passed, or the task no longer has a due date.")
+        }
+        stand.changeFails = RepositoryError.databaseUnavailable
+        await tasks.setReminder(tasks.open[0], at: picked, as: "ada")
+        XCTAssertEqual(tasks.errorMessage, "Couldn't set the reminder on “Call the bank”. Try again.")
+        XCTAssertEqual(stand.heard.last, tasks.errorMessage)
+    }
+
+    func testTheWordsForAReminder_andWhereItsTimePickerStarts() {
+        let british = Locale(identifier: "en_GB")
+        XCTAssertEqual(TaskDetailView.reminderWords(for: nil, now: now, isCompact: false), "Add reminder")
+        XCTAssertEqual(TaskDetailView.reminderWords(for: nil, now: now, isCompact: true), "Remind")
+        // Wednesday 13 January 2027, 10:00 UTC, is now. The year is said only where it is another.
+        let toCome = TaskReminder(preset: nil, remindAt: now.addingTimeInterval(3600), timeZone: "GMT")
+        let words = TaskDetailView.reminderWords(for: toCome, now: now, isCompact: false, calendar: calendar, locale: british)
+        XCTAssertTrue(words.hasPrefix("Remind 13 Jan"), words)
+        XCTAssertTrue(words.hasSuffix("11:00"), words)
+        XCTAssertFalse(words.contains("2027"), words)
+        // Where there is little room the day and time stand alone: the bell says the rest.
+        let short = TaskDetailView.reminderWords(for: toCome, now: now, isCompact: true, calendar: calendar, locale: british)
+        XCTAssertTrue(short.hasPrefix("13 Jan"), short)
+        let nextYear = TaskReminder(preset: nil, remindAt: now.addingTimeInterval(400 * 86400), timeZone: "GMT")
+        XCTAssertTrue(TaskDetailView.reminderWords(for: nextYear, now: now, isCompact: false, calendar: calendar, locale: british).contains("2028"))
+        // One whose time has come has reminded, and says so until it is changed or removed.
+        let passed = TaskReminder(preset: .atDue, remindAt: now.addingTimeInterval(-3600), timeZone: "GMT")
+        XCTAssertTrue(TaskDetailView.reminderWords(for: passed, now: now, isCompact: true, calendar: calendar, locale: british).hasPrefix("Reminded 13 Jan"))
+        XCTAssertTrue(TaskReminder(preset: nil, remindAt: now, timeZone: "GMT").hasPassed(asOf: now), "At its time, it has reminded")
+
+        // The picker starts at the reminder's own time while that is to come; otherwise an hour from now.
+        XCTAssertEqual(TaskReminderTimeSheet.start(from: toCome.remindAt, now: now), toCome.remindAt)
+        XCTAssertEqual(TaskReminderTimeSheet.start(from: passed.remindAt, now: now), now.addingTimeInterval(3600))
+        XCTAssertEqual(TaskReminderTimeSheet.start(from: nil, now: now), now.addingTimeInterval(3600))
     }
 
     // MARK: - The Board

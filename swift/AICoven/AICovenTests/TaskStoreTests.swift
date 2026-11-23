@@ -67,7 +67,7 @@ final class TaskStoreTests: XCTestCase {
             guard let row = try Row.fetchOne(db, sql: "SELECT * FROM tasks WHERE id = ?", arguments: [id]) else { return [] }
             return [
                 "title_ciphertext", "status", "stage", "due_date", "due_time", "pin_period", "pin_expires_at", "updated_at",
-                "thread_id", "lead_agent_id", "handoff_turn_id", "handoff_agent_id",
+                "thread_id", "lead_agent_id", "handoff_turn_id", "handoff_agent_id", "reminder_preset", "reminder_at", "reminder_time_zone",
             ].map {
                 (row[$0] as DatabaseValue).description
             }
@@ -841,6 +841,136 @@ final class TaskStoreTests: XCTestCase {
         try await queue.write { db in try db.execute(sql: "DELETE FROM roles WHERE id = ?", arguments: [quill]) }
         listing = try await store.tasks(inCoven: coven, as: account)
         XCTAssertEqual(listing.lastHandedTo, [:])
+    }
+
+    // MARK: - Its reminder
+
+    /// A moment on the clock of a time zone.
+    private func moment(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int = 0, in zone: String) throws -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: zone))
+        return try XCTUnwrap(calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute)))
+    }
+
+    func testWhenAPresetReminds() throws {
+        let berlin = "Europe/Berlin"
+        let dayOnly = try XCTUnwrap(TaskDue(date: day("2027-02-01")))
+        let timed = try XCTUnwrap(TaskDue(date: day("2027-02-01"), time: "14:30"))
+        // A due day with no time of day is taken as 9:00 in the time zone the reminder is set in.
+        XCTAssertEqual(TaskReminder.time(for: .atDue, due: dayOnly, timeZone: berlin), try moment(2027, 2, 1, 9, in: berlin))
+        XCTAssertEqual(TaskReminder.time(for: .atDue, due: dayOnly, timeZone: "Asia/Bangkok"), try moment(2027, 2, 1, 9, in: "Asia/Bangkok"))
+        XCTAssertEqual(TaskReminder.time(for: .atDue, due: timed, timeZone: berlin), try moment(2027, 2, 1, 14, 30, in: berlin))
+        XCTAssertEqual(TaskReminder.time(for: .hourBefore, due: timed, timeZone: berlin), try moment(2027, 2, 1, 13, 30, in: berlin))
+        XCTAssertEqual(TaskReminder.time(for: .dayBefore, due: timed, timeZone: berlin), try moment(2027, 1, 31, 14, 30, in: berlin))
+        XCTAssertEqual(TaskReminder.time(for: .dayBefore, due: dayOnly, timeZone: berlin), try moment(2027, 1, 31, 9, in: berlin))
+
+        // The clocks go forward in Berlin on 28 March 2027: a day before is the same time of day
+        // on the day before (23 hours earlier), and an hour before is 3,600 seconds earlier.
+        let afterTheChange = try XCTUnwrap(TaskDue(date: day("2027-03-29"), time: "10:00"))
+        let dayBefore = try XCTUnwrap(TaskReminder.time(for: .dayBefore, due: afterTheChange, timeZone: berlin))
+        XCTAssertEqual(dayBefore, try moment(2027, 3, 28, 10, in: berlin))
+        let onTheDay = try XCTUnwrap(TaskDue(date: day("2027-03-28"), time: "03:30"))
+        let hourBefore = try XCTUnwrap(TaskReminder.time(for: .hourBefore, due: onTheDay, timeZone: berlin))
+        XCTAssertEqual(try moment(2027, 3, 28, 3, 30, in: berlin).timeIntervalSince(hourBefore), 3600)
+
+        XCTAssertNil(TaskReminder.time(for: .atDue, due: dayOnly, timeZone: "Mars/Olympus"), "A time zone that is none")
+        XCTAssertEqual(TaskReminderPreset.allCases.map(\.title), ["At the due time", "1 hour before", "1 day before"], "The cloud app's words")
+    }
+
+    func testATasksReminderIsSetForATimeToCome_onAnOpenTask_andIsNoChangeToTheTask() async throws {
+        // The clock tells a later second of 15 January 2027 each time it is asked.
+        let clock = Clock()
+        let store = TaskRepository(now: { clock.next() })
+        let berlin = "Europe/Berlin"
+        let made = try await store.create(title: "Renew the lease", inCoven: nil, as: account)
+        var task = try await read(made.id, inCoven: nil)
+        XCTAssertNil(task.reminder)
+        let changedAt = task.updatedAt
+
+        await expect(.reminderNeedsDue, "A preset is measured from the due time") {
+            try await store.change(made.id, TaskChange(reminder: .to(.preset(.atDue, timeZone: berlin))), as: self.account)
+        }
+        await expect(.noSuchTimeZone, "A time zone that is none") {
+            try await store.change(made.id, TaskChange(reminder: .to(.at(Date(timeIntervalSince1970: 1_900_000_000), timeZone: "Mars/Olympus"))), as: self.account)
+        }
+        await expect(.reminderPassed, "A time that has passed") {
+            try await store.change(made.id, TaskChange(reminder: .to(.at(Date(timeIntervalSince1970: 1_700_000_000), timeZone: berlin))), as: self.account)
+        }
+
+        // A time the person picked.
+        let picked = try moment(2027, 2, 3, 8, 15, in: berlin)
+        try await store.change(made.id, TaskChange(reminder: .to(.at(picked, timeZone: berlin))), as: account)
+        task = try await read(made.id, inCoven: nil)
+        XCTAssertEqual(task.reminder, TaskReminder(preset: nil, remindAt: picked, timeZone: berlin))
+        XCTAssertEqual(task.updatedAt, changedAt, "A reminder alone is no change to the task: a list ordered by that does not move")
+
+        // A preset, given the due day in the same change, takes the picked time's place.
+        let due = try XCTUnwrap(TaskDue(date: day("2027-02-01"), time: "14:30"))
+        try await store.change(made.id, TaskChange(due: .to(due), reminder: .to(.preset(.hourBefore, timeZone: berlin))), as: account)
+        task = try await read(made.id, inCoven: nil)
+        XCTAssertEqual(task.reminder, try TaskReminder(preset: .hourBefore, remindAt: moment(2027, 2, 1, 13, 30, in: berlin), timeZone: berlin))
+        // A preset whose time has passed: the task is due before now.
+        let past = try XCTUnwrap(TaskDue(date: day("2027-01-10")))
+        try await store.change(made.id, TaskChange(reminder: .cleared), as: account)
+        try await store.change(made.id, TaskChange(due: .to(past)), as: account)
+        await expect(.reminderPassed, "Measured from a due day that has passed") {
+            try await store.change(made.id, TaskChange(reminder: .to(.preset(.dayBefore, timeZone: berlin))), as: self.account)
+        }
+        task = try await read(made.id, inCoven: nil)
+        XCTAssertNil(task.reminder, "Removed, and nothing of a change that was refused is kept")
+
+        // A finished task reminds no one: none is set on it, finishing takes the one it had, and opening it again does not bring it back.
+        try await store.change(made.id, TaskChange(due: .to(due), reminder: .to(.preset(.atDue, timeZone: berlin))), as: account)
+        try await store.change(made.id, TaskChange(status: .done), as: account)
+        var listing = try await store.tasks(inCoven: nil, as: account)
+        XCTAssertNil(listing.tasks.first { $0.id == made.id }?.reminder)
+        await expect(.finished, "Not on a finished task") {
+            try await store.change(made.id, TaskChange(reminder: .to(.at(picked, timeZone: berlin))), as: self.account)
+        }
+        try await store.change(made.id, TaskChange(status: .open), as: account)
+        listing = try await store.tasks(inCoven: nil, as: account)
+        XCTAssertNil(listing.tasks.first { $0.id == made.id }?.reminder)
+    }
+
+    func testAReminderFollowsItsTasksDueDay() async throws {
+        let clock = Clock()
+        let store = TaskRepository(now: { clock.next() })
+        let berlin = "Europe/Berlin"
+        let preset = try await store.create(title: "By a preset", inCoven: nil, as: account)
+        let picked = try await store.create(title: "At a picked time", inCoven: nil, as: account)
+        let first = try XCTUnwrap(TaskDue(date: day("2027-02-01"), time: "14:30"))
+        let at = try moment(2027, 2, 3, 8, 15, in: berlin)
+        try await store.change(preset.id, TaskChange(due: .to(first), reminder: .to(.preset(.dayBefore, timeZone: berlin))), as: account)
+        try await store.change(picked.id, TaskChange(due: .to(first), reminder: .to(.at(at, timeZone: berlin))), as: account)
+
+        // The due day changed: a preset's reminder moves with it, in the time zone it was set in; a picked time stays.
+        let later = try XCTUnwrap(TaskDue(date: day("2027-02-10")))
+        for id in [preset.id, picked.id] {
+            try await store.change(id, TaskChange(due: .to(later)), as: account)
+        }
+        var task = try await read(preset.id, inCoven: nil)
+        XCTAssertEqual(task.reminder, try TaskReminder(preset: .dayBefore, remindAt: moment(2027, 2, 9, 9, in: berlin), timeZone: berlin))
+        task = try await read(picked.id, inCoven: nil)
+        XCTAssertEqual(task.reminder?.remindAt, at)
+
+        // Moved to a day that has passed, it has reminded: it stays, and says so.
+        let passed = try XCTUnwrap(TaskDue(date: day("2027-01-12")))
+        try await store.change(preset.id, TaskChange(due: .to(passed)), as: account)
+        task = try await read(preset.id, inCoven: nil)
+        let moved = try XCTUnwrap(task.reminder)
+        XCTAssertEqual(moved.remindAt, try moment(2027, 1, 11, 9, in: berlin))
+        XCTAssertTrue(moved.hasPassed(asOf: clock.next()))
+        // A change that says nothing of the due day leaves the reminder as it is.
+        try await store.change(preset.id, TaskChange(title: "Still by a preset"), as: account)
+        task = try await read(preset.id, inCoven: nil)
+        XCTAssertEqual(task.reminder, moved)
+
+        // The due day taken away takes the reminder, however it was set.
+        for id in [preset.id, picked.id] {
+            try await store.change(id, TaskChange(due: .cleared), as: account)
+            task = try await read(id, inCoven: nil)
+            XCTAssertNil(task.reminder)
+        }
     }
 
     // MARK: - Every place's (On me)

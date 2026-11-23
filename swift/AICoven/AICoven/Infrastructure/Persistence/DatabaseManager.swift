@@ -739,6 +739,18 @@ final class DatabaseManager {
                 }
             }
 
+            // A task's reminder, the person's own: the preset it was set
+            // by (none for a time they picked), when it reminds, and the
+            // time zone it was set in. Kept as they are, like a pin: the
+            // time is what it is scheduled by.
+            migrator.registerMigration("v22_task_reminders") { db in
+                try db.alter(table: "tasks") { t in
+                    t.add(column: "reminder_preset", .text)
+                    t.add(column: "reminder_at", .datetime)
+                    t.add(column: "reminder_time_zone", .text)
+                }
+            }
+
             try migrator.migrate(queue)
             dbQueue = queue
         } catch {

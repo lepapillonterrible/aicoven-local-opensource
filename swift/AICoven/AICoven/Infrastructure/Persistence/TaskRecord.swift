@@ -23,6 +23,12 @@ enum TaskError: Error, Equatable {
     case noSuchAgent
     /// The turn is not a turn of the task's thread.
     case noSuchTurn
+    /// A reminder measured from the due time needs a due day.
+    case reminderNeedsDue
+    /// A reminder is for a time still to come.
+    case reminderPassed
+    /// The time zone a reminder is asked in is none.
+    case noSuchTimeZone
 }
 
 /// A coven's tasks (or Strix's), or those of every place, as a listing gives them.
@@ -192,7 +198,7 @@ actor TaskRepository {
     /// What a change writes of a task, in the order it is put back by.
     private static let changed = [
         "title_ciphertext", "status", "stage", "due_date", "due_time", "pin_period", "pin_expires_at", "updated_at",
-        "thread_id", "lead_agent_id", "handoff_turn_id", "handoff_agent_id",
+        "thread_id", "lead_agent_id", "handoff_turn_id", "handoff_agent_id", "reminder_preset", "reminder_at", "reminder_time_zone",
     ]
 
     /// Changes one of `account`'s tasks: what `change` names, and nothing
@@ -212,7 +218,15 @@ actor TaskRepository {
     ///   Strix's tasks have none to name);
     /// - the turn it is handed over in is a turn of its thread
     ///   (`TaskError.noSuchTurn`), and the agent it is handed to in it an
-    ///   agent of its coven (`TaskError.noSuchAgent`), or Strix (none).
+    ///   agent of its coven (`TaskError.noSuchAgent`), or Strix (none);
+    /// - a reminder is set on an open task (`TaskError.finished`), for a
+    ///   time still to come (`TaskError.reminderPassed`), in a time zone
+    ///   that is one (`TaskError.noSuchTimeZone`), and one measured from
+    ///   the due time needs a due day (`TaskError.reminderNeedsDue`);
+    ///   finishing a task takes its reminder, and so does taking its due
+    ///   day away; a due day changed moves a reminder set by a preset;
+    ///   a reminder alone, like a pin, leaves when the task was last
+    ///   changed as it is.
     /// A new title is sealed with the account's key, also for a task whose
     /// title could not be opened. It takes its turn among the changes to
     /// stored tasks (`inTurn`).
@@ -278,6 +292,10 @@ actor TaskRepository {
             }
             // Finishing a task takes its pin, as in the cloud app.
             if !isOpen { pin = (nil, .null) }
+            let reminder = try Self.reminder(
+                after: change, stored: (stored["reminder_preset"], stored["reminder_at"], stored["reminder_time_zone"]), due: due,
+                isOpen: isOpen, moment: moment
+            )
             var thread: String? = stored["thread_id"]
             if let given = change.threadID, given != thread {
                 guard thread == nil else { throw TaskError.hasThread }
@@ -314,21 +332,21 @@ actor TaskRepository {
                 // The turn and who it was handed to are written together.
                 handoff = (turn, change.handoffAgentID)
             }
-            // A pin alone is no change to the task.
-            let touches = change != TaskChange(pin: change.pin)
+            // A pin or a reminder alone is no change to the task.
+            let touches = change != TaskChange(pin: change.pin, reminder: change.reminder)
             let revision: Int = stored["revision"]
             try db.execute(
                 sql: """
                 UPDATE tasks SET title_ciphertext = ?, status = ?, stage = ?, due_date = ?, due_time = ?, pin_period = ?, pin_expires_at = ?,
                                  updated_at = ?, thread_id = ?, lead_agent_id = ?, handoff_turn_id = ?, handoff_agent_id = ?,
-                                 revision = ?
+                                 reminder_preset = ?, reminder_at = ?, reminder_time_zone = ?, revision = ?
                 WHERE id = ? AND user_id = ?
                 """,
                 arguments: [
                     newTitle ?? (stored["title_ciphertext"] as Data), change.status?.rawValue ?? (stored["status"] as String),
                     change.stage?.rawValue ?? (stored["stage"] as String), due.date, due.time, pin.period, pin.ends,
                     touches ? moment.databaseValue : (stored["updated_at"] as DatabaseValue), thread, lead, handoff.turn, handoff.agent,
-                    revision + 1, id, account,
+                    reminder.preset, reminder.at, reminder.zone, revision + 1, id, account,
                 ]
             )
             return (Self.changed.map { stored[$0] as DatabaseValue }, revision + 1)
@@ -417,6 +435,49 @@ actor TaskRepository {
 
     // MARK: - Reading
 
+    /// A reminder as it is stored: the preset it was set by (none for a
+    /// picked time), when it reminds, and the time zone it was set in.
+    private typealias StoredReminder = (preset: String?, at: DatabaseValue, zone: String?)
+
+    /// A task's reminder after a change, decided against the task as it is
+    /// then: its status and due day as the change leaves them, and the
+    /// time of the write.
+    private static func reminder(
+        after change: TaskChange, stored: StoredReminder, due: (date: String?, time: String?), isOpen: Bool, moment: Date
+    ) throws -> StoredReminder {
+        let none: StoredReminder = (nil, .null, nil)
+        // A finished task reminds no one.
+        guard isOpen else {
+            if case .to = change.reminder { throw TaskError.finished }
+            return none
+        }
+        let dueDay = due.date.flatMap(TaskDueDate.init).flatMap { TaskDue(date: $0, time: due.time) ?? TaskDue(date: $0) }
+        switch change.reminder {
+        case let .to(.preset(preset, zone)):
+            guard TimeZone(identifier: zone) != nil else { throw TaskError.noSuchTimeZone }
+            guard let dueDay else { throw TaskError.reminderNeedsDue }
+            guard let at = TaskReminder.time(for: preset, due: dueDay, timeZone: zone) else { throw TaskError.noSuchTimeZone }
+            guard at > moment else { throw TaskError.reminderPassed }
+            return (preset.rawValue, at.databaseValue, zone)
+        case let .to(.at(at, zone)):
+            guard TimeZone(identifier: zone) != nil else { throw TaskError.noSuchTimeZone }
+            guard at > moment else { throw TaskError.reminderPassed }
+            return (nil, at.databaseValue, zone)
+        case .cleared:
+            return none
+        case nil:
+            guard change.due != nil, !stored.at.isNull else { return stored }
+            // Its due day taken away takes the reminder, as in the cloud
+            // app; changed, it moves one set by a preset (which then
+            // reminds again if that is still to come), and leaves a time
+            // the person picked.
+            guard let dueDay else { return none }
+            guard let preset = stored.preset.flatMap(TaskReminderPreset.init), let zone = stored.zone,
+                  let at = TaskReminder.time(for: preset, due: dueDay, timeZone: zone) else { return stored }
+            return (stored.preset, at.databaseValue, zone)
+        }
+    }
+
     /// A task's row as it is stored: what is kept as it is, and its
     /// sealed title.
     private struct Stored {
@@ -435,6 +496,7 @@ actor TaskRepository {
         let handoffAgentID: String?
         let handoffStatus: String?
         let handoffHasRun: Bool
+        let reminder: TaskReminder?
         let createdAt: Date
         let updatedAt: Date
 
@@ -456,6 +518,14 @@ actor TaskRepository {
             handoffAgentID = row["handoff_agent_id"]
             handoffStatus = row["handoff_status"]
             handoffHasRun = row["handoff_has_run"] ?? false
+            // A reminder with no time that reads as one, or no time zone,
+            // is none; a preset this version does not know is read as a
+            // time the person picked.
+            if let at = Self.time(row["reminder_at"]), let zone: String = row["reminder_time_zone"] {
+                reminder = TaskReminder(preset: (row["reminder_preset"] as String?).flatMap(TaskReminderPreset.init), remindAt: at, timeZone: zone)
+            } else {
+                reminder = nil
+            }
             pinEnds = Self.time(row["pin_expires_at"])
             createdAt = Self.time(row["created_at"]) ?? .distantPast
             updatedAt = Self.time(row["updated_at"]) ?? .distantPast
@@ -498,7 +568,7 @@ actor TaskRepository {
                 let columns = """
                 tasks.id, tasks.coven_id, tasks.title_ciphertext, tasks.status, tasks.stage, tasks.due_date, tasks.due_time, tasks.pin_period,
                 tasks.pin_expires_at, tasks.thread_id, tasks.lead_agent_id, tasks.handoff_turn_id, tasks.handoff_agent_id, tasks.created_at,
-                tasks.updated_at, turns.status AS handoff_status, (turns.run_ciphertext IS NOT NULL) AS handoff_has_run
+                tasks.updated_at, tasks.reminder_preset, tasks.reminder_at, tasks.reminder_time_zone, turns.status AS handoff_status, (turns.run_ciphertext IS NOT NULL) AS handoff_has_run
                 """
                 let from = "tasks LEFT JOIN turns ON turns.id = tasks.handoff_turn_id AND turns.user_id = tasks.user_id"
                 // The account's, in the place asked for or in any.
@@ -576,6 +646,7 @@ actor TaskRepository {
                             agentID: stored.handoffAgentID
                         )
                     },
+                    reminder: stored.reminder,
                     createdAt: stored.createdAt, updatedAt: stored.updatedAt
                 ))
             }

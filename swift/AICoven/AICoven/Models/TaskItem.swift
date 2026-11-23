@@ -111,6 +111,72 @@ nonisolated struct TaskDue: Equatable {
     }
 }
 
+/// When a reminder reminds, measured from the task's due time: at it, an
+/// hour before it, or a day before it. In the cloud app's words.
+nonisolated enum TaskReminderPreset: String, CaseIterable, Identifiable {
+    case atDue = "at_due"
+    case hourBefore = "hour_before"
+    case dayBefore = "day_before"
+
+    var id: String {
+        rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .atDue: "At the due time"
+        case .hourBefore: "1 hour before"
+        case .dayBefore: "1 day before"
+        }
+    }
+}
+
+/// The person's reminder on a task: when it reminds, and how that was
+/// said. One whose time has come has reminded, and stays with the task
+/// until it is changed or removed.
+nonisolated struct TaskReminder: Equatable {
+    /// The preset it was set by, which moves it with the task's due day;
+    /// nil for a time the person picked, which stays.
+    let preset: TaskReminderPreset?
+    let remindAt: Date
+    /// The time zone it was set in, by its identifier: a due day with no
+    /// time of day is taken as 9:00 there.
+    let timeZone: String
+
+    /// The time of day a due day with none is taken to be due at.
+    static let hourOfADayWithNoTime = 9
+
+    /// Whether its time has come.
+    func hasPassed(asOf now: Date) -> Bool {
+        remindAt <= now
+    }
+
+    /// When a preset reminds for a task due on `due`, in the time zone
+    /// named: at the due time (9:00 for a day with no time of day), 3,600
+    /// seconds before it, or at the same time of day on the day before.
+    /// Nil for a time zone that is none.
+    static func time(for preset: TaskReminderPreset, due: TaskDue, timeZone: String) -> Date? {
+        guard let zone = TimeZone(identifier: timeZone) else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        guard let day = due.date.date(in: calendar) else { return nil }
+        let parts = due.time?.split(separator: ":").compactMap { Int($0) } ?? [hourOfADayWithNoTime, 0]
+        guard parts.count == 2, let dueAt = calendar.date(bySettingHour: parts[0], minute: parts[1], second: 0, of: day) else { return nil }
+        switch preset {
+        case .atDue: return dueAt
+        case .hourBefore: return dueAt.addingTimeInterval(-3600)
+        case .dayBefore: return calendar.date(byAdding: .day, value: -1, to: dueAt)
+        }
+    }
+}
+
+/// What is asked for a task's reminder: a preset, or a time the person
+/// picked; each with the time zone it is asked in.
+nonisolated enum TaskReminderAsk: Equatable {
+    case preset(TaskReminderPreset, timeZone: String)
+    case at(Date, timeZone: String)
+}
+
 /// The turn a task was handed to an agent in, as the store has it.
 nonisolated struct TaskHandoff: Equatable {
     let turnID: String
@@ -144,6 +210,8 @@ nonisolated struct TaskItem: Identifiable, Equatable {
     /// The turn the task was last handed to an agent in, and how that
     /// turn stands as it is stored.
     var handoff: TaskHandoff?
+    /// The person's reminder on it, if they set one.
+    var reminder: TaskReminder?
     let createdAt: Date
     let updatedAt: Date
 
@@ -174,4 +242,6 @@ nonisolated struct TaskChange: Equatable {
     /// The agent it was handed to in that turn, an agent of its coven;
     /// nil for Strix. Read only with the turn.
     var handoffAgentID: String?
+    /// Its reminder: set, or taken away.
+    var reminder: Setting<TaskReminderAsk>?
 }
