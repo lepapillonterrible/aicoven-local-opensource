@@ -67,6 +67,11 @@ final class LocalNotificationsTests: XCTestCase {
         var takes = true
         var withdrawn: [String] = []
         var withdrewAll = 0
+        /// What the system was handed to show at a time, and where handing one over waits, if anywhere.
+        var scheduled: [(id: String, notification: ComposedNotification, at: Date)] = []
+        var schedulingWaits: Gate?
+        /// The ids the system holds: waiting for their time, or shown and not cleared.
+        var held: [String] = []
 
         var center: LocalNotifications.Center {
             LocalNotifications.Center(
@@ -87,8 +92,22 @@ final class LocalNotificationsTests: XCTestCase {
                     shown.append((id, notification))
                     return true
                 },
-                withdraw: { [self] ids in withdrawn += ids },
-                withdrawAll: { [self] in withdrewAll += 1 }
+                schedule: { [self] id, notification, at in
+                    await schedulingWaits?.wait()
+                    guard takes else { return false }
+                    scheduled.append((id, notification, at))
+                    if !held.contains(id) { held.append(id) }
+                    return true
+                },
+                listed: { [self] in held },
+                withdraw: { [self] ids in
+                    withdrawn += ids
+                    held.removeAll { ids.contains($0) }
+                },
+                withdrawAll: { [self] in
+                    withdrewAll += 1
+                    held = []
+                }
             )
         }
     }
@@ -555,6 +574,212 @@ final class LocalNotificationsTests: XCTestCase {
             await task.value
         }
         XCTAssertEqual(told.events.count, 1, "Each once")
+    }
+
+    // MARK: - A task's reminder
+
+    private let noon = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func reminder(_ id: String, _ title: String? = "Renew the lease", in seconds: TimeInterval) -> TaskReminderDue {
+        TaskReminderDue(taskID: id, title: title, remindAt: noon.addingTimeInterval(seconds))
+    }
+
+    func testAReminderNamesItsTaskOnlyWithDetails() {
+        XCTAssertEqual(
+            NotificationComposer.reminder(taskTitle: "Renew the lease", showsDetails: false),
+            ComposedNotification(title: "Reminder", subtitle: "", body: "Open AICoven to see the task.")
+        )
+        XCTAssertEqual(
+            NotificationComposer.reminder(taskTitle: "Renew  the\nlease", showsDetails: true),
+            ComposedNotification(title: "Reminder", subtitle: "", body: "Renew the lease")
+        )
+        // A title the key cannot open, or that says nothing, is not named.
+        XCTAssertEqual(NotificationComposer.reminder(taskTitle: nil, showsDetails: true).body, "Open AICoven to see the task.")
+        XCTAssertEqual(NotificationComposer.reminder(taskTitle: "  ", showsDetails: true).body, "Open AICoven to see the task.")
+        XCTAssertEqual(NotificationComposer.reminder(taskTitle: String(repeating: "a", count: 300), showsDetails: true).body.count, 200)
+
+        // Its id names the task and nothing else, and is told from a thread's.
+        XCTAssertEqual(LocalNotifications.id(forTask: "t1"), "task-t1")
+        XCTAssertEqual(LocalNotifications.taskID(ofNotification: "task-t1"), "t1")
+        XCTAssertNil(LocalNotifications.taskID(ofNotification: "thread-t1"))
+        XCTAssertNil(LocalNotifications.taskID(ofNotification: "task-"))
+        XCTAssertNil(LocalNotifications.threadID(ofNotification: "task-t1"))
+    }
+
+    func testTheRemindersTheSystemHoldsAreMadeToMatchTheStores() async {
+        let system = System()
+        // One of a task that has no reminder any more, one already shown, and a thread's own.
+        system.held = ["task-gone", "task-shown", "thread-t1"]
+        let made = notifications(system, now: { self.noon })
+
+        await made.setReminders([reminder("soon", in: 60), reminder("later", "Call the bank", in: 3600), reminder("shown", in: -60)], as: "ada")
+        XCTAssertEqual(system.scheduled.map(\.id), ["task-soon", "task-later"], "Each one still to come waits at its time")
+        XCTAssertEqual(system.scheduled.map(\.at), [noon.addingTimeInterval(60), noon.addingTimeInterval(3600)])
+        XCTAssertEqual(system.scheduled.map(\.notification.body), ["Open AICoven to see the task.", "Open AICoven to see the task."], "Without details")
+        XCTAssertEqual(system.withdrawn, ["task-gone"], "One whose time has come stays as it was shown; a thread's is not touched")
+        XCTAssertEqual(system.held.sorted(), ["task-later", "task-shown", "task-soon", "thread-t1"])
+
+        // With details, a reminder names its task; one that is changed takes the earlier one's place.
+        made.setShowsDetails(true, for: "ada")
+        await made.setReminders([reminder("later", "Call the bank", in: 7200)], as: "ada")
+        XCTAssertEqual(system.scheduled.last?.id, "task-later")
+        XCTAssertEqual(system.scheduled.last?.notification.body, "Call the bank")
+        XCTAssertEqual(system.scheduled.last?.at, noon.addingTimeInterval(7200))
+        XCTAssertEqual(system.held.sorted(), ["task-later", "thread-t1"], "Those of tasks with no reminder any more are taken back, shown or waiting")
+    }
+
+    func testNoReminderWaitsWhileNotificationsAreOffOrRefused_andNoneForAnotherAccount() async {
+        let system = System()
+        let made = notifications(system, now: { self.noon })
+        await made.setReminders([reminder("a", in: 60)], as: "ada")
+        XCTAssertEqual(system.held, ["task-a"])
+
+        // The account turned notifications off: everything is taken back, and nothing is handed over.
+        made.setOn(false, for: "ada")
+        await made.setReminders([reminder("a", in: 60)], as: "ada")
+        XCTAssertEqual(system.scheduled.count, 1)
+        XCTAssertEqual(system.held, [])
+        // On again, but this device refuses them.
+        made.setOn(true, for: "ada")
+        system.permission = .denied
+        system.held = ["task-a"]
+        await made.setReminders([reminder("a", in: 60)], as: "ada")
+        XCTAssertEqual(system.scheduled.count, 1)
+        XCTAssertEqual(system.held, [], "What waited is taken back")
+        // Not for an account that is not the one signed in.
+        system.permission = .allowed
+        await made.setReminders([reminder("hers", in: 60)], as: "grace")
+        XCTAssertEqual(system.scheduled.count, 1)
+    }
+
+    func testOnlyTheSoonestRemindersAreHandedOver_andNoneStaysForAnAccountThatLeftMeanwhile() async {
+        let system = System()
+        var signedIn = "ada"
+        let made = notifications(system, signedIn: { signedIn }, now: { self.noon })
+        // More than the system keeps waiting for an app: the soonest are handed over.
+        let many = (1 ... LocalNotifications.mostReminders + 5).map { reminder("t\($0)", in: TimeInterval(1000 - $0)) }
+        await made.setReminders(many, as: "ada")
+        XCTAssertEqual(system.scheduled.count, LocalNotifications.mostReminders)
+        XCTAssertEqual(system.scheduled.first?.id, "task-t\(LocalNotifications.mostReminders + 5)", "The soonest first")
+        XCTAssertFalse(system.held.contains("task-t1"), "The latest wait their turn")
+
+        // Another account signs in while one is being handed over: it does not stay, and no more are handed over.
+        system.scheduled = []
+        system.held = []
+        let gate = Gate()
+        system.schedulingWaits = gate
+        let handing = Task { await made.setReminders([self.reminder("a", in: 60), self.reminder("b", in: 120)], as: "ada") }
+        await gate.arrived()
+        signedIn = "grace"
+        await gate.open()
+        await handing.value
+        XCTAssertEqual(system.scheduled.map(\.id), ["task-a"])
+        XCTAssertEqual(system.held, [], "Taken back")
+    }
+
+    func testAChoiceChangedWhileRemindersAreHandedOverEndsTheHandingOver() async {
+        // Notifications turned off while the first of two is being taken by the system: everything
+        // was taken back, the one in hand does not stay, and the second is not handed over.
+        let system = System()
+        let made = notifications(system, now: { self.noon })
+        var gate = Gate()
+        system.schedulingWaits = gate
+        var handing = Task { await made.setReminders([self.reminder("a", in: 60), self.reminder("b", in: 120)], as: "ada") }
+        await gate.arrived()
+        made.setOn(false, for: "ada")
+        await gate.open()
+        await handing.value
+        XCTAssertEqual(system.scheduled.map(\.id), ["task-a"])
+        XCTAssertEqual(system.held, [], "Not recreated after everything was taken back")
+
+        // Details turned off while one that names its task is being taken: it does not stay as it was composed.
+        made.setOn(true, for: "ada")
+        made.setShowsDetails(true, for: "ada")
+        system.scheduled = []
+        gate = Gate()
+        system.schedulingWaits = gate
+        handing = Task { await made.setReminders([self.reminder("a", in: 60), self.reminder("b", in: 120)], as: "ada") }
+        await gate.arrived()
+        made.setShowsDetails(false, for: "ada")
+        await gate.open()
+        await handing.value
+        XCTAssertEqual(system.scheduled.map(\.notification.body), ["Renew the lease"], "The one in hand, composed before the change")
+        XCTAssertEqual(system.held, [], "Taken back; none is handed over as things stood")
+        // Signed out and in again while this device's answer is read, before anything is handed over:
+        // everything was taken back, and this handing over is over (its reminders were read before).
+        var signedInAccount = "ada"
+        let returning = notifications(system, signedIn: { signedInAccount }, now: { self.noon })
+        returning.accountReported("ada")
+        system.scheduled = []
+        system.schedulingWaits = nil
+        let reading = Gate()
+        system.readingWaits = reading
+        let early = Task { await returning.setReminders([self.reminder("a", in: 60)], as: "ada") }
+        await reading.arrived()
+        signedInAccount = ""
+        returning.accountReported(nil)
+        signedInAccount = "ada"
+        returning.accountReported("ada")
+        await reading.open()
+        await early.value
+        XCTAssertEqual(system.scheduled.count, 0)
+        XCTAssertEqual(system.held, [])
+        system.readingWaits = nil
+
+        // Handed over anew, as whoever holds the reminders does on the change: none names its task.
+        system.schedulingWaits = nil
+        await made.setReminders([reminder("a", in: 60), reminder("b", in: 120)], as: "ada")
+        XCTAssertEqual(system.scheduled.suffix(2).map(\.notification.body), ["Open AICoven to see the task.", "Open AICoven to see the task."])
+        XCTAssertEqual(system.held.sorted(), ["task-a", "task-b"])
+    }
+
+    func testRemindersAreHandedOverByTheHandingOversOwnReadingOfThePermission() async {
+        // A page reads the permission too, later, and has not been answered: nothing is kept yet.
+        let system = System()
+        let made = notifications(system, now: { self.noon })
+        let reading = Gate()
+        system.readingWaits = reading
+        let handing = Task { await made.setReminders([self.reminder("a", in: 60)], as: "ada") }
+        await reading.arrived()
+        let page = Task { await made.refreshPermission() }
+        await reading.arrived(2)
+        XCTAssertNil(made.permission)
+        await reading.open()
+        await handing.value
+        _ = await page.value
+        XCTAssertEqual(system.held, ["task-a"], "Not taken for refused because a later reading was under way")
+    }
+
+    func testAReminderTheSystemHoldsWhoseTimeCameWhileOthersWereHandedOverIsNotShownTwice() async {
+        let system = System()
+        var moment = noon
+        let made = notifications(system, now: { moment })
+        system.held = ["task-b"]
+        let gate = Gate()
+        system.schedulingWaits = gate
+        let due = [reminder("a", in: 60), reminder("b", in: 90), reminder("c", in: 100)]
+        let handing = Task { await made.setReminders(due, as: "ada") }
+        await gate.arrived()
+        // Two minutes pass while the system takes the first.
+        moment = noon.addingTimeInterval(120)
+        await gate.open()
+        await handing.value
+        XCTAssertEqual(system.scheduled.map(\.id), ["task-a", "task-c"], "The system showed b itself; c, which it did not hold, is still handed over")
+        XCTAssertEqual(system.held.sorted(), ["task-a", "task-b", "task-c"])
+    }
+
+    func testAChangeOfTheAccountsChoicesIsToldToWhoeverHoldsTheReminders() async {
+        let system = System()
+        let made = notifications(system)
+        var told = 0
+        made.whenChoicesChange = { told += 1 }
+        made.setShowsDetails(true, for: "ada")
+        made.setOn(false, for: "ada")
+        made.setOn(true, for: "ada")
+        XCTAssertEqual(told, 3)
+        system.permission = .notAsked
+        await made.turnOn()
+        XCTAssertEqual(told, 4, "The system's question was answered")
     }
 
     func testNothingIsToldOfAThreadThatIsNotTheSignedInAccounts() async {

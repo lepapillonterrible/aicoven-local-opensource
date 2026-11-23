@@ -161,6 +161,7 @@ actor TaskRepository {
             }
             throw error
         }
+        NotificationCenter.default.post(name: TaskItem.didChange, object: nil)
         return TaskItem(id: id, covenID: covenID, title: title, status: .open, stage: .backlog, due: due, pin: nil, createdAt: made, updatedAt: made)
     }
 
@@ -232,6 +233,7 @@ actor TaskRepository {
     /// stored tasks (`inTurn`).
     func change(_ id: String, _ change: TaskChange, as account: String) async throws {
         try await inTurn(as: account) { epoch in try await self.changeInTurn(id, change, as: account, since: epoch) }
+        NotificationCenter.default.post(name: TaskItem.didChange, object: nil)
     }
 
     private func changeInTurn(_ id: String, _ change: TaskChange, as account: String, since epoch: Int) async throws {
@@ -533,6 +535,55 @@ actor TaskRepository {
 
         private static func time(_ stored: DatabaseValue) -> Date? {
             Date.fromDatabaseValue(stored)
+        }
+    }
+
+    // MARK: - Reminders, and where a task is
+
+    /// The reminders of `account`'s open tasks, in whichever place: those
+    /// still to come and those whose time has come. Each with its task's
+    /// title only where `withTitles` asks for them (a reminder names its
+    /// task only if the account chose details; nil for a title the
+    /// account's key cannot open). Only as the account signed in, with
+    /// its own key in memory.
+    func reminders(withTitles: Bool, as account: String) async throws -> [TaskReminderDue] {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        return try await AccountSeal.reading(as: account) {
+            let rows = try await dbQueue.read { db in
+                try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT id, title_ciphertext, reminder_at FROM tasks
+                    WHERE user_id = ? AND status = ? AND reminder_at IS NOT NULL
+                    ORDER BY reminder_at, rowid
+                    """,
+                    arguments: [account, TaskStatus.open.rawValue]
+                )
+            }
+            var due: [TaskReminderDue] = []
+            for row in rows {
+                // A time that does not read as one reminds at no time.
+                guard let at = Date.fromDatabaseValue(row["reminder_at"]) else { continue }
+                var title: String?
+                if withTitles, let opened = try? await DataEncryptionService.shared.decrypt(row["title_ciphertext"] as Data, purpose: Self.titlePurpose) {
+                    title = String(decoding: opened, as: UTF8.self)
+                }
+                due.append(TaskReminderDue(taskID: row["id"], title: title, remindAt: at))
+            }
+            return due
+        }
+    }
+
+    /// The coven a task of `account`'s is in; nil for one of Strix's.
+    /// Throws `TaskError.noSuchTask` for a task that is not the account's.
+    func covenID(ofTask id: String, as account: String) async throws -> String? {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        return try await AccountSeal.reading(as: account) {
+            let coven = try await dbQueue.read { db in
+                try String.fetchOne(db, sql: "SELECT coven_id FROM tasks WHERE id = ? AND user_id = ?", arguments: [id, account])
+            }
+            guard let coven else { throw TaskError.noSuchTask }
+            return coven.isEmpty ? nil : coven
         }
     }
 

@@ -1501,7 +1501,8 @@ final class TasksModelTests: XCTestCase {
         await tasks.load()
 
         // By a preset, in the time zone of the person's calendar.
-        await tasks.setReminder(tasks.open[0], preset: .hourBefore, as: "ada")
+        let isKept = await tasks.setReminder(tasks.open[0], preset: .hourBefore, as: "ada")
+        XCTAssertTrue(isKept)
         XCTAssertEqual(stand.changed.last?.change, TaskChange(reminder: .to(.preset(.hourBefore, timeZone: "GMT"))))
         XCTAssertEqual(tasks.open[0].reminder?.preset, .hourBefore, "Read again")
         XCTAssertEqual(stand.heard.last, "Reminder set")
@@ -1526,9 +1527,16 @@ final class TasksModelTests: XCTestCase {
             XCTAssertEqual(tasks.errorMessage, "That reminder can't be set: its time has passed, or the task no longer has a due date.")
         }
         stand.changeFails = RepositoryError.databaseUnavailable
-        await tasks.setReminder(tasks.open[0], at: picked, as: "ada")
+        let failed = await tasks.setReminder(tasks.open[0], at: picked, as: "ada")
+        XCTAssertFalse(failed)
         XCTAssertEqual(tasks.errorMessage, "Couldn't set the reminder on “Call the bank”. Try again.")
         XCTAssertEqual(stand.heard.last, tasks.errorMessage)
+        // Kept by the store, though the list could not be read again: it was set (the system is asked on that, not on the list).
+        stand.changeFails = nil
+        stand.readFails = RepositoryError.databaseUnavailable
+        let keptUnread = await tasks.setReminder(tasks.open[0], at: picked, as: "ada")
+        XCTAssertTrue(keptUnread)
+        XCTAssertNil(tasks.open[0].reminder, "The list is as it was last read")
     }
 
     func testTheWordsForAReminder_andWhereItsTimePickerStarts() {

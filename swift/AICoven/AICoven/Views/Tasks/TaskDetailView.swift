@@ -31,6 +31,9 @@ struct TaskDetailView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    /// This device's permission and the account's choice: a reminder that
+    /// would not be shown says so.
+    @ObservedObject private var notifications = LocalNotifications.shared
     @State private var renaming = false
     @State private var newTitle = ""
     /// Whether the sheet that picks a reminder's time is up.
@@ -130,6 +133,24 @@ struct TaskDetailView: View {
                 }
 
                 properties(task)
+                if let note = Self.reminderNote(
+                    for: task.reminder, now: now, permission: notifications.permission, isOn: notifications.isOn(for: UserScope.currentUserID)
+                ) {
+                    Text(note)
+                        .font(.aicovenBodySmall)
+                        .foregroundStyle(Color.aicovenTextSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    // Never asked on this device (the reminder was set
+                    // before it could be, or the question was put off):
+                    // the way to be asked is here.
+                    if note == Self.remindersNotAsked {
+                        Button("Turn on notifications") {
+                            Task { await TaskReminders.shared.reminderWasSet() }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(notifications.isAsking)
+                    }
+                }
 
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: Spacing.xs) { buttons(task) }
@@ -153,6 +174,7 @@ struct TaskDetailView: View {
                     Task { await model.setDue(task, to: due, as: account) }
                 }
             }
+            .task { await notifications.refreshPermission() }
             .sheet(isPresented: $pickingReminder) {
                 TaskReminderTimeSheet(initial: task.reminder?.remindAt, now: now) { at in
                     remind(task, at: at)
@@ -336,9 +358,34 @@ struct TaskDetailView: View {
         return isCompact ? at : "Remind \(at)"
     }
 
+    static let remindersOffForAccount = "Notifications are turned off for your account, so this reminder will not be shown. Turn them on in Settings."
+    static let remindersOffOnDevice = "Notifications from AICoven are off on this device, so this reminder will not be shown."
+    static let remindersNotAsked = "AICoven has not been allowed to notify you on this device yet, so this reminder will not be shown."
+
+    /// What is said under a reminder still to come that would not be
+    /// shown: the account turned notifications off, this device refuses
+    /// them, or it was never asked. Nothing for one that will be shown or
+    /// has been, or while the device's answer is not read yet.
+    static func reminderNote(for reminder: TaskReminder?, now: Date, permission: LocalNotifications.Permission?, isOn: Bool) -> String? {
+        guard let reminder, !reminder.hasPassed(asOf: now) else { return nil }
+        if !isOn { return remindersOffForAccount }
+        switch permission {
+        case .denied: return remindersOffOnDevice
+        case .notAsked: return remindersNotAsked
+        case .allowed, nil: return nil
+        }
+    }
+
     private func remind(_ task: TaskItem, preset: TaskReminderPreset? = nil, at: Date? = nil) {
         let account = UserScope.currentUserID
-        Task { await model.setReminder(task, preset: preset, at: at, as: account) }
+        Task {
+            let isKept = await model.setReminder(task, preset: preset, at: at, as: account)
+            // One was set, as the store says: the system is asked whether
+            // the app may notify, if it never was. (The store's change
+            // has the reminder handed over.)
+            guard isKept, preset != nil || at != nil, UserScope.currentUserID == account else { return }
+            await TaskReminders.shared.reminderWasSet()
+        }
     }
 
     static func pinWords(_ pin: TaskPinState, isCompact: Bool) -> String {

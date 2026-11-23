@@ -102,5 +102,7 @@ actor CovenService {
     /// - Parameter id: Coven ID
     func deleteCoven(id: String) async throws {
         try await CovenRepository.shared.deleteCoven(id: id)
+        // Its tasks went with it: so do their reminders.
+        _ = await TaskReminders.shared.refresh()
     }
 }

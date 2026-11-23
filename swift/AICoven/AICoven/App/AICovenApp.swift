@@ -43,6 +43,7 @@ struct AICovenApp: App {
         FontRegistration.register()
         // A notification that is tapped hands its thread to the app.
         NotificationTaps.shared.start()
+        TaskReminders.shared.start()
     }
 
     var body: some Scene {

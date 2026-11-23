@@ -56,6 +56,18 @@ nonisolated enum NotificationComposer {
         return ComposedNotification(title: title, subtitle: "\(placeName) · \(threadTitle)", body: detail.map(capped) ?? fallback)
     }
 
+    static let reminderTitle = "Reminder"
+    static let reminderFallback = "Open AICoven to see the task."
+
+    /// A task's reminder, titled as the cloud app's push. It names the
+    /// task only where the person asked for details (and the title can
+    /// be read): a notification is shown on the Lock Screen and kept by
+    /// the system, outside this app's encrypted store.
+    static func reminder(taskTitle: String?, showsDetails: Bool) -> ComposedNotification {
+        let named = showsDetails ? taskTitle.flatMap(oneLine) : nil
+        return ComposedNotification(title: reminderTitle, subtitle: "", body: named.map(capped) ?? reminderFallback)
+    }
+
     /// The first sentence of a text, on one line; nil for a text that
     /// says nothing. Sentence boundaries come from `NLTokenizer`, so
     /// "README.md" or "Dr." do not end one.

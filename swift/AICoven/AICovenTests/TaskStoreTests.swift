@@ -984,6 +984,67 @@ final class TaskStoreTests: XCTestCase {
         }
     }
 
+    func testTheRemindersOfAnAccountsOpenTasksAreListedForTheSystem_andATaskSaysWhereItIs() async throws {
+        let clock = Clock()
+        let store = TaskRepository(now: { clock.next() })
+        let berlin = "Europe/Berlin"
+        let coven = try await newCoven()
+        let strixs = try await store.create(title: "Renew the lease", inCoven: nil, as: account)
+        let covens = try await store.create(title: "Call the bank", inCoven: coven, as: account)
+        let finished = try await store.create(title: "Already done", inCoven: nil, as: account)
+        _ = try await store.create(title: "No reminder", inCoven: nil, as: account)
+        let soon = try moment(2027, 2, 1, 9, in: berlin), later = try moment(2027, 2, 3, 9, in: berlin)
+        try await store.change(covens.id, TaskChange(reminder: .to(.at(later, timeZone: berlin))), as: account)
+        try await store.change(strixs.id, TaskChange(reminder: .to(.at(soon, timeZone: berlin))), as: account)
+        try await store.change(finished.id, TaskChange(reminder: .to(.at(soon, timeZone: berlin))), as: account)
+        try await store.change(finished.id, TaskChange(status: .done), as: account)
+
+        var due = try await store.reminders(withTitles: true, as: account)
+        XCTAssertEqual(
+            due,
+            [
+                TaskReminderDue(taskID: strixs.id, title: "Renew the lease", remindAt: soon),
+                TaskReminderDue(taskID: covens.id, title: "Call the bank", remindAt: later),
+            ],
+            "Of the open tasks of every place, the soonest first, each with its title"
+        )
+        // A title is opened only where it is asked for (a reminder names its task only with details on).
+        let untitled = try await store.reminders(withTitles: false, as: account)
+        XCTAssertEqual(untitled.map(\.taskID), [strixs.id, covens.id])
+        XCTAssertEqual(untitled.map(\.title), [nil, nil])
+        // Only as the account signed in, and nothing while its data is locked.
+        do {
+            _ = try await store.reminders(withTitles: true, as: "someone-else")
+            XCTFail("Nothing is read as an account that is not signed in")
+        } catch RepositoryError.accountChanged {}
+
+        // Where a task is kept, for the reminder that was tapped.
+        let place = try await store.covenID(ofTask: covens.id, as: account)
+        XCTAssertEqual(place, coven)
+        let strixPlace = try await store.covenID(ofTask: strixs.id, as: account)
+        XCTAssertNil(strixPlace)
+        await expect(.noSuchTask, "No such task of the account's") { _ = try await store.covenID(ofTask: "no-such-task", as: self.account) }
+
+        // A coven that is deleted takes its tasks, and so their reminders.
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        try await queue.write { db in try db.execute(sql: "DELETE FROM covens WHERE id = ?", arguments: [coven]) }
+        due = try await store.reminders(withTitles: true, as: account)
+        XCTAssertEqual(due.map(\.taskID), [strixs.id])
+        await DataEncryptionService.shared.lock()
+        do {
+            _ = try await store.reminders(withTitles: false, as: account)
+            XCTFail("Nothing is read while the data is locked")
+        } catch RepositoryError.dataLocked {}
+    }
+
+    func testAMadeOrChangedTaskIsToldToWhoeverDependsOnTheTasks() async throws {
+        let told = expectation(forNotification: TaskItem.didChange, object: nil)
+        told.expectedFulfillmentCount = 2
+        let made = try await store.create(title: "Renew the lease", inCoven: nil, as: account)
+        try await store.change(made.id, TaskChange(title: "Renew the lease today"), as: account)
+        await fulfillment(of: [told], timeout: 5)
+    }
+
     // MARK: - Every place's (On me)
 
     func testEveryPlacesTasksAreListedTogether_byTheSameRule_andOnlyTheAccountsOwn() async throws {

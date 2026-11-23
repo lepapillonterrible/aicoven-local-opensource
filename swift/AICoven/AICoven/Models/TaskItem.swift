@@ -176,6 +176,21 @@ nonisolated struct TaskReminder: Equatable {
     }
 }
 
+/// A reminder as it is delivered: the task it is on, the task's title
+/// (nil for one the key cannot open), and when it reminds.
+nonisolated struct TaskReminderDue: Equatable {
+    let taskID: String
+    let title: String?
+    let remindAt: Date
+}
+
+extension TaskItem {
+    /// Posted when a task was made or changed in the store, by whatever
+    /// did it: whoever depends on the tasks (the reminders' notifications)
+    /// reads them again.
+    static let didChange = Notification.Name("AICovenTasksDidChange")
+}
+
 /// What is asked for a task's reminder: a preset, or a time the person
 /// picked; each with the time zone it is asked in.
 nonisolated enum TaskReminderAsk: Equatable {
