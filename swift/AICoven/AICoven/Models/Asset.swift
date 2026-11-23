@@ -118,6 +118,38 @@ nonisolated struct AssetFile: Identifiable, Equatable {
     }
 }
 
+/// How two assets of one place are related, as the cloud app keeps it. The
+/// one relation this app writes is a hand-off brief's to the asset it
+/// hands over.
+nonisolated struct AssetRelation: Identifiable, Equatable {
+    let id: String
+    /// The asset the relation is of, and the one it is to: a hand-off
+    /// brief is "handoff for" the asset it hands over.
+    let fromAssetID: String
+    let toAssetID: String
+    /// The kind, as it is stored: a name, of an open set as the cloud app's.
+    let kind: String
+    /// The other asset, as seen from the one the relations were read for,
+    /// and its title; nil for one whose title the key cannot open.
+    let relatedID: String
+    let relatedTitle: String?
+
+    /// A hand-off brief's relation to the asset it hands over.
+    static let handoffFor = "handoff_for"
+
+    /// The kind in the cloud app's words; "Related to" for one this
+    /// version does not write.
+    var displayName: String {
+        kind == Self.handoffFor ? "Handoff for" : "Related to"
+    }
+
+    /// The line the asset's page shows, as the cloud app's: the kind and
+    /// the other asset's title, whichever end this asset is.
+    var line: String {
+        displayName + " " + (relatedTitle ?? "another asset")
+    }
+}
+
 /// An asset: a piece of work kept on purpose in a coven (or with Strix),
 /// with its files, as the cloud app's. It is not a message's attachment:
 /// it has a title, a type and a status, and stays when the thread it was
@@ -138,6 +170,8 @@ nonisolated struct Asset: Identifiable, Equatable {
     /// came from one. The thread may be gone since.
     let threadID: String?
     let sourceMessageID: String?
+    /// The asset it was made from, an asset of the same place; nil for none.
+    var parentID: String?
     let files: [AssetFile]
     /// Whether what is kept of it cannot be opened with the account's key.
     var isUnreadable = false

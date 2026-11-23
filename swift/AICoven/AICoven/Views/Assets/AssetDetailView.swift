@@ -16,6 +16,8 @@ struct AssetDetailView: View {
     private let onOpenThread: ((Thread) -> Void)?
     /// The thread the asset was made in, once looked up.
     @StateObject private var originFound = AssetOriginModel()
+    /// How the asset is related to others, once read.
+    @StateObject private var lineage = AssetLineageModel()
 
     private var origin: Origin {
         originFound.origin
@@ -30,6 +32,7 @@ struct AssetDetailView: View {
     }
 
     static let threadGone = "The thread this was made in has been deleted."
+    static let lineageFailed = "Couldn't load where this came from."
 
     init(asset: Asset, model: AssetLibraryModel, sharing turn: AssetFiles.Turn, onOpenThread: ((Thread) -> Void)? = nil) {
         self.asset = asset
@@ -167,9 +170,28 @@ struct AssetDetailView: View {
                             .textSelection(.enabled)
                     }
                 }
+
+                // Shown only where there is something to say, as in the cloud app.
+                if lineage.failed || !lineage.relations.isEmpty {
+                    Section("Lineage") {
+                        if lineage.failed {
+                            Text(Self.lineageFailed)
+                                .foregroundStyle(Color.aicovenError)
+                        }
+                        ForEach(lineage.relations) { relation in
+                            Text(relation.line)
+                        }
+                    }
+                }
             }
         }
         .presenting(files)
+        .task(id: asset.id) { await lineage.read(asset.id, as: UserScope.currentUserID) }
+        // A hand-off made while the page is open (by an agent's turn, or
+        // from another page) is read for.
+        .onReceive(NotificationCenter.default.publisher(for: Asset.didChange).receive(on: RunLoop.main)) { _ in
+            Task { await lineage.read(asset.id, as: UserScope.currentUserID) }
+        }
         .task(id: asset.threadID) { await findOrigin() }
         // Its thread deleted while the page is open: the way to it goes.
         .onReceive(NotificationCenter.default.publisher(for: .didDeleteThread).receive(on: RunLoop.main)) { _ in
@@ -324,5 +346,39 @@ final class AssetOriginModel: ObservableObject {
         let found = await lookUp()
         guard lookup == lookups, let found else { return }
         origin = found
+    }
+}
+
+/// How an asset is related to others, as its page shows it. Of two
+/// readings under way only the later one's answer is shown, and nothing
+/// read for an account that is no longer signed in. A reading that was
+/// called off says nothing; one that failed says so in place of what an
+/// earlier one read, which may no longer be so.
+@MainActor
+final class AssetLineageModel: ObservableObject {
+    @Published private(set) var relations: [AssetRelation] = []
+    @Published private(set) var failed = false
+    private var readings = 0
+
+    func read(
+        _ assetID: String, as account: String, signedIn: () -> String = { UserScope.currentUserID },
+        relations read: (_ assetID: String, _ account: String) async throws -> [AssetRelation] = {
+            try await AssetRepository.shared.relations(ofAsset: $0, as: $1)
+        }
+    ) async {
+        readings += 1
+        let reading = readings
+        do {
+            let found = try await read(assetID, account)
+            guard reading == readings, signedIn() == account else { return }
+            (relations, failed) = (found, false)
+        } catch is CancellationError {
+            return
+        } catch {
+            guard reading == readings, signedIn() == account else { return }
+            // The kind of failure only.
+            AppErrorReporter.log(message: "An asset's relations could not be read (\(type(of: error)))", context: "AssetLineageModel")
+            (relations, failed) = ([], true)
+        }
     }
 }

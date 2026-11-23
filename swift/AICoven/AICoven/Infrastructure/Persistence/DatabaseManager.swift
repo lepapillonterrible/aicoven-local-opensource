@@ -751,6 +751,64 @@ final class DatabaseManager {
                 }
             }
 
+            // v23: where an asset came from. An asset can have a parent
+            // (the asset it was made from), and two assets can be related:
+            // the one relation this app writes is a hand-off brief's to
+            // the asset it hands over, of which an asset has one. Both are
+            // only between assets of one account in one place, whoever
+            // writes; a relation is written once and goes with either of
+            // its assets.
+            migrator.registerMigration("v23_asset_lineage") { db in
+                try db.alter(table: "assets") { t in
+                    t.add(column: "parent_asset_id", .text).references("assets", onDelete: .setNull)
+                }
+                try db.create(table: "asset_relations") { t in
+                    t.column("id", .text).primaryKey()
+                    t.column("user_id", .text).notNull()
+                    t.column("source_asset_id", .text).notNull().indexed().references("assets", onDelete: .cascade)
+                    t.column("target_asset_id", .text).notNull().indexed().references("assets", onDelete: .cascade)
+                    t.column("relation_type", .text).notNull()
+                    t.column("created_at", .datetime).notNull()
+                    t.check(sql: "source_asset_id <> target_asset_id")
+                }
+                try db.execute(sql: """
+                CREATE UNIQUE INDEX asset_relations_one_handoff ON asset_relations (target_asset_id)
+                WHERE relation_type = 'handoff_for'
+                """)
+                for (event, name) in [("INSERT", "insert"), ("UPDATE OF parent_asset_id, user_id, coven_id", "update")] {
+                    try db.execute(sql: """
+                    CREATE TRIGGER assets_parent_in_place_\(name)
+                    BEFORE \(event) ON assets
+                    WHEN NEW.parent_asset_id IS NOT NULL AND NOT EXISTS (
+                        SELECT 1 FROM assets AS parent
+                        WHERE parent.id = NEW.parent_asset_id AND parent.user_id = NEW.user_id AND parent.coven_id = NEW.coven_id
+                    )
+                    BEGIN
+                        SELECT RAISE(ABORT, 'assets.parent_asset_id must be an asset of the same user in the same place');
+                    END;
+                    """)
+                }
+                try db.execute(sql: """
+                CREATE TRIGGER asset_relations_in_place
+                BEFORE INSERT ON asset_relations
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM assets AS source JOIN assets AS target
+                        ON target.user_id = source.user_id AND target.coven_id = source.coven_id
+                    WHERE source.id = NEW.source_asset_id AND target.id = NEW.target_asset_id AND source.user_id = NEW.user_id
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'asset_relations must relate two assets of the same user in the same place');
+                END;
+                """)
+                try db.execute(sql: """
+                CREATE TRIGGER asset_relations_are_written_once
+                BEFORE UPDATE ON asset_relations
+                BEGIN
+                    SELECT RAISE(ABORT, 'an asset relation is not changed');
+                END;
+                """)
+            }
+
             try migrator.migrate(queue)
             dbQueue = queue
         } catch {

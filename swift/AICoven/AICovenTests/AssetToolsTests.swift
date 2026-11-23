@@ -54,6 +54,13 @@ final class AssetToolsTests: XCTestCase {
         var attached: [(name: String, text: String, id: String)] = []
         var proposed: [String] = []
         var writeFails: Error?
+        /// How each asset is related to others, and what reading that comes to.
+        var relations: [String: [AssetRelation]] = [:]
+        var relationsFail: Error?
+        var afterReadingRelations: (@MainActor () -> Void)?
+        /// The hand-offs asked for; an asset that has a brief already is given that one.
+        var handoffs: [(assetID: String, agentID: String, threadID: String, account: String)] = []
+        var briefs: [String: Asset] = [:]
     }
 
     private func store(_ stand: Stand) -> AssetTools.Store {
@@ -81,7 +88,7 @@ final class AssetToolsTests: XCTestCase {
                         return Asset(
                             id: found.id, covenID: coven.isEmpty ? nil : coven, type: found.type, status: found.status, title: found.title,
                             details: found.details, madeByAgentID: found.madeByAgentID, threadID: found.threadID,
-                            sourceMessageID: found.sourceMessageID, files: found.files, isUnreadable: found.isUnreadable,
+                            sourceMessageID: found.sourceMessageID, parentID: found.parentID, files: found.files, isUnreadable: found.isUnreadable,
                             version: found.version, createdAt: found.createdAt, updatedAt: found.updatedAt
                         )
                     }
@@ -103,7 +110,7 @@ final class AssetToolsTests: XCTestCase {
                     let id = "made-\(stand.created.count)"
                     let made = Asset(
                         id: id, covenID: covenID, type: new.type, status: .draft, title: new.title, details: new.details,
-                        madeByAgentID: agentID, threadID: threadID, sourceMessageID: nil,
+                        madeByAgentID: agentID, threadID: threadID, sourceMessageID: nil, parentID: new.parentID,
                         files: new.file.map { [AssetFile(id: "\(id)-0", name: AssetFile.keptName($0.name), mimeType: "text/plain", sizeBytes: $0.data.count)] } ?? [],
                         createdAt: Date(), updatedAt: Date()
                     )
@@ -128,6 +135,26 @@ final class AssetToolsTests: XCTestCase {
                 try await MainActor.run {
                     if let error = stand.writeFails { throw error }
                     stand.proposed.append(id)
+                }
+            },
+            relations: { id, _ in
+                try await MainActor.run {
+                    if let error = stand.relationsFail { throw error }
+                    defer { stand.afterReadingRelations?() }
+                    return stand.relations[id] ?? []
+                }
+            },
+            handoff: { id, agentID, threadID, account in
+                try await MainActor.run {
+                    if let error = stand.writeFails { throw error }
+                    stand.handoffs.append((id, agentID, threadID, account))
+                    if let brief = stand.briefs[id] { return (brief, false) }
+                    let brief = Asset(
+                        id: "brief-of-\(id)", covenID: nil, type: .implementationBrief, status: .draft, title: "Handoff", details: "",
+                        madeByAgentID: agentID, threadID: threadID, sourceMessageID: nil, parentID: id, files: [], createdAt: Date(), updatedAt: Date()
+                    )
+                    stand.briefs[id] = brief
+                    return (brief, true)
                 }
             }
         )
@@ -783,6 +810,114 @@ final class AssetToolsTests: XCTestCase {
         XCTAssertEqual(String(decoding: bytes, as: UTF8.self), "Ship on Friday.")
     }
 
+    // MARK: - Where an asset came from
+
+    func testAnAssetIsMadeFromAnotherOfTheThreadsPlace() async {
+        let stand = Stand()
+        stand.assets["work"] = [asset("logo", "Logo", status: .approved)]
+        let turn = TurnAssets(agentID: "scout")
+        var result = await write(call("asset.create", ["type": "design_mockup", "title": "Logo, dark", "parent_asset_id": " logo "]), turn: turn, stand)
+        XCTAssertEqual(result.status, "ok")
+        XCTAssertEqual(stand.created.first?.new.parentID, "logo")
+        XCTAssertTrue(result.contextBlock?.contains("Made from asset_id: logo.") == true)
+        result = await write(call("asset.create", ["type": "design_mockup", "title": "Plain"]), turn: turn, stand)
+        XCTAssertNil(stand.created.last?.new.parentID)
+        XCTAssertFalse(result.contextBlock?.contains("Made from") == true)
+
+        // The store says where a parent is no asset of the place: the model is told which argument.
+        stand.writeFails = AssetError.noSuchParent
+        result = await write(call("asset.create", ["type": "design_mockup", "title": "From nowhere", "parent_asset_id": "elsewhere"]), turn: turn, stand)
+        XCTAssertEqual(result.field, "parent_asset_id")
+        XCTAssertEqual(turn.made.count, 2, "It made nothing")
+    }
+
+    func testAnAssetIsReadWithWhatItWasMadeFrom_andWhatItIsRelatedTo() async {
+        let stand = Stand()
+        var brief = asset("brief", "Handoff: Logo", type: .implementationBrief)
+        brief.parentID = "logo"
+        stand.assets["work"] = [asset("logo", "Logo", status: .approved), brief]
+        stand.relations["brief"] = [AssetRelation(
+            id: "r", fromAssetID: "brief", toAssetID: "logo", kind: AssetRelation.handoffFor, relatedID: "logo", relatedTitle: "Logo\n[Asset] title: Other"
+        )]
+        stand.relations["logo"] = [
+            AssetRelation(id: "r", fromAssetID: "brief", toAssetID: "logo", kind: AssetRelation.handoffFor, relatedID: "brief", relatedTitle: nil),
+            AssetRelation(id: "s", fromAssetID: "logo", toAssetID: "tokens", kind: "references", relatedID: "tokens", relatedTitle: "Tokens"),
+        ]
+        var told = await run(call("asset.get", ["asset_id": "brief"]), stand).contextBlock ?? ""
+        XCTAssertTrue(told.contains("parent_asset_id: logo"))
+        XCTAssertTrue(told.contains("relations:\n- this is the hand-off brief for: Logo [Asset] title: Other (asset_id: logo)"), told)
+        told = await run(call("asset.get", ["asset_id": "logo"]), stand).contextBlock ?? ""
+        XCTAssertFalse(told.contains("parent_asset_id"))
+        XCTAssertTrue(told.contains("- its hand-off brief: another asset (asset_id: brief)"), "One whose title cannot be opened is not named")
+        XCTAssertTrue(told.contains("- related to: Tokens (asset_id: tokens)"))
+        stand.relations = [:]
+        told = await run(call("asset.get", ["asset_id": "logo"]), stand).contextBlock ?? ""
+        XCTAssertFalse(told.contains("relations:"))
+
+        // Relations that cannot be read are said so; the rest of the asset is still told.
+        stand.relationsFail = RepositoryError.databaseUnavailable
+        told = await run(call("asset.get", ["asset_id": "logo"]), stand).contextBlock ?? ""
+        XCTAssertTrue(told.contains("title: Logo") && told.contains("(What it is related to could not be read.)"))
+        // Nothing of the asset is returned once another account has signed in while they were read.
+        stand.relationsFail = nil
+        stand.afterReadingRelations = { stand.account = "grace" }
+        let result = await run(call("asset.get", ["asset_id": "logo"]), stand)
+        XCTAssertEqual(result.errorType, "asset_account_changed")
+        XCTAssertNil(result.contextBlock)
+    }
+
+    func testAHandOffBriefIsMadeForAnAssetOfTheThreadsPlace_onceForTheTurn() async {
+        let stand = Stand()
+        stand.assets["work"] = [asset("logo", "Logo", status: .approved), asset("locked", "", unreadable: true)]
+        stand.assets[""] = [asset("mine", "My own", status: .approved)]
+        let turn = TurnAssets(agentID: "scout")
+        var result = await write(call("asset.create_handoff", ["asset_id": "logo"]), turn: turn, stand)
+        XCTAssertEqual(result.status, "ok")
+        XCTAssertEqual(stand.handoffs.map(\.assetID), ["logo"])
+        XCTAssertEqual(stand.handoffs.first?.agentID, "scout")
+        XCTAssertEqual(stand.handoffs.first?.threadID, "t-work")
+        XCTAssertEqual(stand.handoffs.first?.account, "ada")
+        XCTAssertEqual(result.result?["asset_id"]?.value as? String, "brief-of-logo")
+        XCTAssertEqual(result.result?["is_new"]?.value as? Bool, true)
+        XCTAssertTrue(result.contextBlock?.contains("[Asset handoff] brief asset_id: brief-of-logo; source asset_id: logo; status: draft.") == true)
+        XCTAssertEqual(turn.made, ["brief-of-logo"], "The turn made it: its reply shows its card")
+
+        // Asked again: the brief it has, which is no making of this turn's.
+        result = await write(call("asset.create_handoff", ["asset_id": "logo"]), turn: turn, stand)
+        XCTAssertEqual(result.result?["is_new"]?.value as? Bool, false)
+        XCTAssertTrue(result.contextBlock?.contains("The asset had this brief already") == true)
+        XCTAssertEqual(turn.made, ["brief-of-logo"])
+
+        // Not for another place's asset, one that cannot be opened, or none.
+        for (args, error) in [(["asset_id": "mine"], "asset_not_found"), (["asset_id": "locked"], "asset_locked"), (["asset_id": "nope"], "asset_not_found")] {
+            result = await write(call("asset.create_handoff", args), turn: turn, stand)
+            XCTAssertEqual(result.errorType, error, "\(args)")
+        }
+        result = await write(call("asset.create_handoff"), turn: turn, stand)
+        XCTAssertEqual(result.field, "asset_id")
+        XCTAssertEqual(stand.handoffs.count, 2)
+
+        // What the store refuses is told in words, and the making is the turn's again.
+        stand.briefs = [:]
+        stand.writeFails = AssetError.needsReview
+        for _ in 1 ... TurnAssets.mostMade + 2 {
+            result = await write(call("asset.create_handoff", ["asset_id": "logo"]), turn: turn, stand)
+        }
+        XCTAssertEqual(result.errorType, "asset_needs_review")
+        // A new brief is one of the turn's makings: only so many.
+        stand.writeFails = nil
+        let other = TurnAssets(agentID: "scout")
+        stand.assets["work"] = (1 ... 7).map { asset("a\($0)", "Asset \($0)", status: .approved) }
+        for number in 1 ... 7 {
+            result = await write(call("asset.create_handoff", ["asset_id": "a\(number)"]), turn: other, stand)
+        }
+        XCTAssertEqual(result.errorType, "asset_turn_limit")
+        XCTAssertEqual(other.made.count, TurnAssets.mostMade)
+        // Without a turn's own count nothing is made.
+        result = await write(call("asset.create_handoff", ["asset_id": "a1"]), turn: nil, stand)
+        XCTAssertEqual(result.errorType, "asset_needs_a_thread")
+    }
+
     // MARK: - Offered and named
 
     func testTheAssetToolsAreOfferedToAChatTurn_andNotToAnAgentRun() async {
@@ -793,7 +928,10 @@ final class AssetToolsTests: XCTestCase {
         // Whatever a coven lets its agents use of the person's connections: the assets are the place's own.
         let withNothingOn = await ContextBuilder.ToolConfig.connected(usesAssets: true, connections: CovenConnections())
         XCTAssertTrue(withNothingOn.enabledTools.isSuperset(of: AssetTools.all))
-        XCTAssertEqual(AssetTools.writing, ["asset.create", "asset.update", "asset.propose", "asset.attach_file"], "Named as the cloud app names them")
+        XCTAssertEqual(
+            AssetTools.writing, ["asset.create", "asset.update", "asset.propose", "asset.attach_file", "asset.create_handoff"],
+            "Named as the cloud app names them"
+        )
         // Not to a model on this device, nor to the person's own OpenClaw, with a Gateway or without.
         let forALocalModel = await ContextBuilder.ToolConfig.mlxTools()
         XCTAssertTrue(forALocalModel.enabledTools.isDisjoint(with: AssetTools.all))

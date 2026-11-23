@@ -13,7 +13,7 @@ nonisolated enum AssetTools {
     /// The tools that only read.
     static let reading: Set<String> = ["asset.search", "asset.get"]
     /// The tools that make or change an asset.
-    static let writing: Set<String> = ["asset.create", "asset.update", "asset.propose", "asset.attach_file"]
+    static let writing: Set<String> = ["asset.create", "asset.update", "asset.propose", "asset.attach_file", "asset.create_handoff"]
     static let all = reading.union(writing)
 
     /// The longest text an agent gives as a file of an asset, in characters.
@@ -48,6 +48,10 @@ nonisolated enum AssetTools {
         var update: @Sendable (_ assetID: String, _ title: String?, _ details: String?, _ account: String) async throws -> Void
         var addFile: @Sendable (_ file: AssetRepository.NewFile, _ assetID: String, _ account: String) async throws -> AssetFile
         var propose: @Sendable (_ assetID: String, _ account: String) async throws -> Void
+        /// How an asset is related to others.
+        var relations: @Sendable (_ assetID: String, _ account: String) async throws -> [AssetRelation]
+        /// The hand-off brief of an asset: the one it has, or a new one.
+        var handoff: @Sendable (_ assetID: String, _ agentID: String, _ threadID: String, _ account: String) async throws -> (brief: Asset, isNew: Bool)
 
         /// An asset as an agent gives it.
         struct New {
@@ -55,6 +59,8 @@ nonisolated enum AssetTools {
             var title: String
             var details: String
             var file: AssetRepository.NewFile?
+            /// The asset it is made from, if it says one.
+            var parentID: String?
         }
 
         static let live = Store(
@@ -66,12 +72,14 @@ nonisolated enum AssetTools {
             create: { new, covenID, agentID, threadID, account in
                 try await AssetRepository.shared.create(
                     type: new.type, title: new.title, details: new.details, files: new.file.map { [$0] } ?? [],
-                    inCoven: covenID, madeBy: agentID, inThread: threadID, as: account
+                    inCoven: covenID, madeBy: agentID, inThread: threadID, parent: new.parentID, as: account
                 )
             },
             update: { try await AssetRepository.shared.update($0, title: $1, details: $2, as: $3) },
             addFile: { try await AssetRepository.shared.addFile($0, to: $1, as: $2) },
-            propose: { _ = try await AssetRepository.shared.move($0, to: .proposed, as: $1) }
+            propose: { _ = try await AssetRepository.shared.move($0, to: .proposed, as: $1) },
+            relations: { try await AssetRepository.shared.relations(ofAsset: $0, as: $1) },
+            handoff: { try await AssetRepository.shared.handoffBrief(of: $0, madeBy: $1, inThread: $2, as: $3) }
         )
     }
 
@@ -171,6 +179,9 @@ nonisolated enum AssetTools {
             guard !asset.isUnreadable else {
                 return .error(tool: call.name, message: "That asset cannot be opened with the account's key.", errorType: "asset_locked")
             }
+            if call.name == "asset.create_handoff" {
+                return try await handoff(call, of: asset, threadID: threadID, turn: turn, account: account, store: store)
+            }
             guard turn.hasChangesLeft else {
                 return .error(
                     tool: call.name, message: "This turn has changed assets \(TurnAssets.mostChanges) times, which is as many as a turn may.",
@@ -241,7 +252,10 @@ nonisolated enum AssetTools {
         case let .failure(refusal):
             return .validationError(tool: call.name, message: refusal.message, field: refusal.field)
         case let .success(file):
-            new = Store.New(type: type, title: title, details: (call.args["description"]?.value as? String) ?? "", file: file)
+            new = Store.New(
+                type: type, title: title, details: (call.args["description"]?.value as? String) ?? "", file: file,
+                parentID: text(call.args["parent_asset_id"])
+            )
         }
         guard turn.takeAMaking() else {
             return .error(
@@ -259,6 +273,7 @@ nonisolated enum AssetTools {
         turn.made(asset.id)
         var lines = ["[Asset created] asset_id: \(asset.id); type: \(asset.type.rawValue); status: draft."]
         if let file = asset.files.first { lines[0] += " File: \(AttachmentContext.plainName(file.name))." }
+        if let parent = asset.parentID { lines[0] += " Made from asset_id: \(parent)." }
         lines.append("It is kept in Assets as a draft, where the person finds it. Do not write a link to it.")
         lines.append(
             asset.files.isEmpty
@@ -266,6 +281,38 @@ nonisolated enum AssetTools {
                 : "When it is ready for their review, propose it with asset.propose."
         )
         return .success(tool: call.name, result: ["asset_id": .string(asset.id)], contextBlock: lines.joined(separator: "\n"))
+    }
+
+    /// `asset.create_handoff`: the hand-off brief of an asset of the
+    /// thread's place, as the cloud app makes it. An asset has one, so
+    /// asking again gives the one it has; a new one is one of the turn's
+    /// makings, made by the turn's agent in the turn's thread.
+    private static func handoff(
+        _ call: ParsedToolCall, of asset: Asset, threadID: String, turn: TurnAssets, account: String, store: Store
+    ) async throws -> ToolExecutionResult {
+        guard turn.takeAMaking() else {
+            return .error(
+                tool: call.name, message: "This turn has made \(TurnAssets.mostMade) assets, which is as many as a turn may.", errorType: "asset_turn_limit"
+            )
+        }
+        let made: (brief: Asset, isNew: Bool)
+        do {
+            made = try await store.handoff(asset.id, turn.agentID, threadID, account)
+        } catch {
+            turn.made(nil)
+            throw error
+        }
+        // One that was there already is no making of this turn's.
+        turn.made(made.isNew ? made.brief.id : nil)
+        let lines = [
+            "[Asset handoff] brief asset_id: \(made.brief.id); source asset_id: \(asset.id); status: \(made.brief.status.rawValue).",
+            made.isNew
+                ? "The brief is a new draft made from the asset. Write what is to be done into it: asset.update for its description, asset.attach_file for its text."
+                : "The asset had this brief already: read it with asset.get.",
+        ]
+        return .success(
+            tool: call.name, result: ["asset_id": .string(made.brief.id), "is_new": .bool(made.isNew)], contextBlock: lines.joined(separator: "\n")
+        )
     }
 
     /// Why a file given by a call is not taken.
@@ -320,6 +367,10 @@ nonisolated enum AssetTools {
             .error(tool: tool, message: "This asset has as many files as an asset may.", errorType: "asset_full")
         case .tooMany:
             .error(tool: tool, message: "As many assets as can be kept are kept here already.", errorType: "asset_library_full")
+        case .noSuchParent:
+            .validationError(tool: tool, message: "'parent_asset_id' is no asset kept where this thread is. Find its id with asset.search.", field: "parent_asset_id")
+        case .needsReview:
+            .error(tool: tool, message: "Only an asset that is proposed or approved is handed over, and this one is neither.", errorType: "asset_needs_review")
         case .noSuchCoven, .noSuchThread, .changed, .unreadable:
             .error(tool: tool, message: "The asset could not be saved here.", errorType: "asset_not_saved")
         }
@@ -399,6 +450,23 @@ nonisolated enum AssetTools {
             lines.append("files:")
             lines += asset.files.map { "- \(AttachmentContext.plainName($0.name)) (\($0.mimeType), \($0.sizeBytes) bytes)" }
         }
+        // Where it came from: the asset it was made from, and what it is
+        // related to (its hand-off brief, or the asset it is the brief for).
+        if let parent = asset.parentID { lines.append("parent_asset_id: \(parent)") }
+        do {
+            let relations = try await store.relations(asset.id, account)
+            guard await store.account() == account else { return accountChanged(call) }
+            if !relations.isEmpty {
+                lines.append("relations:")
+                lines += relations.map { told($0, of: asset) }
+            }
+        } catch is CancellationError {
+            return .error(tool: call.name, message: "Stopped before the asset was read.", errorType: "cancelled")
+        } catch {
+            guard await store.account() == account else { return accountChanged(call) }
+            AppErrorReporter.log(message: "An asset's relations could not be read for a tool (\(type(of: error)))", context: "AssetTools.get")
+            lines.append("(What it is related to could not be read.)")
+        }
         // The latest file is told, as an attachment's is: text between
         // fences and cut at its longest, a PDF's text, a note for anything else.
         if flag(call.args["include_source"], otherwise: true), let latest = asset.files.last {
@@ -422,6 +490,14 @@ nonisolated enum AssetTools {
         // whose account is no longer the one signed in.
         guard await store.account() == account else { return accountChanged(call) }
         return .success(tool: call.name, result: ["asset_id": .string(asset.id)], contextBlock: lines.joined(separator: "\n"))
+    }
+
+    /// One relation of `asset`, as a model is told it: which end the asset
+    /// is, and the other asset by its title and id.
+    static func told(_ relation: AssetRelation, of asset: Asset) -> String {
+        let other = AttachmentContext.plainName(relation.relatedTitle ?? "another asset") + " (asset_id: \(relation.relatedID))"
+        guard relation.kind == AssetRelation.handoffFor else { return "- related to: " + other }
+        return relation.fromAssetID == asset.id ? "- this is the hand-off brief for: " + other : "- its hand-off brief: " + other
     }
 
     /// What a file of an asset says, as a model is told it: always
