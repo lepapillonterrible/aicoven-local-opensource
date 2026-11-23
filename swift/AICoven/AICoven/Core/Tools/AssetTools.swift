@@ -155,6 +155,11 @@ nonisolated enum AssetTools {
             guard let asset = assets.first(where: { $0.id == id }) else {
                 return .error(tool: call.name, message: "There is no asset with that id here. Find its id with asset.search.", errorType: "asset_not_found")
             }
+            // What the key cannot open is not changed or proposed: nobody
+            // can see what it holds.
+            guard !asset.isUnreadable else {
+                return .error(tool: call.name, message: "That asset cannot be opened with the account's key.", errorType: "asset_locked")
+            }
             guard turn.hasChangesLeft else {
                 return .error(
                     tool: call.name, message: "This turn has changed assets \(TurnAssets.mostChanges) times, which is as many as a turn may.",

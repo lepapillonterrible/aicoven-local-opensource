@@ -364,6 +364,20 @@ final class AssetToolsTests: XCTestCase {
         XCTAssertEqual(stand.attached.count, 1)
         XCTAssertEqual(stand.proposed, ["w"])
 
+        // Nor is an asset the key cannot open changed, given a file or proposed.
+        stand.assets["work"]?.append(asset("locked", "", unreadable: true))
+        for tool in [
+            call("asset.update", ["asset_id": "locked", "title": "Written over"]),
+            call("asset.attach_file", ["asset_id": "locked", "file_name": "x.md", "content": "x"]),
+            call("asset.propose", ["asset_id": "locked"]),
+        ] {
+            let refused = await write(tool, turn: turn, stand)
+            XCTAssertEqual(refused.errorType, "asset_locked", tool.name)
+        }
+        XCTAssertEqual(stand.updated.count, 2)
+        XCTAssertEqual(stand.attached.count, 1)
+        XCTAssertEqual(stand.proposed, ["w"])
+
         // What a call must give.
         result = await write(call("asset.update", ["asset_id": "w"]), turn: turn, stand)
         XCTAssertEqual(result.field, "title")
