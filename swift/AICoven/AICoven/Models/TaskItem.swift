@@ -265,4 +265,9 @@ nonisolated struct TaskChange: Equatable {
     var handoffAgentID: String?
     /// Its reminder: set, or taken away.
     var reminder: Setting<TaskReminderAsk>?
+    /// Whether the change is made only to a task that is open as it is
+    /// written: one finished meanwhile is left as it was left
+    /// (`TaskError.finished`). An agent's tool asks so: it changes open
+    /// tasks, and what the person has finished since it looked is theirs.
+    var onlyWhileOpen = false
 }

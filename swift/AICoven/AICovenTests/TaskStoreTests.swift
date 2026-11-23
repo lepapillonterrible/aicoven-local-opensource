@@ -433,6 +433,46 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(after, before)
     }
 
+    func testAChangeAskedOnlyWhileTheTaskIsOpenLeavesAFinishedOneAsItWasLeft() async throws {
+        let store = TaskRepository()
+        let made = try await store.create(title: "Draft the brief", inCoven: nil, as: account)
+        func read() async throws -> TaskItem {
+            let listing = try await store.tasks(inCoven: nil, alsoListing: made.id, as: account)
+            return try XCTUnwrap(listing.tasks.first { $0.id == made.id })
+        }
+        // Open: the change is made.
+        try await store.change(made.id, TaskChange(stage: .review, onlyWhileOpen: true), as: account)
+        var task = try await read()
+        XCTAssertEqual(task.stage, .review)
+
+        // Finished meanwhile, done or closed: nothing of it is changed, and it is not opened again.
+        let due = try XCTUnwrap(TaskDue(date: day("2027-01-15")))
+        for finished in [TaskStatus.done, .closed] {
+            try await store.change(made.id, TaskChange(status: finished), as: account)
+            let before = try await stored(made.id)
+            for change in [
+                TaskChange(stage: .inProgress, onlyWhileOpen: true), TaskChange(status: .open, stage: .backlog, onlyWhileOpen: true),
+                TaskChange(status: .done, onlyWhileOpen: true), TaskChange(due: .to(due), onlyWhileOpen: true),
+            ] {
+                do {
+                    try await store.change(made.id, change, as: account)
+                    XCTFail("Changed a finished task")
+                } catch {
+                    XCTAssertEqual(error as? TaskError, .finished)
+                }
+            }
+            let after = try await stored(made.id)
+            XCTAssertEqual(after, before, "\(finished)")
+            try await store.change(made.id, TaskChange(status: .open), as: account)
+        }
+        // The person's own change is not asked so, and is made as before.
+        try await store.change(made.id, TaskChange(status: .done), as: account)
+        try await store.change(made.id, TaskChange(stage: .backlog), as: account)
+        task = try await read()
+        XCTAssertEqual(task.stage, .backlog)
+        XCTAssertEqual(task.status, .done)
+    }
+
     func testAPinIsForAnOpenTask_endsInTimeToCome_andIsNoChangeToTheTask() async throws {
         let clock = Clock()
         let store = TaskRepository(now: { clock.next() })

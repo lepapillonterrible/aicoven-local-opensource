@@ -728,6 +728,8 @@ struct TurnProgress {
             ("asset.search", "Looking at the assets kept here…"),
             ("asset.get", "Looking at the assets kept here…"),
             ("asset.", "Working on an asset…"),
+            ("task.", "Looking at the tasks kept here…"),
+            ("surface.taskCommand", "Changing tasks…"),
         ]
         return known.first { toolName.hasPrefix($0.prefix) }?.activity ?? "Using tool \(toolName)…"
     }

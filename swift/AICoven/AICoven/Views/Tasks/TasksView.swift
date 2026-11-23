@@ -356,6 +356,14 @@ struct TasksView: View {
         .onChange(of: model.hasRead) {
             if focusesNewTaskWhenShown, !newTaskLineShows { scrollsToNewTask += 1 }
         }
+        // A task was made or changed in the store, by this page or by
+        // something else (an agent's turn in a thread): the list is read
+        // again, also while a change of the page's own is under way, whose
+        // own reading may have been made before the other change. Only
+        // the latest reading is shown.
+        .onReceive(NotificationCenter.default.publisher(for: TaskItem.didChange).receive(on: RunLoop.main)) { _ in
+            Task { await model.load() }
+        }
         // A reminder of one of this place's tasks was tapped: its details open.
         .onChange(of: navigator.taskAsked, initial: true) { _, _ in
             guard case let .place(covenID) = model.scope, let id = navigator.takeTaskAsk(in: ShellScope(covenID: covenID)) else { return }
