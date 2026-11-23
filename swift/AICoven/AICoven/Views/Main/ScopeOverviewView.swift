@@ -301,11 +301,12 @@ struct ScopeOverviewView: View {
         }
     }
 
-    /// The scope's places as one row of icon buttons of equal width, as in
-    /// the sidebar: Memory, Agents, Assets, Connections.
+    /// The scope's places as one row of icon buttons of equal width: Tasks,
+    /// which the sidebar gives a row of its own, then the sidebar's
+    /// (Memory, Agents, Assets, Connections).
     private func placesRow(_ open: @escaping (ShellSidebarItem) -> Void) -> some View {
         HStack(spacing: Spacing.xxxs) {
-            ForEach(ShellSidebarItem.scopePlaces, id: \.item) { place in
+            ForEach([ShellSidebarItem.tasksPlace] + ShellSidebarItem.scopePlaces, id: \.item) { place in
                 Button {
                     open(place.item)
                 } label: {

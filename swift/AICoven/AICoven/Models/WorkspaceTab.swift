@@ -22,6 +22,8 @@ enum WorkspaceTabType: Equatable {
     case memoryList(covenId: String?)
     /// A scope's assets: a coven's, or Strix's (no coven).
     case assets(covenId: String?)
+    /// A scope's tasks: a coven's, or Strix's (no coven).
+    case tasks(covenId: String?)
     /// Personal Strix settings tab (personal default assistant)
     case personalStrixSettings
     /// In-app purchase store tab
@@ -48,6 +50,8 @@ enum WorkspaceTabType: Equatable {
         case let (.memoryList(c1), .memoryList(c2)):
             c1 == c2
         case let (.assets(c1), .assets(c2)):
+            c1 == c2
+        case let (.tasks(c1), .tasks(c2)):
             c1 == c2
         case (.profile, .profile),
              (.settings, .settings),
@@ -83,6 +87,7 @@ enum WorkspaceTabType: Equatable {
         case .covenConnections: "coven_connections"
         case .memoryList: "memory_list"
         case .assets: "assets"
+        case .tasks: "tasks"
         case .personalStrixSettings: "personal_strix_settings"
         case .store: "store"
         case .terms: "terms"
@@ -170,6 +175,11 @@ struct WorkspaceTab: Identifiable, Equatable {
     /// A scope's Assets place.
     static func assets(covenId: String?) -> WorkspaceTab {
         WorkspaceTab(id: "assets-\(covenId ?? "personal")", type: .assets(covenId: covenId), title: "Assets")
+    }
+
+    /// A scope's Tasks place.
+    static func tasks(covenId: String?) -> WorkspaceTab {
+        WorkspaceTab(id: "tasks-\(covenId ?? "personal")", type: .tasks(covenId: covenId), title: "Tasks")
     }
 
     /// Strix's Agents place: Strix itself, listed as an agent is.
