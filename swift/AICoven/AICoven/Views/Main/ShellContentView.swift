@@ -43,6 +43,8 @@ struct ShellContentView: View {
                     .id(navigator.personPlaceRequest)
             case .activity:
                 ActivityView(navigator: navigator, covens: covens, covensAreKnown: covensAreKnown)
+            case .onMe:
+                TasksView(scope: .onMe, navigator: navigator, covens: covens, covensAreKnown: covensAreKnown)
             case nil:
                 scopePlace
             }
@@ -107,7 +109,7 @@ struct ShellContentView: View {
                 // Strix's, or the coven's on screen; while that coven is
                 // not in, or it is another's, the Overview.
                 if covenID == nil || coven?.id == covenID {
-                    TasksView(covenID: covenID, navigator: navigator)
+                    TasksView(scope: .place(covenID: covenID), navigator: navigator)
                         .id(covenID)
                 } else {
                     overview

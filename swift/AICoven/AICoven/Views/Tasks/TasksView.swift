@@ -1,7 +1,8 @@
 internal import Combine
 import SwiftUI
 
-/// A place's Tasks, as the cloud app's List: what is pinned for today and
+/// A place's Tasks, or On me (every place's tasks, each row naming its
+/// place, with no New task line), as the cloud app's List: what is pinned for today and
 /// for this week first (and before them "Still on today?", for pins whose
 /// day is over), then the open tasks under "Open", which starts with the
 /// New task line, and the finished ones under "Done · N", closed until
@@ -10,6 +11,10 @@ import SwiftUI
 struct TasksView: View {
     @ObservedObject var navigator: ShellNavigator
     @StateObject private var model: TasksModel
+    /// The person's covens, which name each task's place in On me, and
+    /// whether they are read yet.
+    private let covens: [Coven]
+    private let covensAreKnown: Bool
 
     @State private var newTaskTitle = ""
     @FocusState private var newTaskFocused: Bool
@@ -40,9 +45,33 @@ struct TasksView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.isPadLayout) private var isPadLayout
 
-    init(covenID: String?, navigator: ShellNavigator) {
+    /// A place's tasks (`.place`), or every place's (`.onMe`), where
+    /// `covens` names each task's place once they are known.
+    init(scope: TasksModel.Scope, navigator: ShellNavigator, covens: [Coven] = [], covensAreKnown: Bool = true) {
         self.navigator = navigator
-        _model = StateObject(wrappedValue: TasksModel(covenID: covenID))
+        self.covens = covens
+        self.covensAreKnown = covensAreKnown
+        _model = StateObject(wrappedValue: TasksModel(scope: scope))
+    }
+
+    private var isOnMe: Bool {
+        model.scope == .onMe
+    }
+
+    /// The name of the place a task is in, as On me says it on each row.
+    /// Nil on a place's own page.
+    private func placeName(of task: TaskItem) -> String? {
+        guard isOnMe else { return nil }
+        return Self.placeName(ofCoven: task.covenID, among: covens, known: covensAreKnown)
+    }
+
+    /// Strix for the person's own, a coven's name, and "Another coven"
+    /// for a coven that is not among those read; nothing for a coven
+    /// while the covens are not read yet (it is not another's then).
+    static func placeName(ofCoven covenID: String?, among covens: [Coven], known: Bool) -> String? {
+        guard let covenID else { return "Strix" }
+        if let coven = covens.first(where: { $0.id == covenID }) { return coven.name }
+        return known ? "Another coven" : nil
     }
 
     /// The page's own reading column, centred.
@@ -96,7 +125,6 @@ struct TasksView: View {
             pendingTalk = nil
             model.leftScreen()
         }
-        .task { await model.loadAgents() }
         // The tasks handed to an agent follow the turns the app runs: told
         // once the change has been made, not as it is about to be.
         .onReceive(Self.turns.receive(on: RunLoop.main)) { _ in model.turnsChanged() }
@@ -113,6 +141,7 @@ struct TasksView: View {
             .navigationDestination(item: Binding(get: { showsPane ? nil : model.detailsOf }, set: { if !showsPane { model.detailsOf = $0 } })) { id in
                 details(of: id, host: .page)
                     .navigationBarTitleDisplayMode(.inline)
+                    .stoneBackButton()
                     // A screen of the place's own: what is said of a hand-off is still said here.
                     .onAppear { model.cameOnScreen() }
                     .onDisappear { model.leftScreen() }
@@ -134,6 +163,7 @@ struct TasksView: View {
             onAnswer: { task, keep in answer([task], keep: keep) },
             onTalk: talkItThrough,
             lead: lead,
+            placeName: placeName,
             editingDue: $editingDue,
             onClose: { model.detailsOf = nil }
         )
@@ -178,7 +208,7 @@ struct TasksView: View {
         TaskLead(
             hasLead: task.leadAgentID != nil,
             choices: model.leadChoices(for: task),
-            failedToLoad: model.agentsFailed,
+            failedToLoad: model.agentsFailed(for: task),
             onRetry: { Task { await model.loadAgents() } },
             onDoIt: { agent in
                 let account = UserScope.currentUserID
@@ -257,7 +287,8 @@ struct TasksView: View {
                 now = Date()
             }
         }
-        // New Task asked for the cursor in the New task line.
+        // New Task asked for the cursor in the New task line (of a place's
+        // own page: the ask is never On me's to take).
         .onChange(of: navigator.newTaskAsked, initial: true) { _, _ in
             guard navigator.takeNewTaskRequest() else { return }
             focusesNewTaskWhenShown = true
@@ -275,7 +306,7 @@ struct TasksView: View {
         // title is drawn once.
         Group {
             if horizontalSizeClass != .compact {
-                Text("Tasks")
+                Text(isOnMe ? "On me" : "Tasks")
                     .font(.aicovenDisplayLarge)
                     .foregroundStyle(Color.aicovenTextPrimary)
                     .padding(.top, Spacing.lg)
@@ -370,9 +401,12 @@ struct TasksView: View {
     private var listRows: some View {
         if model.hasRead {
             if model.isEmpty {
-                ContentUnavailableView("No tasks", systemImage: "checklist", description: Text("Add one with New task."))
-                    .frame(maxWidth: .infinity)
-                    .taskListRow()
+                ContentUnavailableView(
+                    "No tasks", systemImage: "checklist",
+                    description: Text(isOnMe ? "Tasks from your threads in every coven show here." : "Add one with New task.")
+                )
+                .frame(maxWidth: .infinity)
+                .taskListRow()
             }
             let parts = TaskRules.parts(open: model.open, finished: model.finished, sort: sort, now: now, handoff: model.handoff)
             if !parts.review.isEmpty {
@@ -402,10 +436,17 @@ struct TasksView: View {
                     row(task).taskListRow(vertical: 0)
                 }
             }
-            heading("Open")
-            newTaskField
-                .id(Self.newTaskLineID)
-                .taskListRow(vertical: 0)
+            // A place's own page has the New task line under Open, also
+            // with no open task; On me, which adds none, has Open only
+            // where there is one.
+            if !isOnMe {
+                heading("Open")
+                newTaskField
+                    .id(Self.newTaskLineID)
+                    .taskListRow(vertical: 0)
+            } else if !parts.open.isEmpty {
+                heading("Open")
+            }
             ForEach(parts.open) { task in
                 row(task).taskListRow(vertical: 0)
             }
@@ -491,7 +532,8 @@ struct TasksView: View {
         // apart from that one, or the list takes the two for one row.
         ForEach(tasks, id: \.reviewRowID) { task in
             TaskReviewRow(
-                task: task, isSaving: model.saving.contains(task.id), onKeep: { answer([task], keep: true) }, onClear: { answer([task], keep: false) }
+                task: task, place: placeName(of: task), isSaving: model.saving.contains(task.id), onKeep: { answer([task], keep: true) },
+                onClear: { answer([task], keep: false) }
             )
             .taskListRow()
         }
@@ -508,7 +550,7 @@ struct TasksView: View {
             task: task,
             pin: TaskRules.pinState(of: task, now: now),
             handoff: handoff,
-            context: TaskRules.context(of: task, now: now, handoff: handoff, agent: model.agentName(for: task)),
+            context: TaskRules.context(of: task, now: now, handoff: handoff, agent: model.agentName(for: task), place: placeName(of: task)),
             isSaving: model.saving.contains(task.id),
             onTick: { done in
                 let account = UserScope.currentUserID
@@ -671,9 +713,13 @@ struct TaskPinActions: View {
     }
 }
 
-/// A task pinned for a day that is over, with the two answers.
-private struct TaskReviewRow: View {
+/// A task pinned for a day that is over, with the two answers. In On me
+/// it names the task's place under its title, so that two tasks of one
+/// title in two places are told apart.
+struct TaskReviewRow: View {
     let task: TaskItem
+    /// The name of the task's place, where the page is of every place's.
+    let place: String?
     let isSaving: Bool
     let onKeep: () -> Void
     let onClear: () -> Void
@@ -699,13 +745,25 @@ private struct TaskReviewRow: View {
             Button("Not today", action: onClear)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Still on today: \(TasksModel.name(of: task))")
+        .accessibilityLabel(Self.label(for: task, place: place))
+    }
+
+    /// What VoiceOver calls the row: the task, and its place where it is named.
+    static func label(for task: TaskItem, place: String?) -> String {
+        "Still on today: \(TasksModel.name(of: task))" + (place.map { ", \($0)" } ?? "")
     }
 
     private var title: some View {
-        Text(task.isUnreadable ? TasksModel.unreadable : task.title)
-            .font(.aicovenH2)
-            .foregroundStyle(Color.aicovenTextPrimary)
+        VStack(alignment: .leading, spacing: 1) {
+            Text(task.isUnreadable ? TasksModel.unreadable : task.title)
+                .font(.aicovenH2)
+                .foregroundStyle(Color.aicovenTextPrimary)
+            if let place {
+                Text(place)
+                    .font(.aicovenBodySmall)
+                    .foregroundStyle(Color.aicovenTextSecondary)
+            }
+        }
     }
 
     private var answers: some View {
@@ -749,7 +807,30 @@ struct LeadAgentChoices: View {
     let lead: TaskLead
     let onChoose: (TasksModel.Agent) -> Void
 
+    /// What the menu says besides the agents.
+    enum Note: Equatable {
+        /// They could not be read: said also over those read before,
+        /// which stay, with Try Again.
+        case failed
+        /// They are being read, and none was read before.
+        case loading
+    }
+
+    static func note(hasChoices: Bool, failedToLoad: Bool) -> Note? {
+        if failedToLoad { return .failed }
+        return hasChoices ? nil : .loading
+    }
+
     var body: some View {
+        switch Self.note(hasChoices: lead.choices != nil, failedToLoad: lead.failedToLoad) {
+        case .failed:
+            Text("Couldn't load the agents")
+            Button("Try Again", action: lead.onRetry)
+        case .loading:
+            Text("Loading agents…")
+        case nil:
+            EmptyView()
+        }
         if let choices = lead.choices {
             if let marked = choices.marked {
                 Section(choices.reason == .lead ? "Lead agent" : "Last used") { choice(marked) }
@@ -757,11 +838,6 @@ struct LeadAgentChoices: View {
             Section {
                 ForEach(choices.others) { choice($0) }
             }
-        } else if lead.failedToLoad {
-            Text("Couldn't load the agents")
-            Button("Try Again", action: lead.onRetry)
-        } else {
-            Text("Loading agents…")
         }
     }
 

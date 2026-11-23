@@ -32,6 +32,8 @@ nonisolated enum ShellSidebarItem: Hashable {
     case connectedApps
     /// Activity: the person's own, across every scope.
     case activity
+    /// On me: every task of the person's, across every scope.
+    case onMe
 
     /// A scope's places as a row of buttons shows them, in the sidebar and
     /// on a phone's Overview: each with its name and its symbol.
@@ -67,6 +69,8 @@ final class ShellNavigator: ObservableObject {
         /// Activity: what waits for the person, moves, and has finished,
         /// across Strix and every coven.
         case activity
+        /// On me: every task of the person's, across Strix and every coven.
+        case onMe
     }
 
     /// The person's place on screen, over the scope's; nil for none.
@@ -176,8 +180,9 @@ final class ShellNavigator: ObservableObject {
     /// forms, the Overview for none. Nil for a place that has no row.
     var sidebarItem: ShellSidebarItem? {
         // The person's own place belongs to no row of the scope's:
-        // Activity has its own, Settings has none.
+        // Activity and On me have their own, Settings has none.
         if personPlace == .activity { return .activity }
+        if personPlace == .onMe { return .onMe }
         guard personPlace == nil else { return nil }
         guard let place else { return .overview }
         return Self.row(of: place)
@@ -204,6 +209,7 @@ final class ShellNavigator: ObservableObject {
         switch personPlace {
         case .settings: return "Settings"
         case .activity: return "Activity"
+        case .onMe: return "On me"
         case nil: break
         }
         guard let place else { return nil }
@@ -335,8 +341,8 @@ final class ShellNavigator: ObservableObject {
     }
 
     /// Opens the place a sidebar row or a Go menu item leads to: one of
-    /// the selected scope's places, or Activity, which is the person's own
-    /// and covers the scope's. A thread opens with `open(_:)`. Strix's
+    /// the selected scope's places, or Activity or On me, which are the
+    /// person's own and cover the scope's. A thread opens with `open(_:)`. Strix's
     /// agent is Strix itself, so its Agents place is Strix's settings;
     /// Strix uses every connection, so it has no Connections place (its
     /// row leads to Settings instead).
@@ -350,6 +356,7 @@ final class ShellNavigator: ObservableObject {
         case (.agents, .strix): open(.personalStrix)
         case let (.connectedApps, .coven(covenID)): open(.covenConnections(covenId: covenID))
         case (.activity, _): openPersonPlace(.activity)
+        case (.onMe, _): openPersonPlace(.onMe)
         case (.connectedApps, .strix), (.thread, _): break
         }
     }
@@ -530,16 +537,19 @@ final class ShellNavigator: ObservableObject {
 }
 
 /// The window's title for the shell's current place: "<Coven> — <Place>",
-/// the place being Settings while it covers the scope's, and "Overview"
-/// where none is open; "AICoven" while the scope has no name yet.
+/// the place being Settings or Activity while it covers the scope's, and
+/// "Overview" where none is open; "AICoven" while the scope has no name
+/// yet. On me is of every scope, and titled by itself, as the cloud app's.
 nonisolated func shellWindowTitle(
     covenName: String?, personPlace: ShellNavigator.PersonPlace? = nil, covenPlaceTitle: String?
 ) -> String {
-    guard let covenName else { return "AICoven" }
-    let place = switch personPlace {
-    case .settings: "Settings"
-    case .activity: "Activity"
-    case nil: covenPlaceTitle ?? "Overview"
+    let place: String
+    switch personPlace {
+    case .onMe: return "On me"
+    case .settings: place = "Settings"
+    case .activity: place = "Activity"
+    case nil: place = covenPlaceTitle ?? "Overview"
     }
+    guard let covenName else { return "AICoven" }
     return "\(covenName) — \(place)"
 }

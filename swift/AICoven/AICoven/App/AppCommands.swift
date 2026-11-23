@@ -204,6 +204,9 @@ struct ShellCommands: Commands {
             // No shortcut, as in the cloud app: ⇧⌘A is the system's Deselect All.
             Button("Activity") { shell?.openPlace(.activity) }
                 .disabled(shell == nil)
+            Button("On me") { shell?.openPlace(.onMe) }
+                .keyboardShortcut("m", modifiers: [.shift, .command])
+                .disabled(shell == nil)
             Divider()
             ForEach(ShellCommandRules.scopes(covens: shell?.covens ?? [])) { scope in
                 Button(scope.name) { shell?.select(scope.scope) }

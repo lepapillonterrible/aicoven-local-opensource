@@ -1,17 +1,26 @@
 internal import Combine
 import SwiftUI
 
-/// One place's tasks as its Tasks page shows them: a coven's, or Strix's.
-/// It reads them, adds one, changes one, and hands one to an agent, each
-/// as the account that asked. Only the latest reading is shown, and
-/// nothing read or done for an account that is no longer signed in.
+/// One place's tasks as its Tasks page shows them (a coven's, or
+/// Strix's), or every place's as On me shows them. It reads them, adds
+/// one, changes one, and hands one to an agent, each as the account that
+/// asked. Only the latest reading is shown, and nothing read or done for
+/// an account that is no longer signed in.
 @MainActor
 final class TasksModel: ObservableObject {
+    /// Whose tasks a page shows.
+    nonisolated enum Scope: Equatable {
+        /// One place's: a coven's, or Strix's for nil.
+        case place(covenID: String?)
+        /// Every task of the account's, in whichever coven or with Strix.
+        case onMe
+    }
+
     /// The store's side, which a test replaces.
     struct Source {
         /// The place's listing, which also lists the task named (the one
         /// whose details are on screen) where it would be left out.
-        var tasks: @Sendable (_ covenID: String?, _ alsoListing: String?, _ account: String) async throws -> TaskListing
+        var tasks: @Sendable (_ scope: Scope, _ alsoListing: String?, _ account: String) async throws -> TaskListing
         var create: @Sendable (_ title: String, _ covenID: String?, _ account: String) async throws -> TaskItem
         var change: @Sendable (_ id: String, _ change: TaskChange, _ account: String) async throws -> Void
         /// Keeps for today (until the time given) or clears the pins of
@@ -19,7 +28,12 @@ final class TasksModel: ObservableObject {
         var answerLapsedPins: @Sendable (_ ids: [String], _ keepUntil: Date?, _ account: String) async throws -> Set<String>
 
         static let live = Source(
-            tasks: { try await TaskRepository.shared.tasks(inCoven: $0, alsoListing: $1, as: $2) },
+            tasks: { scope, shown, account in
+                switch scope {
+                case let .place(covenID): try await TaskRepository.shared.tasks(inCoven: covenID, alsoListing: shown, as: account)
+                case .onMe: try await TaskRepository.shared.allTasks(alsoListing: shown, as: account)
+                }
+            },
             create: { try await TaskRepository.shared.create(title: $0, inCoven: $1, as: $2) },
             change: { try await TaskRepository.shared.change($0, $1, as: $2) },
             answerLapsedPins: { try await TaskRepository.shared.answerLapsedPins(of: $0, keepUntil: $1, as: $2) }
@@ -148,18 +162,19 @@ final class TasksModel: ObservableObject {
     @Published private(set) var isAdding = false
     /// The tasks whose change is on its way: one change at a time for a task.
     @Published private(set) var saving: Set<TaskItem.ID> = []
-    /// The agents of the place a task can be handed to: the coven's, or
-    /// Strix alone in Strix's place and in a coven with none. Nil until
-    /// they are read.
-    @Published private(set) var agents: [Agent]?
-    /// Whether the agents could not be read.
-    @Published private(set) var agentsFailed = false
+    /// The agents a task can be handed to, by the place it is in (a
+    /// coven's id, none for Strix's): the coven's, or Strix alone in
+    /// Strix's place and in a coven with none. A place has no entry until
+    /// its agents are read.
+    @Published private(set) var agentsByPlace: [String: [Agent]] = [:]
+    /// The places whose agents could not be read.
+    @Published private(set) var placesWhoseAgentsFailed: Set<String> = []
     /// The turns the app is running now in the threads of tasks handed
     /// to an agent, by thread id.
     @Published private(set) var liveTurns: [String: TaskLiveTurn] = [:]
     /// The agent, still there, that the place's latest hand-off went to,
     /// of every task of the place, listed or not.
-    private var lastHandedTo: String?
+    private var lastHandedTo: [String: String] = [:]
     /// The hand-off turns whose ending is still to be told, by turn id,
     /// each with whether it was seen at work here: one handed over on this
     /// page, or followed on it.
@@ -167,9 +182,12 @@ final class TasksModel: ObservableObject {
     /// The turns the tasks were read again for once already: listed as
     /// running while nothing ran them.
     private var readAgainFor: Set<String> = []
-    /// The reading of the agents under way: one at a time, which whoever
-    /// asks meanwhile waits for.
-    private var agentsReading: Task<Void, Never>?
+    /// The turns whose wait for an OK was told (or passed over, with no
+    /// screen up), until they stop waiting: told once for each wait.
+    private var toldNeedsOK: Set<String> = []
+    /// The readings of agents under way, by place: one at a time for a
+    /// place, which whoever asks meanwhile waits for.
+    private var agentReadings: [String: Task<Void, Never>] = [:]
     /// How many of the place's screens are up: the page, and a task's
     /// details where they are a screen of their own. What a hand-off's
     /// turn comes to is said only while one is.
@@ -195,8 +213,8 @@ final class TasksModel: ObservableObject {
         "Couldn't save the change to \(quoted(task)). Try again."
     }
 
-    /// The coven whose tasks these are; nil for Strix's.
-    let covenID: String?
+    /// Whose tasks these are.
+    let scope: Scope
     private let source: Source
     private let hands: Hands
     private let signedIn: () -> String
@@ -219,10 +237,10 @@ final class TasksModel: ObservableObject {
     /// The app's own store, account, voice, clock and calendar unless a
     /// test gives others.
     init(
-        covenID: String?, source: Source? = nil, hands: Hands? = nil, signedIn: (() -> String)? = nil, announce: ((String) -> Void)? = nil,
+        scope: Scope, source: Source? = nil, hands: Hands? = nil, signedIn: (() -> String)? = nil, announce: ((String) -> Void)? = nil,
         now: (() -> Date)? = nil, calendar: (() -> Calendar)? = nil
     ) {
-        self.covenID = covenID
+        self.scope = scope
         self.source = source ?? .live
         self.hands = hands ?? .live
         self.signedIn = signedIn ?? { UserScope.currentUserID }
@@ -253,7 +271,7 @@ final class TasksModel: ObservableObject {
         let account = signedIn()
         do {
             let shown = detailsOf
-            let listing = try await source.tasks(covenID, shown, account)
+            let listing = try await source.tasks(scope, shown, account)
             guard signedIn() == account else { return false }
             // A later listing has landed: what is shown is newer than this.
             guard reading > read else { return true }
@@ -279,6 +297,15 @@ final class TasksModel: ObservableObject {
                 landed = reading
                 if errorMessage == Self.couldNotLoad { errorMessage = nil }
             }
+            // The agents of the places shown are read once the tasks are
+            // (in On me the places are known only then), before anything
+            // is said of a hand-off, so that it is said by its agent's
+            // name. A place whose reading failed waits to be asked for
+            // again.
+            for place in placesShown where agentsByPlace[place] == nil && !placesWhoseAgentsFailed.contains(place) {
+                await loadAgents(in: place)
+            }
+            guard signedIn() == account else { return false }
             // The turns the tasks follow are those of the tasks as read.
             // One that ended while they were read is read again for.
             let again = turnsChanged()
@@ -304,7 +331,8 @@ final class TasksModel: ObservableObject {
     /// account.
     func add(title: String, as account: String) async -> Bool {
         let title = TaskRepository.keptTitle(title)
-        guard !title.isEmpty, !isAdding else { return false }
+        // A task is made in a place: On me adds none.
+        guard case let .place(covenID) = scope, !title.isEmpty, !isAdding else { return false }
         isAdding = true
         defer { isAdding = false }
         errorMessage = nil
@@ -474,28 +502,75 @@ final class TasksModel: ObservableObject {
 
     // MARK: - Handing a task to an agent
 
-    /// Reads the agents of the place: the coven's, or Strix alone where
-    /// the place has none of its own. One reading at a time: asked again
-    /// while one is under way, it waits for that one and reads nothing
-    /// more, so no earlier answer lands over a later one, and whoever
-    /// asked has the agents when it returns. Nothing read for an account
-    /// that is no longer signed in is kept.
-    func loadAgents() async {
-        if let reading = agentsReading { return await reading.value }
-        let reading = Task { await self.readAgents() }
-        agentsReading = reading
-        await reading.value
-        if agentsReading == reading { agentsReading = nil }
+    /// The place a task is in, as its agents are kept by: the page's own,
+    /// or in On me the task's (a coven's id, none for Strix's).
+    private func place(of task: TaskItem) -> String {
+        covenID(of: task) ?? ""
     }
 
-    private func readAgents() async {
+    private func covenID(of task: TaskItem) -> String? {
+        if case let .place(covenID) = scope { return covenID }
+        return task.covenID
+    }
+
+    /// The places whose agents the page needs: its own, or in On me
+    /// those of the open tasks listed (only an open task is handed over,
+    /// led or talked through with an agent).
+    private var placesShown: [String] {
+        switch scope {
+        case let .place(covenID): return [covenID ?? ""]
+        case .onMe:
+            var seen: Set<String> = []
+            return open.map(place(of:)).filter { seen.insert($0).inserted }
+        }
+    }
+
+    /// Reads the agents of the places shown again (the tasks' own reading
+    /// reads those not read yet; this is Try Again's): each coven's, or
+    /// Strix alone where the place has none of its own. One reading at a time for a
+    /// place: asked again while one is under way, it waits for that one
+    /// and reads nothing more, so no earlier answer lands over a later
+    /// one, and whoever asked has the agents when it returns. Nothing
+    /// read for an account that is no longer signed in is kept.
+    func loadAgents() async {
+        for place in placesShown {
+            await loadAgents(in: place)
+        }
+    }
+
+    private func loadAgents(in place: String) async {
+        if let reading = agentReadings[place] { return await reading.value }
+        let reading = Task { await self.readAgents(in: place) }
+        agentReadings[place] = reading
+        await reading.value
+        if agentReadings[place] == reading { agentReadings[place] = nil }
+    }
+
+    private func readAgents(in place: String) async {
         let account = signedIn()
         var read: [Agent]? = []
-        if let covenID { read = await hands.agents(covenID) }
+        if !place.isEmpty { read = await hands.agents(place) }
         if read?.isEmpty == true { read = await [hands.strix(account)] }
         guard signedIn() == account else { return }
-        agentsFailed = read == nil
-        if let read { agents = read }
+        if let read {
+            agentsByPlace[place] = read
+            placesWhoseAgentsFailed.remove(place)
+        } else {
+            // Those read before stay, and it says so.
+            placesWhoseAgentsFailed.insert(place)
+        }
+    }
+
+    /// Whether the agents of a task's place are read, or could not be:
+    /// what is said of the task can name its agent, or never will.
+    private func agentsAreSettled(for task: TaskItem) -> Bool {
+        let place = place(of: task)
+        return agentsByPlace[place] != nil || placesWhoseAgentsFailed.contains(place)
+    }
+
+    /// Whether the agents of a task's place could not be read.
+    func agentsFailed(for task: TaskItem) -> Bool {
+        placesWhoseAgentsFailed.contains(place(of: task))
     }
 
     /// The page, or a task's details as a screen of their own, came on
@@ -520,7 +595,7 @@ final class TasksModel: ObservableObject {
     /// where it was handed to no stored agent; nil for one that is gone);
     /// otherwise its lead agent.
     func agentName(for task: TaskItem) -> String? {
-        handoff(of: task) == nil ? name(ofAgent: task.leadAgentID) : handoffAgentName(for: task)
+        handoff(of: task) == nil ? name(ofAgent: task.leadAgentID, of: task) : handoffAgentName(for: task)
     }
 
     /// The name of the agent a task was handed to: Strix for no stored
@@ -528,23 +603,26 @@ final class TasksModel: ObservableObject {
     private func handoffAgentName(for task: TaskItem) -> String? {
         guard let handoff = task.handoff else { return nil }
         guard let id = handoff.agentID else { return Agent.strix.name }
-        return name(ofAgent: id)
+        return name(ofAgent: id, of: task)
     }
 
-    private func name(ofAgent id: String?) -> String? {
-        id.flatMap { id in agents?.first { $0.id == id }?.name }
+    /// An agent's name among those of the task's place.
+    private func name(ofAgent id: String?, of task: TaskItem) -> String? {
+        id.flatMap { id in agentsByPlace[place(of: task)]?.first { $0.id == id }?.name }
     }
 
-    /// The agents a task can be handed to: its lead agent first, or else
-    /// the agent the place's latest hand-off went to. Nil while the
-    /// agents are not read.
+    /// The agents a task can be handed to, those of its place: its lead
+    /// agent first, or else the agent the place's latest hand-off went
+    /// to. Nil while the place's agents are not read.
     func leadChoices(for task: TaskItem) -> TaskRules.LeadChoices<Agent>? {
-        guard let agents else { return nil }
-        return TaskRules.leadChoices(among: agents, id: \.id, leadAgentID: task.leadAgentID, lastUsedID: lastHandedTo)
+        let place = place(of: task)
+        guard let agents = agentsByPlace[place] else { return nil }
+        return TaskRules.leadChoices(among: agents, id: \.id, leadAgentID: task.leadAgentID, lastUsedID: lastHandedTo[place])
     }
 
     /// The turns the app runs changed: follows those of the tasks handed
-    /// to an agent, says when one newly waits for the person's OK, and
+    /// to an agent, says when one newly waits for the person's OK (once
+    /// the agents of its place are read, so that it names its agent), and
     /// reads the tasks again when one of them has ended, to learn how
     /// (answering with that reading, for whoever waits for it). A turn
     /// listed as running that nothing runs may have ended while the tasks
@@ -559,9 +637,14 @@ final class TasksModel: ObservableObject {
             if let turn = hands.liveTurn(threadID), turn.turnID == handoff.turnID {
                 live[threadID] = turn
                 awaited[turn.turnID] = true
-                let asks = turn.needsOK && !turn.isStopping
-                let asked = liveTurns[threadID].map { $0.turnID == turn.turnID && $0.needsOK && !$0.isStopping } ?? false
-                if asks, !asked, screensUp > 0 { say("\(handoffAgentName(for: task) ?? "An agent") needs your OK on \(Self.name(of: task))") }
+                if !turn.needsOK || turn.isStopping {
+                    toldNeedsOK.remove(turn.turnID)
+                } else if agentsAreSettled(for: task), toldNeedsOK.insert(turn.turnID).inserted, screensUp > 0 {
+                    // Once the agents of its place are read (the tasks'
+                    // reading comes back to this when they are): it is
+                    // said by its agent's name.
+                    say("\(handoffAgentName(for: task) ?? "An agent") needs your OK on \(Self.name(of: task))")
+                }
             } else if handoff.outcome == .running, readAgainFor.insert(handoff.turnID).inserted {
                 if awaited[handoff.turnID] == nil { awaited[handoff.turnID] = false }
                 ended = true
@@ -620,7 +703,8 @@ final class TasksModel: ObservableObject {
         // A thread made for it goes to an agent of the place, as a new
         // thread there does: the agents are read first, or the reading
         // under way waited for.
-        if task.threadID == nil, agents == nil { await loadAgents() }
+        let place = place(of: task)
+        if task.threadID == nil, agentsByPlace[place] == nil { await loadAgents(in: place) }
         guard signedIn() == account else { return nil }
         guard let thread = await thread(for: task, agent: talkAgent(for: task), as: account), signedIn() == account else { return nil }
         // A thread it had already is opened as it is.
@@ -738,7 +822,7 @@ final class TasksModel: ObservableObject {
         do {
             guard signedIn() == account else { return nil }
             if let threadID = task.threadID { return try await hands.thread(threadID, account) }
-            let thread = try await hands.createThread(Self.name(of: task), covenID, agent, account)
+            let thread = try await hands.createThread(Self.name(of: task), covenID(of: task), agent, account)
             guard signedIn() == account else { return nil }
             do {
                 try await source.change(task.id, TaskChange(threadID: thread.id), account)
