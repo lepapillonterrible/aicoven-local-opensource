@@ -1,4 +1,5 @@
 @testable import AICoven
+internal import Combine
 import XCTest
 
 /// A place's Tasks page: what it shows of the tasks it reads, adding one,
@@ -95,6 +96,7 @@ final class TasksModelTests: XCTestCase {
         /// How a turn just started stands by the time the task is read again.
         var startedAs = TurnOutcome.running
         var handedBack: [(text: String, threadID: String)] = []
+        var discarded: [String] = []
         var live: [String: TaskLiveTurn] = [:]
         var answered: [(ids: [String], keepUntil: Date?, account: String)] = []
         var answerFails: Error?
@@ -211,6 +213,10 @@ final class TasksModelTests: XCTestCase {
                     stand.started.append((thread.id, text, agent))
                     return "turn-\(stand.started.count)"
                 },
+                discardThread: { thread, _ in
+                    stand.discarded.append(thread.id)
+                    stand.threads[thread.id] = nil
+                },
                 handBack: { text, threadID, _ in stand.handedBack.append((text, threadID)) },
                 liveTurn: { stand.live[$0] }
             ),
@@ -219,6 +225,13 @@ final class TasksModelTests: XCTestCase {
         // Its page is on screen, as when anything is asked of it.
         tasks.cameOnScreen()
         return tasks
+    }
+
+    /// Returns once the model is at work on the task: told by the model itself.
+    private func isWorking(_ tasks: TasksModel, on id: String) async {
+        for await saving in tasks.$saving.values where saving.contains(id) {
+            return
+        }
     }
 
     // MARK: - Reading
@@ -916,25 +929,34 @@ final class TasksModelTests: XCTestCase {
         XCTAssertFalse(scout.isStrix)
     }
 
-    func testTheAgentsAreReadOnceAtATime_soNoEarlierAnswerLandsOverALaterOne() async {
+    func testTheAgentsAreReadOnceAtATime_andWhoeverAsksMeanwhileWaitsForThatReading() async {
         let stand = Stand()
         stand.agents = nil
         let tasks = model(stand, covenID: "work")
         await tasks.loadAgents()
         XCTAssertTrue(tasks.agentsFailed)
 
-        // Try Again pressed twice: the second press does nothing while the first is read.
+        // Asked for again while they are read (Try Again pressed twice, or Talk it through, which
+        // needs them): nothing more is read, and whoever asked waits for the reading under way.
+        // The thread made for the task goes to an agent of the place, not to Strix for want of knowing.
         let gate = Gate()
         stand.agentsWait = gate
         stand.agents = [scout]
         let first = Task { await tasks.loadAgents() }
         await gate.arrived(1)
-        await tasks.loadAgents()
+        stand.kept = [task("a", "Call the bank")]
+        let talking = Task { await tasks.talkItThrough(self.task("a", "Call the bank"), as: "ada") }
+        await isWorking(tasks, on: "a")
         XCTAssertEqual(stand.agentReadings, 2, "The failed reading, and one more")
+        XCTAssertEqual(stand.madeThreads.count, 0, "It waits for the agents")
         await gate.letOneThrough()
         await first.value
+        let thread = await talking.value
+        XCTAssertEqual(stand.agentReadings, 2)
         XCTAssertEqual(tasks.agents, [scout])
         XCTAssertFalse(tasks.agentsFailed)
+        XCTAssertEqual(thread?.id, "thread-1")
+        XCTAssertEqual(stand.madeThreads.map(\.agent), [scout])
 
         // Nothing read for an account that is no longer signed in is kept.
         stand.agents = [scout, quill]
@@ -1015,6 +1037,7 @@ final class TasksModelTests: XCTestCase {
         let refused = await tasks.talkItThrough(tasks.open[0], as: "ada")
         XCTAssertNil(refused)
         XCTAssertEqual(tasks.errorMessage, TasksModel.couldNotOpenThread)
+        XCTAssertEqual(stand.discarded, ["thread-2"], "The thread made for it is not left behind, empty")
     }
 
     func testAThreadMadeForATaskGoesToAnAgentOfThePlace_asANewThreadThereDoes() async {

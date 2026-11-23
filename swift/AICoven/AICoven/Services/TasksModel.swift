@@ -59,6 +59,10 @@ final class TasksModel: ObservableObject {
         /// the thread's own agent is; the thread's own for nil), and
         /// answers with the turn's id.
         var startTurn: @MainActor (_ thread: Thread, _ text: String, _ agent: Agent?) async throws -> String
+        /// Undoes a thread made for a task that could not be given it:
+        /// only as the account it was made for; one that cannot be
+        /// deleted is left, empty.
+        var discardThread: @MainActor (_ thread: Thread, _ account: String) async -> Void
         /// Hands words that could not be sent into a thread to the
         /// thread's composer, which says why.
         var handBack: @MainActor (_ text: String, _ threadID: String, _ error: Error) -> Void
@@ -104,6 +108,17 @@ final class TasksModel: ObservableObject {
                     with: TurnProgress.userMessage(in: thread.id, text: text, attachments: []), context: text,
                     roleID: answering.roleID, agentName: answering.name, attachments: nil
                 )
+            },
+            discardThread: { thread, account in
+                guard UserScope.currentUserID == account else { return }
+                do {
+                    try await ThreadService.shared.deleteThread(threadId: thread.id)
+                } catch {
+                    // The kind of failure only.
+                    AppErrorReporter.log(
+                        message: "Could not discard a thread its task was not given (\(type(of: error)))", context: "TasksModel.discardThread"
+                    )
+                }
             },
             handBack: { text, threadID, error in
                 TurnEngine.shared.handBack(ComposerDraft(text: text), to: threadID, because: error)
@@ -152,8 +167,9 @@ final class TasksModel: ObservableObject {
     /// The turns the tasks were read again for once already: listed as
     /// running while nothing ran them.
     private var readAgainFor: Set<String> = []
-    /// Whether the agents are being read: one reading at a time.
-    private var isReadingAgents = false
+    /// The reading of the agents under way: one at a time, which whoever
+    /// asks meanwhile waits for.
+    private var agentsReading: Task<Void, Never>?
     /// How many of the place's screens are up: the page, and a task's
     /// details where they are a screen of their own. What a hand-off's
     /// turn comes to is said only while one is.
@@ -460,13 +476,19 @@ final class TasksModel: ObservableObject {
 
     /// Reads the agents of the place: the coven's, or Strix alone where
     /// the place has none of its own. One reading at a time: asked again
-    /// while one is under way, it does nothing, so no earlier answer
-    /// lands over a later one. Nothing read for an account that is no
-    /// longer signed in is kept.
+    /// while one is under way, it waits for that one and reads nothing
+    /// more, so no earlier answer lands over a later one, and whoever
+    /// asked has the agents when it returns. Nothing read for an account
+    /// that is no longer signed in is kept.
     func loadAgents() async {
-        guard !isReadingAgents else { return }
-        isReadingAgents = true
-        defer { isReadingAgents = false }
+        if let reading = agentsReading { return await reading.value }
+        let reading = Task { await self.readAgents() }
+        agentsReading = reading
+        await reading.value
+        if agentsReading == reading { agentsReading = nil }
+    }
+
+    private func readAgents() async {
         let account = signedIn()
         var read: [Agent]? = []
         if let covenID { read = await hands.agents(covenID) }
@@ -585,9 +607,9 @@ final class TasksModel: ObservableObject {
 
     /// The task's thread, for Talk it through and Open thread: the one it
     /// has, or one made for it in its place, for an agent of the place,
-    /// and given to it, which starts with the task so that whoever
-    /// answers knows what it is about (none is made for a task whose
-    /// title cannot be read); if
+    /// and given to it. A thread made here starts with the task, so that
+    /// whoever answers knows what it is about, and none is made for a
+    /// task whose title cannot be read. If
     /// those words could not be sent, they are handed to the thread's
     /// composer, which says why. Nil where it could not be opened, which
     /// is said, and where another account is signed in by then.
@@ -595,7 +617,9 @@ final class TasksModel: ObservableObject {
         guard TaskRules.canBeTalkedThrough(task), saving.insert(task.id).inserted else { return nil }
         defer { saving.remove(task.id) }
         errorMessage = nil
-        // A thread made for it goes to an agent of the place, as a new thread there does.
+        // A thread made for it goes to an agent of the place, as a new
+        // thread there does: the agents are read first, or the reading
+        // under way waited for.
         if task.threadID == nil, agents == nil { await loadAgents() }
         guard signedIn() == account else { return nil }
         guard let thread = await thread(for: task, agent: talkAgent(for: task), as: account), signedIn() == account else { return nil }
@@ -707,15 +731,23 @@ final class TasksModel: ObservableObject {
     static let couldNotOpenThread = "Couldn't open the task's thread. Try again."
 
     /// The task's thread: the one it has, or one made in its place with
-    /// `agent` as its agent and given to the task. Every step is for
-    /// `account` only. Nil where it could not be had, which is said.
+    /// `agent` as its agent and given to the task; one that could not be
+    /// given to it is deleted again. Every step is for `account` only.
+    /// Nil where it could not be had, which is said.
     private func thread(for task: TaskItem, agent: Agent?, as account: String) async -> Thread? {
         do {
             guard signedIn() == account else { return nil }
             if let threadID = task.threadID { return try await hands.thread(threadID, account) }
             let thread = try await hands.createThread(Self.name(of: task), covenID, agent, account)
             guard signedIn() == account else { return nil }
-            try await source.change(task.id, TaskChange(threadID: thread.id), account)
+            do {
+                try await source.change(task.id, TaskChange(threadID: thread.id), account)
+            } catch {
+                // A thread the task was not given is not kept: nothing
+                // was sent into it, and asking again makes another.
+                await hands.discardThread(thread, account)
+                throw error
+            }
             return signedIn() == account ? thread : nil
         } catch is CancellationError {
             return nil
