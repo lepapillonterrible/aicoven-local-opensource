@@ -53,6 +53,22 @@ final class TaskRulesTests: XCTestCase {
         let end = TaskRules.pinEnd(for: .today, now: shortDay, calendar: berlin)
         XCTAssertEqual(end, date(2027, 3, 29, 0, in: berlin))
         XCTAssertEqual(end.timeIntervalSince(berlin.startOfDay(for: shortDay)), 23 * 3600)
+
+        // Where the clocks go forward at midnight, that day starts at one o'clock:
+        // the pin still ends when the next day, or week, starts, at midnight.
+        var santiago = Calendar(identifier: .gregorian)
+        santiago.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Santiago"))
+        santiago.firstWeekday = 2
+        let lateStart = date(2027, 9, 5, 12, in: santiago)
+        XCTAssertEqual(santiago.component(.hour, from: santiago.startOfDay(for: lateStart)), 1, "The day the test is about")
+        XCTAssertEqual(TaskRules.pinEnd(for: .today, now: lateStart, calendar: santiago), santiago.startOfDay(for: date(2027, 9, 6, 12, in: santiago)))
+        XCTAssertEqual(santiago.component(.hour, from: TaskRules.pinEnd(for: .today, now: lateStart, calendar: santiago)), 0)
+        XCTAssertEqual(TaskRules.pinEnd(for: .week, now: lateStart, calendar: santiago), santiago.startOfDay(for: date(2027, 9, 6, 12, in: santiago)), "Sunday, the week's last day")
+        // And a week that ends on such a day ends at its own start, one o'clock.
+        let weekBefore = date(2027, 8, 31, 12, in: santiago)
+        var sundayFirst = santiago
+        sundayFirst.firstWeekday = 1
+        XCTAssertEqual(TaskRules.pinEnd(for: .week, now: weekBefore, calendar: sundayFirst), sundayFirst.startOfDay(for: lateStart))
     }
 
     func testHowAPinStands() {
@@ -149,6 +165,16 @@ final class TaskRulesTests: XCTestCase {
         XCTAssertEqual(words("2027-01-12", status: .done), "Due Tue 12 Jan", "A finished task is not overdue")
         XCTAssertEqual(words("2027-01-13", time: "17:30"), "Due today, 17:30")
         XCTAssertEqual(words("2027-01-14", time: "09:05"), "Due tomorrow, 09:05")
+
+        // A time the clock skips that day is said as it was set, not moved on.
+        var berlin = Calendar(identifier: .gregorian)
+        berlin.timeZone = try XCTUnwrap(TimeZone(identifier: "Europe/Berlin"))
+        let skipped = TaskDueLine(
+            task: task("a", due: "2027-03-28", time: "02:30"), now: date(2027, 3, 20, 12, in: berlin), calendar: berlin, locale: british
+        )
+        XCTAssertEqual(skipped?.text, "Due Sun 28 Mar, 02:30")
+        XCTAssertEqual(TaskDueLine.timeWords("17:05", locale: Locale(identifier: "en_US"))?.replacingOccurrences(of: "\u{202F}", with: " "), "5:05 PM")
+        XCTAssertNil(TaskDueLine.timeWords("soon", locale: british))
 
         let overdue = try XCTUnwrap(TaskDueLine(task: task("a", due: "2027-01-12"), now: wednesday, calendar: utc, locale: british))
         XCTAssertTrue(overdue.isOverdue)

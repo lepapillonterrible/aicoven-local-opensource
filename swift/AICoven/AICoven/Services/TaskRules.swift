@@ -71,18 +71,23 @@ nonisolated struct TaskDueLine: Equatable {
         } else {
             date.formatted(style.day().month(.abbreviated).year())
         }
-        if let at = Self.time(due.time, on: date, calendar: calendar) {
-            words += ", \(at.formatted(style.hour().minute()))"
+        if let at = due.time.flatMap({ Self.timeWords($0, locale: locale) }) {
+            words += ", \(at)"
         }
         text = isOverdue ? "Overdue · Due \(words)" : "Due \(words)"
     }
 
-    /// A time of day, `HH:mm`, on `day`.
-    static func time(_ clock: String?, on day: Date, calendar: Calendar = .current) -> Date? {
-        guard let clock else { return nil }
+    /// A time of day, `HH:mm`, as the person's locale writes one. It is
+    /// the hour and minute that were kept, whatever the day: on a day the
+    /// clocks change, a time the clock skips is still said as it was set.
+    static func timeWords(_ clock: String, locale: Locale = .current) -> String? {
         let parts = clock.split(separator: ":").compactMap { Int($0) }
         guard parts.count == 2 else { return nil }
-        return calendar.date(bySettingHour: parts[0], minute: parts[1], second: 0, of: day)
+        // Told on a day and in a zone where every time of day exists.
+        var plain = Calendar(identifier: .gregorian)
+        plain.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        guard let at = plain.date(from: DateComponents(year: 2001, month: 1, day: 1, hour: parts[0], minute: parts[1])) else { return nil }
+        return at.formatted(Date.FormatStyle(locale: locale, calendar: plain, timeZone: plain.timeZone).hour().minute())
     }
 }
 
@@ -90,20 +95,23 @@ nonisolated struct TaskDueLine: Equatable {
 /// ends, how one stands, the order inside each part, the parts themselves,
 /// and the line under a task's title.
 nonisolated enum TaskRules {
-    /// When a pin made now runs out: at the end of the person's day, or of
-    /// their week. A calendar day is added (not 24 hours), so that today
-    /// is right through a change of the clocks; the week starts on the
-    /// person's own first weekday.
+    /// When a pin made now runs out: at the start of the person's next
+    /// day, or of their next week. Calendar days are added (not hours),
+    /// and the day reached is taken from its own start, so that the end is
+    /// right through a change of the clocks, also where a day does not
+    /// start at midnight; the week starts on the person's own first weekday.
     static func pinEnd(for period: TaskPinPeriod, now: Date, calendar: Calendar) -> Date {
         let today = calendar.startOfDay(for: now)
+        func start(daysOn days: Int) -> Date {
+            calendar.startOfDay(for: calendar.date(byAdding: .day, value: days, to: today) ?? today.addingTimeInterval(Double(days) * 86400))
+        }
         switch period {
         case .today:
-            return calendar.date(byAdding: .day, value: 1, to: today) ?? today.addingTimeInterval(86400)
+            return start(daysOn: 1)
         case .week:
             let weekday = calendar.component(.weekday, from: today)
             let sinceWeekStart = (weekday - calendar.firstWeekday + 7) % 7
-            let weekStart = calendar.date(byAdding: .day, value: -sinceWeekStart, to: today) ?? today
-            return calendar.date(byAdding: .day, value: 7, to: weekStart) ?? weekStart.addingTimeInterval(7 * 86400)
+            return start(daysOn: 7 - sinceWeekStart)
         }
     }
 

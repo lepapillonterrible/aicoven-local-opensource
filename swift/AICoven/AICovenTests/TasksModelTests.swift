@@ -77,6 +77,7 @@ final class TasksModelTests: XCTestCase {
         var answered: [(ids: [String], keepUntil: Date?, account: String)] = []
         var answerFails: Error?
         var answers: Set<String>?
+        var answeringWaits: Gate?
     }
 
     private func model(_ stand: Stand, covenID: String? = nil) -> TasksModel {
@@ -124,7 +125,8 @@ final class TasksModelTests: XCTestCase {
                     }
                 },
                 answerLapsedPins: { ids, keepUntil, account in
-                    try await MainActor.run {
+                    await MainActor.run { stand.answeringWaits }?.wait()
+                    return try await MainActor.run {
                         if let error = stand.answerFails { throw error }
                         stand.answered.append((ids, keepUntil, account))
                         return stand.answers ?? Set(ids)
@@ -573,6 +575,37 @@ final class TasksModelTests: XCTestCase {
         stand.answerFails = RepositoryError.databaseUnavailable
         await tasks.answerLapsedPins(of: tasks.open, keep: true, as: "ada")
         XCTAssertNil(tasks.errorMessage)
+    }
+
+    func testWhileAnAnswerForPinsIsOnItsWay_itsTasksAreNotChanged_andNothingIsSaidToAnotherAccount() async {
+        let stand = Stand()
+        let over = TaskPin(period: .today, expiresAt: now.addingTimeInterval(-60))
+        stand.kept = [task("a", pin: over), task("b", pin: over), task("c")]
+        let tasks = model(stand)
+        await tasks.load()
+        let listed = tasks.open
+        let gate = Gate()
+        stand.answeringWaits = gate
+
+        let answering = Task { await tasks.answerLapsedPins(of: listed, keep: true, as: "ada") }
+        await gate.arrived(1)
+        XCTAssertEqual(tasks.saving, ["a", "b"])
+        // One of them is not changed, or answered for again, meanwhile; another task is.
+        await tasks.unpin(listed[0], as: "ada")
+        await tasks.answerLapsedPins(of: [listed[1]], keep: false, as: "ada")
+        XCTAssertEqual(stand.changed.count, 0)
+        await tasks.close(listed[2], as: "ada")
+        XCTAssertEqual(stand.changed.map(\.id), ["c"])
+
+        // Another account signs in before the answer lands.
+        stand.account = "grace"
+        let heard = stand.heard.count, readings = stand.readings.count
+        await gate.letOneThrough()
+        await answering.value
+        XCTAssertEqual(stand.answered.count, 1)
+        XCTAssertEqual(stand.heard.count, heard, "Nothing is said to another account")
+        XCTAssertEqual(stand.readings.count, readings, "Nor read for it")
+        XCTAssertEqual(tasks.saving, [])
     }
 
     // MARK: - New Task
