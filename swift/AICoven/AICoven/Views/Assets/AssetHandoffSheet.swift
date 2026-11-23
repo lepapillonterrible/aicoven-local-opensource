@@ -152,7 +152,7 @@ struct AssetHandoffSheet: View {
     /// The asset being sent, and where its review stands.
     private var source: some View {
         HStack(spacing: Spacing.sm) {
-            AssetThumbnail(type: asset.type, isLocked: asset.isUnreadable, width: 40, height: 40)
+            AssetThumbnail(asset: asset, width: 40, height: 40)
             VStack(alignment: .leading, spacing: 2) {
                 Text(asset.title)
                     .font(.aicovenBody.weight(.semibold))

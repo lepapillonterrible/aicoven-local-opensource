@@ -104,6 +104,7 @@ struct AICovenApp: App {
                 // for the second.
                 if let previous, let current, previous != current {
                     isEncryptionUnlocked = false
+                    AssetThumbnails.shared.forgetAll()
                     Task { await DataEncryptionService.shared.lock() }
                 }
             }

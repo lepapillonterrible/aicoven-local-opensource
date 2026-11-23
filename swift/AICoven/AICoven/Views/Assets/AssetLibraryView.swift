@@ -19,6 +19,10 @@ struct AssetLibraryView: View {
     /// The asset being sent to an agent from its row's menu.
     @State private var sending: Asset?
     #if os(macOS)
+    /// List or Grid, as the cloud Mac's library: the window's own choice.
+    @SceneStorage(AssetLibraryRules.layoutKey) private var layout = AssetLibraryLayout.list
+    #endif
+    #if os(macOS)
     /// The row selected in the table, shown in the inspector.
     @State private var selectedID: Asset.ID?
     #endif
@@ -187,25 +191,31 @@ struct AssetLibraryView: View {
     @ViewBuilder
     private func listed(now: Date) -> some View {
         #if os(macOS)
-        table(now: now)
-            .overlay { emptyState }
-            .safeAreaInset(edge: .bottom) {
-                footer
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(Spacing.md)
+        Group {
+            if layout == .grid {
+                grid
+            } else {
+                table(now: now)
             }
-            .onKeyPress(.space) {
-                guard let file = selected?.files.first, selected?.isUnreadable == false else { return .ignored }
-                Task { await files.look(at: file) }
-                return .handled
+        }
+        .overlay { emptyState }
+        .safeAreaInset(edge: .bottom) {
+            footer
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(Spacing.md)
+        }
+        .onKeyPress(.space) {
+            guard let file = selected?.files.first, selected?.isUnreadable == false else { return .ignored }
+            Task { await files.look(at: file) }
+            return .handled
+        }
+        .inspector(isPresented: Binding(get: { selected != nil }, set: { if !$0 { selectedID = nil } })) {
+            if let selected {
+                AssetDetailView(asset: selected, model: model, sharing: files.turn, onOpenThread: open)
+                    .id(selected.id)
+                    .inspectorColumnWidth(min: 260, ideal: 300, max: 420)
             }
-            .inspector(isPresented: Binding(get: { selected != nil }, set: { if !$0 { selectedID = nil } })) {
-                if let selected {
-                    AssetDetailView(asset: selected, model: model, sharing: files.turn, onOpenThread: open)
-                        .id(selected.id)
-                        .inspectorColumnWidth(min: 260, ideal: 300, max: 420)
-                }
-            }
+        }
         #else
         list(now: now)
             .overlay { emptyState }
@@ -245,6 +255,8 @@ struct AssetLibraryView: View {
                     Task { await files.download(file) }
                 case .sendToAgent:
                     sending = asset
+                case .copyReference:
+                    _ = ThreadMarkdownExport.writeClipboard(AssetLibraryRules.reference(to: asset))
                 default:
                     let account = UserScope.currentUserID
                     Task { await model.perform(action, on: asset, as: account) }
@@ -319,7 +331,7 @@ struct AssetLibraryView: View {
             openID = asset.id
         } label: {
             HStack(spacing: Spacing.sm) {
-                AssetThumbnail(type: asset.type, isLocked: asset.isUnreadable, width: 40, height: 40)
+                AssetThumbnail(asset: asset, width: 40, height: 40)
                 VStack(alignment: .leading, spacing: Spacing.xxxs) {
                     Text(title(asset))
                         .foregroundStyle(Color.aicovenTextPrimary)
@@ -349,7 +361,7 @@ struct AssetLibraryView: View {
         return Table(shown.needsReview + shown.others, selection: $selectedID) {
             TableColumn("Asset") { asset in
                 HStack(spacing: Spacing.sm) {
-                    AssetThumbnail(type: asset.type, isLocked: asset.isUnreadable, width: 28, height: 21)
+                    AssetThumbnail(asset: asset, width: 28, height: 21)
                     Text(title(asset))
                 }
             }
@@ -387,6 +399,76 @@ struct AssetLibraryView: View {
         }
     }
 
+    /// The cloud Mac's grid: each asset a card with its picture, under
+    /// "Needs review" and "Everything else". A click selects (its page is
+    /// then in the inspector), a double click or Return opens it.
+    private var grid: some View {
+        let shown = model.shown
+        return ScrollView {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 180, maximum: 260), spacing: Spacing.md, alignment: .top)], alignment: .leading, spacing: Spacing.md) {
+                if !shown.needsReview.isEmpty {
+                    Section {
+                        ForEach(shown.needsReview) { card($0) }
+                    } header: {
+                        gridHeader("Needs review · \(shown.needsReview.count)")
+                    }
+                }
+                Section {
+                    ForEach(shown.others) { card($0) }
+                } header: {
+                    if !shown.needsReview.isEmpty, !shown.others.isEmpty {
+                        gridHeader("Everything else")
+                    }
+                }
+            }
+            .padding(Spacing.md)
+        }
+        .background(Color.aicovenSurface)
+        .focusable()
+        .focusEffectDisabled()
+        .onKeyPress(.return) {
+            guard let selectedID else { return .ignored }
+            openID = selectedID
+            return .handled
+        }
+    }
+
+    private func gridHeader(_ words: String) -> some View {
+        Text(words)
+            .font(.aicovenBodySmall.weight(.semibold))
+            .foregroundStyle(Color.aicovenTextSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private func card(_ asset: Asset) -> some View {
+        let isSelected = selectedID == asset.id
+        return VStack(alignment: .leading, spacing: Spacing.xs) {
+            AssetThumbnail(asset: asset)
+                .overlay(
+                    RoundedRectangle(cornerRadius: BorderRadius.xs)
+                        .strokeBorder(Color.accentColor, lineWidth: isSelected ? 3 : 0)
+                )
+            Text(title(asset))
+                .font(.aicovenBody.weight(.semibold))
+                .foregroundStyle(Color.aicovenTextPrimary)
+                .lineLimit(2)
+            Text(AssetLibraryRules.gridLine(asset, agents: model.agents))
+                .font(.aicovenBodySmall)
+                .foregroundStyle(Color.aicovenTextSecondary)
+                .lineLimit(1)
+        }
+        .opacity(asset.status == .archived ? 0.75 : 1)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) { openID = asset.id }
+        .simultaneousGesture(TapGesture().onEnded { selectedID = asset.id })
+        .contextMenu { menu(for: asset) }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction { selectedID = asset.id }
+        .accessibilityAction(named: "Open") { openID = asset.id }
+    }
+
     /// The asset open full size, as a sheet takes it.
     private struct OpenAsset: Identifiable {
         let id: Asset.ID
@@ -402,6 +484,15 @@ struct AssetLibraryView: View {
                 .stoneToolbarMenu()
         }
         #if os(macOS)
+        StoneToolbarItem(placement: .primaryAction) {
+            Picker("Layout", selection: $layout) {
+                ForEach(AssetLibraryLayout.allCases) { layout in
+                    Text(layout.title).tag(layout)
+                }
+            }
+            .pickerStyle(.segmented)
+            .help("Layout")
+        }
         StoneToolbarItem(placement: .primaryAction) {
             Button("New Asset…") { isCreating = true }
         }
@@ -494,20 +585,43 @@ struct AssetLibraryView: View {
 /// there is a picture: the type's symbol, or its short tag where the well
 /// is small; a lock for an asset the key cannot open.
 struct AssetThumbnail: View {
-    let type: AssetType
-    let isLocked: Bool
-    let width: CGFloat
-    let height: CGFloat
+    let asset: Asset
+    /// Its size; with none it fills the width it is given, at 4:3.
+    var width: CGFloat?
+    var height: CGFloat?
+    /// The asset's picture, once drawn (`AssetThumbnails`): of its latest
+    /// picture or PDF. Any other asset keeps its type's well.
+    @State private var picture: CGImage?
+
+    private var type: AssetType {
+        asset.type
+    }
+
+    private var isLocked: Bool {
+        asset.isUnreadable
+    }
+
+    @ViewBuilder
+    private var well: some View {
+        if let width, let height {
+            Color.aicovenSurfaceElevated.frame(width: width, height: height)
+        } else {
+            Color.aicovenSurfaceElevated.aspectRatio(4 / 3, contentMode: .fit)
+        }
+    }
 
     var body: some View {
-        Color.aicovenSurfaceElevated
-            .frame(width: width, height: height)
+        well
             .overlay {
-                if isLocked {
+                if let picture, !isLocked {
+                    Image(decorative: picture, scale: 1)
+                        .resizable()
+                        .scaledToFill()
+                } else if isLocked {
                     Image(systemName: "lock")
                         .font(.system(size: glyphSize, weight: .semibold))
                         .foregroundStyle(Color.aicovenTextSecondary)
-                } else if height >= 40 {
+                } else if (height ?? 40) >= 40 {
                     Image(systemName: type.iconSystemName)
                         .font(.system(size: glyphSize))
                         .foregroundStyle(Color.aicovenTextTertiary)
@@ -525,10 +639,16 @@ struct AssetThumbnail: View {
                     .strokeBorder(Color.aicovenBorder, lineWidth: 1)
             )
             .accessibilityHidden(true)
+            // Drawn for the file it is drawn from: again when that changes
+            // (a newer file, or an asset the key can open again).
+            .task(id: AssetThumbnails.file(of: asset)?.id) {
+                picture = await AssetThumbnails.shared.picture(of: asset, as: UserScope.currentUserID)
+            }
     }
 
     private var glyphSize: CGFloat {
-        min(width, height) * 0.42
+        guard let width, let height else { return 34 }
+        return min(width, height) * 0.42
     }
 }
 

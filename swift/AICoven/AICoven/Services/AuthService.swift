@@ -75,6 +75,9 @@ class AuthService: ObservableObject {
                 MemoryProposalQuestions.shared.accountChanged()
                 ToolApprovals.shared.accountChanged()
                 LocalNotifications.shared.accountReported(firebaseUser?.uid)
+                // The pictures drawn of the account's assets are held in
+                // memory only, and not for whoever is signed in next.
+                AssetThumbnails.shared.forgetAll()
                 if let firebaseUser {
                     print("✅ Firebase user signed in: \(firebaseUser.email ?? "unknown")")
                     // Clear any previous user's data first
@@ -201,6 +204,7 @@ class AuthService: ObservableObject {
         // At once, before this returns: nothing the rows said of the
         // account stays said.
         ThreadActivities.shared.accountChanged()
+        AssetThumbnails.shared.forgetAll()
         MemoryProposalQuestions.shared.accountChanged()
         ToolApprovals.shared.accountChanged()
         LocalNotifications.shared.accountReported(nil)
@@ -358,6 +362,7 @@ class AuthService: ObservableObject {
 
         // Its threads are gone: so is what their rows said.
         ThreadActivities.shared.accountChanged()
+        AssetThumbnails.shared.forgetAll()
         MemoryProposalQuestions.shared.accountChanged()
         ToolApprovals.shared.accountChanged()
         LocalNotifications.shared.accountReported(nil)

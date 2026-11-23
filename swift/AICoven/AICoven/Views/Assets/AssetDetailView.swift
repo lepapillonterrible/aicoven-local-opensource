@@ -222,7 +222,7 @@ struct AssetDetailView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
-            AssetThumbnail(type: asset.type, isLocked: asset.isUnreadable, width: 96, height: 72)
+            AssetThumbnail(asset: asset, width: 96, height: 72)
             if !asset.isUnreadable {
                 Text(asset.title)
                     .font(.aicovenH3)
@@ -334,7 +334,7 @@ struct AssetDetailView: View {
     private func isBusy(with action: AssetAction) -> Bool {
         switch action {
         case .download: files.preparing != nil
-        case .sendToAgent: false
+        case .sendToAgent, .copyReference: false
         default: isChanging
         }
     }
@@ -349,6 +349,10 @@ struct AssetDetailView: View {
         }
         if action == .sendToAgent {
             isSendingToAgent = true
+            return
+        }
+        if action == .copyReference {
+            _ = ThreadMarkdownExport.writeClipboard(AssetLibraryRules.reference(to: asset))
             return
         }
         let account = UserScope.currentUserID
