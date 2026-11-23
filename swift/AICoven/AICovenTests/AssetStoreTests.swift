@@ -363,6 +363,11 @@ final class AssetStoreTests: XCTestCase {
         XCTAssertEqual(found.last?.files.map(\.name), ["s.png"])
         let none = try await store.assets(withIDs: [], as: account)
         XCTAssertEqual(none.count, 0)
+
+        // However many are asked for, each is looked up, and one asked for twice is told once.
+        let many = [strixs.id] + (0 ..< AssetRepository.idsInOneRead * 2).map { "no-such-asset-\($0)" } + [strixs.id, covens.id]
+        let ofMany = try await store.assets(withIDs: many, as: account)
+        XCTAssertEqual(ofMany.map(\.id), [strixs.id, covens.id])
         do {
             _ = try await store.assets(withIDs: [strixs.id], as: "someone-else")
             XCTFail("Nothing is read as an account that is not signed in")

@@ -1,3 +1,4 @@
+internal import Combine
 import SwiftUI
 
 /// An asset's page, as the cloud app's: what it is, what can be done with
@@ -17,7 +18,7 @@ struct AssetDetailView: View {
     @State private var origin = Origin.unknown
 
     /// What is known of the thread an asset was made in.
-    private enum Origin: Equatable {
+    enum Origin: Equatable {
         case unknown
         case thread(Thread)
         /// It was made in a thread that is no longer there.
@@ -35,14 +36,35 @@ struct AssetDetailView: View {
 
     /// Looks up the thread the asset was made in, as the account signed in.
     private func findOrigin() async {
-        guard let threadID = asset.threadID else {
-            origin = .unknown
-            return
+        let found = await Self.origin(
+            ofThread: asset.threadID, as: UserScope.currentUserID,
+            thread: { try await ThreadService.shared.getThread(threadId: $0) },
+            isThread: { try await ThreadRepository.shared.isThread($0, of: $1) }
+        )
+        if let found { origin = found }
+    }
+
+    /// What is known of the thread an asset was made in: the thread, where
+    /// it is the account's; gone only where the store says the account has
+    /// no such thread; unknown where that cannot be read (the row is then
+    /// left out, and nothing is said of a deletion). Nil if another
+    /// account is signed in by then.
+    static func origin(
+        ofThread threadID: String?, as account: String,
+        thread: (String) async throws -> Thread,
+        isThread: (String, String) async throws -> Bool,
+        signedIn: () -> String = { UserScope.currentUserID }
+    ) async -> Origin? {
+        guard let threadID else { return .unknown }
+        let found: Origin = if let read = try? await thread(threadID), read.userId == account {
+            .thread(read)
+        } else if let isThere = try? await isThread(threadID, account) {
+            // There, but not read: nothing is said of it.
+            isThere ? .unknown : .gone
+        } else {
+            .unknown
         }
-        let account = UserScope.currentUserID
-        let found = try? await ThreadService.shared.getThread(threadId: threadID)
-        guard UserScope.currentUserID == account else { return }
-        origin = found.map { $0.userId == account ? .thread($0) : .gone } ?? .gone
+        return signedIn() == account ? found : nil
     }
 
     static let proposedNote = "Proposed for review."
@@ -143,6 +165,10 @@ struct AssetDetailView: View {
         }
         .presenting(files)
         .task(id: asset.threadID) { await findOrigin() }
+        // Its thread deleted while the page is open: the way to it goes.
+        .onReceive(NotificationCenter.default.publisher(for: .didDeleteThread).receive(on: RunLoop.main)) { _ in
+            Task { await findOrigin() }
+        }
     }
 
     private var header: some View {

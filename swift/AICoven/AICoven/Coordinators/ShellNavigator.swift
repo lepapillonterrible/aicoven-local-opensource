@@ -346,21 +346,36 @@ final class ShellNavigator: ObservableObject {
         }
     }
 
-    /// The asset the Assets place is asked to show, until it has.
-    @Published private(set) var assetAsked: String?
+    /// An asset the Assets place of a scope is asked to show.
+    struct AssetAsk: Equatable {
+        let id: String
+        let scope: ShellScope
+        /// The person's moves when it was asked: it stands until the next.
+        fileprivate let moves: Int
+    }
+
+    /// The asset an Assets place is asked to show, until it has.
+    @Published private(set) var assetAsked: AssetAsk?
 
     /// Opens the Assets place of `scope` and asks it to show an asset.
     func showAsset(_ id: String, in scope: ShellScope) {
         open(.assets(covenId: scope.covenID), in: scope)
-        assetAsked = id
+        assetAsked = AssetAsk(id: id, scope: scope, moves: personMoves)
     }
 
     /// The asset the place showing `scope`'s assets is asked to show;
-    /// answered by this, once, and only to the place on screen.
+    /// answered by this, once, and only to the place it was asked of.
+    /// Once the person has gone anywhere else it is asked of nobody, also
+    /// when they come back.
     func takeAssetAsk(in scope: ShellScope) -> String? {
-        guard scope == selected, let asked = assetAsked else { return nil }
+        guard let asked = assetAsked else { return nil }
+        guard asked.moves == personMoves else {
+            assetAsked = nil
+            return nil
+        }
+        guard asked.scope == scope else { return nil }
         assetAsked = nil
-        return asked
+        return asked.id
     }
 
     /// Asks for the thread search: the sidebar's, or in the phone layout

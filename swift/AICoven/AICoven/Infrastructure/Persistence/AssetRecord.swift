@@ -453,14 +453,24 @@ actor AssetRepository {
 
     /// Those of `account`'s assets that have these ids, wherever each is
     /// kept, in the order of the ids; an id that is no asset of the
-    /// account's is left out. At most 50 ids are looked up.
+    /// account's is left out. Every id is looked up, some at a time.
     func assets(withIDs ids: [String], as account: String) async throws -> [Asset] {
-        let asked = Array(ids.prefix(50))
-        guard !asked.isEmpty else { return [] }
-        let marks = Array(repeating: "?", count: asked.count).joined(separator: ", ")
-        let found = try await assets(where: "assets.id IN (\(marks))", asked, as: account)
-        return asked.compactMap { id in found.first { $0.id == id } }
+        var found: [String: Asset] = [:]
+        var rest = ids[...]
+        while !rest.isEmpty {
+            let some = Array(rest.prefix(Self.idsInOneRead))
+            rest = rest.dropFirst(some.count)
+            let marks = Array(repeating: "?", count: some.count).joined(separator: ", ")
+            for asset in try await assets(where: "assets.id IN (\(marks))", some, as: account) {
+                found[asset.id] = asset
+            }
+        }
+        var told = Set<String>()
+        return ids.compactMap { id in told.insert(id).inserted ? found[id] : nil }
     }
+
+    /// The most ids one read names: well under what a statement takes.
+    static let idsInOneRead = 200
 
     /// The account's assets that `condition` holds for (it speaks of the
     /// `assets` table), as a listing gives them.

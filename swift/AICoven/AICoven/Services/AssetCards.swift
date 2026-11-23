@@ -27,11 +27,22 @@ final class AssetCardsModel: ObservableObject {
     /// What went wrong with the last approval asked for, and of which asset.
     @Published private(set) var failure: (assetID: String, words: String)?
 
+    /// What came of the last approval asked for, for VoiceOver: each its
+    /// own, so that the same words twice are said twice.
+    @Published private(set) var said: Said?
+
+    struct Said: Equatable {
+        let number: Int
+        let words: String
+    }
+
     static let couldNotApprove = "Couldn't approve the asset. Try again."
+    static let approved = "Asset approved"
 
     private let ids: [String]
     private let source: Source
     private let signedIn: () -> String
+    private var sayings = 0
     private var readings = 0
     private var landed = 0
 
@@ -65,6 +76,7 @@ final class AssetCardsModel: ObservableObject {
         do {
             try await source.approve(asset, account)
             NotificationCenter.default.post(name: Asset.didChange, object: nil)
+            if signedIn() == account { say(Self.approved) }
         } catch AssetError.noSuchAsset {
             // Gone: the card goes with the next reading.
         } catch {
@@ -75,8 +87,14 @@ final class AssetCardsModel: ObservableObject {
             default: Self.couldNotApprove
             }
             failure = (asset.id, words)
+            say(words)
         }
         guard signedIn() == account else { return }
         await Task { await self.load() }.value
+    }
+
+    private func say(_ words: String) {
+        sayings += 1
+        said = Said(number: sayings, words: words)
     }
 }

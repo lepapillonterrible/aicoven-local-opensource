@@ -29,6 +29,11 @@ struct AssetCardsView: View {
         .onReceive(NotificationCenter.default.publisher(for: Asset.didChange).receive(on: RunLoop.main)) { _ in
             Task { await model.load() }
         }
+        // What came of Approve is said to VoiceOver: the card that was
+        // pressed is on screen.
+        .onChange(of: model.said) { _, said in
+            if let said { AccessibilityNotification.Announcement(said.words).post() }
+        }
     }
 
     private func card(_ asset: Asset) -> some View {

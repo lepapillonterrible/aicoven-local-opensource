@@ -73,6 +73,8 @@ final class AssetCardsTests: XCTestCase {
     /// What a source gives and was asked. Sendable by hand: used one step at a time.
     private final class Stand: @unchecked Sendable {
         var account = "ada"
+        var readingWaits: Gate?
+        var approvingWaits: Gate?
         var kept: [Asset] = []
         var asked: [(ids: [String], account: String)] = []
         var approved: [(id: String, version: String, account: String)] = []
@@ -85,13 +87,17 @@ final class AssetCardsTests: XCTestCase {
             ids: ids,
             source: AssetCardsModel.Source(
                 assets: { ids, account in
-                    try await MainActor.run {
+                    // What is kept is read as the reading is asked, and given once it is let through.
+                    let read = try await MainActor.run {
                         stand.asked.append((ids, account))
                         if stand.readFails { throw RepositoryError.databaseUnavailable }
                         return ids.compactMap { id in stand.kept.first { $0.id == id } }
                     }
+                    await MainActor.run { stand.readingWaits }?.wait()
+                    return read
                 },
                 approve: { asset, account in
+                    await MainActor.run { stand.approvingWaits }?.wait()
                     try await MainActor.run {
                         if let error = stand.approveFails { throw error }
                         stand.approved.append((asset.id, asset.version, account))
@@ -138,6 +144,55 @@ final class AssetCardsTests: XCTestCase {
         XCTAssertNil(cards.failure)
         XCTAssertEqual(cards.approving, [])
         XCTAssertEqual(told, 1, "Whatever else shows the asset is told")
+        XCTAssertEqual(cards.said, AssetCardsModel.Said(number: 1, words: AssetCardsModel.approved), "And VoiceOver that it was approved")
+    }
+
+    func testOnlyTheLatestReadingOfTheCardsIsShown() async {
+        let stand = Stand()
+        let gate = Gate()
+        stand.readingWaits = gate
+        let cards = model(stand, ids: ["a1"])
+
+        stand.kept = [asset("a1", status: .proposed)]
+        let earlier = Task { await cards.load() }
+        await gate.arrived(1)
+        stand.kept = [asset("a1", status: .approved)]
+        let later = Task { await cards.load() }
+        await gate.arrived(2)
+
+        await gate.letNewestThrough()
+        await later.value
+        XCTAssertEqual(cards.assets.map(\.status), [.approved])
+        await gate.letOneThrough()
+        await earlier.value
+        XCTAssertEqual(cards.assets.map(\.status), [.approved], "A reading that lands after a later one is not shown over it")
+    }
+
+    func testAnAssetIsApprovedOnceAtATime_andNothingIsSaidToAnotherAccount() async {
+        let stand = Stand()
+        stand.kept = [asset("a1")]
+        let cards = model(stand, ids: ["a1"])
+        await cards.load()
+        let listed = cards.assets[0]
+        let gate = Gate()
+        stand.approvingWaits = gate
+
+        let first = Task { await cards.approve(listed, as: "ada") }
+        await gate.arrived(1)
+        XCTAssertEqual(cards.approving, ["a1"])
+        await cards.approve(listed, as: "ada")
+        XCTAssertEqual(stand.approved.count, 0, "A second press while the first is on its way does nothing")
+
+        // Another account signs in before the approval lands: nothing is said or read for it.
+        stand.account = "grace"
+        let readings = stand.asked.count
+        await gate.letOneThrough()
+        await first.value
+        XCTAssertEqual(stand.approved.map(\.account), ["ada"])
+        XCTAssertNil(cards.said)
+        XCTAssertNil(cards.failure)
+        XCTAssertEqual(stand.asked.count, readings)
+        XCTAssertEqual(cards.approving, [])
     }
 
     func testAnApprovalThatWasRefusedSaysWhy_toWhoeverPressed() async {
@@ -155,7 +210,9 @@ final class AssetCardsTests: XCTestCase {
             await cards.approve(listed, as: "ada")
             XCTAssertEqual(cards.failure?.words, words, "\(error)")
             XCTAssertEqual(cards.failure?.assetID, "a1")
+            XCTAssertEqual(cards.said?.words, words, "Said to VoiceOver too")
         }
+        XCTAssertEqual(cards.said?.number, 4, "Each its own, so the same words twice are said twice")
         // An asset that is gone is not said to have failed; nor is anything said to another account.
         stand.approveFails = AssetError.noSuchAsset
         await cards.approve(listed, as: "ada")
@@ -184,5 +241,92 @@ final class AssetCardsTests: XCTestCase {
         navigator.showAsset("s1", in: .strix)
         XCTAssertEqual(navigator.place, .assets(covenId: nil))
         XCTAssertEqual(navigator.takeAssetAsk(in: .strix), "s1")
+    }
+
+    func testAnAssetAskedForIsItsScopesOwn_andNoLongerAskedOnceThePersonHasGoneElsewhere() {
+        let navigator = ShellNavigator()
+        // Asked of a coven's Assets; the person goes to Strix's Assets before the coven's are read.
+        navigator.showAsset("a1", in: .coven("work"))
+        navigator.open(.assets(covenId: nil), in: .strix)
+        XCTAssertNil(navigator.takeAssetAsk(in: .strix), "Another scope's place does not take it")
+        XCTAssertNil(navigator.assetAsked, "And it is no longer asked")
+        navigator.open(.assets(covenId: "work"), in: .coven("work"))
+        XCTAssertNil(navigator.takeAssetAsk(in: .coven("work")), "Also when the person comes back")
+
+        // Asked for again, it is shown; a later ask takes an earlier one's place.
+        navigator.showAsset("a1", in: .coven("work"))
+        navigator.showAsset("a2", in: .coven("work"))
+        XCTAssertEqual(navigator.takeAssetAsk(in: .coven("work")), "a2")
+    }
+
+    // MARK: - The thread an asset was made in
+
+    func testTheThreadAnAssetWasMadeInIsGoneOnlyWhereTheStoreSaysSo() async {
+        func made(by account: String) -> AICoven.Thread {
+            AICoven.Thread(id: "t", userId: account, covenId: nil, title: "Plans", createdAt: Date(timeIntervalSince1970: 0), updatedAt: nil, lastMessageAt: nil)
+        }
+        let thread = made(by: "ada")
+        struct Failed: Error {}
+        typealias Origin = AssetDetailView.Origin
+        func origin(
+            _ threadID: String? = "t", thread: @escaping (String) async throws -> AICoven.Thread, isThread: @escaping (String, String) async throws -> Bool,
+            signedIn: String = "ada"
+        ) async -> Origin? {
+            await AssetDetailView.origin(ofThread: threadID, as: "ada", thread: thread, isThread: isThread, signedIn: { signedIn })
+        }
+
+        let found = await origin(thread: { _ in thread }, isThread: { _, _ in XCTFail("Not asked")
+            return true
+        })
+        XCTAssertEqual(found, .thread(thread))
+        let gone = await origin(thread: { _ in throw Failed() }, isThread: { id, account in
+            XCTAssertEqual(id, "t")
+            XCTAssertEqual(account, "ada")
+            return false
+        })
+        XCTAssertEqual(gone, .gone, "The store says the account has no such thread")
+        let notRead = await origin(thread: { _ in throw Failed() }, isThread: { _, _ in true })
+        XCTAssertEqual(notRead, .unknown, "There, but it could not be read: nothing is said of a deletion")
+        let unreadable = await origin(thread: { _ in throw Failed() }, isThread: { _, _ in throw Failed() })
+        XCTAssertEqual(unreadable, .unknown, "Whether it is there could not be read either")
+        let anothers = await origin(thread: { _ in made(by: "grace") }, isThread: { _, _ in false })
+        XCTAssertEqual(anothers, .gone, "Another account's thread is no thread of this one's")
+        let none = await origin(nil, thread: { _ in thread }, isThread: { _, _ in true })
+        XCTAssertEqual(none, .unknown, "Made in no thread")
+        let late = await origin(thread: { _ in thread }, isThread: { _, _ in true }, signedIn: "grace")
+        XCTAssertNil(late, "Nothing is said once another account is signed in")
+    }
+
+    private actor Gate {
+        private var held: [CheckedContinuation<Void, Never>] = []
+        private var arrivals = 0
+        private var hearing: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+
+        func wait() async {
+            await withCheckedContinuation { continuation in
+                held.append(continuation)
+                arrivals += 1
+                for heard in hearing where heard.count <= arrivals {
+                    heard.continuation.resume()
+                }
+                hearing.removeAll { $0.count <= arrivals }
+            }
+        }
+
+        /// Returns once `count` have come to wait.
+        func arrived(_ count: Int) async {
+            if arrivals >= count { return }
+            await withCheckedContinuation { hearing.append((count, $0)) }
+        }
+
+        /// Lets the one who came first through.
+        func letOneThrough() {
+            if !held.isEmpty { held.removeFirst().resume() }
+        }
+
+        /// Lets the one who came last through, ahead of those before it.
+        func letNewestThrough() {
+            held.popLast()?.resume()
+        }
     }
 }
