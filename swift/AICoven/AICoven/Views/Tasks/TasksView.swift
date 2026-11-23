@@ -57,9 +57,6 @@ struct TasksView: View {
         }
         .background(Color.aicovenSurface.ignoresSafeArea())
         .task { await model.load() }
-        .onChange(of: model.said) { _, said in
-            if let said { AccessibilityNotification.Announcement(said.words).post() }
-        }
         // New Task asked for the cursor in the New task line.
         .onChange(of: navigator.newTaskAsked, initial: true) { _, _ in
             guard navigator.takeNewTaskRequest() else { return }

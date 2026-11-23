@@ -389,21 +389,30 @@ final class ShellNavigator: ObservableObject {
     /// Counts the times New Task was asked for.
     @Published private(set) var newTaskAsked = 0
     private var newTaskAnswered = 0
+    /// The person's moves when New Task was last asked for: the ask
+    /// stands until the next.
+    private var newTaskMoves = 0
 
     /// Opens the Tasks place of the scope on screen and asks for the
     /// cursor in its New task line.
     func requestNewTask() {
         open(.tasks(covenId: selected.covenID))
+        newTaskMoves = personMoves
         newTaskAsked += 1
     }
 
     /// Whether New Task was asked for and its line not yet given the
-    /// cursor; answered by this, once, and only to the Tasks place on
-    /// screen.
+    /// cursor; answered by this, once. Once the person has gone anywhere
+    /// else the ask is over, also when they come back to Tasks, whether
+    /// or not anything took it meanwhile.
     func takeNewTaskRequest() -> Bool {
         guard newTaskAnswered != newTaskAsked else { return false }
-        newTaskAnswered = newTaskAsked
+        guard newTaskMoves == personMoves else {
+            newTaskAnswered = newTaskAsked
+            return false
+        }
         guard case .tasks = place?.type, personPlace == nil else { return false }
+        newTaskAnswered = newTaskAsked
         return true
     }
 

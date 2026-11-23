@@ -1,5 +1,5 @@
 internal import Combine
-import Foundation
+import SwiftUI
 
 /// One place's tasks as its Tasks page shows them: a coven's, or Strix's.
 /// It reads them, adds one, and marks one done, closed or open again, each
@@ -34,14 +34,6 @@ final class TasksModel: ObservableObject {
     @Published private(set) var isAdding = false
     /// The tasks whose change is on its way: one change at a time for a task.
     @Published private(set) var saving: Set<TaskItem.ID> = []
-    /// What VoiceOver is told of what was asked: each its own, so that the
-    /// same words twice are said twice.
-    @Published private(set) var said: Said?
-
-    struct Said: Equatable {
-        let number: Int
-        let words: String
-    }
 
     static let couldNotLoad = "Couldn't load tasks."
     static let couldNotAdd = "Couldn't add the task. Try again."
@@ -62,18 +54,21 @@ final class TasksModel: ObservableObject {
     let covenID: String?
     private let source: Source
     private let signedIn: () -> String
+    /// Tells VoiceOver what came of what was asked, as it happens: each
+    /// is said, also two that end in the same moment.
+    private let announce: (String) -> Void
     /// Counts the readings, and remembers the latest that landed: one
     /// that lands after a later one did is not shown over it. A reading
     /// that was called off lands nothing, so one asked before it still can.
     private var readings = 0
     private var landed = 0
-    private var sayings = 0
 
-    /// The app's own store and account unless a test gives others.
-    init(covenID: String?, source: Source? = nil, signedIn: (() -> String)? = nil) {
+    /// The app's own store, account and voice unless a test gives others.
+    init(covenID: String?, source: Source? = nil, signedIn: (() -> String)? = nil, announce: ((String) -> Void)? = nil) {
         self.covenID = covenID
         self.source = source ?? .live
         self.signedIn = signedIn ?? { UserScope.currentUserID }
+        self.announce = announce ?? { AccessibilityNotification.Announcement($0).post() }
     }
 
     /// Whether there is no task at all, open or finished.
@@ -82,28 +77,35 @@ final class TasksModel: ObservableObject {
     }
 
     /// Reads the place's tasks. One that fails after a reading that worked
-    /// leaves the list as it is, and says so.
-    func load() async {
+    /// leaves the list as it is, and says so. Answers whether the tasks
+    /// were read: by this reading, or by a later one that landed first.
+    @discardableResult
+    func load() async -> Bool {
         readings += 1
         let reading = readings
         let account = signedIn()
         do {
             let listing = try await source.tasks(covenID, account)
-            guard reading > landed, signedIn() == account else { return }
+            guard signedIn() == account else { return false }
+            // A later reading has landed: what is shown is newer than this.
+            guard reading > landed else { return true }
             landed = reading
             open = listing.tasks.filter { !$0.isFinished }
             finished = listing.tasks.filter(\.isFinished)
             finishedCount = listing.finished
             hasRead = true
             if errorMessage == Self.couldNotLoad { errorMessage = nil }
+            return true
         } catch is CancellationError {
             // Whoever asked was called off: nothing was read, and what is shown stays.
+            return false
         } catch {
-            guard reading > landed, signedIn() == account else { return }
+            guard reading > landed, signedIn() == account else { return false }
             landed = reading
             // The kind of failure only.
             AppErrorReporter.log(message: "Could not read the tasks (\(type(of: error)))", context: "TasksModel.load")
             report(Self.couldNotLoad)
+            return false
         }
     }
 
@@ -122,11 +124,12 @@ final class TasksModel: ObservableObject {
             guard signedIn() == account else { return false }
             // Read in a task of its own: whoever asked may be called off,
             // and what was added is still to be shown.
-            await Task { await self.load() }.value
+            let read = await Task { await self.load() }.value
             guard signedIn() == account else { return false }
             // If the list could not be read again, what was added is shown
-            // all the same, first, as the one last changed.
-            if !open.contains(where: { $0.id == task.id }) { open.insert(task, at: 0) }
+            // all the same, first, as the one last changed. Read again, the
+            // list says where the task stands now, which may be elsewhere.
+            if !read, !(open + finished).contains(where: { $0.id == task.id }) { open.insert(task, at: 0) }
             say("Added \(task.title)")
             return true
         } catch {
@@ -193,7 +196,6 @@ final class TasksModel: ObservableObject {
     }
 
     private func say(_ words: String) {
-        sayings += 1
-        said = Said(number: sayings, words: words)
+        announce(words)
     }
 }

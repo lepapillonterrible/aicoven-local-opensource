@@ -61,6 +61,8 @@ final class TasksModelTests: XCTestCase {
         var changed: [(id: String, change: TaskChange, account: String)] = []
         var changeFails: Error?
         var changingWaits: Gate?
+        /// What VoiceOver was told, in order.
+        var heard: [String] = []
     }
 
     private func model(_ stand: Stand, covenID: String? = nil) -> TasksModel {
@@ -98,7 +100,7 @@ final class TasksModelTests: XCTestCase {
                     }
                 }
             ),
-            signedIn: { stand.account }
+            signedIn: { stand.account }, announce: { stand.heard.append($0) }
         )
     }
 
@@ -139,7 +141,7 @@ final class TasksModelTests: XCTestCase {
         await tasks.load()
         XCTAssertFalse(tasks.hasRead)
         XCTAssertEqual(tasks.errorMessage, TasksModel.couldNotLoad)
-        XCTAssertEqual(tasks.said, TasksModel.Said(number: 1, words: TasksModel.couldNotLoad))
+        XCTAssertEqual(stand.heard, [TasksModel.couldNotLoad])
 
         stand.readFails = nil
         stand.kept = [task("a")]
@@ -151,12 +153,12 @@ final class TasksModelTests: XCTestCase {
         await tasks.load()
         XCTAssertEqual(tasks.open.map(\.id), ["a"], "The list stays")
         XCTAssertEqual(tasks.errorMessage, TasksModel.couldNotLoad)
-        XCTAssertEqual(tasks.said?.number, 2, "Each failed reading is said")
+        XCTAssertEqual(stand.heard, [TasksModel.couldNotLoad, TasksModel.couldNotLoad], "Each failed reading is said")
 
         // A reading that was called off is no failure.
         stand.readFails = CancellationError()
         await tasks.load()
-        XCTAssertEqual(tasks.said?.number, 2)
+        XCTAssertEqual(stand.heard.count, 2)
     }
 
     func testOnlyTheLatestReadingIsShown_andNoneForAnotherAccount() async {
@@ -202,7 +204,7 @@ final class TasksModelTests: XCTestCase {
         XCTAssertEqual(stand.created.map(\.covenID), ["work"])
         XCTAssertEqual(stand.created.map(\.account), ["ada"])
         XCTAssertEqual(tasks.open.map(\.title), ["Book the venue", "A"], "Read again")
-        XCTAssertEqual(tasks.said?.words, "Added Book the venue")
+        XCTAssertEqual(stand.heard.last, "Added Book the venue")
         XCTAssertFalse(tasks.isAdding)
 
         // Nothing to add: nothing is asked.
@@ -215,7 +217,29 @@ final class TasksModelTests: XCTestCase {
         let unread = await tasks.add(title: "Second", as: "ada")
         XCTAssertTrue(unread)
         XCTAssertEqual(tasks.open.map(\.title), ["Second", "Book the venue", "A"])
-        XCTAssertEqual(tasks.said?.words, "Added Second")
+        XCTAssertEqual(stand.heard.last, "Added Second")
+    }
+
+    func testATaskFinishedBeforeTheListIsReadAgainIsShownWhereItStands_notAsOpenToo() async {
+        let stand = Stand()
+        let tasks = model(stand)
+        await tasks.load()
+        // What is added is finished by something else before the list is read again.
+        let gate = Gate()
+        stand.readingWaits = gate
+        let adding = Task { await tasks.add(title: "Short-lived", as: "ada") }
+        await gate.arrived(1)
+        // That reading read it open; a later one, which lands first, reads it done.
+        stand.kept = stand.kept.map { self.task($0.id, $0.title, status: .done) }
+        let later = Task { await tasks.load() }
+        await gate.arrived(2)
+        await gate.letNewestThrough()
+        await later.value
+        await gate.letOneThrough()
+        let added = await adding.value
+        XCTAssertTrue(added)
+        XCTAssertEqual(tasks.open.map(\.title), [], "The list says where it stands now")
+        XCTAssertEqual(tasks.finished.map(\.title), ["Short-lived"])
     }
 
     func testATaskThatWasNotAddedSaysWhy_toWhoeverAsked() async {
@@ -230,16 +254,16 @@ final class TasksModelTests: XCTestCase {
             let added = await tasks.add(title: "More", as: "ada")
             XCTAssertFalse(added)
             XCTAssertEqual(tasks.errorMessage, words, "\(error)")
-            XCTAssertEqual(tasks.said?.words, words)
+            XCTAssertEqual(stand.heard.last, words)
         }
-        XCTAssertEqual(tasks.said?.number, 4, "Each its own")
+        XCTAssertEqual(stand.heard.count, 4, "Each its own")
 
         // Asking again clears what was said of the last; nothing is said to another account.
         stand.account = "grace"
         let anothers = await tasks.add(title: "More", as: "ada")
         XCTAssertFalse(anothers)
         XCTAssertNil(tasks.errorMessage)
-        XCTAssertEqual(tasks.said?.number, 4)
+        XCTAssertEqual(stand.heard.count, 4)
     }
 
     func testOneTaskIsAddedAtATime_andNothingIsShownOfOneAddedForAnotherAccount() async {
@@ -262,7 +286,7 @@ final class TasksModelTests: XCTestCase {
         XCTAssertFalse(added, "Not said to another account")
         XCTAssertEqual(stand.created.map(\.title), ["First"])
         XCTAssertEqual(tasks.open.count, 0)
-        XCTAssertNil(tasks.said)
+        XCTAssertEqual(stand.heard, [])
         XCTAssertEqual(stand.readings.count, readings)
         XCTAssertFalse(tasks.isAdding)
     }
@@ -281,18 +305,18 @@ final class TasksModelTests: XCTestCase {
         XCTAssertEqual(stand.changed.last?.account, "ada")
         XCTAssertEqual(tasks.open.map(\.id), ["b"], "Read again")
         XCTAssertEqual(tasks.finished.map(\.status), [.done])
-        XCTAssertEqual(tasks.said?.words, "Marked Call the bank done")
+        XCTAssertEqual(stand.heard.last, "Marked Call the bank done")
         XCTAssertEqual(tasks.saving, [])
 
         await tasks.close(tasks.open[0], as: "ada")
         XCTAssertEqual(stand.changed.last?.change, TaskChange(status: .closed))
-        XCTAssertEqual(tasks.said?.words, "Closed Renew the lease")
+        XCTAssertEqual(stand.heard.last, "Closed Renew the lease")
         XCTAssertEqual(tasks.open.count, 0)
 
         let done = tasks.finished.first { $0.id == "a" }
         try await tasks.setDone(XCTUnwrap(done), false, as: "ada")
         XCTAssertEqual(stand.changed.last?.change, TaskChange(status: .open))
-        XCTAssertEqual(tasks.said?.words, "Reopened Call the bank")
+        XCTAssertEqual(stand.heard.last, "Reopened Call the bank")
         XCTAssertEqual(tasks.open.map(\.id), ["a"])
         XCTAssertNil(tasks.errorMessage)
 
@@ -315,16 +339,16 @@ final class TasksModelTests: XCTestCase {
             stand.changeFails = error
             await tasks.setDone(listed, false, as: "ada")
             XCTAssertEqual(tasks.errorMessage, words, "\(error)")
-            XCTAssertEqual(tasks.said?.words, words)
+            XCTAssertEqual(stand.heard.last, words)
             XCTAssertEqual(tasks.saving, [])
         }
-        let said = tasks.said?.number
+        let said = stand.heard.count
 
         stand.changeFails = TaskError.noSuchTask
         stand.kept = []
         await tasks.setDone(listed, false, as: "ada")
         XCTAssertNil(tasks.errorMessage)
-        XCTAssertEqual(tasks.said?.number, said, "Nothing more is said")
+        XCTAssertEqual(stand.heard.count, said, "Nothing more is said")
         XCTAssertEqual(tasks.finished.count, 0, "The list, read again, shows it is gone")
     }
 
@@ -354,9 +378,29 @@ final class TasksModelTests: XCTestCase {
         await changing.value
         await closing.value
         XCTAssertEqual(Set(stand.changed.map(\.id)), ["a", "b"])
-        XCTAssertNil(tasks.said, "Nothing is said to another account")
+        XCTAssertEqual(stand.heard, [], "Nothing is said to another account")
         XCTAssertEqual(stand.readings.count, readings, "Nor read for it")
         XCTAssertEqual(tasks.saving, [])
+    }
+
+    func testWhatComesOfTwoChangesEndingTogetherIsSaidOfBoth() async {
+        let stand = Stand()
+        stand.kept = [task("a", "Call the bank"), task("b", "Renew the lease")]
+        let tasks = model(stand)
+        await tasks.load()
+        let (first, other) = (tasks.open[0], tasks.open[1])
+        let gate = Gate()
+        stand.changingWaits = gate
+
+        let marking = Task { await tasks.setDone(first, true, as: "ada") }
+        let closing = Task { await tasks.close(other, as: "ada") }
+        await gate.arrived(2)
+        // Both are let through before either's outcome is looked at.
+        await gate.letOneThrough()
+        await gate.letOneThrough()
+        await marking.value
+        await closing.value
+        XCTAssertEqual(Set(stand.heard), ["Marked Call the bank done", "Closed Renew the lease"], "Each is said, not only the last")
     }
 
     // MARK: - New Task
@@ -379,11 +423,18 @@ final class TasksModelTests: XCTestCase {
         navigator.requestNewTask()
         XCTAssertTrue(navigator.takeNewTaskRequest())
 
-        // An ask the person has left before it was taken is not kept for later.
+        // An ask the person has left before anything took it is over: coming
+        // back to Tasks, there or in another scope, does not take the cursor.
         navigator.requestNewTask()
         navigator.showOverview()
-        XCTAssertFalse(navigator.takeNewTaskRequest())
         navigator.openPlace(.tasks)
         XCTAssertFalse(navigator.takeNewTaskRequest(), "Coming back to Tasks does not take the cursor")
+        navigator.requestNewTask()
+        navigator.select(.coven("work"))
+        navigator.openPlace(.tasks)
+        XCTAssertFalse(navigator.takeNewTaskRequest(), "Nor does another scope's Tasks")
+        // Asked for again, it is taken.
+        navigator.requestNewTask()
+        XCTAssertTrue(navigator.takeNewTaskRequest())
     }
 }
