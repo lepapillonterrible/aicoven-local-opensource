@@ -647,13 +647,36 @@ final class TaskStoreTests: XCTestCase {
         await expect(.hasThread, "Given once") { try await self.store.change(covens.id, TaskChange(threadID: another), as: self.account) }
         try await store.change(covens.id, TaskChange(threadID: covenThread), as: account)
 
-        // Whoever writes: a thread that is not the task's account's is refused by the database.
+        // Whoever writes: a thread that is not the task's account's is refused by the database,
+        // for a task that is changed and for one that is made.
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
-        do {
-            try await queue.write { db in try db.execute(sql: "UPDATE tasks SET thread_id = 'no-such-thread' WHERE id = ?", arguments: [strixs.id]) }
-            XCTFail("Refused by the database")
-        } catch let error as DatabaseError {
-            XCTAssertEqual(error.resultCode, .SQLITE_CONSTRAINT)
+        let anothers = "anothers-\(UUID().uuidString)"
+        try await queue.write { db in
+            try db.execute(sql: "INSERT INTO threads (id, user_id, created_at, updated_at) VALUES (?, 'someone-else', ?, ?)", arguments: [anothers, Date(), Date()])
+        }
+        addTeardownBlock {
+            try? await queue.write { db in try db.execute(sql: "DELETE FROM threads WHERE id = ?", arguments: [anothers]) }
+        }
+        let account = account
+        for (sql, arguments) in [
+            ("UPDATE tasks SET thread_id = 'no-such-thread' WHERE id = ?", [strixs.id]),
+            ("UPDATE tasks SET thread_id = ? WHERE id = ?", [anothers, strixs.id]),
+            (
+                "INSERT INTO tasks (id, user_id, coven_id, title_ciphertext, status, stage, created_at, updated_at, thread_id) "
+                    + "VALUES ('t-z', ?, '', x'01', 'open', 'backlog', '2026-01-01', '2026-01-01', ?)",
+                [account, anothers]
+            ),
+        ] {
+            do {
+                try await queue.write { db in try db.execute(sql: sql, arguments: StatementArguments(arguments)) }
+                XCTFail("Refused by the database: \(sql.prefix(40))")
+            } catch let error as DatabaseError {
+                XCTAssertEqual(error.resultCode, .SQLITE_CONSTRAINT)
+            }
+        }
+        // Nor is another account's thread given by the store, though it is in no coven either.
+        await expect(.noSuchThread, "Another account's thread") {
+            try await self.store.change(strixs.id, TaskChange(threadID: anothers), as: self.account)
         }
 
         // A thread that is deleted leaves its task with no thread, and no hand-off.
@@ -683,6 +706,14 @@ final class TaskStoreTests: XCTestCase {
         }
         await expect(.noSuchAgent, "Strix's tasks have no agent to name") {
             try await self.store.change(strixs.id, TaskChange(leadAgentID: .to(scout)), as: self.account)
+        }
+        // Another account's agent cannot be in the coven at all: the database keeps it out,
+        // so there is none for a task of the coven's to be led by.
+        do {
+            try await insertAgent("anothers-\(UUID().uuidString)", inCoven: coven, of: "someone-else")
+            XCTFail("Refused by the database")
+        } catch let error as DatabaseError {
+            XCTAssertEqual(error.resultCode, .SQLITE_CONSTRAINT)
         }
 
         try await store.change(made.id, TaskChange(leadAgentID: .to(scout)), as: account)
