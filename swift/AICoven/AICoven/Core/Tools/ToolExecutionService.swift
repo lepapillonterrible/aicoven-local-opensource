@@ -319,7 +319,8 @@ actor ToolExecutionService {
     // MARK: - Execution
 
     func execute(
-        toolCall called: ParsedToolCall, agentType: String, threadID: String? = nil, pictures: TurnPictures? = nil, assets: TurnAssets? = nil
+        toolCall called: ParsedToolCall, agentType: String, threadID: String? = nil, pictures: TurnPictures? = nil, assets: TurnAssets? = nil,
+        tasks: TurnTasks? = nil
     ) async -> ToolExecutionResult {
         // A tool called by a name it had before is the tool as it is named
         // now: allowed, refused and run as that one.
@@ -414,6 +415,13 @@ actor ToolExecutionService {
 
         case _ where AssetTools.writing.contains(toolCall.name):
             return await AssetTools.write(toolCall, threadID: threadID, turn: assets)
+
+        // --- Tasks ---
+        case _ where TaskTools.reading.contains(toolCall.name):
+            return await TaskTools.read(toolCall, threadID: threadID, turn: tasks)
+
+        case _ where TaskTools.writing.contains(toolCall.name):
+            return await TaskTools.write(toolCall, threadID: threadID, turn: tasks)
 
         // --- Web Tools ---
         case "web_search":
@@ -2123,6 +2131,15 @@ actor ToolExecutionService {
     func setWhitelist(for agentType: String, tools: Set<String>) {
         toolWhitelist[agentType] = tools
     }
+
+    #if DEBUG
+    /// The calls counted against the rate limit are forgotten. The tests
+    /// share this one executor within a run: one that counts on its calls
+    /// being run starts with none counted.
+    func forgetCalls() {
+        callLog = []
+    }
+    #endif
 
     // MARK: - Web Tool Implementations
 

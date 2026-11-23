@@ -126,15 +126,17 @@ struct ContextBuilder {
         /// tools and the MCP servers offered are those it allows.
         ///
         /// `usesAssets` says the caller is a turn in a thread, whose
-        /// agent reads the assets of the place the thread is in and makes
-        /// assets there (a chat turn does; an agent run does not): only
-        /// then are the asset tools offered.
+        /// agent reads the assets and the tasks of the place the thread
+        /// is in, makes assets there and changes its tasks (a chat turn
+        /// does; an agent run does not): only then are the asset tools
+        /// and the task tools offered.
         static func connected(
             deliversFiles: Bool = false, seesPictures: Bool = false, usesAssets: Bool = false, connections: CovenConnections? = nil
         ) async -> ToolConfig {
             var connectedTools = await PromptTemplates.connectedToolSet()
             if usesAssets {
                 connectedTools.formUnion(AssetTools.all)
+                connectedTools.formUnion(TaskTools.all)
             }
             if deliversFiles {
                 connectedTools.formUnion(PromptTemplates.offeredImageTools())

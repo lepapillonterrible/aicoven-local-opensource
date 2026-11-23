@@ -356,6 +356,13 @@ struct TasksView: View {
         .onChange(of: model.hasRead) {
             if focusesNewTaskWhenShown, !newTaskLineShows { scrollsToNewTask += 1 }
         }
+        // A task was made or changed by something else than this page (an
+        // agent's turn in a thread): the list is read again. The page's
+        // own changes read it themselves.
+        .onReceive(NotificationCenter.default.publisher(for: TaskItem.didChange).receive(on: RunLoop.main)) { _ in
+            guard model.saving.isEmpty, !model.isAdding else { return }
+            Task { await model.load() }
+        }
         // A reminder of one of this place's tasks was tapped: its details open.
         .onChange(of: navigator.taskAsked, initial: true) { _, _ in
             guard case let .place(covenID) = model.scope, let id = navigator.takeTaskAsk(in: ShellScope(covenID: covenID)) else { return }
@@ -587,7 +594,7 @@ struct TasksView: View {
             if model.isEmpty {
                 ContentUnavailableView(
                     "No tasks", systemImage: "checklist",
-                    description: Text(isOnMe ? "Tasks from your threads in every coven show here." : "Add one with New task.")
+                    description: Text(isOnMe ? "Tasks from your threads in every coven show here." : "Add one with New task, or ask Strix in a thread.")
                 )
                 .frame(maxWidth: .infinity)
                 .taskListRow()
