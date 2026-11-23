@@ -35,7 +35,8 @@ nonisolated enum TaskCommandReader {
         for part in parts {
             // "…, then move X to review": the joining word is not the part's own.
             let part = strip(part, #"^(?:and|then)\s+"#)
-            guard let action = action(in: part), !found.contains(action) else { continue }
+            // The same part twice is one, whatever its case, as on the server.
+            guard let action = action(in: part), !found.contains(where: { isSame($0, action) }) else { continue }
             found.append(action)
             if found.count == mostActions { break }
         }
@@ -118,15 +119,28 @@ nonisolated enum TaskCommandReader {
             var hint: String?
             if let due = groups(in: title, #"\b("# + days + #")$"#) {
                 let rest = cleaned(String(title.dropLast(due[0].count)).trimmingCharacters(in: CharacterSet(charactersIn: " ,.")))
-                // Words that are only a day are the title all the same.
-                if !rest.isEmpty {
-                    title = rest
-                    hint = due[0]
-                }
+                // Words that are only a day are the title all the same,
+                // and the day it is due, as on the server.
+                if !rest.isEmpty { title = rest }
+                hint = due[0]
             }
             return .add(title: title, dueHint: hint)
         }
         return nil
+    }
+
+    /// Whether two parts ask for the same thing: the same kind of thing,
+    /// of the same title and day, whatever their case.
+    private static func isSame(_ one: TaskCommandAction, _ other: TaskCommandAction) -> Bool {
+        func key(_ action: TaskCommandAction) -> [String] {
+            switch action {
+            case let .add(title, hint): ["add", title.lowercased(), (hint ?? "").lowercased()]
+            case let .complete(title): ["complete", title.lowercased(), ""]
+            case let .move(title, stage): ["move", title.lowercased(), stage?.rawValue ?? "done"]
+            case let .reschedule(title, when): ["reschedule", title.lowercased(), when.lowercased()]
+            }
+        }
+        return key(one) == key(other)
     }
 
     /// A title without a leading article, on one line, with single spaces.

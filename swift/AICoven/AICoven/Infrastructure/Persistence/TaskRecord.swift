@@ -273,6 +273,7 @@ actor TaskRepository {
             // change waited its turn is not kept.
             let moment = now()
             let wasOpen = (stored["status"] as String) == TaskStatus.open.rawValue
+            if change.onlyWhileOpen, !wasOpen { throw TaskError.finished }
             let isOpen = change.status.map { $0 == .open } ?? wasOpen
             if isOpen, !wasOpen {
                 guard try Self.openTasks(of: account, inCoven: stored["coven_id"], in: db) < Self.mostOpen else { throw TaskError.tooMany }

@@ -115,21 +115,29 @@ nonisolated enum TaskTools {
     /// changes, so pages do not overlap).
     private static func list(_ call: ParsedToolCall, among listing: TaskListing) -> ToolExecutionResult {
         let tasks = listing.tasks
+        // A filter that is given and is none is refused: read as not
+        // given, it would tell of tasks the call did not ask about.
         var status: TaskStatus?
-        if let named = text(call.args["status"]) {
-            guard let known = TaskStatus(rawValue: named.lowercased()) else {
+        if isGiven(call.args["status"]) {
+            guard let known = text(call.args["status"]).flatMap({ TaskStatus(rawValue: $0.lowercased()) }) else {
                 return .validationError(tool: call.name, message: "'status' is one of: open, done, closed.", field: "status")
             }
             status = known
         }
         var stage: TaskStage?
-        if let named = text(call.args["stage"]) {
-            guard let known = TaskStage(rawValue: named.lowercased()) else {
+        if isGiven(call.args["stage"]) {
+            guard let known = text(call.args["stage"]).flatMap({ TaskStage(rawValue: $0.lowercased()) }) else {
                 return .validationError(tool: call.name, message: "'stage' is one of: backlog, in_progress, review.", field: "stage")
             }
             stage = known
         }
-        let query = text(call.args["query"]).map { String($0.prefix(longestQuery)) }
+        var query: String?
+        if isGiven(call.args["query"]) {
+            guard let words = text(call.args["query"]) else {
+                return .validationError(tool: call.name, message: "'query' is text to look for in titles.", field: "query")
+            }
+            query = String(words.prefix(longestQuery))
+        }
         guard let limit = number(call.args["limit"], otherwise: usualPage, in: 1 ... largestPage) else {
             return .validationError(tool: call.name, message: "'limit' is a whole number from 1 to \(largestPage).", field: "limit")
         }
@@ -282,16 +290,16 @@ nonisolated enum TaskTools {
         case .add:
             return nil
         case let .complete(title):
-            (words, change, saying) = (title, TaskChange(status: .done), "Marked done")
+            (words, change, saying) = (title, TaskChange(status: .done, onlyWhileOpen: true), "Marked done")
         case let .move(title, stage?):
-            (words, change, saying) = (title, TaskChange(status: .open, stage: stage), "Moved to \(stage.title)")
+            (words, change, saying) = (title, TaskChange(stage: stage, onlyWhileOpen: true), "Moved to \(stage.title)")
         case let .move(title, nil):
-            (words, change, saying) = (title, TaskChange(status: .done), "Marked done")
+            (words, change, saying) = (title, TaskChange(status: .done, onlyWhileOpen: true), "Marked done")
         case let .reschedule(title, when):
             guard let day = TaskCommandReader.day(named: when, from: store.now(), calendar: store.calendar()), let due = TaskDue(date: day) else {
                 throw Refusal(words: "Not changed: '\(AttachmentContext.plainName(when))' names no day.")
             }
-            (words, change, saying) = (title, TaskChange(due: .to(due)), "Due \(day.rawValue)")
+            (words, change, saying) = (title, TaskChange(due: .to(due), onlyWhileOpen: true), "Due \(day.rawValue)")
         }
         // Among the place's open tasks whose titles can be read: the one
         // whose title is these words (of several, the one last changed),
@@ -313,6 +321,8 @@ nonisolated enum TaskTools {
         guard turn.takeAChange() else {
             throw Refusal(words: "Not changed: this turn has changed tasks \(TurnTasks.mostChanges) times, which is as many as a turn may.")
         }
+        // Only while it is still open as the change is written: a task
+        // the person finished since it was found here stays as they left it.
         do {
             try await store.change(task.id, change, account)
         } catch {
@@ -334,7 +344,7 @@ nonisolated enum TaskTools {
         case TaskError.tooMany: "Not done: this place has as many open tasks as it may keep."
         case TaskError.noTitle: "Not added: a task needs a title."
         case TaskError.noSuchTask: "Not changed: that task is no longer there."
-        case TaskError.finished: "Not changed: that task is finished."
+        case TaskError.finished: "Not changed: that task has been finished meanwhile."
         case RepositoryError.dataLocked: "Not done: the account's data is locked."
         default: "Not done: the tasks could not be saved."
         }
@@ -349,6 +359,14 @@ nonisolated enum TaskTools {
     /// Whether a title holds these words, whatever their case or accents.
     static func holds(_ title: String, _ words: String) -> Bool {
         title.range(of: words, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+    }
+
+    /// Whether an argument is given: not left out, not null, and not text
+    /// that says nothing (which a model sends for a filter it does not use).
+    private static func isGiven(_ value: AnyJSONValue?) -> Bool {
+        guard let value, value != .null else { return false }
+        if let words = value.value as? String { return !words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        return true
     }
 
     /// An argument given as text that says something; nil for none.

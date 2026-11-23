@@ -121,7 +121,10 @@ final class TaskToolsTests: XCTestCase {
         XCTAssertEqual(read("Add task review launch copy tomorrow"), [.add(title: "review launch copy", dueHint: "tomorrow")])
         XCTAssertEqual(read("create a new task for the board pack"), [.add(title: "board pack", dueHint: nil)])
         XCTAssertEqual(read("Remind me to call the bank this week."), [.add(title: "call the bank", dueHint: "this week")])
-        XCTAssertEqual(read("remember to tomorrow"), [.add(title: "tomorrow", dueHint: nil)], "Words that are only a day are the title all the same")
+        XCTAssertEqual(
+            read("remember to tomorrow"), [.add(title: "tomorrow", dueHint: "tomorrow")],
+            "Words that are only a day are the title all the same, and the day, as on the server"
+        )
         XCTAssertEqual(read("Mark Auth QA done"), [.complete(title: "Auth QA")], "The word that says so is not its title's")
         XCTAssertEqual(read("mark the invoice as completed"), [.complete(title: "invoice")])
         XCTAssertEqual(read("finish the report"), [.complete(title: "report")])
@@ -151,7 +154,14 @@ final class TaskToolsTests: XCTestCase {
             TaskCommandReader.actions(in: "Add task A and mark B done, then move C to review"),
             [.add(title: "A", dueHint: nil), .complete(title: "B"), .move(title: "C", stage: .review)]
         )
-        XCTAssertEqual(TaskCommandReader.actions(in: "add task A and add task a and Add Task A").count, 2, "The same part twice is one; a title's case is its own")
+        XCTAssertEqual(
+            TaskCommandReader.actions(in: "add task A and add task a and Add Task A"), [.add(title: "A", dueHint: nil)],
+            "The same part twice is one, whatever its case, as on the server"
+        )
+        XCTAssertEqual(
+            TaskCommandReader.actions(in: "mark A done, move A to review, Move a to Review, move A to done, move A to friday and move a to Friday").count, 4,
+            "Parts that ask for different things of one task are each read"
+        )
         let many = (1 ... 14).map { "add task number \($0)" }.joined(separator: " and ")
         XCTAssertEqual(TaskCommandReader.actions(in: many).count, TaskCommandReader.mostActions)
     }
@@ -262,10 +272,17 @@ final class TaskToolsTests: XCTestCase {
         page = await read(call("task.list", ["query": "nothing like it"]), stand)
         XCTAssertEqual(page.contextBlock, "[Tasks] None found.")
 
-        // What is no filter is said, and nothing is read as another.
+        // A filter left out, null or of no words is none.
+        found = await ids(["status": "", "stage": "  ", "query": NSNull()])
+        XCTAssertEqual(found, ["a", "b", "c", "d"])
+        // What is given and is no filter is said: it is not read as left out, nor as another.
         for (args, field) in [
             (["status": "archived"], "status"),
+            (["status": 123], "status"),
             (["stage": "done"], "stage"),
+            (["stage": true], "stage"),
+            (["query": ["invoice"]], "query"),
+            (["query": 7], "query"),
             (["limit": 0], "limit"),
             (["limit": 101], "limit"),
             (["limit": 1.5], "limit"),
@@ -400,7 +417,7 @@ final class TaskToolsTests: XCTestCase {
 
         result = await command("Mark auth qa for ios done", stand)
         XCTAssertEqual(stand.changed.last?.id, "ios")
-        XCTAssertEqual(stand.changed.last?.change, TaskChange(status: .done))
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(status: .done, onlyWhileOpen: true), "Only while it is still open as it is written")
         XCTAssertTrue(result.contextBlock?.contains("- Marked done: Auth QA for iOS (task_id: ios)") == true)
 
         // Words only one open task holds name it.
@@ -408,18 +425,18 @@ final class TaskToolsTests: XCTestCase {
         XCTAssertEqual(stand.changed.count, 1, "No task's title holds 'web one'")
         result = await command("Move QA for web to in review", stand)
         XCTAssertEqual(stand.changed.last?.id, "web")
-        XCTAssertEqual(stand.changed.last?.change, TaskChange(status: .open, stage: .review))
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(stage: .review, onlyWhileOpen: true), "Its stage alone: it opens nothing again")
         XCTAssertTrue(result.contextBlock?.contains("- Moved to Review: Auth QA for web (task_id: web)") == true)
 
         result = await command("move the cafe invoice to done", stand)
         XCTAssertEqual(stand.changed.last?.id, "cafe", "Whatever the accents")
-        XCTAssertEqual(stand.changed.last?.change, TaskChange(status: .done), "Moved to Done is marked done")
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(status: .done, onlyWhileOpen: true), "Moved to Done is marked done")
 
         // A title that is the words is the task, though another's holds them; of two so named, the one last changed.
         result = await command("Push the invoice to next week", stand)
         XCTAssertEqual(stand.changed.last?.id, "twin")
         let monday = try XCTUnwrap(TaskDueDate(rawValue: "2027-01-18").flatMap { TaskDue(date: $0) })
-        XCTAssertEqual(stand.changed.last?.change, TaskChange(due: .to(monday)))
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(due: .to(monday), onlyWhileOpen: true))
         XCTAssertTrue(result.contextBlock?.contains("- Due 2027-01-18: Invoice (task_id: twin)") == true)
         XCTAssertEqual(stand.changed.map(\.account), ["ada", "ada", "ada", "ada"])
 
@@ -533,9 +550,11 @@ final class TaskToolsTests: XCTestCase {
         var result = await command("mark Auth QA done", stand)
         XCTAssertEqual(result.status, "ok")
         XCTAssertTrue(result.contextBlock?.contains("- Not done: the account's data is locked.") == true)
+        // Finished by the person since it was found here: it stays as they left it.
         stand.changeFails = TaskError.finished
-        result = await command("move Auth QA to friday", stand)
-        XCTAssertTrue(result.contextBlock?.contains("- Not changed: that task is finished.") == true)
+        result = await command("move Auth QA to review", stand)
+        XCTAssertTrue(result.contextBlock?.contains("- Not changed: that task has been finished meanwhile.") == true)
+        XCTAssertEqual(result.result?["changed"]?.value as? Int, 0)
         stand.changeFails = nil
         stand.createFails = TaskError.noTitle
         result = await command("add task ...", stand)
