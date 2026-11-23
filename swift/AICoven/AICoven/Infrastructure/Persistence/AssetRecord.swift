@@ -159,13 +159,15 @@ actor AssetRepository {
         try await make(
             type: type, title: title, details: details, files: files, inCoven: covenID, madeBy: agentID, inThread: threadID,
             fromMessage: messageID, parent: parentID, handingOver: nil, as: account
-        )
+        ).asset
     }
 
     /// The hand-off brief an asset has already, found in the write that
     /// would have made another.
     private struct HasABrief: Error {
         let briefID: String
+        /// How the asset stood in that write.
+        let status: String
     }
 
     /// The hand-off brief of one of `account`'s assets, as the cloud app
@@ -177,26 +179,37 @@ actor AssetRepository {
     /// over (`AssetError.needsReview`), decided in the write against the
     /// asset as it is then; one the key cannot open is not
     /// (`AssetError.unreadable`). The brief an asset has is its answer
-    /// also where its place has no room for another asset.
+    /// also where its place has no room for another asset. `sourceStatus`
+    /// is how the asset stood in the write that made the brief or found
+    /// it: an asset that has a brief can have been archived or sent back
+    /// since, which whoever sends it on must look at.
     func handoffBrief(
         of sourceID: String, madeBy agentID: String? = nil, inThread threadID: String? = nil, as account: String
-    ) async throws -> (brief: Asset, isNew: Bool) {
+    ) async throws -> (brief: Asset, isNew: Bool, sourceStatus: AssetStatus) {
         guard let source = try await assets(withIDs: [sourceID], as: account).first else { throw AssetError.noSuchAsset }
         guard !source.isUnreadable else { throw AssetError.unreadable }
         do {
-            let brief = try await make(
+            let made = try await make(
                 type: .implementationBrief, title: "Handoff: " + source.title, details: "", files: [], inCoven: source.covenID, madeBy: agentID,
                 inThread: threadID, fromMessage: nil, parent: source.id, handingOver: source.id, as: account
             )
-            return (brief, true)
+            // Made only for an asset that was proposed or approved in that write.
+            return (made.asset, true, Self.status(made.handedOverAs))
         } catch let has as HasABrief {
             guard let brief = try await assets(withIDs: [has.briefID], as: account).first else { throw AssetError.noSuchAsset }
-            return (brief, false)
+            return (brief, false, Self.status(has.status))
         }
     }
 
+    /// A status as it is stored: one this version does not know is read
+    /// as a draft, as in a listing.
+    private static func status(_ stored: String?) -> AssetStatus {
+        stored.flatMap(AssetStatus.init(rawValue:)) ?? .draft
+    }
+
     /// Keeps a new asset: `create`, and for `handingOver` the hand-off
-    /// brief of that asset, related to it in the same write.
+    /// brief of that asset, related to it in the same write, with how
+    /// that asset stood in it.
     private func make(
         type: AssetType,
         title: String,
@@ -209,7 +222,7 @@ actor AssetRepository {
         parent parentID: String?,
         handingOver sourceID: String?,
         as account: String
-    ) async throws -> Asset {
+    ) async throws -> (asset: Asset, handedOverAs: String?) {
         // Whoever asks is the account signed in, before anything is said
         // of what was given; and with the same key in memory from here
         // until the asset has been written.
@@ -262,7 +275,9 @@ actor AssetRepository {
         // The sealed files are taken into the write as one value.
         let toWrite = sealedFiles
         await at?(.beforeWriting)
-        try await dbQueue.write { db in
+        // The write answers with how the asset handed over stood in it.
+        let handedOverAs: String? = try await dbQueue.write { db in
+            var sourceStatus: String?
             if let sourceID {
                 // Decided here, against the asset as it is now, and before
                 // anything a new asset must pass: the brief an asset has
@@ -277,8 +292,9 @@ actor AssetRepository {
                     db, sql: "SELECT source_asset_id FROM asset_relations WHERE user_id = ? AND target_asset_id = ? AND relation_type = ?",
                     arguments: [account, sourceID, AssetRelation.handoffFor]
                 )
-                if let briefID { throw HasABrief(briefID: briefID) }
+                if let briefID { throw HasABrief(briefID: briefID, status: status) }
                 guard [AssetStatus.proposed.rawValue, AssetStatus.approved.rawValue].contains(status) else { throw AssetError.needsReview }
+                sourceStatus = status
             }
             // Counted in the write that adds it.
             let count = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM assets WHERE user_id = ? AND coven_id = ?", arguments: [account, coven]) ?? 0
@@ -334,6 +350,7 @@ actor AssetRepository {
                     arguments: [file.id, id, file.meta, now, file.body]
                 )
             }
+            return sourceStatus
         }
         do {
             try await AccountSeal.requireKey(of: account, since: epoch)
@@ -345,12 +362,13 @@ actor AssetRepository {
             }
             throw error
         }
-        return Asset(
+        let asset = Asset(
             id: id, covenID: covenID, type: type, status: .draft, title: title, details: details,
             madeByAgentID: agentID, threadID: threadID, sourceMessageID: messageID, parentID: parentID, files: kept,
             version: Self.version(title: sealedTitle, details: sealedDetails, files: sealedFiles.map { ($0.id, $0.meta) }),
             createdAt: now, updatedAt: now
         )
+        return (asset, handedOverAs)
     }
 
     // MARK: - Changing a draft

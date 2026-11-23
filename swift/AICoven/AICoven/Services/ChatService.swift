@@ -98,11 +98,44 @@ enum ToolIntentDecision {
     /// Ambiguous — fall through to the LLM with tool instructions.
     case ambiguous
 
+    /// Whether `text` holds `name` as a whole name: not as the start or
+    /// the end of a longer one ("file.reading" does not name `file.read`,
+    /// nor "asset.get.all", "file.read-extra" or "other-file.read"; "use
+    /// asset.get." does).
+    static func names(_ name: String, in text: String) -> Bool {
+        func isOfAName(_ character: Character?) -> Bool {
+            character.map { $0.isLetter || $0.isNumber || $0 == "_" } ?? false
+        }
+        /// A dot or a hyphen joins a name to more of it.
+        func joins(_ character: Character?) -> Bool {
+            character == "." || character == "-"
+        }
+        var from = text.startIndex
+        while let found = text.range(of: name, range: from ..< text.endIndex) {
+            let before = found.lowerBound > text.startIndex ? text[text.index(before: found.lowerBound)] : nil
+            let after = found.upperBound < text.endIndex ? text[found.upperBound] : nil
+            let afterThat = after == nil ? nil : (text.index(after: found.upperBound) < text.endIndex ? text[text.index(after: found.upperBound)] : nil)
+            // A dot or a hyphen goes on with a name only where a name's character follows it.
+            let goesOn = isOfAName(after) || (joins(after) && isOfAName(afterThat))
+            if !isOfAName(before), !joins(before), !goesOn { return true }
+            from = found.upperBound
+        }
+        return false
+    }
+
     /// Heuristic fast-path: classify a user message without an LLM call.
     /// Returns `.noTools` for obviously conversational requests and
     /// `.useTools` for obvious tool requests; `.ambiguous` otherwise.
     static func heuristic(for message: String) -> ToolIntentDecision {
         let lower = message.lowercased()
+
+        // A message that names a tool by its name asks for tools, whatever
+        // else it says: an asset's hand-off tells the agent to read it
+        // with `asset.get`, and what the person adds to it ("draft the
+        // plan") must not take the tool away.
+        if PromptTemplates.toolDefinitions.contains(where: { names($0.name.lowercased(), in: lower) }) {
+            return .useTools(suggested: [])
+        }
 
         // Obvious no-tool patterns (conversational, opinion, summarization).
         // NOTE: broad phrases like "what is" were intentionally narrowed
@@ -233,6 +266,66 @@ actor ChatService {
     /// still their own server, which is offered none).
     nonisolated static func usesAssets(provider: String) -> Bool {
         provider.lowercased() != "openclaw"
+    }
+
+    /// Whether a turn answered through `provider` is offered the tools of
+    /// its thread's place (the asset tools, the task tools): a cloud
+    /// model's turn is; one handed to Hermes or to OpenClaw, or answered
+    /// by a model on this device or this network, is not.
+    nonisolated static func givesPlaceTools(provider: String, isLocal: Bool) -> Bool {
+        provider.lowercased() != AgentRun.hermes && usesAssets(provider: provider) && !isLocal
+    }
+
+    /// Whether a turn for an agent (Strix for nil) would be offered the
+    /// tools of its thread's place, as the agent and the connections are
+    /// set up now: asked before an asset is sent to an agent, which reads
+    /// it with those tools. Decided as a turn decides it: after the same
+    /// refresh of what is connected, by the model that would in fact
+    /// answer (the agent's own where it is there, else the one the turn
+    /// would fall back to), and not for a turn that would be handed to
+    /// Hermes or an OpenClaw Gateway, or that no model can answer.
+    ///
+    /// Asked for several agents at once (nil for Strix), with one refresh
+    /// for all of them, as `account`: an agent's settings and the
+    /// connections are the signed-in account's, so nothing is answered
+    /// (nil) once another account is signed in, before or after the wait.
+    /// For an agent no model can answer for just now the answer is nil:
+    /// nothing is connected, or what is connected could not be read (the
+    /// device is offline, a provider did not list its models), and that
+    /// says nothing of where the agent runs.
+    func offersPlaceTools(toAgents roleIDs: [String?], as account: String) async -> [Bool?]? {
+        guard await signedIn() == account else { return nil }
+        await ensureEnvironment()
+        var offered: [Bool?] = []
+        for roleID in roleIDs {
+            guard await signedIn() == account else { return nil }
+            let preferred = await preferredProviderAndModel(roleId: roleID)
+            if preferred.provider == AgentRun.hermes, hermesAgent() != nil {
+                offered.append(false)
+            } else if preferred.provider == AgentRun.openClaw, openClawTurn("") != nil {
+                offered.append(false)
+            } else if let answering = answeringModel(provider: preferred.provider, model: preferred.model) {
+                let provider = answering.descriptor.providerID
+                offered.append(Self.givesPlaceTools(provider: provider, isLocal: isLocalDeployment(providerID: provider)))
+            } else {
+                offered.append(nil)
+            }
+        }
+        guard await signedIn() == account else { return nil }
+        return offered
+    }
+
+    /// The model that answers a turn whose agent prefers `provider` and
+    /// `model`: that one where its connection and the model are there,
+    /// else the one the router gives; nil where none can answer.
+    private func answeringModel(provider: String, model: String) -> (descriptor: ModelDescriptor, client: LLMClient)? {
+        if let client = llmClients[provider], let match = modelRouter.findExact(providerID: provider, modelID: model) {
+            return (match, client)
+        }
+        // Fall back to heuristic routing.
+        let routing = RoutingContext(task: .chat, requireLocalOnly: false, requireLongContext: false, preferHighQuality: true)
+        guard let descriptor = modelRouter.route(for: routing), let client = llmClients[descriptor.providerID] else { return nil }
+        return (descriptor, client)
     }
 
     /// What a turn that was cut off this way says in its thread.
@@ -405,33 +498,14 @@ actor ChatService {
         }
         threadsLastAnsweredByAnAgent.remove(threadId)
 
-        let descriptor: ModelDescriptor
-        let client: LLMClient
-
-        if let prefClient = llmClients[prefProvider],
-           let match = modelRouter.findExact(providerID: prefProvider, modelID: prefModel) {
-            descriptor = match
-            client = prefClient
-        } else {
-            // Fall back to heuristic routing.
-            let routingContext = RoutingContext(
-                task: .chat,
-                requireLocalOnly: false,
-                requireLongContext: false,
-                preferHighQuality: true
-            )
-            guard let fallbackDescriptor = modelRouter.route(for: routingContext),
-                  let fallbackClient = llmClients[fallbackDescriptor.providerID] else {
-                let msg = "No configured providers/models available for chat. Add provider keys in Settings."
-                state.phase = .finalizing
-                state.status = .failed
-                state.answer = msg
-                state.bumpVersion()
-                onStateChange(state)
-                return
-            }
-            descriptor = fallbackDescriptor
-            client = fallbackClient
+        guard let (descriptor, client) = answeringModel(provider: prefProvider, model: prefModel) else {
+            let msg = "No configured providers/models available for chat. Add provider keys in Settings."
+            state.phase = .finalizing
+            state.status = .failed
+            state.answer = msg
+            state.bumpVersion()
+            onStateChange(state)
+            return
         }
 
         // Give the UI an immediate hint that we're contacting the provider.
@@ -487,7 +561,8 @@ actor ChatService {
         let toolConfig: ContextBuilder.ToolConfig = isLocalModel
             ? await .mlxTools(connections: connections)
             : await .connected(
-                deliversFiles: true, seesPictures: descriptor.takesImages, usesAssets: Self.usesAssets(provider: descriptor.providerID),
+                deliversFiles: true, seesPictures: descriptor.takesImages,
+                usesAssets: Self.givesPlaceTools(provider: descriptor.providerID, isLocal: isLocalModel),
                 connections: connections
             )
         // The tools this turn was offered are the ones it may call: they

@@ -79,7 +79,10 @@ nonisolated enum AssetTools {
             addFile: { try await AssetRepository.shared.addFile($0, to: $1, as: $2) },
             propose: { _ = try await AssetRepository.shared.move($0, to: .proposed, as: $1) },
             relations: { try await AssetRepository.shared.relations(ofAsset: $0, as: $1) },
-            handoff: { try await AssetRepository.shared.handoffBrief(of: $0, madeBy: $1, inThread: $2, as: $3) }
+            handoff: {
+                let made = try await AssetRepository.shared.handoffBrief(of: $0, madeBy: $1, inThread: $2, as: $3)
+                return (made.brief, made.isNew)
+            }
         )
     }
 
@@ -249,14 +252,20 @@ nonisolated enum AssetTools {
         guard let title = text(call.args["title"]) else {
             return .validationError(tool: call.name, message: "Missing required argument: 'title'", field: "title")
         }
+        // A parent that is given is an asset's id: one that is none (a
+        // number, a list) is refused, not read as none given.
+        let parent = call.args["parent_asset_id"]
+        let parentID = text(parent)
+        if let parent, parent != .null, !(parent.value is String) {
+            return .validationError(tool: call.name, message: "'parent_asset_id' is an asset's id, as asset.search gives it.", field: "parent_asset_id")
+        }
         let new: Store.New
         switch file(from: call) {
         case let .failure(refusal):
             return .validationError(tool: call.name, message: refusal.message, field: refusal.field)
         case let .success(file):
             new = Store.New(
-                type: type, title: title, details: (call.args["description"]?.value as? String) ?? "", file: file,
-                parentID: text(call.args["parent_asset_id"])
+                type: type, title: title, details: (call.args["description"]?.value as? String) ?? "", file: file, parentID: parentID
             )
         }
         guard turn.takeAMaking() else {

@@ -16,6 +16,8 @@ struct AssetLibraryView: View {
     @State private var isOnScreen = false
     /// The asset open full size: pushed on the iPhone and iPad, a sheet on the Mac.
     @State private var openID: Asset.ID?
+    /// The asset being sent to an agent from its row's menu.
+    @State private var sending: Asset?
     #if os(macOS)
     /// The row selected in the table, shown in the inspector.
     @State private var selectedID: Asset.ID?
@@ -79,6 +81,12 @@ struct AssetLibraryView: View {
                 }
             }
             .presenting(files)
+            .sheet(item: $sending) { asset in
+                AssetHandoffSheet(asset: asset) { thread in
+                    sending = nil
+                    open(thread)
+                }
+            }
         #if os(macOS)
             .sheet(item: Binding(get: { openID.map(OpenAsset.init) }, set: { openID = $0?.id })) { open in
                 NavigationStack {
@@ -97,6 +105,7 @@ struct AssetLibraryView: View {
                 page(of: id)
                     .navigationTitle("Asset")
                     .navigationBarTitleDisplayMode(.inline)
+                    .stoneBackButton()
             }
         #endif
             .task {
@@ -230,17 +239,20 @@ struct AssetLibraryView: View {
         }
         ForEach(AssetLibraryRules.reviewActions(asset) + AssetLibraryRules.otherActions(asset)) { action in
             Button {
-                if action == .download {
+                switch action {
+                case .download:
                     guard let file = asset.files.first else { return }
                     Task { await files.download(file) }
-                } else {
+                case .sendToAgent:
+                    sending = asset
+                default:
                     let account = UserScope.currentUserID
                     Task { await model.perform(action, on: asset, as: account) }
                 }
             } label: {
                 Label(action.title, systemImage: action.iconSystemName)
             }
-            .disabled(action == .download ? files.preparing != nil : model.changing.contains(asset.id))
+            .disabled(action == .download ? files.preparing != nil : action.status != nil && model.changing.contains(asset.id))
         }
     }
 

@@ -135,6 +135,7 @@ final class AssetLineageTests: XCTestCase {
         let logo = try await asset("Logo", .proposed, inCoven: coven)
         let made = try await store.handoffBrief(of: logo.id, madeBy: "scout", as: account)
         XCTAssertTrue(made.isNew)
+        XCTAssertEqual(made.sourceStatus, .proposed, "How the asset stood in the write that made it")
         let brief = made.brief
         XCTAssertEqual(brief.title, "Handoff: Logo", "As the cloud app names it")
         XCTAssertEqual(brief.type, .implementationBrief)
@@ -165,6 +166,7 @@ final class AssetLineageTests: XCTestCase {
         _ = try await store.move(logo.id, to: .approved, listedAs: listed.first?.version, as: account)
         again = try await store.handoffBrief(of: logo.id, as: account)
         XCTAssertEqual(again.brief.id, brief.id)
+        XCTAssertEqual(again.sourceStatus, .approved, "And how it stands now")
         let kept = try await counts()
         XCTAssertEqual(kept.assets, 2)
         XCTAssertEqual(kept.relations, 1)
@@ -232,6 +234,7 @@ final class AssetLineageTests: XCTestCase {
         _ = try await store.move(logo.id, to: .archived, as: account)
         let archived = try await store.handoffBrief(of: logo.id, as: account)
         XCTAssertEqual(archived.brief.id, brief.id)
+        XCTAssertEqual(archived.sourceStatus, .archived, "Whoever sends it on is told that it is no longer for review")
     }
 
     func testAHandOffWrittenAfterTheDataWasLockedIsTakenBack_withItsRelation() async throws {
