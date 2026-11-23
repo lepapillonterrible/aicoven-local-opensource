@@ -36,6 +36,12 @@ struct AssetCardsView: View {
         }
     }
 
+    /// How a card's buttons name its asset to VoiceOver: several cards in
+    /// a thread would otherwise have buttons of the same name.
+    static func name(of asset: Asset) -> String {
+        asset.isUnreadable ? "the locked asset" : asset.title
+    }
+
     private func card(_ asset: Asset) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: Spacing.sm) {
@@ -52,6 +58,7 @@ struct AssetCardsView: View {
                     HStack(spacing: Spacing.xs) {
                         if let onOpen {
                             Button("Open in Assets") { onOpen(asset) }
+                                .accessibilityLabel("Open \(Self.name(of: asset)) in Assets")
                         }
                         if asset.status == .proposed, !asset.isUnreadable {
                             Button("Approve") {
@@ -59,6 +66,7 @@ struct AssetCardsView: View {
                                 Task { await model.approve(asset, as: account) }
                             }
                             .disabled(model.approving.contains(asset.id))
+                            .accessibilityLabel("Approve \(Self.name(of: asset))")
                         }
                     }
                     .buttonStyle(.bordered)

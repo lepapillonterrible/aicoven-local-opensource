@@ -68,6 +68,32 @@ final class AssetCardsTests: XCTestCase {
         XCTAssertEqual(AssetLibraryRules.madeBy(asset("a", agent: "gone"), agents: ["scout": "Scout"]), "Agent", "An agent that is gone has no name left")
     }
 
+    func testTheAgentsNamesStayAsLastReadWhenTheyCannotBeReadAgain() async {
+        final class Names: @unchecked Sendable {
+            var given: [String: String]? = ["scout": "Scout"]
+        }
+        let names = Names()
+        let library = AssetLibraryModel(
+            covenID: "work",
+            source: AssetLibraryModel.Source(
+                assets: { _, _ in [] }, create: { _, _, _ in throw AssetError.tooMany }, move: { _, _, _ in },
+                agents: { _ in await MainActor.run { names.given } }
+            ),
+            signedIn: { "ada" }
+        )
+        await library.load()
+        XCTAssertEqual(library.agents, ["scout": "Scout"])
+        names.given = nil
+        await library.load()
+        XCTAssertEqual(library.agents, ["scout": "Scout"], "Not read this time: as they were")
+        names.given = [:]
+        await library.load()
+        XCTAssertEqual(library.agents, [:], "Read, and there are none")
+
+        XCTAssertEqual(AssetCardsView.name(of: asset("a", "Launch brief")), "Launch brief")
+        XCTAssertEqual(AssetCardsView.name(of: asset("a", unreadable: true)), "the locked asset")
+    }
+
     // MARK: - The cards' model
 
     /// What a source gives and was asked. Sendable by hand: used one step at a time.

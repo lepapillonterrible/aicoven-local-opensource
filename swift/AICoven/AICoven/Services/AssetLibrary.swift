@@ -206,8 +206,9 @@ final class AssetLibraryModel: ObservableObject {
         var create: @Sendable (_ new: NewAsset, _ covenID: String?, _ account: String) async throws -> Asset
         /// Moves the asset, as it was listed, to another status.
         var move: @Sendable (_ asset: Asset, _ next: AssetStatus, _ account: String) async throws -> Void
-        /// The names of the coven's agents, by id (none for Strix's place).
-        var agents: @Sendable (_ covenID: String?) async -> [String: String] = { _ in [:] }
+        /// The names of the coven's agents, by id (none for Strix's
+        /// place); nil where they could not be read.
+        var agents: @Sendable (_ covenID: String?) async -> [String: String]? = { _ in [:] }
 
         static let live = Source(
             assets: { try await AssetRepository.shared.assets(inCoven: $0, as: $1) },
@@ -218,7 +219,8 @@ final class AssetLibraryModel: ObservableObject {
             },
             move: { try await AssetRepository.shared.move($0.id, to: $1, listedAs: $0.version, as: $2) },
             agents: { covenID in
-                guard let covenID, let roles = try? await RoleService.shared.loadRoles(covenId: covenID) else { return [:] }
+                guard let covenID else { return [:] }
+                guard let roles = try? await RoleService.shared.loadRoles(covenId: covenID) else { return nil }
                 return Dictionary(roles.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
             }
         )
@@ -317,7 +319,8 @@ final class AssetLibraryModel: ObservableObject {
             guard reading > landed, signedIn() == account else { return }
             landed = reading
             assets = read
-            agents = names
+            // Names that could not be read again stay as they were read last.
+            if let names { agents = names }
             hasRead = true
             loadFailed = false
         } catch is CancellationError {

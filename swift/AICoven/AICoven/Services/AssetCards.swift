@@ -90,6 +90,8 @@ final class AssetCardsModel: ObservableObject {
             say(words)
         }
         guard signedIn() == account else { return }
+        // In a task of its own: whoever pressed may be called off, and how
+        // the asset stands now is still to be shown.
         await Task { await self.load() }.value
     }
 
