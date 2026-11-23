@@ -141,6 +141,12 @@ nonisolated struct Asset: Identifiable, Equatable {
     let files: [AssetFile]
     /// Whether what is kept of it cannot be opened with the account's key.
     var isUnreadable = false
+    /// What tells the asset as it was listed from the same asset changed
+    /// since: a digest of what is stored of its title, of what says what
+    /// it is, and of its files (all sealed, so it says nothing of them).
+    /// An asset is approved only as it was listed. Empty for one that was
+    /// not read from the store.
+    var version = ""
     let createdAt: Date
     let updatedAt: Date
 }

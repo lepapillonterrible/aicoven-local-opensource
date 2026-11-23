@@ -318,7 +318,9 @@ actor ToolExecutionService {
 
     // MARK: - Execution
 
-    func execute(toolCall called: ParsedToolCall, agentType: String, threadID: String? = nil, pictures: TurnPictures? = nil) async -> ToolExecutionResult {
+    func execute(
+        toolCall called: ParsedToolCall, agentType: String, threadID: String? = nil, pictures: TurnPictures? = nil, assets: TurnAssets? = nil
+    ) async -> ToolExecutionResult {
         // A tool called by a name it had before is the tool as it is named
         // now: allowed, refused and run as that one.
         let toolCall = ParsedToolCall(name: ToolNames.offeredName(of: called.name), args: called.args, reason: called.reason)
@@ -408,7 +410,10 @@ actor ToolExecutionService {
 
         // --- Assets ---
         case _ where AssetTools.reading.contains(toolCall.name):
-            return await AssetTools.read(toolCall, threadID: threadID)
+            return await AssetTools.read(toolCall, threadID: threadID, turn: assets)
+
+        case _ where AssetTools.writing.contains(toolCall.name):
+            return await AssetTools.write(toolCall, threadID: threadID, turn: assets)
 
         // --- Web Tools ---
         case "web_search":

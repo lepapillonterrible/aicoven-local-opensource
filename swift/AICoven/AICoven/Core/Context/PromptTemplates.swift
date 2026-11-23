@@ -91,6 +91,46 @@ enum PromptTemplates {
             ],
             example: #"{"tool": "asset.get", "input": {"asset_id": "6F1C2B0E-5A3D-4E9B-8C7A-1D2E3F4A5B6C"}, "reason": "Read the brief before answering"}"#
         ),
+        ToolDefinition(
+            name: "asset.create",
+            description: "Use this when the user asks to save, create or keep work as an asset or in Assets. Makes a draft asset where this thread is. For work you wrote (Markdown, a chart's JSON, a dataset, an SVG mockup), give file_name and content in this same call, so that the asset holds the work. At most 5 in a reply.",
+            parameters: [
+                ToolParameter(name: "type", type: "string", description: "One of: image, design_mockup, chart, dataset, implementation_brief, social_creative, deck. Use implementation_brief for Markdown or plain-text documents and deck for slides.", required: true),
+                ToolParameter(name: "title", type: "string", description: "A short title", required: true),
+                ToolParameter(name: "description", type: "string", description: "Optional: what the asset is, in a few sentences", required: false),
+                ToolParameter(name: "file_name", type: "string", description: "The name of the file that holds the work, like 'brief.md'; required with content", required: false),
+                ToolParameter(name: "content", type: "string", description: "The file's whole text; required with file_name", required: false),
+            ],
+            example: #"{"tool": "asset.create", "input": {"type": "implementation_brief", "title": "Checkout redesign brief", "file_name": "brief.md", "content": "Checkout redesign: what changes, and why."}, "reason": "The user asked to keep the brief as an asset"}"#
+        ),
+        ToolDefinition(
+            name: "asset.update",
+            description: "Change the title or the description of a draft asset. An asset that has been proposed is frozen for the user's review and cannot be changed.",
+            parameters: [
+                ToolParameter(name: "asset_id", type: "string", description: "The asset's id", required: true),
+                ToolParameter(name: "title", type: "string", description: "Optional: a new title", required: false),
+                ToolParameter(name: "description", type: "string", description: "Optional: a new description", required: false),
+            ],
+            example: #"{"tool": "asset.update", "input": {"asset_id": "6F1C2B0E-5A3D-4E9B-8C7A-1D2E3F4A5B6C", "title": "Checkout redesign brief, v2"}, "reason": "Name the revision"}"#
+        ),
+        ToolDefinition(
+            name: "asset.attach_file",
+            description: "Add a text file to a draft asset: a further file, or a corrected one. Text only; no binary data, base64 or links.",
+            parameters: [
+                ToolParameter(name: "asset_id", type: "string", description: "The asset's id", required: true),
+                ToolParameter(name: "file_name", type: "string", description: "The file's name, like 'tokens.json'", required: true),
+                ToolParameter(name: "content", type: "string", description: "The file's whole text", required: true),
+            ],
+            example: #"{"tool": "asset.attach_file", "input": {"asset_id": "6F1C2B0E-5A3D-4E9B-8C7A-1D2E3F4A5B6C", "file_name": "tokens.json", "content": "{}"}, "reason": "Add the design tokens to the mockup"}"#
+        ),
+        ToolDefinition(
+            name: "asset.propose",
+            description: "Propose a draft asset for the user's review. It needs a file first. Only the user approves, archives or sends back an asset: you cannot.",
+            parameters: [
+                ToolParameter(name: "asset_id", type: "string", description: "The asset's id", required: true),
+            ],
+            example: #"{"tool": "asset.propose", "input": {"asset_id": "6F1C2B0E-5A3D-4E9B-8C7A-1D2E3F4A5B6C"}, "reason": "The brief is ready for review"}"#
+        ),
 
         // File tools
         ToolDefinition(
@@ -861,7 +901,7 @@ enum PromptTemplates {
 
     /// All tools combined.
     static let allTools: Set<String> = basicChatTools
-        .union(AssetTools.reading)
+        .union(AssetTools.all)
         .union(fileTools)
         .union(shellTools)
         .union(githubTools)

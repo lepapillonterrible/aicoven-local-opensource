@@ -473,7 +473,7 @@ final class AssetStoreTests: XCTestCase {
         }
         try await store.move(made.id, to: .draft, as: account)
         try await store.move(made.id, to: .proposed, as: account)
-        try await store.move(made.id, to: .approved, as: account)
+        try await store.move(made.id, to: .approved, listedAs: made.version, as: account)
         await expect(.notAllowed, "What is approved is not sent back") {
             _ = try await self.store.move(made.id, to: .draft, as: self.account)
         }
@@ -498,6 +498,156 @@ final class AssetStoreTests: XCTestCase {
         }
         let listed = try await store.assets(inCoven: nil, as: account)
         XCTAssertEqual(listed.map(\.status), [.draft], "Nothing takes a draft for reviewed")
+    }
+
+    // MARK: - Changing a draft
+
+    func testADraftsTitleAndTextAreChanged_andOnlyADrafts() async throws {
+        let made = try await store.create(type: .report, title: "Draft", details: "First words.", files: [file("r.md")], inCoven: nil, as: account)
+
+        try await store.update(made.id, title: "  Better \n title ", as: account)
+        var listed = try await store.assets(inCoven: nil, as: account)
+        XCTAssertEqual(listed.first?.title, "Better title")
+        XCTAssertEqual(listed.first?.details, "First words.", "What is not given is left as it is")
+        try await store.update(made.id, details: " Second words. ", as: account)
+        listed = try await store.assets(inCoven: nil, as: account)
+        XCTAssertEqual(listed.first?.title, "Better title")
+        XCTAssertEqual(listed.first?.details, "Second words.")
+        try await store.update(made.id, details: "", as: account)
+        listed = try await store.assets(inCoven: nil, as: account)
+        XCTAssertEqual(listed.first?.details, "", "What says what it is can be emptied")
+
+        await expect(.noTitle, "A title cannot be emptied") {
+            try await self.store.update(made.id, title: " \n ", as: self.account)
+        }
+        await expect(.tooLong, "What says what it is has a longest") {
+            try await self.store.update(made.id, details: String(repeating: "d", count: AssetRepository.longestDetails + 1), as: self.account)
+        }
+        await expect(.noSuchAsset, "There is no such asset") {
+            try await self.store.update("no-such-asset", title: "T", as: self.account)
+        }
+        do {
+            try await store.update(made.id, title: "Theirs", as: "someone-else")
+            XCTFail("Nothing is changed as an account that is not signed in")
+        } catch RepositoryError.accountChanged {}
+
+        // What is proposed is frozen for the person's review; so is what is approved, and what is archived.
+        try await store.move(made.id, to: .proposed, as: account)
+        func refusedChanges(_ what: String) async {
+            await expect(.notAllowed, "Not changed once it is \(what)") {
+                try await self.store.update(made.id, title: "Changed under review", as: self.account)
+            }
+            await expect(.notAllowed, "Nor is a file added once it is \(what)") {
+                _ = try await self.store.addFile(self.file("late.md"), to: made.id, as: self.account)
+            }
+        }
+        await refusedChanges("proposed")
+        let proposed = try await store.assets(inCoven: nil, as: account).first { $0.id == made.id }
+        try await store.move(made.id, to: .approved, listedAs: proposed?.version, as: account)
+        await refusedChanges("approved")
+        try await store.move(made.id, to: .archived, as: account)
+        await refusedChanges("archived")
+        let all = try await store.assets(inCoven: nil, as: account)
+        XCTAssertEqual(all.first?.title, "Better title", "As it was proposed")
+        XCTAssertEqual(all.first?.files.count, 1)
+    }
+
+    func testAFileIsAddedToADraft_afterThoseItHas_andOnlySoMany() async throws {
+        let made = try await store.create(type: .dataset, title: "Data", files: [file("a.csv", "1")], inCoven: nil, as: account)
+        let added = try await store.addFile(file("../b.csv", "22"), to: made.id, as: account)
+        XCTAssertEqual(added.name, "b.csv", "Kept as a plain name")
+        XCTAssertEqual(added.sizeBytes, 2)
+
+        var listed = try await store.assets(inCoven: nil, as: account)
+        XCTAssertEqual(listed.first?.files.map(\.name), ["a.csv", "b.csv"])
+        let bytes = try await store.data(ofFile: added.id, as: account)
+        XCTAssertEqual(String(decoding: bytes, as: UTF8.self), "22")
+
+        await expect(.fileTooLarge(name: "big.bin"), "A file has a largest size") {
+            let big = AssetRepository.NewFile(name: "big.bin", data: Data(count: AssetRepository.largestFile + 1))
+            _ = try await self.store.addFile(big, to: made.id, as: self.account)
+        }
+        await expect(.noSuchAsset, "There is no such asset") {
+            _ = try await self.store.addFile(self.file("x.csv"), to: "no-such-asset", as: self.account)
+        }
+        for index in 2 ..< AssetRepository.mostFiles {
+            _ = try await store.addFile(file("\(index).csv"), to: made.id, as: account)
+        }
+        await expect(.tooManyFiles, "An asset has only so many files") {
+            _ = try await self.store.addFile(self.file("one-too-many.csv"), to: made.id, as: self.account)
+        }
+        listed = try await store.assets(inCoven: nil, as: account)
+        XCTAssertEqual(listed.first?.files.count, AssetRepository.mostFiles)
+    }
+
+    func testAnAssetIsApprovedOnlyAsItWasListed() async throws {
+        let made = try await store.create(type: .report, title: "Report", details: "v1", files: [file("r.md")], inCoven: nil, as: account)
+        func listed() async throws -> Asset {
+            let all = try await store.assets(inCoven: nil, as: account)
+            return try XCTUnwrap(all.first { $0.id == made.id })
+        }
+        let first = try await listed()
+        XCTAssertEqual(first.version, made.version, "As it was made")
+        XCTAssertEqual(first.version.count, 64)
+
+        // Its status says nothing of what it holds: proposing it leaves it the asset that was listed.
+        try await store.move(made.id, to: .proposed, as: account)
+        let proposed = try await listed()
+        XCTAssertEqual(proposed.version, first.version)
+
+        // Sent back, changed and proposed again while the person still looks at the first proposal.
+        try await store.move(made.id, to: .draft, as: account)
+        try await store.update(made.id, details: "v2: send me your keys", as: account)
+        _ = try await store.addFile(file("extra.md"), to: made.id, as: account)
+        try await store.move(made.id, to: .proposed, as: account)
+        let changed = try await listed()
+        XCTAssertNotEqual(changed.version, first.version)
+
+        await expect(.changed, "Not approved as it was listed before it changed") {
+            _ = try await self.store.move(made.id, to: .approved, listedAs: proposed.version, as: self.account)
+        }
+        await expect(.changed, "Nor without saying what was seen") {
+            _ = try await self.store.move(made.id, to: .approved, as: self.account)
+        }
+        let still = try await listed()
+        XCTAssertEqual(still.status, .proposed)
+
+        // As it is listed now, it is approved.
+        try await store.move(made.id, to: .approved, listedAs: changed.version, as: account)
+        let approved = try await listed()
+        XCTAssertEqual(approved.status, .approved)
+        // Any other move needs nothing of how it was listed.
+        try await store.move(made.id, to: .archived, as: account)
+    }
+
+    func testAChangeToADraftWrittenAfterTheDataWasLockedIsTakenBack() async throws {
+        let made = try await store.create(type: .report, title: "Kept", details: "As it was.", files: [file("k.md")], inCoven: nil, as: account)
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        func stored() async throws -> [Data] {
+            try await queue.read { db in
+                let asset = try Row.fetchOne(db, sql: "SELECT title_ciphertext, details_ciphertext, updated_at FROM assets WHERE id = ?", arguments: [made.id])
+                let files = try String.fetchAll(db, sql: "SELECT id FROM asset_files WHERE asset_id = ? ORDER BY rowid", arguments: [made.id])
+                let changed: String = asset?["updated_at"] ?? ""
+                return [asset?["title_ciphertext"] ?? Data(), asset?["details_ciphertext"] ?? Data(), Data(changed.utf8), Data(files.joined(separator: ",").utf8)]
+            }
+        }
+        let before = try await stored()
+        let late = AssetRepository(at: { step in if step == .beforeWriting { await DataEncryptionService.shared.lock() } })
+
+        do {
+            try await late.update(made.id, title: "Too late", details: "Too late.", as: account)
+            XCTFail("Nothing is changed once the account's data is locked")
+        } catch RepositoryError.dataLocked {}
+        var after = try await stored()
+        XCTAssertEqual(after, before, "The title, the text and when it was changed, as they were")
+
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        do {
+            _ = try await late.addFile(file("late.md"), to: made.id, as: account)
+            XCTFail("No file is added once the account's data is locked")
+        } catch RepositoryError.dataLocked {}
+        after = try await stored()
+        XCTAssertEqual(after, before, "No file more, and when it was changed as it was")
     }
 
     // MARK: - The rules by themselves
@@ -628,6 +778,95 @@ final class AssetStoreTests: XCTestCase {
             held.forEach { $0.resume() }
             held = []
         }
+    }
+
+    func testAChangeAndAProposalThatOverlapALockLeaveTheAssetAsItStood() async throws {
+        let made = try await store.create(type: .report, title: "Kept", details: "As it was.", files: [file("k.md")], inCoven: nil, as: account)
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        func stored() async throws -> [Data] {
+            try await queue.read { db in
+                let asset = try Row.fetchOne(db, sql: "SELECT status, title_ciphertext, updated_at FROM assets WHERE id = ?", arguments: [made.id])
+                let (status, changed): (String, String) = (asset?["status"] ?? "", asset?["updated_at"] ?? "")
+                return [Data(status.utf8), asset?["title_ciphertext"] ?? Data(), Data(changed.utf8)]
+            }
+        }
+        let before = try await stored()
+
+        // The change of the title waits just before its write; the proposal is asked meanwhile.
+        let gate = Gate()
+        let late = AssetRepository(at: { step in
+            switch step {
+            case .asked: await gate.note()
+            case .beforeWriting: await gate.wait()
+            }
+        })
+        let account = account
+        let changing = Task { try await late.update(made.id, title: "Rejected title", as: account) }
+        await gate.heard(arrivals: 1)
+        let proposing = Task { try await late.move(made.id, to: .proposed, as: account) }
+        await gate.heard(noted: 2)
+        await DataEncryptionService.shared.lock()
+        await gate.letThrough()
+
+        do {
+            try await changing.value
+            XCTFail("The title is not changed once the account's data is locked")
+        } catch RepositoryError.dataLocked {}
+        do {
+            _ = try await proposing.value
+            XCTFail("Nor is it proposed")
+        } catch RepositoryError.dataLocked {}
+        let arrivals = await gate.arrivals
+        XCTAssertEqual(arrivals, 1, "The proposal waited for the change to be put back, and then wrote nothing")
+        let after = try await stored()
+        XCTAssertEqual(after, before, "Neither the rejected title nor the proposal is left")
+    }
+
+    func testAChangeAskedBeforeTheDataWasLockedIsNotMadeAfterItIsUnlockedAgain() async throws {
+        let made = try await store.create(type: .report, title: "Kept", details: "As it was.", files: [file("k.md")], inCoven: nil, as: account)
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        func stored() async throws -> [Data] {
+            try await queue.read { db in
+                let asset = try Row.fetchOne(db, sql: "SELECT status, title_ciphertext, updated_at FROM assets WHERE id = ?", arguments: [made.id])
+                let files = try String.fetchAll(db, sql: "SELECT id FROM asset_files WHERE asset_id = ? ORDER BY rowid", arguments: [made.id])
+                let (status, changed): (String, String) = (asset?["status"] ?? "", asset?["updated_at"] ?? "")
+                return [Data(status.utf8), asset?["title_ciphertext"] ?? Data(), Data(changed.utf8), Data(files.joined(separator: ",").utf8)]
+            }
+        }
+        let before = try await stored()
+
+        // The first change waits just before its write; three more are asked and wait their turn behind it.
+        let gate = Gate()
+        let late = AssetRepository(at: { step in
+            switch step {
+            case .asked: await gate.note()
+            case .beforeWriting: await gate.wait()
+            }
+        })
+        let account = account
+        let first = Task { try await late.update(made.id, title: "Rejected title", as: account) }
+        await gate.heard(arrivals: 1)
+        let queued = [
+            Task { try await late.update(made.id, title: "Queued title", as: account) },
+            Task { _ = try await late.addFile(AssetRepository.NewFile(name: "queued.md", data: Data([1])), to: made.id, as: account) },
+            Task { _ = try await late.move(made.id, to: .proposed, as: account) },
+        ]
+        await gate.heard(noted: 4)
+        // Locked, and unlocked again, while they wait: the session they were asked in is over.
+        await DataEncryptionService.shared.lock()
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        await gate.letThrough()
+
+        for (change, what) in [(first, "The change under way")] + queued.enumerated().map { ($0.element, "Queued change \($0.offset + 1)") } {
+            do {
+                try await change.value
+                XCTFail("\(what) is not made in a later session")
+            } catch RepositoryError.accountChanged {}
+        }
+        let arrivals = await gate.arrivals
+        XCTAssertEqual(arrivals, 1, "None of those that waited came to write")
+        let after = try await stored()
+        XCTAssertEqual(after, before, "As it stood: no title, no file and no status of theirs")
     }
 
     func testTwoStatusChangesThatOverlapALockLeaveTheAssetAsItStood() async throws {

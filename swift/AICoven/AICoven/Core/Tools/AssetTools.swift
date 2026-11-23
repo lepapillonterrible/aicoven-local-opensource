@@ -3,13 +3,21 @@ import Foundation
 /// The agents' tools for the Assets library, named as the cloud app names
 /// them. A turn's agent reads the assets of the place its thread is in (its
 /// coven's, or Strix's for a thread in none) and no other place's, as the
-/// account the thread belongs to. What an asset says (its title, what says
+/// account the thread belongs to; and it makes assets there, as drafts,
+/// changes drafts, and proposes them for the person's review. It never
+/// approves, archives or takes one out again: those are the person's. What an asset says (its title, what says
 /// what it is, its files' names and text) reaches the model as data,
 /// marked as such: it was written by a person or by an earlier turn, and is
 /// never the turn's instructions.
 nonisolated enum AssetTools {
     /// The tools that only read.
     static let reading: Set<String> = ["asset.search", "asset.get"]
+    /// The tools that make or change an asset.
+    static let writing: Set<String> = ["asset.create", "asset.update", "asset.propose", "asset.attach_file"]
+    static let all = reading.union(writing)
+
+    /// The longest text an agent gives as a file of an asset, in characters.
+    static let longestContent = 100_000
 
     /// The most assets one search tells of, and the most file names told
     /// of each (each at no more than so many characters): a search's
@@ -33,19 +41,43 @@ nonisolated enum AssetTools {
         var covenOfThread: @Sendable (_ threadID: String, _ account: String) async throws -> String?
         var assets: @Sendable (_ covenID: String?, _ account: String) async throws -> [Asset]
         var data: @Sendable (_ fileID: String, _ account: String) async throws -> Data
+        var create: @Sendable (_ new: New, _ covenID: String?, _ agentID: String, _ threadID: String, _ account: String) async throws -> Asset
+        var update: @Sendable (_ assetID: String, _ title: String?, _ details: String?, _ account: String) async throws -> Void
+        var addFile: @Sendable (_ file: AssetRepository.NewFile, _ assetID: String, _ account: String) async throws -> AssetFile
+        var propose: @Sendable (_ assetID: String, _ account: String) async throws -> Void
+
+        /// An asset as an agent gives it.
+        struct New {
+            var type: AssetType
+            var title: String
+            var details: String
+            var file: AssetRepository.NewFile?
+        }
 
         static let live = Store(
             account: { await MainActor.run { UserScope.currentUserID } },
             covenOfThread: { try await ThreadRepository.shared.covenID(ofThread: $0, for: $1) },
             assets: { try await AssetRepository.shared.assets(inCoven: $0, as: $1) },
-            data: { try await AssetRepository.shared.data(ofFile: $0, as: $1) }
+            data: { try await AssetRepository.shared.data(ofFile: $0, as: $1) },
+            create: { new, covenID, agentID, threadID, account in
+                try await AssetRepository.shared.create(
+                    type: new.type, title: new.title, details: new.details, files: new.file.map { [$0] } ?? [],
+                    inCoven: covenID, madeBy: agentID, inThread: threadID, as: account
+                )
+            },
+            update: { try await AssetRepository.shared.update($0, title: $1, details: $2, as: $3) },
+            addFile: { try await AssetRepository.shared.addFile($0, to: $1, as: $2) },
+            propose: { _ = try await AssetRepository.shared.move($0, to: .proposed, as: $1) }
         )
     }
 
-    /// Runs one of the reading tools for a turn in `threadID`.
-    static func read(_ call: ParsedToolCall, threadID: String?, store: Store = .live) async -> ToolExecutionResult {
-        guard let threadID else {
-            return .error(tool: call.name, message: "Assets are read only in a thread.", errorType: "asset_needs_a_thread")
+    /// Runs one of the reading tools for a turn in `threadID`. `turn` is
+    /// the turn's own: only a turn that was offered the asset tools has
+    /// one, so a call from any other turn reads nothing, whatever tools
+    /// some other turn has just been allowed.
+    static func read(_ call: ParsedToolCall, threadID: String?, turn: TurnAssets?, store: Store = .live) async -> ToolExecutionResult {
+        guard let threadID, turn != nil else {
+            return .error(tool: call.name, message: "Assets are read only in a turn of a thread.", errorType: "asset_needs_a_thread")
         }
         // A turn can outlive the account it was started as: the assets
         // are read as whoever is signed in now, of a thread that is theirs.
@@ -73,6 +105,212 @@ nonisolated enum AssetTools {
             return await get(call, among: assets, account: account, store: store)
         default:
             return .error(tool: call.name, message: "There is no such asset tool.", errorType: "unknown_tool")
+        }
+    }
+
+    // MARK: - Making and changing
+
+    /// Posted when a tool has made or changed an asset, so that a place
+    /// showing assets reads them again.
+    static let changedAssets = Notification.Name("AssetToolsChangedAssets")
+
+    /// Runs one of the writing tools for a turn in `threadID`. `turn` is
+    /// the turn's own count of what it makes and changes, and says who its
+    /// agent is; only a turn that was offered the asset tools has one, so
+    /// without it nothing is made.
+    static func write(_ call: ParsedToolCall, threadID: String?, turn: TurnAssets?, store: Store = .live) async -> ToolExecutionResult {
+        let result = await written(call, threadID: threadID, turn: turn, store: store)
+        if result.status == "ok" {
+            NotificationCenter.default.post(name: changedAssets, object: nil)
+        }
+        return result
+    }
+
+    private static func written(_ call: ParsedToolCall, threadID: String?, turn: TurnAssets?, store: Store) async -> ToolExecutionResult {
+        guard let threadID, let turn else {
+            return .error(tool: call.name, message: "Assets are made only in a turn of a thread.", errorType: "asset_needs_a_thread")
+        }
+        let account = await store.account()
+        let covenID: String?
+        do {
+            covenID = try await store.covenOfThread(threadID, account)
+        } catch is CancellationError {
+            return .error(tool: call.name, message: "Stopped before anything was done.", errorType: "cancelled")
+        } catch is ThreadLookupError {
+            return .error(tool: call.name, message: "This thread's assets cannot be changed.", errorType: "asset_thread_unreadable")
+        } catch {
+            AppErrorReporter.log(message: "A thread could not be placed for a tool (\(type(of: error)))", context: "AssetTools.write")
+            return .error(tool: call.name, message: "The assets could not be reached.", errorType: "asset_store_unavailable", isRetryable: true)
+        }
+        do {
+            if call.name == "asset.create" {
+                return try await create(call, inCoven: covenID, threadID: threadID, turn: turn, account: account, store: store)
+            }
+            // Any other changes an asset that is there, in this place.
+            guard let id = text(call.args["asset_id"]) else {
+                return .validationError(tool: call.name, message: "Missing required argument: 'asset_id'", field: "asset_id")
+            }
+            let assets = try await store.assets(covenID, account)
+            guard await store.account() == account else { return accountChanged(call) }
+            guard let asset = assets.first(where: { $0.id == id }) else {
+                return .error(tool: call.name, message: "There is no asset with that id here. Find its id with asset.search.", errorType: "asset_not_found")
+            }
+            // What the key cannot open is not changed or proposed: nobody
+            // can see what it holds.
+            guard !asset.isUnreadable else {
+                return .error(tool: call.name, message: "That asset cannot be opened with the account's key.", errorType: "asset_locked")
+            }
+            guard turn.hasChangesLeft else {
+                return .error(
+                    tool: call.name, message: "This turn has changed assets \(TurnAssets.mostChanges) times, which is as many as a turn may.",
+                    errorType: "asset_turn_limit"
+                )
+            }
+            switch call.name {
+            case "asset.update":
+                let title = text(call.args["title"])
+                let details = (call.args["description"]?.value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard title != nil || details != nil else {
+                    return .validationError(tool: call.name, message: "Give a 'title', a 'description', or both.", field: "title")
+                }
+                try await store.update(asset.id, title, details, account)
+                turn.changed()
+                return .success(tool: call.name, result: ["asset_id": .string(asset.id)], contextBlock: "[Asset updated] asset_id: \(asset.id).")
+            case "asset.attach_file":
+                switch file(from: call) {
+                case let .failure(refusal):
+                    return .validationError(tool: call.name, message: refusal.message, field: refusal.field)
+                case .success(nil):
+                    return .validationError(tool: call.name, message: "Missing required arguments: 'file_name' and 'content'", field: "file_name")
+                case let .success(file?):
+                    let added = try await store.addFile(file, asset.id, account)
+                    turn.changed()
+                    return .success(
+                        tool: call.name, result: ["asset_id": .string(asset.id)],
+                        contextBlock: "[File attached] asset_id: \(asset.id); file: \(AttachmentContext.plainName(added.name))."
+                    )
+                }
+            case "asset.propose":
+                try await store.propose(asset.id, account)
+                turn.changed()
+                return .success(
+                    tool: call.name, result: ["asset_id": .string(asset.id)],
+                    contextBlock: "[Asset proposed] asset_id: \(asset.id). It waits for the person's review in Assets. Only they approve it."
+                )
+            default:
+                return .error(tool: call.name, message: "There is no such asset tool.", errorType: "unknown_tool")
+            }
+        } catch is CancellationError {
+            return .error(tool: call.name, message: "Stopped before it was done.", errorType: "cancelled")
+        } catch let refused as AssetError {
+            return refusal(of: refused, tool: call.name)
+        } catch {
+            guard await store.account() == account else { return accountChanged(call) }
+            AppErrorReporter.log(message: "An asset could not be written for a tool (\(type(of: error)))", context: "AssetTools.write")
+            return .error(tool: call.name, message: "The asset could not be saved.", errorType: "asset_store_unavailable", isRetryable: true)
+        }
+    }
+
+    private static func create(
+        _ call: ParsedToolCall, inCoven covenID: String?, threadID: String, turn: TurnAssets, account: String, store: Store
+    ) async throws -> ToolExecutionResult {
+        guard let named = text(call.args["type"]) else {
+            return .validationError(tool: call.name, message: "Missing required argument: 'type'", field: "type")
+        }
+        let type = AssetType(rawValue: named.lowercased())
+        guard type.isName else {
+            let known = AssetType.offered.map(\.rawValue).joined(separator: ", ")
+            return .validationError(tool: call.name, message: "'type' is a name such as: \(known).", field: "type")
+        }
+        guard let title = text(call.args["title"]) else {
+            return .validationError(tool: call.name, message: "Missing required argument: 'title'", field: "title")
+        }
+        let new: Store.New
+        switch file(from: call) {
+        case let .failure(refusal):
+            return .validationError(tool: call.name, message: refusal.message, field: refusal.field)
+        case let .success(file):
+            new = Store.New(type: type, title: title, details: (call.args["description"]?.value as? String) ?? "", file: file)
+        }
+        guard turn.takeAMaking() else {
+            return .error(
+                tool: call.name, message: "This turn has made \(TurnAssets.mostMade) assets, which is as many as a turn may.", errorType: "asset_turn_limit"
+            )
+        }
+        let asset: Asset
+        do {
+            asset = try await store.create(new, covenID, turn.agentID, threadID, account)
+        } catch {
+            // It made nothing: the making is the turn's again.
+            turn.made(nil)
+            throw error
+        }
+        turn.made(asset.id)
+        var lines = ["[Asset created] asset_id: \(asset.id); type: \(asset.type.rawValue); status: draft."]
+        if let file = asset.files.first { lines[0] += " File: \(AttachmentContext.plainName(file.name))." }
+        lines.append("It is kept in Assets as a draft, where the person finds it. Do not write a link to it.")
+        lines.append(
+            asset.files.isEmpty
+                ? "It has no file yet: add one with asset.attach_file before it can be proposed."
+                : "When it is ready for their review, propose it with asset.propose."
+        )
+        return .success(tool: call.name, result: ["asset_id": .string(asset.id)], contextBlock: lines.joined(separator: "\n"))
+    }
+
+    /// Why a file given by a call is not taken.
+    private struct Refusal: Error {
+        let message: String
+        let field: String
+    }
+
+    /// The file a call gives as `file_name` and `content`: nil where it
+    /// gives neither; refused where it gives one without the other, or
+    /// more text than a file of an agent's may hold.
+    private static func file(from call: ParsedToolCall) -> Result<AssetRepository.NewFile?, Refusal> {
+        let name = text(call.args["file_name"])
+        let content = call.args["content"]?.value as? String
+        switch (name, content) {
+        case (nil, nil):
+            return .success(nil)
+        case (nil, _):
+            return .failure(Refusal(message: "Give a 'file_name' with 'content'.", field: "file_name"))
+        case (_, nil):
+            return .failure(Refusal(message: "Give 'content' with 'file_name': the file's whole text.", field: "content"))
+        case let (name?, content?):
+            guard !content.isEmpty else { return .failure(Refusal(message: "'content' is empty.", field: "content")) }
+            guard content.count <= longestContent else {
+                return .failure(Refusal(message: "'content' is longer than \(longestContent) characters.", field: "content"))
+            }
+            return .success(AssetRepository.NewFile(name: name, data: Data(content.utf8)))
+        }
+    }
+
+    /// What a model is told of a change the store refused.
+    private static func refusal(of error: AssetError, tool: String) -> ToolExecutionResult {
+        switch error {
+        case .noSuchAsset:
+            .error(tool: tool, message: "There is no asset with that id here.", errorType: "asset_not_found")
+        case .notAllowed:
+            .error(
+                tool: tool, message: "Only a draft can be changed or proposed, and this asset is not one. Once proposed, it is the person's to review.",
+                errorType: "asset_not_a_draft"
+            )
+        case .needsAFile:
+            .error(tool: tool, message: "An asset needs a file before it is proposed. Add one with asset.attach_file.", errorType: "asset_needs_a_file")
+        case .noTitle:
+            .validationError(tool: tool, message: "'title' says nothing.", field: "title")
+        case .tooLong:
+            .validationError(tool: tool, message: "'description' is longer than \(AssetRepository.longestDetails) characters.", field: "description")
+        case .notAType:
+            .validationError(tool: tool, message: "'type' does not read as an asset type.", field: "type")
+        case .fileTooLarge:
+            .validationError(tool: tool, message: "The file is larger than a file of an asset may be.", field: "content")
+        case .tooManyFiles:
+            .error(tool: tool, message: "This asset has as many files as an asset may.", errorType: "asset_full")
+        case .tooMany:
+            .error(tool: tool, message: "As many assets as can be kept are kept here already.", errorType: "asset_library_full")
+        case .noSuchCoven, .noSuchThread, .changed, .unreadable:
+            .error(tool: tool, message: "The asset could not be saved here.", errorType: "asset_not_saved")
         }
     }
 
