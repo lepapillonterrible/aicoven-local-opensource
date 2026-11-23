@@ -878,6 +878,12 @@ final class TaskStoreTests: XCTestCase {
         let hourBefore = try XCTUnwrap(TaskReminder.time(for: .hourBefore, due: onTheDay, timeZone: berlin))
         XCTAssertEqual(try moment(2027, 3, 28, 3, 30, in: berlin).timeIntervalSince(hourBefore), 3600)
 
+        // Due at midnight: the start of the due day itself, not of the day after.
+        let midnight = try XCTUnwrap(TaskDue(date: day("2027-02-01"), time: "00:00"))
+        XCTAssertEqual(TaskReminder.time(for: .atDue, due: midnight, timeZone: berlin), try moment(2027, 2, 1, 0, in: berlin))
+        XCTAssertEqual(TaskReminder.time(for: .hourBefore, due: midnight, timeZone: berlin), try moment(2027, 1, 31, 23, in: berlin))
+        XCTAssertEqual(TaskReminder.time(for: .dayBefore, due: midnight, timeZone: berlin), try moment(2027, 1, 31, 0, in: berlin))
+
         XCTAssertNil(TaskReminder.time(for: .atDue, due: dayOnly, timeZone: "Mars/Olympus"), "A time zone that is none")
         XCTAssertEqual(TaskReminderPreset.allCases.map(\.title), ["At the due time", "1 hour before", "1 day before"], "The cloud app's words")
     }
