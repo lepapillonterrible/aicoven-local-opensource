@@ -105,11 +105,10 @@ These are used in two main places:
 - The turn gives it to its reply, which shows it like any attachment (`FileAttachmentDetail`): a thumbnail that opens in Quick Look. The model is told the person has the image, not where it is.
 - OpenRouter's image models are not used yet.
 
-### File generation
+### Files a tool makes
 
-- `generateFile(name:mimeType:contents:)` writes a file to disk (typically under a `GeneratedFiles` directory) and returns a `GeneratedFile` with `id`, `url`, and MIME type.
-- Used for things like saving summaries, reports, or other text artifacts produced during a chat or agent run.
-- Files are exposed to the UI as attachments so users can open or export them via the host OS.
+- The tool service writes no file. A picture a tool makes is kept in the app's encrypted attachment store and shown with the reply.
+- Work kept on purpose (a brief, a dataset, a chart) is an asset: the `asset.*` tools keep it, encrypted, in the Assets library of the place the thread is in.
 
 ## Tools in the chat UI
 

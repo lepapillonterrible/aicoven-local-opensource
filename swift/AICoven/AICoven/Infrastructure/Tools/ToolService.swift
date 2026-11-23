@@ -22,7 +22,6 @@ extension ToolService: ChatToolService {}
 /// level services (agents, chat):
 /// - Timezone-aware current time
 /// - Web search (stubbed for now)
-/// - File generation with download links
 /// - Image analysis (vision)
 /// - File analysis (summaries / QA)
 ///
