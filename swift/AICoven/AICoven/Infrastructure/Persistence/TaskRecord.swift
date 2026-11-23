@@ -156,18 +156,20 @@ actor TaskRepository {
     /// change is made only if the same key is still in memory when its
     /// turn comes (and until it has been written). One asked for before
     /// the data was locked is not made after it was unlocked again.
-    private func inTurn(as account: String, _ change: @escaping @Sendable (_ epoch: Int) async throws -> Void) async throws {
+    private func inTurn<Done: Sendable>(
+        as account: String, _ change: @escaping @Sendable (_ epoch: Int) async throws -> Done
+    ) async throws -> Done {
         let epoch = await DataEncryptionService.shared.keyEpoch
         try await AccountSeal.requireKey(of: account, since: epoch)
         let before = lastChange
-        let changing = Task {
+        let changing = Task { () throws -> Done in
             await self.at?(.asked)
             await before?.value
             try await AccountSeal.requireKey(of: account, since: epoch)
-            try await change(epoch)
+            return try await change(epoch)
         }
         lastChange = Task { _ = try? await changing.value }
-        try await changing.value
+        return try await changing.value
     }
 
     /// The change last asked for, done or not.
@@ -269,6 +271,69 @@ actor TaskRepository {
             }
             throw error
         }
+    }
+
+    // MARK: - Pins that have run out
+
+    /// Answers "Still on today?" for these of `account`'s tasks, in one
+    /// write: each that is open and pinned for a day that is over (at the
+    /// time of the write) is kept for today, its pin ending at `keepUntil`,
+    /// or loses its pin (nil). A task that is not, because it was pinned
+    /// again, finished or answered meanwhile, is left as it is. Answers
+    /// with the tasks it changed. Like any pin, this leaves when a task
+    /// was last changed as it is. It takes its turn among the changes.
+    @discardableResult
+    func answerLapsedPins(of ids: [String], keepUntil: Date?, as account: String) async throws -> Set<String> {
+        try await inTurn(as: account) { epoch in try await self.answerLapsedPinsInTurn(of: ids, keepUntil: keepUntil, as: account, since: epoch) }
+    }
+
+    private func answerLapsedPinsInTurn(of ids: [String], keepUntil: Date?, as account: String, since epoch: Int) async throws -> Set<String> {
+        guard !ids.isEmpty else { return [] }
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let now = now
+        await at?(.beforeWriting)
+        // Each task it changed, with its pin's end as it was stored and
+        // which writing of the task this one is, to put it back by.
+        let written: [(id: String, ends: DatabaseValue, revision: Int)] = try await dbQueue.write { db in
+            let moment = now()
+            if let keepUntil, keepUntil <= moment { throw TaskError.pinEnded }
+            var changed: [(id: String, ends: DatabaseValue, revision: Int)] = []
+            for id in Set(ids) {
+                let stored = try Row.fetchOne(
+                    db, sql: "SELECT status, pin_period, pin_expires_at, revision FROM tasks WHERE id = ? AND user_id = ?", arguments: [id, account]
+                )
+                guard let stored, (stored["status"] as String) == TaskStatus.open.rawValue,
+                      (stored["pin_period"] as String?) == TaskPinPeriod.today.rawValue,
+                      let ends = Date.fromDatabaseValue(stored["pin_expires_at"]), ends <= moment else { continue }
+                let revision: Int = stored["revision"]
+                try db.execute(
+                    sql: "UPDATE tasks SET pin_period = ?, pin_expires_at = ?, revision = ? WHERE id = ? AND user_id = ?",
+                    arguments: [keepUntil == nil ? nil : TaskPinPeriod.today.rawValue, keepUntil, revision + 1, id, account]
+                )
+                changed.append((id, stored["pin_expires_at"], revision + 1))
+            }
+            return changed
+        }
+        do {
+            try await AccountSeal.requireKey(of: account, since: epoch)
+        } catch {
+            // Locked, or another account's, while the write waited its
+            // turn: each pin is put back as it stood, unless something has
+            // written its task since.
+            await takeBack(in: dbQueue) { db in
+                for task in written {
+                    try db.execute(
+                        sql: """
+                        UPDATE tasks SET pin_period = ?, pin_expires_at = ?, revision = revision + 1
+                        WHERE id = ? AND user_id = ? AND revision = ?
+                        """,
+                        arguments: [TaskPinPeriod.today.rawValue, task.ends, task.id, account, task.revision]
+                    )
+                }
+            }
+            throw error
+        }
+        return Set(written.map(\.id))
     }
 
     // MARK: - Reading

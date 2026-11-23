@@ -12,11 +12,15 @@ final class TasksModel: ObservableObject {
         var tasks: @Sendable (_ covenID: String?, _ account: String) async throws -> TaskListing
         var create: @Sendable (_ title: String, _ covenID: String?, _ account: String) async throws -> TaskItem
         var change: @Sendable (_ id: String, _ change: TaskChange, _ account: String) async throws -> Void
+        /// Keeps for today (until the time given) or clears the pins of
+        /// these tasks that have run out, and answers with those it changed.
+        var answerLapsedPins: @Sendable (_ ids: [String], _ keepUntil: Date?, _ account: String) async throws -> Set<String>
 
         static let live = Source(
             tasks: { try await TaskRepository.shared.tasks(inCoven: $0, as: $1) },
             create: { try await TaskRepository.shared.create(title: $0, inCoven: $1, as: $2) },
-            change: { try await TaskRepository.shared.change($0, $1, as: $2) }
+            change: { try await TaskRepository.shared.change($0, $1, as: $2) },
+            answerLapsedPins: { try await TaskRepository.shared.answerLapsedPins(of: $0, keepUntil: $1, as: $2) }
         )
     }
 
@@ -46,8 +50,13 @@ final class TasksModel: ObservableObject {
         task.isUnreadable ? "the task" : task.title
     }
 
+    /// A task's title between quotation marks, as a failure names it.
+    static func quoted(_ task: TaskItem) -> String {
+        task.isUnreadable ? "the task" : "“\(task.title)”"
+    }
+
     static func couldNotSave(_ task: TaskItem) -> String {
-        "Couldn't save the change to \(task.isUnreadable ? "the task" : "“\(task.title)”"). Try again."
+        "Couldn't save the change to \(quoted(task)). Try again."
     }
 
     /// The coven whose tasks these are; nil for Strix's.
@@ -57,6 +66,10 @@ final class TasksModel: ObservableObject {
     /// Tells VoiceOver what came of what was asked, as it happens: each
     /// is said, also two that end in the same moment.
     private let announce: (String) -> Void
+    /// The time, and the person's calendar: a pin ends with their day or
+    /// their week.
+    private let now: () -> Date
+    private let calendar: () -> Calendar
     /// Counts the readings, and remembers the latest that landed and the
     /// latest that landed with the tasks read: a listing that lands after
     /// a later listing did is not shown over it, and a failure that lands
@@ -66,12 +79,18 @@ final class TasksModel: ObservableObject {
     private var landed = 0
     private var read = 0
 
-    /// The app's own store, account and voice unless a test gives others.
-    init(covenID: String?, source: Source? = nil, signedIn: (() -> String)? = nil, announce: ((String) -> Void)? = nil) {
+    /// The app's own store, account, voice, clock and calendar unless a
+    /// test gives others.
+    init(
+        covenID: String?, source: Source? = nil, signedIn: (() -> String)? = nil, announce: ((String) -> Void)? = nil,
+        now: (() -> Date)? = nil, calendar: (() -> Calendar)? = nil
+    ) {
         self.covenID = covenID
         self.source = source ?? .live
         self.signedIn = signedIn ?? { UserScope.currentUserID }
         self.announce = announce ?? { AccessibilityNotification.Announcement($0).post() }
+        self.now = now ?? { Date() }
+        self.calendar = calendar ?? { .current }
     }
 
     /// Whether there is no task at all, open or finished.
@@ -157,25 +176,92 @@ final class TasksModel: ObservableObject {
 
     /// Marks an open task done, or opens a finished one again.
     func setDone(_ task: TaskItem, _ done: Bool, as account: String) async {
-        await change(task, to: done ? .done : .open, saying: done ? "Marked \(Self.name(of: task)) done" : "Reopened \(Self.name(of: task))", as: account)
+        await change(
+            task, TaskChange(status: done ? .done : .open), saying: done ? "Marked \(Self.name(of: task)) done" : "Reopened \(Self.name(of: task))",
+            orElse: Self.couldNotSave(task), as: account
+        )
     }
 
     /// Closes a task without its being done.
     func close(_ task: TaskItem, as account: String) async {
-        await change(task, to: .closed, saying: "Closed \(Self.name(of: task))", as: account)
+        await change(task, TaskChange(status: .closed), saying: "Closed \(Self.name(of: task))", orElse: Self.couldNotSave(task), as: account)
     }
 
-    /// Changes a task's status for `account`, who asked, and reads the
+    /// Pins an open task for today or for this week: until the end of the
+    /// person's day, or of their week.
+    func pin(_ task: TaskItem, for period: TaskPinPeriod, as account: String) async {
+        guard !task.isFinished else { return }
+        let pin = TaskPin(period: period, expiresAt: TaskRules.pinEnd(for: period, now: now(), calendar: calendar()))
+        await change(
+            task, TaskChange(pin: .to(pin)), saying: "Pinned \(Self.name(of: task)) for \(period.title.lowercased())",
+            orElse: "Couldn't pin \(Self.quoted(task)). Try again.", as: account
+        )
+    }
+
+    /// Takes a task's pin away.
+    func unpin(_ task: TaskItem, as account: String) async {
+        guard task.pin != nil else { return }
+        await change(
+            task, TaskChange(pin: .cleared), saying: "Unpinned \(Self.name(of: task))", orElse: "Couldn't unpin \(Self.quoted(task)). Try again.",
+            as: account
+        )
+    }
+
+    /// Answers "Still on today?" for these tasks, for `account`, who
+    /// asked: keeps them for today, or clears their pins. Only those whose
+    /// pin has run out are answered for, and none that is being changed.
+    /// Says how many were kept or cleared.
+    func answerLapsedPins(of tasks: [TaskItem], keep: Bool, as account: String) async {
+        let moment = now()
+        let ids = tasks.filter { TaskRules.pinState(of: $0, now: moment) == .review }.map(\.id)
+        guard !ids.isEmpty, saving.isDisjoint(with: ids) else { return }
+        saving.formUnion(ids)
+        defer { saving.subtract(ids) }
+        errorMessage = nil
+        do {
+            let answered = try await answer(ids, keep: keep, account)
+            if signedIn() == account, !answered.isEmpty {
+                say("\(keep ? "Kept for today" : "Cleared") \(answered.count) \(answered.count == 1 ? "task" : "tasks")")
+            }
+        } catch {
+            guard signedIn() == account else { return }
+            if case RepositoryError.dataLocked = error {
+                report(Self.needsUnlock)
+            } else {
+                if !(error is TaskError), !(error is RepositoryError) {
+                    AppErrorReporter.log(message: "Could not answer for pins (\(type(of: error)))", context: "TasksModel.answerLapsedPins")
+                }
+                report("Couldn't update \(ids.count) \(ids.count == 1 ? "task" : "tasks").")
+            }
+        }
+        guard signedIn() == account else { return }
+        await Task { await self.load() }.value
+    }
+
+    /// Keeps the pins until the end of today as it is when asked, or
+    /// clears them. Asked just before midnight, the end of that day can
+    /// have passed by the time it is written: it is then asked once more,
+    /// for the day that has begun.
+    private func answer(_ ids: [String], keep: Bool, _ account: String) async throws -> Set<String> {
+        guard keep else { return try await source.answerLapsedPins(ids, nil, account) }
+        do {
+            return try await source.answerLapsedPins(ids, TaskRules.pinEnd(for: .today, now: now(), calendar: calendar()), account)
+        } catch TaskError.pinEnded {
+            return try await source.answerLapsedPins(ids, TaskRules.pinEnd(for: .today, now: now(), calendar: calendar()), account)
+        }
+    }
+
+    /// Makes one change to a task for `account`, who asked, and reads the
     /// list again. One change at a time for a task: a second ask while one
     /// is under way does nothing. What came of it is said, to that account
     /// only; a task that is gone is not said to have failed (the list,
     /// read again, shows so).
-    private func change(_ task: TaskItem, to status: TaskStatus, saying done: String, as account: String) async {
+    private func change(_ task: TaskItem, _ change: TaskChange, saying done: String, orElse failed: String, as account: String) async {
         guard saving.insert(task.id).inserted else { return }
         defer { saving.remove(task.id) }
         errorMessage = nil
         do {
-            try await source.change(task.id, TaskChange(status: status), account)
+            try await source.change(task.id, change, account)
             if signedIn() == account { say(done) }
         } catch TaskError.noSuchTask {
             // Gone, with its coven or its account.
@@ -188,7 +274,7 @@ final class TasksModel: ObservableObject {
                 if !(error is TaskError), !(error is RepositoryError) {
                     AppErrorReporter.log(message: "Could not change a task (\(type(of: error)))", context: "TasksModel.change")
                 }
-                report(Self.couldNotSave(task))
+                report(failed)
             }
         }
         guard signedIn() == account else { return }
