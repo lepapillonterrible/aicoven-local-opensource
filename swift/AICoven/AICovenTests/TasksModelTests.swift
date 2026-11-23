@@ -70,16 +70,17 @@ final class TasksModelTests: XCTestCase {
             covenID: covenID,
             source: TasksModel.Source(
                 tasks: { covenID, account in
-                    // What is kept is read as the reading is asked, and given once it is let through.
-                    let listing = try await MainActor.run {
+                    // What is kept is read, or fails to be, as the reading is asked;
+                    // what came of it is given once it is let through.
+                    let outcome: Result<TaskListing, Error> = await MainActor.run {
                         stand.readings.append((covenID, account))
-                        if let error = stand.readFails { throw error }
+                        if let error = stand.readFails { return .failure(error) }
                         let open = stand.kept.filter { !$0.isFinished }
                         let finished = stand.kept.filter(\.isFinished)
-                        return TaskListing(tasks: open + finished, finished: stand.finishedInAll ?? finished.count)
+                        return .success(TaskListing(tasks: open + finished, finished: stand.finishedInAll ?? finished.count))
                     }
                     await MainActor.run { stand.readingWaits }?.wait()
-                    return listing
+                    return try outcome.get()
                 },
                 create: { title, covenID, account in
                     await MainActor.run { stand.creatingWaits }?.wait()
@@ -240,6 +241,59 @@ final class TasksModelTests: XCTestCase {
         XCTAssertTrue(added)
         XCTAssertEqual(tasks.open.map(\.title), [], "The list says where it stands now")
         XCTAssertEqual(tasks.finished.map(\.title), ["Short-lived"])
+    }
+
+    func testALaterReadingThatFailedDoesNotHideWhatAnEarlierOneRead() async {
+        let stand = Stand()
+        stand.kept = [task("a")]
+        let tasks = model(stand)
+        await tasks.load()
+        // A task is added; the reading after it is held, and a later one fails and lands first.
+        let gate = Gate()
+        stand.readingWaits = gate
+        let adding = Task { await tasks.add(title: "Just added", as: "ada") }
+        await gate.arrived(1)
+        stand.readFails = RepositoryError.databaseUnavailable
+        let failing = Task { await tasks.load() }
+        await gate.arrived(2)
+        stand.readFails = nil
+        await gate.letNewestThrough()
+        let wasRead = await failing.value
+        XCTAssertFalse(wasRead)
+        XCTAssertEqual(tasks.errorMessage, TasksModel.couldNotLoad)
+        XCTAssertEqual(tasks.open.map(\.title), ["A"], "Not read yet")
+
+        await gate.letOneThrough()
+        let added = await adding.value
+        XCTAssertTrue(added)
+        XCTAssertEqual(tasks.open.map(\.title), ["Just added", "A"], "What the earlier reading read is shown: nothing newer was read")
+        XCTAssertEqual(tasks.errorMessage, TasksModel.couldNotLoad, "The later failure is still so")
+        XCTAssertEqual(stand.heard, [TasksModel.couldNotLoad, "Added Just added"])
+    }
+
+    func testAFailureThatLandsAfterALaterReadingIsNotSaid() async {
+        let stand = Stand()
+        stand.kept = [task("a")]
+        let tasks = model(stand)
+        let gate = Gate()
+        stand.readingWaits = gate
+
+        stand.readFails = RepositoryError.databaseUnavailable
+        let earlier = Task { await tasks.load() }
+        await gate.arrived(1)
+        stand.readFails = nil
+        let later = Task { await tasks.load() }
+        await gate.arrived(2)
+        await gate.letNewestThrough()
+        let wasRead = await later.value
+        XCTAssertTrue(wasRead)
+        XCTAssertEqual(tasks.open.map(\.id), ["a"])
+
+        await gate.letOneThrough()
+        let earlierRead = await earlier.value
+        XCTAssertFalse(earlierRead)
+        XCTAssertNil(tasks.errorMessage, "What was read since is what is so")
+        XCTAssertEqual(stand.heard, [])
     }
 
     func testATaskThatWasNotAddedSaysWhy_toWhoeverAsked() async {
@@ -436,5 +490,12 @@ final class TasksModelTests: XCTestCase {
         // Asked for again, it is taken.
         navigator.requestNewTask()
         XCTAssertTrue(navigator.takeNewTaskRequest())
+
+        // Taken, the cursor may still be owed while the tasks are read: the ask
+        // stands until the person's next move, also one that leaves Tasks open.
+        XCTAssertTrue(navigator.newTaskAskStands)
+        navigator.requestSearch()
+        XCTAssertEqual(navigator.place, .tasks(covenId: "work"), "Still on Tasks")
+        XCTAssertFalse(navigator.newTaskAskStands, "The search has the cursor now")
     }
 }

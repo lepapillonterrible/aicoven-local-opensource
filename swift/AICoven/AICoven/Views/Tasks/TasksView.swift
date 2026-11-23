@@ -234,9 +234,12 @@ struct TasksView: View {
         .onDisappear { newTaskLineShows = false }
     }
 
+    /// Gives the New task line the cursor it is owed, unless the person
+    /// has gone on to something else while the line was not yet there.
     private func focusNewTaskWhenShown() {
         guard focusesNewTaskWhenShown else { return }
         focusesNewTaskWhenShown = false
+        guard navigator.newTaskAskStands else { return }
         newTaskFocused = true
     }
 

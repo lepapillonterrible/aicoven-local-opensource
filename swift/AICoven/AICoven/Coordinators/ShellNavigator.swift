@@ -401,13 +401,20 @@ final class ShellNavigator: ObservableObject {
         newTaskAsked += 1
     }
 
+    /// Whether the last ask for New Task still stands: the person has not
+    /// moved since. Whoever took the ask and waits to give the cursor
+    /// (the tasks are still being read) asks this again before giving it.
+    var newTaskAskStands: Bool {
+        newTaskMoves == personMoves
+    }
+
     /// Whether New Task was asked for and its line not yet given the
     /// cursor; answered by this, once. Once the person has gone anywhere
     /// else the ask is over, also when they come back to Tasks, whether
     /// or not anything took it meanwhile.
     func takeNewTaskRequest() -> Bool {
         guard newTaskAnswered != newTaskAsked else { return false }
-        guard newTaskMoves == personMoves else {
+        guard newTaskAskStands else {
             newTaskAnswered = newTaskAsked
             return false
         }

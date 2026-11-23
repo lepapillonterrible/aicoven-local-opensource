@@ -57,11 +57,14 @@ final class TasksModel: ObservableObject {
     /// Tells VoiceOver what came of what was asked, as it happens: each
     /// is said, also two that end in the same moment.
     private let announce: (String) -> Void
-    /// Counts the readings, and remembers the latest that landed: one
-    /// that lands after a later one did is not shown over it. A reading
-    /// that was called off lands nothing, so one asked before it still can.
+    /// Counts the readings, and remembers the latest that landed and the
+    /// latest that landed with the tasks read: a listing that lands after
+    /// a later listing did is not shown over it, and a failure that lands
+    /// after a later reading did is not said. A reading that was called
+    /// off lands nothing, so one asked before it still can.
     private var readings = 0
     private var landed = 0
+    private var read = 0
 
     /// The app's own store, account and voice unless a test gives others.
     init(covenID: String?, source: Source? = nil, signedIn: (() -> String)? = nil, announce: ((String) -> Void)? = nil) {
@@ -78,7 +81,8 @@ final class TasksModel: ObservableObject {
 
     /// Reads the place's tasks. One that fails after a reading that worked
     /// leaves the list as it is, and says so. Answers whether the tasks
-    /// were read: by this reading, or by a later one that landed first.
+    /// were read: by this reading, or by a later one whose listing landed
+    /// first (a later one that failed is no reading of them).
     @discardableResult
     func load() async -> Bool {
         readings += 1
@@ -87,14 +91,18 @@ final class TasksModel: ObservableObject {
         do {
             let listing = try await source.tasks(covenID, account)
             guard signedIn() == account else { return false }
-            // A later reading has landed: what is shown is newer than this.
-            guard reading > landed else { return true }
-            landed = reading
+            // A later listing has landed: what is shown is newer than this.
+            guard reading > read else { return true }
+            read = reading
             open = listing.tasks.filter { !$0.isFinished }
             finished = listing.tasks.filter(\.isFinished)
             finishedCount = listing.finished
             hasRead = true
-            if errorMessage == Self.couldNotLoad { errorMessage = nil }
+            // Unless a later reading has failed since: that is still so.
+            if reading > landed {
+                landed = reading
+                if errorMessage == Self.couldNotLoad { errorMessage = nil }
+            }
             return true
         } catch is CancellationError {
             // Whoever asked was called off: nothing was read, and what is shown stays.
