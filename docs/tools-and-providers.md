@@ -116,7 +116,6 @@ The enhanced message composer in the personal chat view wires several of these t
 
 - **Web search** – Takes the current draft message as a query and appends a `[Web search results]` section with top results.
 - **Summarize attachments** – Runs `analyzeAttachment` for each attached file/image and appends an `[Attachment analysis]` section.
-- **Generate file from message** – Calls `generateFile` to save the draft text as a `.txt` file and attaches it.
 
 When you hit send:
 
