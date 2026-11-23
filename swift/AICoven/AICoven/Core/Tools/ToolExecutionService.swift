@@ -1303,7 +1303,7 @@ actor ToolExecutionService {
             // A change whose answer did not come may have been made: it is
             // not asked for again without looking.
             if changes, began, Self.mayHaveBeenCarriedOut(error) {
-                return .error(tool: toolCall.name, message: "Figma's answer did not come or could not be read, so the comment may have been posted. Check with figma.readComments before posting it again.", errorType: "figma_unconfirmed", isRetryable: false)
+                return .error(tool: toolCall.name, message: "Figma's answer did not come, could not be read, or said its server failed, so the comment may have been posted. Check with figma.readComments before posting it again.", errorType: "figma_unconfirmed", isRetryable: false)
             }
             let failure = Self.figmaFailure(error)
             return .error(tool: toolCall.name, message: failure.message, errorType: failure.code, isRetryable: failure.retry)
@@ -2341,7 +2341,8 @@ actor ToolExecutionService {
     /// coven's choice of connections has it now; nil if it may, or it is
     /// no connected app's tool. Without a thread there is no coven.
     private func covenRefusal(ofAppTool tool: String, in threadID: String?) async -> ToolExecutionResult? {
-        guard let threadID else { return nil }
+        // Only a connected app's tool has the coven's choice read for it.
+        guard let threadID, CovenConnectionRules.app(of: tool) != nil else { return nil }
         return await Self.covenRefusal(ofAppTool: tool, under: covenConnections(threadID))
     }
 

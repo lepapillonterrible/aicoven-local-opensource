@@ -308,25 +308,27 @@ final class CovenConnectionsModel: ObservableObject {
     /// One change of this screen's is saved at a time. The store makes
     /// the change to the choice as it is stored when it is written, so
     /// what another window changed since this one read the choice is not
-    /// undone; what was kept is then what is shown.
+    /// undone; what was kept is then what is shown. Whether the choice
+    /// takes a change (a file there already, too many) is the store's to
+    /// say, of the choice as it is stored: what this screen last read
+    /// only decides what it shows meanwhile.
     @discardableResult
     private func change(row: String, saysFailure: Bool = true, _ make: @escaping @Sendable (CovenConnections) throws -> CovenConnections) async -> Outcome {
         guard let before = choice, saving.isEmpty else { return .failed }
-        let after: CovenConnections
-        do {
-            after = try make(before)
-        } catch {
-            return (error as? CovenConnections.FigmaRefusal).map(Outcome.refused) ?? .failed
-        }
-        guard after != before else { return .unchanged }
+        let shown = try? make(before)
+        // A change that leaves what is shown as it is has nothing to keep.
+        if shown == before { return .unchanged }
         let wasKeptFromBefore = keptFromBefore
         generation += 1
         saving.insert(row)
-        choice = after
-        keptFromBefore = false
+        if let shown {
+            choice = shown
+            keptFromBefore = false
+        }
         var outcome = Outcome.kept
         do {
             choice = try await sources.change(covenID, before, make)
+            keptFromBefore = false
         } catch {
             choice = before
             keptFromBefore = wasKeptFromBefore

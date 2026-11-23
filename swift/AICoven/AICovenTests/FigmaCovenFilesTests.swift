@@ -340,6 +340,21 @@ final class FigmaCovenFilesTests: XCTestCase {
         XCTAssertEqual(world.asked.requests.count, 1, "Nothing is asked of Figma to say so")
     }
 
+    func testATool_thatIsNoConnectedApps_hasNoCovensChoiceReadForIt() async {
+        let reads = Counter()
+        let executor = ToolExecutionService(toolService: ToolService.shared, covenConnections: { _ in
+            _ = reads.next()
+            return nil
+        })
+        await executor.setWhitelist(for: "chat", tools: ["current_time", "figma.listFiles"])
+        await executor.forgetCalls()
+
+        _ = await executor.execute(toolCall: ParsedToolCall(name: "current_time", args: [:]), agentType: "chat", threadID: "thread")
+        XCTAssertEqual(reads.next(), 1, "Nothing was read of the thread's coven for it")
+        _ = await executor.execute(toolCall: ParsedToolCall(name: "figma.listFiles", args: [:]), agentType: "chat", threadID: "thread")
+        XCTAssertGreaterThan(reads.next(), 2, "A connected app's tool is under the coven's choice")
+    }
+
     func testAProjectThatCannotBeRead_isNotTakenForOneWithoutTheFile() async throws {
         let world = try await world(figma(folders: [Chosen(id: "1", name: "Site")])) { path, _ in
             path == "/v2/folders/1/files" ? (500, "{}") : (200, Self.document)
@@ -462,6 +477,7 @@ final class FigmaCovenFilesTests: XCTestCase {
         let unsure = await world.call("figma.addComment", ["file": AnyJSONValue(Self.home), "message": AnyJSONValue("Hello")])
         XCTAssertEqual(unsure.errorType, "figma_unconfirmed")
         XCTAssertFalse(unsure.isRetryable)
+        XCTAssertEqual(unsure.error, "Figma's answer did not come, could not be read, or said its server failed, so the comment may have been posted. Check with figma.readComments before posting it again.")
         // A reading that failed the same way changed nothing, and can be asked again.
         let reading = await world.call("figma.readFile", ["file": AnyJSONValue(Self.home)])
         XCTAssertEqual(reading.errorType, "figma_failed")
@@ -790,12 +806,50 @@ final class FigmaCovenFilesTests: XCTestCase {
         XCTAssertEqual(screen.stored?.apps, ["figma": .readWrite, "github": .readOnly])
         XCTAssertEqual(screen.stored?.figma.files, [Chosen(id: Self.other, name: "Brand")])
 
-        // A link another window added meanwhile is done with here, and the screen reads what is stored.
+        // A link that is stored already is done with here, and nothing more is saved.
+        let saves = screen.saves.count
         screen.name = { _ in "Brand" }
         let twice = await one.addFigma(link: "https://www.figma.com/design/\(Self.other)/Brand")
         XCTAssertTrue(twice)
+        XCTAssertEqual(screen.saves.count, saves)
         XCTAssertEqual(one.figma.files, [Chosen(id: Self.other, name: "Brand")])
         XCTAssertNil(one.figmaAddError)
+
+        // Whether a file is there already is the store's to say: one this window
+        // still shows, which another has removed, is added again when its link is pasted.
+        let stale = CovenConnectionsModel(covenID: "coven", sources: screen.sources)
+        await stale.load()
+        await one.removeFigma(file: Self.other)
+        XCTAssertEqual(stale.figma.files.map(\.id), [Self.other], "Still shown here")
+        let again = await stale.addFigma(link: "https://www.figma.com/design/\(Self.other)/Brand")
+        XCTAssertTrue(again)
+        XCTAssertEqual(screen.stored?.figma.files, [Chosen(id: Self.other, name: "Brand")], "It was asked for, and is chosen")
+        XCTAssertEqual(screen.said.last, "Added Brand")
+        XCTAssertEqual(stale.figma.files, [Chosen(id: Self.other, name: "Brand")])
+    }
+
+    @MainActor
+    func testWhetherThereIsRoomForAFile_isSaidOfTheChoiceAsItIsStored() async {
+        let full = (0 ..< CovenConnections.FigmaChoice.mostFiles).map { Chosen(id: "File\($0)", name: "n") }
+        let screen = Screen(stored: figma(files: full))
+        let stale = CovenConnectionsModel(covenID: "coven", sources: screen.sources)
+        let other = CovenConnectionsModel(covenID: "coven", sources: screen.sources)
+        await stale.load()
+        await other.load()
+
+        // Full as stored: said so.
+        let refused = await stale.addFigma(link: "https://www.figma.com/design/\(Self.home)/Homepage")
+        XCTAssertFalse(refused)
+        XCTAssertEqual(stale.figmaAddError, "This coven already has \(CovenConnections.FigmaChoice.mostFiles) Figma files. Remove one to add another.")
+        XCTAssertEqual(screen.stored?.figma.files.count, CovenConnections.FigmaChoice.mostFiles)
+
+        // Another window makes room; this one, which still shows it full, can add.
+        await other.removeFigma(file: "File0")
+        stale.figmaLinkChanged()
+        let added = await stale.addFigma(link: "https://www.figma.com/design/\(Self.home)/Homepage")
+        XCTAssertTrue(added)
+        XCTAssertEqual(screen.stored?.figma.files.last, Chosen(id: Self.home, name: "Homepage"))
+        XCTAssertEqual(stale.figma.files.count, CovenConnections.FigmaChoice.mostFiles, "The window shows what is stored")
     }
 
     @MainActor
