@@ -329,6 +329,9 @@ struct ShellSidebar: View {
             overviewRow
                 .padding(.horizontal, Spacing.sm)
                 .padding(.bottom, Spacing.xxs)
+            tasksRow
+                .padding(.horizontal, Spacing.sm)
+                .padding(.bottom, Spacing.xxs)
             placesRow
                 .padding(.horizontal, Spacing.sm)
                 .padding(.bottom, Spacing.xs)
@@ -336,15 +339,28 @@ struct ShellSidebar: View {
     }
 
     private var overviewRow: some View {
-        let isSelected = navigator.sidebarItem == .overview
+        pinnedRow("Overview", symbol: "square.grid.2x2", item: .overview)
+            .accessibilityIdentifier("sidebar-overview")
+    }
+
+    /// Tasks, a row of its own under the Overview's, as in the cloud app.
+    private var tasksRow: some View {
+        pinnedRow(ShellSidebarItem.tasksPlace.name, symbol: ShellSidebarItem.tasksPlace.symbol, item: .tasks)
+            .accessibilityIdentifier("sidebar-tasks")
+    }
+
+    /// A row pinned above the threads, drawn by hand and selected as the
+    /// list draws a selected row.
+    private func pinnedRow(_ title: String, symbol: String, item: ShellSidebarItem) -> some View {
+        let isSelected = navigator.sidebarItem == item
         return Button {
-            navigate(to: .overview)
+            navigate(to: item)
         } label: {
             Label {
-                Text("Overview")
+                Text(title)
                     .foregroundStyle(SidebarSelection.ink(.aicovenTextPrimary, selected: isSelected, isKey: isKeyWindow))
             } icon: {
-                Image(systemName: "square.grid.2x2")
+                Image(systemName: symbol)
                     .foregroundStyle(SidebarSelection.ink(.accentColor, selected: isSelected, isKey: isKeyWindow))
             }
             .lineLimit(1)
@@ -358,7 +374,6 @@ struct ShellSidebar: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .accessibilityIdentifier("sidebar-overview")
     }
 
     /// The scope's places as one row of icon-only buttons.

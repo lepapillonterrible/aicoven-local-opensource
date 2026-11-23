@@ -22,6 +22,9 @@ nonisolated enum ShellScope: Hashable {
 /// Where a sidebar row leads.
 nonisolated enum ShellSidebarItem: Hashable {
     case overview
+    /// The scope's tasks: a row under the Overview's in the sidebar, and
+    /// the first of the place buttons on a phone's Overview.
+    case tasks
     case thread(String)
     case memory
     case agents
@@ -38,6 +41,9 @@ nonisolated enum ShellSidebarItem: Hashable {
         (.assets, "Assets", "photo.on.rectangle.angled"),
         (.connectedApps, "Connections", "puzzlepiece.extension"),
     ]
+
+    /// Tasks, as a row or a button names and draws it.
+    static let tasksPlace: (item: ShellSidebarItem, name: String, symbol: String) = (.tasks, "Tasks", "checklist")
 }
 
 /// Navigation state for the split-view shell, as the cloud app's.
@@ -184,6 +190,7 @@ final class ShellNavigator: ObservableObject {
         case let .thread(thread): .thread(thread.id)
         case .memoryList: .memory
         case .assets: .assets
+        case .tasks: .tasks
         case .covenAgents, .addRole, .editRole, .personalStrixSettings: .agents
         case .covenConnections: .connectedApps
         default: nil
@@ -338,6 +345,7 @@ final class ShellNavigator: ObservableObject {
         case (.overview, _): showOverview()
         case (.memory, _): open(.memoryList(covenId: selected.covenID))
         case (.assets, _): open(.assets(covenId: selected.covenID))
+        case (.tasks, _): open(.tasks(covenId: selected.covenID))
         case let (.agents, .coven(covenID)): open(.covenAgents(covenId: covenID))
         case (.agents, .strix): open(.personalStrix)
         case let (.connectedApps, .coven(covenID)): open(.covenConnections(covenId: covenID))
@@ -376,6 +384,27 @@ final class ShellNavigator: ObservableObject {
         guard asked.scope == scope else { return nil }
         assetAsked = nil
         return asked.id
+    }
+
+    /// Counts the times New Task was asked for.
+    @Published private(set) var newTaskAsked = 0
+    private var newTaskAnswered = 0
+
+    /// Opens the Tasks place of the scope on screen and asks for the
+    /// cursor in its New task line.
+    func requestNewTask() {
+        open(.tasks(covenId: selected.covenID))
+        newTaskAsked += 1
+    }
+
+    /// Whether New Task was asked for and its line not yet given the
+    /// cursor; answered by this, once, and only to the Tasks place on
+    /// screen.
+    func takeNewTaskRequest() -> Bool {
+        guard newTaskAnswered != newTaskAsked else { return false }
+        newTaskAnswered = newTaskAsked
+        guard case .tasks = place?.type, personPlace == nil else { return false }
+        return true
     }
 
     /// Asks for the thread search: the sidebar's, or in the phone layout

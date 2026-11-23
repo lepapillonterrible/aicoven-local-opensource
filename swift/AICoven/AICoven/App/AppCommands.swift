@@ -9,6 +9,9 @@ struct ShellCommandActions {
     /// The scope on screen.
     let selected: ShellScope
     let newThread: () -> Void
+    /// Opens the Tasks of the scope on screen with the cursor in its New
+    /// task line.
+    let newTask: () -> Void
     /// The New Coven sheet, as the switcher opens it.
     let newCoven: () -> Void
     /// Opens the thread search: the sidebar's, shown first if it is
@@ -44,10 +47,10 @@ nonisolated enum ShellCommandRules {
         }
     }
 
-    /// The cloud app's places and their numbers, of which these are here:
-    /// 2 (Tasks) is kept for when it is.
+    /// The cloud app's places and their numbers.
     static let places: [Place] = [
         Place(title: "Overview", item: .overview, key: "1"),
+        Place(title: "Tasks", item: .tasks, key: "2"),
         Place(title: "Memory", item: .memory, key: "3"),
         Place(title: "Agents", item: .agents, key: "4"),
         Place(title: "Assets", item: .assets, key: "5"),
@@ -142,6 +145,9 @@ struct ShellCommands: Commands {
                 .keyboardShortcut("n")
                 .disabled(shell == nil)
             if isMac {
+                Button("New Task") { shell?.newTask() }
+                    .keyboardShortcut("n", modifiers: [.shift, .command])
+                    .disabled(shell == nil)
                 Button("New Coven…") { shell?.newCoven() }
                     .disabled(shell == nil)
             }

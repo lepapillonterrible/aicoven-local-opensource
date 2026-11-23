@@ -464,6 +464,7 @@ struct ShellRootView: View {
             covens: orderedCovens,
             selected: navigator.selected,
             newThread: newThread,
+            newTask: { navigator.requestNewTask() },
             newCoven: { showCreateCoven = true },
             searchThreads: {
                 // The search is in the sidebar (shown first, if it is
