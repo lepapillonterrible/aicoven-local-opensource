@@ -166,6 +166,9 @@ final class AssetHandoffModel: ObservableObject {
     @Published private(set) var agents: [Agent] = []
     @Published private(set) var threads: [Thread] = []
     @Published private(set) var isLoading = true
+    /// Whether the agents and the threads were read: until they are,
+    /// nothing is chosen, and nothing is said of what there is.
+    @Published private(set) var hasRead = false
     @Published private(set) var isSending = false
     /// What went wrong with the last thing asked, in words.
     @Published private(set) var failure: String?
@@ -197,7 +200,7 @@ final class AssetHandoffModel: ObservableObject {
     /// Whether Send sends: an agent that can read the asset, and a thread
     /// (or a new one), once both are read and nothing is on its way.
     var canSend: Bool {
-        guard !isLoading, !isSending, let agent, agent.readsAssets else { return false }
+        guard hasRead, !isLoading, !isSending, let agent, agent.readsAssets else { return false }
         return startsNewThread || thread != nil
     }
 
@@ -218,6 +221,7 @@ final class AssetHandoffModel: ObservableObject {
             fail(Self.couldNotLoad)
             return
         }
+        hasRead = true
         self.agents = agents
         self.threads = threads
         if thread == nil { threadID = (threads.first { $0.id == asset.threadID } ?? threads.first)?.id }

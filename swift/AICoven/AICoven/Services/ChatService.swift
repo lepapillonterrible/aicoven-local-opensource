@@ -557,7 +557,8 @@ actor ChatService {
         let toolConfig: ContextBuilder.ToolConfig = isLocalModel
             ? await .mlxTools(connections: connections)
             : await .connected(
-                deliversFiles: true, seesPictures: descriptor.takesImages, usesAssets: Self.usesAssets(provider: descriptor.providerID),
+                deliversFiles: true, seesPictures: descriptor.takesImages,
+                usesAssets: Self.givesPlaceTools(provider: descriptor.providerID, isLocal: isLocalModel),
                 connections: connections
             )
         // The tools this turn was offered are the ones it may call: they

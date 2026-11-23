@@ -32,6 +32,15 @@ struct AssetHandoffSheet: View {
                             Text(AssetHandoffModel.loading)
                                 .foregroundStyle(Color.aicovenTextSecondary)
                         }
+                    } else if !model.hasRead {
+                        // Not read: nothing is said of what agents or
+                        // threads there are, and the reading is offered again.
+                        Text(AssetHandoffModel.couldNotLoad)
+                            .foregroundStyle(Color.aicovenError)
+                        Button("Try Again") {
+                            let account = UserScope.currentUserID
+                            Task { await model.load(as: account) }
+                        }
                     } else {
                         Picker("Agent", selection: $model.agentID) {
                             Text("Choose an agent").tag(String?.none)
@@ -73,7 +82,8 @@ struct AssetHandoffSheet: View {
                     }
                 } footer: {
                     Group {
-                        if let failure = model.failure {
+                        // What could not be read is said where the agents and threads would be.
+                        if let failure = model.failure, model.hasRead {
                             Text(failure)
                                 .foregroundStyle(Color.aicovenError)
                         } else {

@@ -180,14 +180,21 @@ final class AssetHandoffTests: XCTestCase {
         XCTAssertEqual(sending.failure, "Couldn't load the agents and threads. Try again.")
         XCTAssertEqual(stand.said, [AssetHandoffModel.couldNotLoad], "Told to VoiceOver too")
         XCTAssertFalse(sending.canSend)
+        XCTAssertFalse(sending.hasRead, "Nothing is said of what threads there are: they were not read")
+        XCTAssertFalse(sending.startsNewThread)
         stand.agents = [.init(id: "scout", name: "Scout")]
         stand.threadsFail = true
         await sending.load(as: "ada")
         XCTAssertEqual(sending.failure, AssetHandoffModel.couldNotLoad)
+        XCTAssertFalse(sending.hasRead)
+        // Read again, as the sheet offers: what there is is then shown and chosen.
         stand.threadsFail = false
         await sending.load(as: "ada")
         XCTAssertNil(sending.failure)
+        XCTAssertTrue(sending.hasRead)
         XCTAssertEqual(sending.agents.map(\.id), ["scout"])
+        XCTAssertTrue(sending.startsNewThread, "No thread, read as none")
+        XCTAssertTrue(sending.canSend)
 
         // Nothing read for an account that is no longer signed in is taken.
         let other = model(asset(), stand)
@@ -216,7 +223,40 @@ final class AssetHandoffTests: XCTestCase {
         XCTAssertNil(sending.agentNote)
         XCTAssertTrue(sending.canSend)
 
-        // Which turns are given the place's tools.
+        // Which turns are given the place's tools, as the chat service decides for an agent as it is set up.
+        final class Silent: LLMClient, @unchecked Sendable {
+            func completeChat(messages _: [LLMMessage], model: String, options _: ChatOptions) async throws -> LLMChatResponse {
+                LLMChatResponse(message: LLMMessage(role: .assistant, content: ""), providerID: "test", modelID: model, usage: nil)
+            }
+
+            func embed(texts: [String], model _: String) async throws -> [[Float]] {
+                Array(repeating: [0], count: texts.count)
+            }
+        }
+        func chat(answeredBy provider: String?) -> ChatService {
+            ChatService(
+                contextBuilder: ContextBuilder(limits: .init(maxRecentMessages: 4, maxRecentMemories: 4)),
+                modelRouter: HeuristicModelRouter(availableModels: provider.map { [ModelDescriptor(
+                    providerID: $0, modelID: "model", maxContextTokens: 128_000, supportsTools: false, supportsEmbeddings: false, costClass: .cheap
+                )] } ?? []),
+                llmClients: provider.map { [$0: Silent()] } ?? [:],
+                threadStore: ThreadRepository.shared,
+                toolService: ToolService.shared,
+                shouldAutoRefreshEnvironment: false,
+                hermesAgent: { nil },
+                openClawTurn: { _ in nil }
+            )
+        }
+        let account = UserScope.currentUserID
+        let offeredByACloudModel = await chat(answeredBy: "anthropic").offersPlaceTools(toAgents: [nil, "no-such-agent"], as: account)
+        XCTAssertEqual(offeredByACloudModel, [true, true], "Strix and an agent that falls back to the one model there is")
+        let offeredOnThisDevice = await chat(answeredBy: "mlx").offersPlaceTools(toAgents: [nil], as: account)
+        XCTAssertEqual(offeredOnThisDevice, [false])
+        let offeredByNothing = await chat(answeredBy: nil).offersPlaceTools(toAgents: [nil], as: account)
+        XCTAssertEqual(offeredByNothing, [false], "No model can answer: its turn would be offered nothing")
+        let asAnother = await chat(answeredBy: "anthropic").offersPlaceTools(toAgents: [nil], as: "someone-else")
+        XCTAssertNil(asAnother, "Nothing is answered for an account that is not the one signed in")
+
         XCTAssertTrue(ChatService.givesPlaceTools(provider: "anthropic", isLocal: false))
         XCTAssertTrue(ChatService.givesPlaceTools(provider: "openai_compatible", isLocal: false))
         XCTAssertFalse(ChatService.givesPlaceTools(provider: "openai_compatible", isLocal: true), "A server on this network")
