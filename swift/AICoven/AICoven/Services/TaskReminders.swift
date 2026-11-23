@@ -19,6 +19,8 @@ final class TaskReminders {
         var showsDetails: @MainActor (_ account: String) -> Bool
         /// Makes what the system holds match them.
         var hold: @MainActor (_ due: [TaskReminderDue], _ account: String) async -> Void
+        /// Whether the account has notifications on.
+        var isOn: @MainActor (_ account: String) -> Bool
         /// This device's permission, and the asking for it.
         var permission: @MainActor () async -> LocalNotifications.Permission?
         var ask: @MainActor () async -> Void
@@ -27,10 +29,8 @@ final class TaskReminders {
             reminders: { try await TaskRepository.shared.reminders(withTitles: $0, as: $1) },
             showsDetails: { LocalNotifications.shared.showsDetails(for: $0) },
             hold: { await LocalNotifications.shared.setReminders($0, as: $1) },
-            permission: {
-                await LocalNotifications.shared.refreshPermission()
-                return LocalNotifications.shared.permission
-            },
+            isOn: { LocalNotifications.shared.isOn(for: $0) },
+            permission: { await LocalNotifications.shared.refreshPermission() },
             ask: { await LocalNotifications.shared.turnOn() }
         )
     }
@@ -106,9 +106,12 @@ final class TaskReminders {
     /// The person has just set a reminder, or asks for notifications
     /// under one that would not be shown: if this device was never asked
     /// whether the app may notify, it is asked now, and the reminders are
-    /// handed over with the answer.
+    /// handed over with the answer. An account that turned notifications
+    /// off is not asked: its reminders would not be shown whatever the
+    /// device answers.
     func reminderWasSet() async {
-        if await hands.permission() == .notAsked {
+        let account = signedIn()
+        if hands.isOn(account), await hands.permission() == .notAsked, signedIn() == account {
             await hands.ask()
         }
         await refresh().value

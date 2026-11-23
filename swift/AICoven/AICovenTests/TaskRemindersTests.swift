@@ -40,6 +40,7 @@ final class TaskRemindersTests: XCTestCase {
         var readings: [String] = []
         /// Whether the account chose details, and whether each reading asked for titles.
         var showsDetails = false
+        var isOn = true
         var askedForTitles: [Bool] = []
         var held: [(due: [TaskReminderDue], account: String)] = []
         var permission: LocalNotifications.Permission? = .allowed
@@ -62,6 +63,7 @@ final class TaskRemindersTests: XCTestCase {
                 },
                 showsDetails: { _ in stand.showsDetails },
                 hold: { due, account in stand.held.append((due, account)) },
+                isOn: { _ in stand.isOn },
                 permission: { stand.permission },
                 ask: {
                     stand.asked += 1
@@ -168,6 +170,12 @@ final class TaskRemindersTests: XCTestCase {
         await reminders.reminderWasSet()
         XCTAssertEqual(stand.asked, 1)
         XCTAssertEqual(stand.held.count, 3)
+        // An account that turned notifications off is not asked: its reminders would not be shown anyway.
+        stand.permission = .notAsked
+        stand.isOn = false
+        await reminders.reminderWasSet()
+        XCTAssertEqual(stand.asked, 1)
+        XCTAssertEqual(stand.held.count, 4, "Handed over all the same, to be taken back")
     }
 
     func testWhatIsSaidUnderAReminderThatWouldNotBeShown() {

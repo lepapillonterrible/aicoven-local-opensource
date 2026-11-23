@@ -210,12 +210,15 @@ final class LocalNotifications: ObservableObject {
 
     /// Reads this device's permission. Only the latest reading is kept:
     /// one that was asked for earlier and answers later says nothing.
-    func refreshPermission() async {
+    /// Whoever asked is answered by its own reading all the same (a later
+    /// one may not have answered yet).
+    @discardableResult
+    func refreshPermission() async -> Permission {
         permissionReads += 1
         let read = permissionReads
         let answer = await center.permission()
-        guard read == permissionReads else { return }
-        permission = answer
+        if read == permissionReads { permission = answer }
+        return answer
     }
 
     /// Turn on, from the line or from Settings: the system asks the
@@ -340,10 +343,12 @@ final class LocalNotifications: ObservableObject {
         // wait: a change during any of them ends this handing over (the
         // same account signing out and in again is one).
         let choices = choicesMade
-        await refreshPermission()
+        // By this reading's own answer: another reading under way (a
+        // page's) would otherwise leave none to go by.
+        let allowed = await refreshPermission() == .allowed
         let held = await Set(center.listed().compactMap(Self.taskID(ofNotification:)))
         guard signedIn() == account, choicesMade == choices else { return }
-        let shows = isOn(for: account) && permission == .allowed
+        let shows = isOn(for: account) && allowed
         let moment = now()
         let toCome = shows ? Array(due.filter { $0.remindAt > moment }.sorted { $0.remindAt < $1.remindAt }.prefix(Self.mostReminders)) : []
         let reminded = shows ? due.filter { $0.remindAt <= moment }.map(\.taskID) : []
@@ -353,6 +358,10 @@ final class LocalNotifications: ObservableObject {
         for reminder in toCome {
             // Asked again before each: the system's answer can take a while.
             guard signedIn() == account, choicesMade == choices else { break }
+            // One the system holds whose time came while the others were
+            // handed over has been shown: handed over again, it would be
+            // shown twice.
+            if held.contains(reminder.taskID), reminder.remindAt <= now() { continue }
             let id = Self.id(forTask: reminder.taskID)
             _ = await center.schedule(id, NotificationComposer.reminder(taskTitle: reminder.title, showsDetails: details), reminder.remindAt)
             // The account or its choices changed while the system took

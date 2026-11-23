@@ -733,6 +733,41 @@ final class LocalNotificationsTests: XCTestCase {
         XCTAssertEqual(system.held.sorted(), ["task-a", "task-b"])
     }
 
+    func testRemindersAreHandedOverByTheHandingOversOwnReadingOfThePermission() async {
+        // A page reads the permission too, later, and has not been answered: nothing is kept yet.
+        let system = System()
+        let made = notifications(system, now: { self.noon })
+        let reading = Gate()
+        system.readingWaits = reading
+        let handing = Task { await made.setReminders([self.reminder("a", in: 60)], as: "ada") }
+        await reading.arrived()
+        let page = Task { await made.refreshPermission() }
+        await reading.arrived(2)
+        XCTAssertNil(made.permission)
+        await reading.open()
+        await handing.value
+        _ = await page.value
+        XCTAssertEqual(system.held, ["task-a"], "Not taken for refused because a later reading was under way")
+    }
+
+    func testAReminderTheSystemHoldsWhoseTimeCameWhileOthersWereHandedOverIsNotShownTwice() async {
+        let system = System()
+        var moment = noon
+        let made = notifications(system, now: { moment })
+        system.held = ["task-b"]
+        let gate = Gate()
+        system.schedulingWaits = gate
+        let due = [reminder("a", in: 60), reminder("b", in: 90), reminder("c", in: 100)]
+        let handing = Task { await made.setReminders(due, as: "ada") }
+        await gate.arrived()
+        // Two minutes pass while the system takes the first.
+        moment = noon.addingTimeInterval(120)
+        await gate.open()
+        await handing.value
+        XCTAssertEqual(system.scheduled.map(\.id), ["task-a", "task-c"], "The system showed b itself; c, which it did not hold, is still handed over")
+        XCTAssertEqual(system.held.sorted(), ["task-a", "task-b", "task-c"])
+    }
+
     func testAChangeOfTheAccountsChoicesIsToldToWhoeverHoldsTheReminders() async {
         let system = System()
         let made = notifications(system)
