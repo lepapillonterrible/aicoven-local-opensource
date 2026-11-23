@@ -103,7 +103,7 @@ final class TasksModelTests: XCTestCase {
     }
 
     private func model(_ stand: Stand, covenID: String? = nil) -> TasksModel {
-        TasksModel(
+        let tasks = TasksModel(
             covenID: covenID,
             source: TasksModel.Source(
                 tasks: { covenID, also, account in
@@ -216,6 +216,9 @@ final class TasksModelTests: XCTestCase {
             ),
             signedIn: { stand.account }, announce: { stand.heard.append($0) }, now: { self.now }, calendar: { self.calendar }
         )
+        // Its page is on screen, as when anything is asked of it.
+        tasks.cameOnScreen()
+        return tasks
     }
 
     // MARK: - Reading
@@ -1187,18 +1190,82 @@ final class TasksModelTests: XCTestCase {
         XCTAssertEqual(tasks.handoff(of: tasks.open[0]), .finished, "Read again for")
         XCTAssertEqual(stand.heard, ["Scout finished Call the bank"])
 
-        // A turn that stays recorded as running (its ending could not be stored) is read again for once, not over and over.
+        // The same for an agent's own run, which would otherwise be left as paused.
+        var run = task("c", "File the return")
+        run.threadID = "thread-3"
+        run.handoff = TaskHandoff(turnID: "turn-3", outcome: .running, hasRun: true, agentID: "scout")
+        stand.kept = [run]
+        let runs = Task { await tasks.load() }
+        await gate.arrived(3)
+        run.handoff?.outcome = .completed
+        stand.kept = [run]
+        await gate.letOneThrough()
+        await gate.arrived(4)
+        XCTAssertEqual(tasks.handoff(of: tasks.open[0]), .paused, "As it was listed")
+        await gate.letOneThrough()
+        await runs.value
+        XCTAssertEqual(tasks.handoff(of: tasks.open[0]), .finished)
+        XCTAssertEqual(stand.heard.last, "Scout finished File the return")
+
+        // A turn that stays recorded as running (its ending could not be stored, or an agent's
+        // own run goes on) is read again for once, not over and over.
         stand.readingWaits = nil
         var stuck = task("b", "Renew the lease")
         stuck.threadID = "thread-2"
         stuck.handoff = TaskHandoff(turnID: "turn-2", outcome: .running, agentID: "scout")
-        stand.kept = [stuck]
-        let before = stand.readings.count
+        var paused = task("d", "Book the flights")
+        paused.threadID = "thread-4"
+        paused.handoff = TaskHandoff(turnID: "turn-4", outcome: .running, hasRun: true, agentID: "scout")
+        stand.kept = [stuck, paused]
+        let before = stand.readings.count, heard = stand.heard.count
         await tasks.load()
         XCTAssertEqual(stand.readings.count, before + 2)
         await tasks.load()
         XCTAssertEqual(stand.readings.count, before + 3)
         XCTAssertNil(tasks.turnsChanged())
+        XCTAssertEqual(tasks.handoff(of: tasks.open[1]), .paused)
+        XCTAssertEqual(stand.heard.count, heard, "Nothing has ended")
+    }
+
+    func testHowAHandOffEndedIsNotSaidOnceThePersonHasLeftTasks() async {
+        let stand = Stand()
+        stand.agents = [scout]
+        stand.kept = [task("a", "Call the bank")]
+        let tasks = model(stand, covenID: "work")
+        await tasks.load()
+        await tasks.loadAgents()
+
+        // Do it for me, and the person leaves while the turn is being started: it fails at once.
+        let gate = Gate()
+        stand.startingWaits = gate
+        stand.startedAs = .failed
+        let handing = Task { await tasks.doItForMe(tasks.open[0], agent: scout, as: "ada") }
+        await gate.arrived(1)
+        tasks.leftScreen()
+        await gate.letOneThrough()
+        _ = await handing.value
+        XCTAssertNil(tasks.errorMessage)
+        XCTAssertEqual(stand.heard, [], "Its thread, Activity and notifications tell of it")
+
+        // Nor that a turn followed here needs an OK, or finished.
+        var handed = task("b", "Renew the lease")
+        handed.threadID = "thread-9"
+        handed.handoff = TaskHandoff(turnID: "turn-9", outcome: .running, agentID: "scout")
+        stand.kept = [handed]
+        stand.startingWaits = nil
+        stand.live = ["thread-9": TaskLiveTurn(turnID: "turn-9", needsOK: true)]
+        await tasks.load()
+        XCTAssertEqual(tasks.handoff(of: tasks.open[0]), .needsOK)
+        handed.handoff?.outcome = .completed
+        stand.kept = [handed]
+        stand.live = [:]
+        await tasks.turnsChanged()?.value
+        XCTAssertEqual(tasks.handoff(of: tasks.open[0]), .finished)
+        XCTAssertEqual(stand.heard, [])
+        // Back on screen, what was not said is not said late.
+        tasks.cameOnScreen()
+        await tasks.load()
+        XCTAssertEqual(stand.heard, [])
     }
 
     func testATurnThatFailedBeforeItWasSeenAtWorkCouldNotStart_andIsSaidSoOnTheTask() async {
@@ -1361,19 +1428,21 @@ final class TasksModelTests: XCTestCase {
         XCTAssertFalse(navigator.newTaskAskStands, "The search has the cursor now")
     }
 
-    func testAThreadBeingOpenedForATaskIsNotOpenedOverWhatThePersonAskedForSince() {
-        // Talk it through notes the person's moves as it is asked, and opens
-        // the thread only if there has been none since: New Task and Search
-        // Threads are moves, also where they leave Tasks open.
+    func testAThreadMadeReadyForATaskIsNotOpenedOverWhatThePersonAskedForSince() {
+        // What the page decides once the thread is ready: Talk it through notes the
+        // person's moves as it is asked. New Task and Search Threads are moves, also
+        // where they leave Tasks open.
         let navigator = ShellNavigator()
         navigator.openPlace(.tasks)
         var asked = navigator.personMoves
-        XCTAssertTrue(navigator.isStill(at: asked))
+        XCTAssertTrue(TasksView.stillOpensThread(askedAt: asked, in: navigator, as: "ada", signedIn: "ada"))
+        XCTAssertFalse(TasksView.stillOpensThread(askedAt: asked, in: navigator, as: "ada", signedIn: "grace"), "Another account")
         navigator.requestNewTask()
         XCTAssertEqual(navigator.place, .tasks(covenId: nil), "Still on Tasks")
-        XCTAssertFalse(navigator.isStill(at: asked))
+        XCTAssertFalse(TasksView.stillOpensThread(askedAt: asked, in: navigator, as: "ada", signedIn: "ada"), "New Task since")
         asked = navigator.personMoves
+        XCTAssertTrue(TasksView.stillOpensThread(askedAt: asked, in: navigator, as: "ada", signedIn: "ada"))
         navigator.requestSearch()
-        XCTAssertFalse(navigator.isStill(at: asked))
+        XCTAssertFalse(TasksView.stillOpensThread(askedAt: asked, in: navigator, as: "ada", signedIn: "ada"), "Search Threads since")
     }
 }

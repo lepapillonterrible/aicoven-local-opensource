@@ -154,6 +154,10 @@ final class TasksModel: ObservableObject {
     private var readAgainFor: Set<String> = []
     /// Whether the agents are being read: one reading at a time.
     private var isReadingAgents = false
+    /// How many of the place's screens are up: the page, and a task's
+    /// details where they are a screen of their own. What a hand-off's
+    /// turn comes to is said only while one is.
+    private var screensUp = 0
 
     static let couldNotLoad = "Couldn't load tasks."
     static let couldNotAdd = "Couldn't add the task. Try again."
@@ -472,6 +476,18 @@ final class TasksModel: ObservableObject {
         if let read { agents = read }
     }
 
+    /// The page, or a task's details as a screen of their own, came on
+    /// screen or left it. Work asked for on the page can end after the
+    /// person has left it: how a hand-off's turn went is then told by its
+    /// thread, Activity and notifications, not said here.
+    func cameOnScreen() {
+        screensUp += 1
+    }
+
+    func leftScreen() {
+        screensUp = max(0, screensUp - 1)
+    }
+
     /// Where a task handed to an agent stands.
     func handoff(of task: TaskItem) -> TaskHandoffState? {
         TaskRules.handoff(of: task, live: task.threadID.flatMap { liveTurns[$0] })
@@ -509,8 +525,9 @@ final class TasksModel: ObservableObject {
     /// to an agent, says when one newly waits for the person's OK, and
     /// reads the tasks again when one of them has ended, to learn how
     /// (answering with that reading, for whoever waits for it). A turn
-    /// listed as running that nothing runs ended while the tasks were
-    /// read: they are read again for it, once.
+    /// listed as running that nothing runs may have ended while the tasks
+    /// were read (an agent's own run too, which is otherwise paused):
+    /// they are read again for it, once.
     @discardableResult
     func turnsChanged() -> Task<Void, Never>? {
         var live: [String: TaskLiveTurn] = [:]
@@ -522,8 +539,8 @@ final class TasksModel: ObservableObject {
                 awaited[turn.turnID] = true
                 let asks = turn.needsOK && !turn.isStopping
                 let asked = liveTurns[threadID].map { $0.turnID == turn.turnID && $0.needsOK && !$0.isStopping } ?? false
-                if asks, !asked { say("\(handoffAgentName(for: task) ?? "An agent") needs your OK on \(Self.name(of: task))") }
-            } else if handoff.outcome == .running, !handoff.hasRun, readAgainFor.insert(handoff.turnID).inserted {
+                if asks, !asked, screensUp > 0 { say("\(handoffAgentName(for: task) ?? "An agent") needs your OK on \(Self.name(of: task))") }
+            } else if handoff.outcome == .running, readAgainFor.insert(handoff.turnID).inserted {
                 if awaited[handoff.turnID] == nil { awaited[handoff.turnID] = false }
                 ended = true
             }
@@ -537,15 +554,17 @@ final class TasksModel: ObservableObject {
     /// read have them: that the agent finished, or that it could not
     /// start (a turn that failed before it was seen at work, as with no
     /// connection to answer) or stopped on a problem. A turn the person
-    /// stopped, or that is gone, is told of by nothing.
+    /// stopped, or that is gone, is told of by nothing, and nothing is
+    /// said once the place has left the screen.
     private func tellEndings() {
         for task in open + finished {
             guard let handoff = task.handoff, let wasSeenAtWork = awaited[handoff.turnID] else { continue }
             if let threadID = task.threadID, liveTurns[threadID]?.turnID == handoff.turnID { continue }
-            // Not stored as ended yet: the tasks are read again for it.
-            if handoff.outcome == .running, !handoff.hasRun { continue }
+            // Not stored as ended: the tasks are read again for it, or it
+            // is an agent's own run that goes on.
+            if handoff.outcome == .running { continue }
             awaited[handoff.turnID] = nil
-            guard !task.isFinished else { continue }
+            guard !task.isFinished, screensUp > 0 else { continue }
             let agent = handoffAgentName(for: task) ?? "An agent"
             switch handoff.outcome {
             case .completed: say("\(agent) finished \(Self.name(of: task))")

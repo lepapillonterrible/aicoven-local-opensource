@@ -91,7 +91,11 @@ struct TasksView: View {
             editingDue = false
             pendingTalk = nil
         }
-        .onDisappear { pendingTalk = nil }
+        .onAppear { model.cameOnScreen() }
+        .onDisappear {
+            pendingTalk = nil
+            model.leftScreen()
+        }
         .task { await model.loadAgents() }
         // The tasks handed to an agent follow the turns the app runs: told
         // once the change has been made, not as it is about to be.
@@ -109,6 +113,9 @@ struct TasksView: View {
             .navigationDestination(item: Binding(get: { showsPane ? nil : model.detailsOf }, set: { if !showsPane { model.detailsOf = $0 } })) { id in
                 details(of: id, host: .page)
                     .navigationBarTitleDisplayMode(.inline)
+                    // A screen of the place's own: what is said of a hand-off is still said here.
+                    .onAppear { model.cameOnScreen() }
+                    .onDisappear { model.leftScreen() }
             }
         #endif
     }
@@ -144,9 +151,17 @@ struct TasksView: View {
         Task {
             guard let thread = await model.talkItThrough(task, as: account), pendingTalk == request else { return }
             pendingTalk = nil
-            guard navigator.isStill(at: moves), UserScope.currentUserID == account else { return }
+            guard Self.stillOpensThread(askedAt: moves, in: navigator, as: account, signedIn: UserScope.currentUserID) else { return }
             navigator.open(thread)
         }
+    }
+
+    /// Whether a thread made ready for a task is still to be opened: the
+    /// person has done nothing in the shell since they asked (New Task
+    /// and Search Threads are moves, also where they leave Tasks open),
+    /// and the account that asked is the one signed in.
+    static func stillOpensThread(askedAt moves: Int, in navigator: ShellNavigator, as account: String, signedIn: String) -> Bool {
+        navigator.isStill(at: moves) && signedIn == account
     }
 
     /// Do it for me… and Change Lead Agent… for a task.
