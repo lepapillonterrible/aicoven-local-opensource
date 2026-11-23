@@ -9,9 +9,10 @@ struct NotificationsSettingsView: View {
     @ObservedObject private var notifications = LocalNotifications.shared
     @Environment(\.scenePhase) private var scenePhase
 
-    static let whatTheyTell = "Notifications tell you when an agent finishes, needs your OK, or stops on a problem, while AICoven is not in front."
+    static let whatTheyTell = "Notifications tell you when an agent finishes, needs your OK, or stops on a problem, while AICoven is not in front, "
+        + "and remind you of a task at the time you set."
     static let whatDetailsAre = "With details off, a notification says only which agent it is about. With details on, it also names the thread "
-        + "and shows the start of what was said: the reply, what you are asked to allow, or what went wrong. "
+        + "and shows the start of what was said: the reply, what you are asked to allow, or what went wrong; and a reminder names its task. "
         + "These then appear on your Lock Screen and in Notification Center."
     static let allowedAndOn = "Notifications are on."
     static let allowedButOff = "This device allows notifications. They are turned off for your account."

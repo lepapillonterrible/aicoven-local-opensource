@@ -32,6 +32,14 @@ final class LocalNotifications: ObservableObject {
         /// Shows a notification under `id`, in place of any earlier one
         /// under it; false if the system would not take it.
         var show: (_ id: String, _ notification: ComposedNotification) async -> Bool
+        /// Has the system show a notification under `id` at a time still
+        /// to come, in place of any earlier one under it: the system
+        /// delivers it, also with the app closed. False if the system
+        /// would not take it.
+        var schedule: (_ id: String, _ notification: ComposedNotification, _ at: Date) async -> Bool
+        /// The ids of every notification the system holds for the app:
+        /// those waiting for their time, and those shown and not cleared.
+        var listed: () async -> [String]
         /// Takes back the notifications under these ids, delivered or not.
         var withdraw: (_ ids: [String]) -> Void
         var withdrawAll: () -> Void
@@ -62,6 +70,30 @@ final class LocalNotifications: ObservableObject {
                     return false
                 }
             },
+            schedule: { id, notification, at in
+                let content = UNMutableNotificationContent()
+                content.title = notification.title
+                content.body = notification.body
+                content.sound = .default
+                // The moment itself, not a time of day that comes round
+                // again: it is shown once.
+                let parts = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: at)
+                let trigger = UNCalendarNotificationTrigger(dateMatching: parts, repeats: false)
+                do {
+                    try await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
+                    return true
+                } catch {
+                    // The kind of failure only.
+                    AppErrorReporter.log(message: "A reminder was not taken by the system (\(type(of: error)))", context: "LocalNotifications.schedule")
+                    return false
+                }
+            },
+            listed: {
+                let center = UNUserNotificationCenter.current()
+                let pending = await center.pendingNotificationRequests().map(\.identifier)
+                let delivered = await center.deliveredNotifications().map(\.request.identifier)
+                return pending + delivered
+            },
             withdraw: { ids in
                 UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ids)
                 UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ids)
@@ -90,6 +122,10 @@ final class LocalNotifications: ObservableObject {
     @Published private(set) var isAsking = false
     /// Whether the app is in front: nothing is notified of while it is.
     var appIsInFront = true
+    /// Told when the account's choices or this device's answer change
+    /// (notifications on or off, details, the system's question): the
+    /// reminders the system holds depend on them.
+    var whenChoicesChange: (@MainActor () -> Void)?
 
     /// Who the sign-in service last said is signed in (nobody: nil); not
     /// set until it has said.
@@ -130,6 +166,7 @@ final class LocalNotifications: ObservableObject {
             center.withdrawAll()
             offer = nil
         }
+        whenChoicesChange?()
     }
 
     private static func onKey(for account: String) -> String {
@@ -160,6 +197,7 @@ final class LocalNotifications: ObservableObject {
     func setShowsDetails(_ shows: Bool, for account: String) {
         objectWillChange.send()
         defaults.set(shows, forKey: Self.detailsKey(for: account))
+        whenChoicesChange?()
     }
 
     // MARK: - Permission
@@ -185,6 +223,7 @@ final class LocalNotifications: ObservableObject {
         // Whatever was offered while the system was asking goes too.
         offer = nil
         isAsking = false
+        whenChoicesChange?()
     }
 
     /// Not now: the line goes, and is not offered again for a week.
@@ -253,6 +292,63 @@ final class LocalNotifications: ObservableObject {
         return await center.show(Self.id(forThread: thread.id), composed)
     }
 
+    // MARK: - Reminders
+
+    /// The id of a task's reminder: one for a task, naming the task and
+    /// nothing else.
+    nonisolated static func id(forTask taskID: String) -> String {
+        "\(taskPrefix)\(taskID)"
+    }
+
+    private nonisolated static let taskPrefix = "task-"
+
+    /// The task a notification with this id reminds of; nil for an id
+    /// that is not a reminder's.
+    nonisolated static func taskID(ofNotification id: String) -> String? {
+        guard id.hasPrefix(taskPrefix), id.count > taskPrefix.count else { return nil }
+        return String(id.dropFirst(taskPrefix.count))
+    }
+
+    /// The most reminders handed to the system at once, the soonest
+    /// first: the system keeps only so many waiting for an app (64 on
+    /// iOS), and the rest are handed over as these are shown or go.
+    static let mostReminders = 48
+
+    /// Makes the reminders the system holds match `due`, the reminders of
+    /// `account`'s open tasks as the store has them: each one still to
+    /// come waits at its time (the soonest, up to `mostReminders`); one
+    /// whose time has come stays as it was shown; and the reminder of a
+    /// task that has none any more is taken back, shown or waiting.
+    /// Nothing waits while the account has notifications off or this
+    /// device refuses them. Its words follow the account's choice of
+    /// details. Nothing is handed over for an account that is no longer
+    /// signed in.
+    func setReminders(_ due: [TaskReminderDue], as account: String) async {
+        guard signedIn() == account else { return }
+        await refreshPermission()
+        let held = await Set(center.listed().compactMap(Self.taskID(ofNotification:)))
+        guard signedIn() == account else { return }
+        let shows = isOn(for: account) && permission == .allowed
+        let moment = now()
+        let toCome = shows ? Array(due.filter { $0.remindAt > moment }.sorted { $0.remindAt < $1.remindAt }.prefix(Self.mostReminders)) : []
+        let reminded = shows ? due.filter { $0.remindAt <= moment }.map(\.taskID) : []
+        let stays = Set(toCome.map(\.taskID)).union(reminded)
+        center.withdraw(held.subtracting(stays).sorted().map(Self.id(forTask:)))
+        let details = showsDetails(for: account)
+        var handed: [String] = []
+        for reminder in toCome {
+            // Asked again before each: the system's answer can take a while.
+            guard signedIn() == account else { break }
+            let id = Self.id(forTask: reminder.taskID)
+            if await center.schedule(id, NotificationComposer.reminder(taskTitle: reminder.title, showsDetails: details), reminder.remindAt) {
+                handed.append(id)
+            }
+        }
+        // Another account signed in while they were handed over: what was
+        // handed over since everything of the first was taken back goes too.
+        if signedIn() != account { center.withdraw(handed) }
+    }
+
     /// The thread came on screen: what was notified of it is seen.
     func threadShown(_ threadID: String) {
         center.withdraw([Self.id(forThread: threadID)])
@@ -282,9 +378,9 @@ final class LocalNotifications: ObservableObject {
     }
 }
 
-/// Hears that a notification was tapped, and hands its thread to the app:
-/// the id alone says which thread, and the shell opens it only if it is
-/// the signed-in account's. Nothing else is read from a notification.
+/// Hears that a notification was tapped, and hands its thread or its task
+/// to the app: the id alone says which, and the shell opens it only if it
+/// is the signed-in account's. Nothing else is read from a notification.
 final class NotificationTaps: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationTaps()
 
@@ -295,8 +391,19 @@ final class NotificationTaps: NSObject, UNUserNotificationCenterDelegate {
     }
 
     nonisolated func userNotificationCenter(_: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier,
-              let threadID = LocalNotifications.threadID(ofNotification: response.notification.request.identifier) else { return }
-        await MainActor.run { AppState.shared.notificationTapped(forThread: threadID) }
+        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }
+        let id = response.notification.request.identifier
+        if let threadID = LocalNotifications.threadID(ofNotification: id) {
+            await MainActor.run { AppState.shared.notificationTapped(forThread: threadID) }
+        } else if let taskID = LocalNotifications.taskID(ofNotification: id) {
+            await MainActor.run { AppState.shared.notificationTapped(forTask: taskID) }
+        }
+    }
+
+    /// A reminder is shown also while the app is in front: it is about a
+    /// time, not about something on screen. Nothing else is (a turn's
+    /// notifications are made only while the app is away).
+    nonisolated func userNotificationCenter(_: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        LocalNotifications.taskID(ofNotification: notification.request.identifier) == nil ? [] : [.banner, .list, .sound]
     }
 }

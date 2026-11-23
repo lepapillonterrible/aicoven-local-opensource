@@ -393,6 +393,60 @@ final class ShellNavigator: ObservableObject {
         return asked.id
     }
 
+    /// A task the Tasks place of a scope is asked to show the details of.
+    struct TaskAsk: Equatable {
+        let id: String
+        let scope: ShellScope
+        /// The person's moves when it was asked: once they have gone
+        /// anywhere else, it is asked of nobody.
+        let moves: Int
+    }
+
+    /// The task a Tasks place is asked to show, until it has.
+    @Published private(set) var taskAsked: TaskAsk?
+
+    /// Opens the Tasks place of `scope` and asks it to show a task's
+    /// details: a reminder of the task was tapped.
+    func showTask(_ id: String, in scope: ShellScope) {
+        open(.tasks(covenId: scope.covenID), in: scope)
+        taskAsked = TaskAsk(id: id, scope: scope, moves: personMoves)
+    }
+
+    /// The task the place showing `scope`'s tasks is asked to show;
+    /// answered by this, once, and only to the place it was asked of.
+    /// Once the person has gone anywhere else it is asked of nobody, also
+    /// when they come back.
+    func takeTaskAsk(in scope: ShellScope) -> String? {
+        guard let asked = taskAsked else { return nil }
+        guard asked.moves == personMoves else {
+            taskAsked = nil
+            return nil
+        }
+        guard asked.scope == scope else { return nil }
+        taskAsked = nil
+        return asked.id
+    }
+
+    /// Opens the task a tapped reminder is about, where it is kept: only
+    /// a task of `account`'s, only while that account is signed in, and
+    /// not over where the person went while it was looked up. `place`
+    /// says where the task is (its coven, none for Strix's), or throws
+    /// for a task that is not the account's.
+    func openTask(
+        askedFor taskID: String, as account: String, signedIn: () -> String, place: (_ taskID: String) async throws -> String?
+    ) async {
+        let moves = personMoves
+        let covenID: String?
+        do {
+            covenID = try await place(taskID)
+        } catch {
+            // Not the account's, or gone: nothing is opened.
+            return
+        }
+        guard signedIn() == account, isStill(at: moves) else { return }
+        showTask(taskID, in: ShellScope(covenID: covenID))
+    }
+
     /// Counts the times New Task was asked for.
     @Published private(set) var newTaskAsked = 0
     private var newTaskAnswered = 0

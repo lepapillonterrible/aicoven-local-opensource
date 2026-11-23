@@ -28,6 +28,10 @@ class AppState: ObservableObject {
     /// that was signed in leaves or another takes its place. (The shell
     /// opens only a thread of the account it finds signed in.)
     @Published private(set) var pendingThreadID: String?
+    /// The task a reminder that was tapped is about: held and dropped as
+    /// a tapped thread is. (The shell opens only a task of the account it
+    /// finds signed in.)
+    @Published private(set) var pendingTaskID: String?
     /// The place in Settings a request names. The Settings window shows it
     /// and clears this.
     @Published var requestedSettingsPane: WorkspaceTabType?
@@ -70,6 +74,7 @@ class AppState: ObservableObject {
         if let was = reportedAccount, was != account {
             pendingDeepLink = nil
             pendingThreadID = nil
+            pendingTaskID = nil
         }
         reportedAccount = account
     }
@@ -85,6 +90,19 @@ class AppState: ObservableObject {
         let threadID = pendingThreadID
         pendingThreadID = nil
         return threadID
+    }
+
+    /// A task's reminder was tapped: the shell opens the task, if it is
+    /// the signed-in account's.
+    func notificationTapped(forTask taskID: String) {
+        pendingTaskID = taskID
+    }
+
+    /// Takes the task a tapped reminder is about, once.
+    func consumeTaskAsk() -> String? {
+        let taskID = pendingTaskID
+        pendingTaskID = nil
+        return taskID
     }
 
     /// Consume and clear pending deep link target.

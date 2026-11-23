@@ -160,6 +160,10 @@ struct ShellRootView: View {
                 // apps, as far as the system lets it.
                 let keeping = TurnKeepAlive.shared
                 if phase == .active { keeping.appCameToFront() }
+                // The reminders the system holds are made to match the
+                // tasks as they are now (the shell is up: the data is
+                // unlocked, and the device's permission may have changed).
+                if phase == .active { TaskReminders.shared.refresh() }
             }
             // A thread was used, or made: the list follows it.
             .onReceive(NotificationCenter.default.publisher(for: ThreadService.threadUsed)) { _ in
@@ -192,6 +196,12 @@ struct ShellRootView: View {
             .onChange(of: appState.pendingThreadID, initial: true) { _, threadID in
                 guard threadID != nil, let asked = appState.consumeThreadAsk() else { return }
                 openThread(askedFor: asked)
+            }
+            // A task's reminder was tapped, also one tapped before this
+            // came up: its details are opened in its place's Tasks.
+            .onChange(of: appState.pendingTaskID, initial: true) { _, taskID in
+                guard taskID != nil, let asked = appState.consumeTaskAsk() else { return }
+                openTask(askedFor: asked)
             }
             // A thread was deleted, by whatever did it (a new thread whose
             // files could not go into it is deleted again, with no list's
@@ -512,6 +522,17 @@ struct ShellRootView: View {
         Task {
             await navigator.openThread(askedFor: threadID, as: account, signedIn: { UserScope.currentUserID }) {
                 try? await ThreadService.shared.getThread(threadId: $0)
+            }
+        }
+    }
+
+    /// Opens the task a tapped reminder is about, as the account signed
+    /// in when the shell took it.
+    private func openTask(askedFor taskID: String) {
+        let account = UserScope.currentUserID
+        Task {
+            await navigator.openTask(askedFor: taskID, as: account, signedIn: { UserScope.currentUserID }) {
+                try await TaskRepository.shared.covenID(ofTask: $0, as: account)
             }
         }
     }

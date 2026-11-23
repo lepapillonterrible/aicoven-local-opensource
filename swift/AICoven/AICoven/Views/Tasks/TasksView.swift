@@ -356,6 +356,11 @@ struct TasksView: View {
         .onChange(of: model.hasRead) {
             if focusesNewTaskWhenShown, !newTaskLineShows { scrollsToNewTask += 1 }
         }
+        // A reminder of one of this place's tasks was tapped: its details open.
+        .onChange(of: navigator.taskAsked, initial: true) { _, _ in
+            guard case let .place(covenID) = model.scope, let id = navigator.takeTaskAsk(in: ShellScope(covenID: covenID)) else { return }
+            model.detailsOf = id
+        }
     }
 
     private var header: some View {
