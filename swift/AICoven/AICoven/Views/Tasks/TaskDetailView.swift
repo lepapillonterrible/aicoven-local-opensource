@@ -33,6 +33,8 @@ struct TaskDetailView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var renaming = false
     @State private var newTitle = ""
+    /// Whether the sheet that picks a reminder's time is up.
+    @State private var pickingReminder = false
 
     private var task: TaskItem? {
         model.task(taskID)
@@ -151,6 +153,11 @@ struct TaskDetailView: View {
                     Task { await model.setDue(task, to: due, as: account) }
                 }
             }
+            .sheet(isPresented: $pickingReminder) {
+                TaskReminderTimeSheet(initial: task.reminder?.remindAt, now: now) { at in
+                    remind(task, at: at)
+                }
+            }
         } else {
             ContentUnavailableView("Task unavailable", systemImage: "checklist")
                 .padding(Spacing.lg)
@@ -235,35 +242,103 @@ struct TaskDetailView: View {
         host != .sheet && (horizontalSizeClass == .compact || host == .pane)
     }
 
-    /// The task's pin and its due day on one line, as two small pop-ups.
+    /// The task's pin, its due day and the person's reminder on it, as
+    /// three small pop-ups: on one line where they fit, and otherwise the
+    /// reminder on a line of its own, so that none is squeezed.
     private func properties(_ task: TaskItem) -> some View {
-        let pin = TaskRules.pinState(of: task, now: now)
-        return HStack(spacing: Spacing.xs) {
-            Menu {
-                TaskPinActions(
-                    task: task, pin: pin, onPin: { onPin(task, $0) }, onUnpin: { onUnpin(task) }, onAnswer: { onAnswer(task, $0) }
-                )
-            } label: {
-                StonePopUpLabel(icon: isCompact ? "pin" : nil, text: Self.pinWords(pin, isCompact: isCompact))
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: Spacing.xs) {
+                pinMenu(task)
+                dueButton(task)
+                if !task.isFinished { reminderMenu(task) }
+                Spacer(minLength: 0)
             }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .disabled(task.isFinished)
-            .accessibilityLabel(Self.pinWords(pin, isCompact: false))
-
-            Button {
-                editingDue = true
-            } label: {
-                StonePopUpLabel(icon: isCompact ? "calendar" : nil, text: Self.dueWords(for: task, now: now, isCompact: isCompact))
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                HStack(spacing: Spacing.xs) {
+                    pinMenu(task)
+                    dueButton(task)
+                    Spacer(minLength: 0)
+                }
+                if !task.isFinished { reminderMenu(task) }
             }
-            .buttonStyle(.plain)
-            .disabled(task.isFinished)
-            .accessibilityLabel(Self.dueWords(for: task, now: now, isCompact: false))
-            .accessibilityHint("Sets the due date")
-            Spacer(minLength: 0)
         }
+    }
+
+    private func pinMenu(_ task: TaskItem) -> some View {
+        let pin = TaskRules.pinState(of: task, now: now)
+        return Menu {
+            TaskPinActions(task: task, pin: pin, onPin: { onPin(task, $0) }, onUnpin: { onUnpin(task) }, onAnswer: { onAnswer(task, $0) })
+        } label: {
+            StonePopUpLabel(icon: isCompact ? "pin" : nil, text: Self.pinWords(pin, isCompact: isCompact))
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(task.isFinished)
+        .accessibilityLabel(Self.pinWords(pin, isCompact: false))
+    }
+
+    private func dueButton(_ task: TaskItem) -> some View {
+        Button {
+            editingDue = true
+        } label: {
+            StonePopUpLabel(icon: isCompact ? "calendar" : nil, text: Self.dueWords(for: task, now: now, isCompact: isCompact))
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .disabled(task.isFinished)
+        .accessibilityLabel(Self.dueWords(for: task, now: now, isCompact: false))
+        .accessibilityHint("Sets the due date")
+    }
+
+    /// The reminder's pop-up: at the due time, an hour or a day before it
+    /// (those need a due day), or at a time the person picks; and No
+    /// Reminder where there is one.
+    private func reminderMenu(_ task: TaskItem) -> some View {
+        let words = Self.reminderWords(for: task.reminder, now: now, isCompact: isCompact)
+        return Menu {
+            ForEach(TaskReminderPreset.allCases) { preset in
+                Button(preset.title) { remind(task, preset: preset) }
+                    .disabled(task.due == nil)
+            }
+            Button("Pick a Time…") { pickingReminder = true }
+            if task.reminder != nil {
+                Divider()
+                Button("No Reminder", role: .destructive) { remind(task) }
+            }
+        } label: {
+            StonePopUpLabel(icon: isCompact ? "bell" : nil, text: words)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel("Reminder: \(Self.reminderWords(for: task.reminder, now: now, isCompact: false))")
+    }
+
+    /// The reminder in words: "Add reminder" for none ("Remind" where
+    /// there is little room), "Remind <day, time>" for one still to come
+    /// (the day and time alone where there is little room: its bell says
+    /// the rest), and "Reminded <day, time>" for one whose time has come.
+    /// The year is said only where it is another than this one.
+    static func reminderWords(
+        for reminder: TaskReminder?, now: Date, isCompact: Bool, calendar: Calendar = .current, locale: Locale = .current
+    ) -> String {
+        guard let reminder else { return isCompact ? "Remind" : "Add reminder" }
+        var style = Date.FormatStyle().day().month(.abbreviated).hour().minute()
+        if !calendar.isDate(reminder.remindAt, equalTo: now, toGranularity: .year) { style = style.year() }
+        style.calendar = calendar
+        style.timeZone = calendar.timeZone
+        style.locale = locale
+        let at = reminder.remindAt.formatted(style)
+        if reminder.hasPassed(asOf: now) { return "Reminded \(at)" }
+        return isCompact ? at : "Remind \(at)"
+    }
+
+    private func remind(_ task: TaskItem, preset: TaskReminderPreset? = nil, at: Date? = nil) {
+        let account = UserScope.currentUserID
+        Task { await model.setReminder(task, preset: preset, at: at, as: account) }
     }
 
     static func pinWords(_ pin: TaskPinState, isCompact: Bool) -> String {
@@ -295,6 +370,55 @@ struct TaskDetailView: View {
         let title = newTitle
         let account = UserScope.currentUserID
         Task { await model.rename(task, to: title, as: account) }
+    }
+}
+
+/// Choosing the moment a reminder reminds: a day and a time of day still
+/// to come.
+struct TaskReminderTimeSheet: View {
+    let onSave: (Date) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var at: Date
+    /// The earliest time that can be picked: when the sheet came up.
+    private let earliest: Date
+
+    init(initial: Date?, now: Date, onSave: @escaping (Date) -> Void) {
+        self.onSave = onSave
+        earliest = now
+        _at = State(initialValue: Self.start(from: initial, now: now))
+    }
+
+    /// Where the picker starts: the reminder's own time while that is
+    /// still to come; otherwise an hour from now, so that Save does not
+    /// ask for a time that has passed.
+    static func start(from initial: Date?, now: Date) -> Date {
+        initial.flatMap { $0 > now ? $0 : nil } ?? now.addingTimeInterval(3600)
+    }
+
+    var body: some View {
+        NavigationStack {
+            SettingsForm {
+                DatePicker("Remind me", selection: $at, in: earliest..., displayedComponents: [.date, .hourAndMinute])
+            }
+            .navigationTitle("Reminder")
+            #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+            #endif
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            onSave(at)
+                            dismiss()
+                        }
+                    }
+                }
+        }
+        #if os(macOS)
+        .frame(minWidth: 360, minHeight: 200)
+        #endif
     }
 }
 

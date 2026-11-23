@@ -426,6 +426,27 @@ final class TasksModel: ObservableObject {
         )
     }
 
+    static let reminderCannotBeSet = "That reminder can't be set: its time has passed, or the task no longer has a due date."
+
+    /// Sets the person's reminder on an open task: by a preset, measured
+    /// from its due time, or at a time they picked, in the time zone of
+    /// their calendar; or takes it away (neither given).
+    func setReminder(_ task: TaskItem, preset: TaskReminderPreset? = nil, at: Date? = nil, as account: String) async {
+        let zone = calendar().timeZone.identifier
+        let asked: TaskChange.Setting<TaskReminderAsk> = if let preset {
+            .to(.preset(preset, timeZone: zone))
+        } else if let at {
+            .to(.at(at, timeZone: zone))
+        } else {
+            .cleared
+        }
+        guard asked != .cleared || task.reminder != nil else { return }
+        await change(
+            task, TaskChange(reminder: asked), saying: asked == .cleared ? "Reminder removed" : "Reminder set",
+            orElse: "Couldn't set the reminder on \(Self.quoted(task)). Try again.", as: account
+        )
+    }
+
     /// Pins an open task for today or for this week: until the end of the
     /// person's day, or of their week.
     func pin(_ task: TaskItem, for period: TaskPinPeriod, as account: String) async {
@@ -508,6 +529,7 @@ final class TasksModel: ObservableObject {
             guard signedIn() == account else { return }
             switch error {
             case TaskError.tooMany: report(Self.tooManyOpen)
+            case TaskError.reminderPassed, TaskError.reminderNeedsDue: report(Self.reminderCannotBeSet)
             case RepositoryError.dataLocked: report(Self.needsUnlock)
             default:
                 if !(error is TaskError), !(error is RepositoryError) {
