@@ -44,7 +44,7 @@ struct ShellContentView: View {
             case .activity:
                 ActivityView(navigator: navigator, covens: covens, covensAreKnown: covensAreKnown)
             case .onMe:
-                TasksView(scope: .onMe, navigator: navigator, covens: covens)
+                TasksView(scope: .onMe, navigator: navigator, covens: covens, covensAreKnown: covensAreKnown)
             case nil:
                 scopePlace
             }

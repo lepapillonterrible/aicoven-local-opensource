@@ -336,7 +336,7 @@ struct ShellRootView: View {
             #endif
                 .stoneBackButton()
         case .onMe:
-            TasksView(scope: .onMe, navigator: navigator, covens: orderedCovens)
+            TasksView(scope: .onMe, navigator: navigator, covens: orderedCovens, covensAreKnown: covensAreKnown)
                 .navigationTitle("On me")
             #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)

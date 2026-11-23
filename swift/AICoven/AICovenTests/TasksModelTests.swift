@@ -1646,9 +1646,12 @@ final class TasksModelTests: XCTestCase {
 
     func testOnMeNamesEachTasksPlace() {
         let covens = [Coven(id: "work", name: "Work", createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0))]
-        XCTAssertEqual(TasksView.placeName(ofCoven: nil, among: covens), "Strix")
-        XCTAssertEqual(TasksView.placeName(ofCoven: "work", among: covens), "Work")
-        XCTAssertEqual(TasksView.placeName(ofCoven: "gone", among: covens), "Another coven")
+        XCTAssertEqual(TasksView.placeName(ofCoven: nil, among: covens, known: true), "Strix")
+        XCTAssertEqual(TasksView.placeName(ofCoven: "work", among: covens, known: true), "Work")
+        XCTAssertEqual(TasksView.placeName(ofCoven: "gone", among: covens, known: true), "Another coven")
+        // While the covens are not read yet, a coven's task names no place: it is not another's.
+        XCTAssertNil(TasksView.placeName(ofCoven: "work", among: [], known: false))
+        XCTAssertEqual(TasksView.placeName(ofCoven: nil, among: [], known: false), "Strix")
 
         // First on the row's line, and in the details.
         var led = task("a", "Call the bank", pin: TaskPin(period: .today, expiresAt: now.addingTimeInterval(3600)), coven: "work")

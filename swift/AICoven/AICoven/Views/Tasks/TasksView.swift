@@ -11,8 +11,10 @@ import SwiftUI
 struct TasksView: View {
     @ObservedObject var navigator: ShellNavigator
     @StateObject private var model: TasksModel
-    /// The person's covens, which name each task's place in On me.
+    /// The person's covens, which name each task's place in On me, and
+    /// whether they are read yet.
     private let covens: [Coven]
+    private let covensAreKnown: Bool
 
     @State private var newTaskTitle = ""
     @FocusState private var newTaskFocused: Bool
@@ -44,10 +46,11 @@ struct TasksView: View {
     @Environment(\.isPadLayout) private var isPadLayout
 
     /// A place's tasks (`.place`), or every place's (`.onMe`), where
-    /// `covens` names each task's place.
-    init(scope: TasksModel.Scope, navigator: ShellNavigator, covens: [Coven] = []) {
+    /// `covens` names each task's place once they are known.
+    init(scope: TasksModel.Scope, navigator: ShellNavigator, covens: [Coven] = [], covensAreKnown: Bool = true) {
         self.navigator = navigator
         self.covens = covens
+        self.covensAreKnown = covensAreKnown
         _model = StateObject(wrappedValue: TasksModel(scope: scope))
     }
 
@@ -55,17 +58,20 @@ struct TasksView: View {
         model.scope == .onMe
     }
 
-    /// The name of the place a task is in, as On me says it on each row:
-    /// Strix for the person's own, a coven's name, and "Another coven"
-    /// for a coven that is not known. Nil on a place's own page.
+    /// The name of the place a task is in, as On me says it on each row.
+    /// Nil on a place's own page.
     private func placeName(of task: TaskItem) -> String? {
         guard isOnMe else { return nil }
-        return Self.placeName(ofCoven: task.covenID, among: covens)
+        return Self.placeName(ofCoven: task.covenID, among: covens, known: covensAreKnown)
     }
 
-    static func placeName(ofCoven covenID: String?, among covens: [Coven]) -> String {
+    /// Strix for the person's own, a coven's name, and "Another coven"
+    /// for a coven that is not among those read; nothing for a coven
+    /// while the covens are not read yet (it is not another's then).
+    static func placeName(ofCoven covenID: String?, among covens: [Coven], known: Bool) -> String? {
         guard let covenID else { return "Strix" }
-        return covens.first { $0.id == covenID }?.name ?? "Another coven"
+        if let coven = covens.first(where: { $0.id == covenID }) { return coven.name }
+        return known ? "Another coven" : nil
     }
 
     /// The page's own reading column, centred.
