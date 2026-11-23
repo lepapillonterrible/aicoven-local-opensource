@@ -120,7 +120,10 @@ final class TasksModel: ObservableObject {
                 let answering = answering(agent, in: thread)
                 return try await TurnEngine.shared.start(
                     with: TurnProgress.userMessage(in: thread.id, text: text, attachments: []), context: text,
-                    roleID: answering.roleID, agentName: answering.name, attachments: nil
+                    roleID: answering.roleID, agentName: answering.name, attachments: nil,
+                    // The app's own words, with the task's title in them:
+                    // the turn's tools are not judged by what a title holds.
+                    offersToolsWhateverItSays: true
                 )
             },
             discardThread: { thread, account in

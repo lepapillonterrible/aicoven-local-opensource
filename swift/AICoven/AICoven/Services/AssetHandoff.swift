@@ -129,7 +129,7 @@ final class AssetHandoffModel: ObservableObject {
             startTurn: { thread, text, agent in
                 _ = try await TurnEngine.shared.start(
                     with: TurnProgress.userMessage(in: thread.id, text: text, attachments: []), context: text,
-                    roleID: agent.isStrix ? nil : agent.id, agentName: agent.name, attachments: nil
+                    roleID: agent.isStrix ? nil : agent.id, agentName: agent.name, attachments: nil, offersToolsWhateverItSays: true
                 )
             },
             discardThread: { thread, account in
