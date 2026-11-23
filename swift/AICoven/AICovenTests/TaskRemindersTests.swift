@@ -38,6 +38,9 @@ final class TaskRemindersTests: XCTestCase {
         var readFails: Error?
         var readingWaits: Gate?
         var readings: [String] = []
+        /// Whether the account chose details, and whether each reading asked for titles.
+        var showsDetails = false
+        var askedForTitles: [Bool] = []
         var held: [(due: [TaskReminderDue], account: String)] = []
         var permission: LocalNotifications.Permission? = .allowed
         var asked = 0
@@ -46,16 +49,18 @@ final class TaskRemindersTests: XCTestCase {
     private func reminders(_ stand: Stand) -> TaskReminders {
         TaskReminders(
             hands: TaskReminders.Hands(
-                reminders: { account in
+                reminders: { withTitles, account in
                     // What is kept is read as the reading is asked; it is given once it is let through.
                     let outcome: Result<[TaskReminderDue], Error> = await MainActor.run {
                         stand.readings.append(account)
+                        stand.askedForTitles.append(withTitles)
                         if let error = stand.readFails { return .failure(error) }
                         return .success(stand.kept)
                     }
                     await MainActor.run { stand.readingWaits }?.wait()
                     return try outcome.get()
                 },
+                showsDetails: { _ in stand.showsDetails },
                 hold: { due, account in stand.held.append((due, account)) },
                 permission: { stand.permission },
                 ask: {
@@ -77,17 +82,22 @@ final class TaskRemindersTests: XCTestCase {
         XCTAssertEqual(stand.readings, ["ada"])
         XCTAssertEqual(stand.held.map(\.due), [[due]])
         XCTAssertEqual(stand.held.map(\.account), ["ada"])
+        XCTAssertEqual(stand.askedForTitles, [false], "A title is opened only where the account chose details")
+        stand.showsDetails = true
+        await reminders.refresh().value
+        XCTAssertEqual(stand.askedForTitles, [false, true])
+        stand.showsDetails = false
 
         // While the account's data is locked nothing is read, and what waits stays as it is.
         stand.readFails = RepositoryError.dataLocked
         await reminders.refresh().value
-        XCTAssertEqual(stand.held.count, 1)
+        XCTAssertEqual(stand.held.count, 2)
         // With nobody signed in there is nothing to read.
         stand.readFails = nil
         stand.account = ""
         await reminders.refresh().value
-        XCTAssertEqual(stand.readings.count, 2)
-        XCTAssertEqual(stand.held.count, 1)
+        XCTAssertEqual(stand.readings.count, 3)
+        XCTAssertEqual(stand.held.count, 2)
     }
 
     func testOneReadingAtATime_andTheLastAskIsAnsweredByAReadingMadeAfterIt() async {
@@ -145,7 +155,11 @@ final class TaskRemindersTests: XCTestCase {
         let toCome = TaskReminder(preset: nil, remindAt: now.addingTimeInterval(60), timeZone: "GMT")
         let passed = TaskReminder(preset: nil, remindAt: now.addingTimeInterval(-60), timeZone: "GMT")
         XCTAssertNil(TaskDetailView.reminderNote(for: toCome, now: now, permission: .allowed, isOn: true))
-        XCTAssertNil(TaskDetailView.reminderNote(for: toCome, now: now, permission: .notAsked, isOn: true), "Setting one asks")
+        XCTAssertEqual(
+            TaskDetailView.reminderNote(for: toCome, now: now, permission: .notAsked, isOn: true), TaskDetailView.remindersNotAsked,
+            "One set before the device could be asked: said, with the way to be asked"
+        )
+        XCTAssertNil(TaskDetailView.reminderNote(for: toCome, now: now, permission: nil, isOn: true), "The device's answer is not read yet")
         XCTAssertEqual(TaskDetailView.reminderNote(for: toCome, now: now, permission: .denied, isOn: true), TaskDetailView.remindersOffOnDevice)
         XCTAssertEqual(TaskDetailView.reminderNote(for: toCome, now: now, permission: .allowed, isOn: false), TaskDetailView.remindersOffForAccount)
         // Nothing of one that has reminded, or of no reminder.
@@ -193,6 +207,29 @@ final class TaskRemindersTests: XCTestCase {
         }
         XCTAssertEqual(navigator.place, .memoryList(covenId: nil))
         XCTAssertNil(navigator.taskAsked)
+    }
+
+    func testOfTwoRemindersTappedOnlyTheLaterOnesTaskIsOpened() async {
+        let navigator = ShellNavigator()
+        let first = Gate(), second = Gate()
+        // The first tap's task is still being looked up when the second is tapped; the first lookup answers first.
+        let earlier = Task { await navigator.openTask(askedFor: "t1", as: "ada", signedIn: { "ada" }) { _ in
+            await first.wait()
+            return "work"
+        } }
+        await first.arrived()
+        let later = Task { await navigator.openTask(askedFor: "t2", as: "ada", signedIn: { "ada" }) { _ in
+            await second.wait()
+            return "home"
+        } }
+        await second.arrived()
+        await first.open()
+        await earlier.value
+        XCTAssertNil(navigator.place, "Not the earlier one's")
+        await second.open()
+        await later.value
+        XCTAssertEqual(navigator.selected, .coven("home"))
+        XCTAssertEqual(navigator.takeTaskAsk(in: .coven("home")), "t2")
     }
 
     func testATappedRemindersTaskIsHeldForTheShell_once_andNotForAnotherAccount() {

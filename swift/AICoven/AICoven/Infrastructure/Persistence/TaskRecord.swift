@@ -540,11 +540,13 @@ actor TaskRepository {
 
     // MARK: - Reminders, and where a task is
 
-    /// The reminders of `account`'s open tasks, in whichever place, each
-    /// with its task's title (nil for a title the account's key cannot
-    /// open): those still to come and those whose time has come. Only as
-    /// the account signed in, with its own key in memory.
-    func reminders(as account: String) async throws -> [TaskReminderDue] {
+    /// The reminders of `account`'s open tasks, in whichever place: those
+    /// still to come and those whose time has come. Each with its task's
+    /// title only where `withTitles` asks for them (a reminder names its
+    /// task only if the account chose details; nil for a title the
+    /// account's key cannot open). Only as the account signed in, with
+    /// its own key in memory.
+    func reminders(withTitles: Bool, as account: String) async throws -> [TaskReminderDue] {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         return try await AccountSeal.reading(as: account) {
             let rows = try await dbQueue.read { db in
@@ -562,8 +564,11 @@ actor TaskRepository {
             for row in rows {
                 // A time that does not read as one reminds at no time.
                 guard let at = Date.fromDatabaseValue(row["reminder_at"]) else { continue }
-                let title = try? await DataEncryptionService.shared.decrypt(row["title_ciphertext"] as Data, purpose: Self.titlePurpose)
-                due.append(TaskReminderDue(taskID: row["id"], title: title.map { String(decoding: $0, as: UTF8.self) }, remindAt: at))
+                var title: String?
+                if withTitles, let opened = try? await DataEncryptionService.shared.decrypt(row["title_ciphertext"] as Data, purpose: Self.titlePurpose) {
+                    title = String(decoding: opened, as: UTF8.self)
+                }
+                due.append(TaskReminderDue(taskID: row["id"], title: title, remindAt: at))
             }
             return due
         }

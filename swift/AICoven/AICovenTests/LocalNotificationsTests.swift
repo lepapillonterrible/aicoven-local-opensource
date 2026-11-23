@@ -677,6 +677,41 @@ final class LocalNotificationsTests: XCTestCase {
         XCTAssertEqual(system.held, [], "Taken back")
     }
 
+    func testAChoiceChangedWhileRemindersAreHandedOverEndsTheHandingOver() async {
+        // Notifications turned off while the first of two is being taken by the system: everything
+        // was taken back, the one in hand does not stay, and the second is not handed over.
+        let system = System()
+        let made = notifications(system, now: { self.noon })
+        var gate = Gate()
+        system.schedulingWaits = gate
+        var handing = Task { await made.setReminders([self.reminder("a", in: 60), self.reminder("b", in: 120)], as: "ada") }
+        await gate.arrived()
+        made.setOn(false, for: "ada")
+        await gate.open()
+        await handing.value
+        XCTAssertEqual(system.scheduled.map(\.id), ["task-a"])
+        XCTAssertEqual(system.held, [], "Not recreated after everything was taken back")
+
+        // Details turned off while one that names its task is being taken: it does not stay as it was composed.
+        made.setOn(true, for: "ada")
+        made.setShowsDetails(true, for: "ada")
+        system.scheduled = []
+        gate = Gate()
+        system.schedulingWaits = gate
+        handing = Task { await made.setReminders([self.reminder("a", in: 60), self.reminder("b", in: 120)], as: "ada") }
+        await gate.arrived()
+        made.setShowsDetails(false, for: "ada")
+        await gate.open()
+        await handing.value
+        XCTAssertEqual(system.scheduled.map(\.notification.body), ["Renew the lease"], "The one in hand, composed before the change")
+        XCTAssertEqual(system.held, [], "Taken back; none is handed over as things stood")
+        // Handed over anew, as whoever holds the reminders does on the change: none names its task.
+        system.schedulingWaits = nil
+        await made.setReminders([reminder("a", in: 60), reminder("b", in: 120)], as: "ada")
+        XCTAssertEqual(system.scheduled.suffix(2).map(\.notification.body), ["Open AICoven to see the task.", "Open AICoven to see the task."])
+        XCTAssertEqual(system.held.sorted(), ["task-a", "task-b"])
+    }
+
     func testAChangeOfTheAccountsChoicesIsToldToWhoeverHoldsTheReminders() async {
         let system = System()
         let made = notifications(system)

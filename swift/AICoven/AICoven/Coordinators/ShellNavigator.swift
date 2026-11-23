@@ -427,14 +427,21 @@ final class ShellNavigator: ObservableObject {
         return asked.id
     }
 
+    /// Counts the tasks asked for from outside the shell, so that only
+    /// the latest asked for is opened.
+    private var taskAsks = 0
+
     /// Opens the task a tapped reminder is about, where it is kept: only
-    /// a task of `account`'s, only while that account is signed in, and
-    /// not over where the person went while it was looked up. `place`
-    /// says where the task is (its coven, none for Strix's), or throws
-    /// for a task that is not the account's.
+    /// a task of `account`'s, only while that account is signed in, not
+    /// over where the person went while it was looked up, and of two
+    /// asked for only the later. `place` says where the task is (its
+    /// coven, none for Strix's), or throws for a task that is not the
+    /// account's.
     func openTask(
         askedFor taskID: String, as account: String, signedIn: () -> String, place: (_ taskID: String) async throws -> String?
     ) async {
+        taskAsks += 1
+        let ask = taskAsks
         let moves = personMoves
         let covenID: String?
         do {
@@ -443,7 +450,7 @@ final class ShellNavigator: ObservableObject {
             // Not the account's, or gone: nothing is opened.
             return
         }
-        guard signedIn() == account, isStill(at: moves) else { return }
+        guard ask == taskAsks, signedIn() == account, isStill(at: moves) else { return }
         showTask(taskID, in: ShellScope(covenID: covenID))
     }
 

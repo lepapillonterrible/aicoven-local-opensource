@@ -999,7 +999,7 @@ final class TaskStoreTests: XCTestCase {
         try await store.change(finished.id, TaskChange(reminder: .to(.at(soon, timeZone: berlin))), as: account)
         try await store.change(finished.id, TaskChange(status: .done), as: account)
 
-        var due = try await store.reminders(as: account)
+        var due = try await store.reminders(withTitles: true, as: account)
         XCTAssertEqual(
             due,
             [
@@ -1008,9 +1008,13 @@ final class TaskStoreTests: XCTestCase {
             ],
             "Of the open tasks of every place, the soonest first, each with its title"
         )
+        // A title is opened only where it is asked for (a reminder names its task only with details on).
+        let untitled = try await store.reminders(withTitles: false, as: account)
+        XCTAssertEqual(untitled.map(\.taskID), [strixs.id, covens.id])
+        XCTAssertEqual(untitled.map(\.title), [nil, nil])
         // Only as the account signed in, and nothing while its data is locked.
         do {
-            _ = try await store.reminders(as: "someone-else")
+            _ = try await store.reminders(withTitles: true, as: "someone-else")
             XCTFail("Nothing is read as an account that is not signed in")
         } catch RepositoryError.accountChanged {}
 
@@ -1024,11 +1028,11 @@ final class TaskStoreTests: XCTestCase {
         // A coven that is deleted takes its tasks, and so their reminders.
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
         try await queue.write { db in try db.execute(sql: "DELETE FROM covens WHERE id = ?", arguments: [coven]) }
-        due = try await store.reminders(as: account)
+        due = try await store.reminders(withTitles: true, as: account)
         XCTAssertEqual(due.map(\.taskID), [strixs.id])
         await DataEncryptionService.shared.lock()
         do {
-            _ = try await store.reminders(as: account)
+            _ = try await store.reminders(withTitles: false, as: account)
             XCTFail("Nothing is read while the data is locked")
         } catch RepositoryError.dataLocked {}
     }

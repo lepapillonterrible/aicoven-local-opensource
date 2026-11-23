@@ -12,8 +12,11 @@ final class TaskReminders {
 
     /// The store's and the system's side, which a test replaces.
     struct Hands {
-        /// The reminders of the account's open tasks.
-        var reminders: @Sendable (_ account: String) async throws -> [TaskReminderDue]
+        /// The reminders of the account's open tasks, with their titles
+        /// where the account chose details.
+        var reminders: @Sendable (_ withTitles: Bool, _ account: String) async throws -> [TaskReminderDue]
+        /// Whether the account chose details: a reminder then names its task.
+        var showsDetails: @MainActor (_ account: String) -> Bool
         /// Makes what the system holds match them.
         var hold: @MainActor (_ due: [TaskReminderDue], _ account: String) async -> Void
         /// This device's permission, and the asking for it.
@@ -21,7 +24,8 @@ final class TaskReminders {
         var ask: @MainActor () async -> Void
 
         static let live = Hands(
-            reminders: { try await TaskRepository.shared.reminders(as: $0) },
+            reminders: { try await TaskRepository.shared.reminders(withTitles: $0, as: $1) },
+            showsDetails: { LocalNotifications.shared.showsDetails(for: $0) },
             hold: { await LocalNotifications.shared.setReminders($0, as: $1) },
             permission: {
                 await LocalNotifications.shared.refreshPermission()
@@ -82,7 +86,9 @@ final class TaskReminders {
         let account = signedIn()
         guard !account.isEmpty else { return }
         do {
-            let due = try await hands.reminders(account)
+            // A title is opened only to be shown. (A change of the choice
+            // while they are read asks for another reading.)
+            let due = try await hands.reminders(hands.showsDetails(account), account)
             guard signedIn() == account else { return }
             await hands.hold(due, account)
         } catch {
@@ -94,9 +100,10 @@ final class TaskReminders {
         }
     }
 
-    /// The person has just set a reminder: if this device was never asked
-    /// whether the app may notify, it is asked now (they have just asked
-    /// to be reminded), and the reminders are handed over with the answer.
+    /// The person has just set a reminder, or asks for notifications
+    /// under one that would not be shown: if this device was never asked
+    /// whether the app may notify, it is asked now, and the reminders are
+    /// handed over with the answer.
     func reminderWasSet() async {
         if await hands.permission() == .notAsked {
             await hands.ask()

@@ -75,10 +75,10 @@ final class LocalNotifications: ObservableObject {
                 content.title = notification.title
                 content.body = notification.body
                 content.sound = .default
-                // The moment itself, not a time of day that comes round
-                // again: it is shown once.
-                let parts = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: at)
-                let trigger = UNCalendarNotificationTrigger(dateMatching: parts, repeats: false)
+                // The moment itself, counted from now: not a time of day,
+                // which would move with the device's time zone if that
+                // changed while the reminder waits.
+                let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, at.timeIntervalSinceNow), repeats: false)
                 do {
                     try await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
                     return true
@@ -126,6 +126,10 @@ final class LocalNotifications: ObservableObject {
     /// (notifications on or off, details, the system's question): the
     /// reminders the system holds depend on them.
     var whenChoicesChange: (@MainActor () -> Void)?
+    /// Counts the changes of the account and of its choices (on or off,
+    /// details, the system's question answered): reminders being handed
+    /// over as things stood before one are not handed over after it.
+    private var choicesMade = 0
 
     /// Who the sign-in service last said is signed in (nobody: nil); not
     /// set until it has said.
@@ -166,6 +170,7 @@ final class LocalNotifications: ObservableObject {
             center.withdrawAll()
             offer = nil
         }
+        choicesMade += 1
         whenChoicesChange?()
     }
 
@@ -197,6 +202,7 @@ final class LocalNotifications: ObservableObject {
     func setShowsDetails(_ shows: Bool, for account: String) {
         objectWillChange.send()
         defaults.set(shows, forKey: Self.detailsKey(for: account))
+        choicesMade += 1
         whenChoicesChange?()
     }
 
@@ -223,6 +229,7 @@ final class LocalNotifications: ObservableObject {
         // Whatever was offered while the system was asking goes too.
         offer = nil
         isAsking = false
+        choicesMade += 1
         whenChoicesChange?()
     }
 
@@ -311,7 +318,9 @@ final class LocalNotifications: ObservableObject {
 
     /// The most reminders handed to the system at once, the soonest
     /// first: the system keeps only so many waiting for an app (64 on
-    /// iOS), and the rest are handed over as these are shown or go.
+    /// iOS). The rest are handed over the next time the reminders are
+    /// made to match: when a task or a choice changes, or the app comes
+    /// to the front.
     static let mostReminders = 48
 
     /// Makes the reminders the system holds match `due`, the reminders of
@@ -322,7 +331,9 @@ final class LocalNotifications: ObservableObject {
     /// Nothing waits while the account has notifications off or this
     /// device refuses them. Its words follow the account's choice of
     /// details. Nothing is handed over for an account that is no longer
-    /// signed in.
+    /// signed in, or as the account's choices stood before they changed:
+    /// a change while the reminders are handed over ends the handing
+    /// over (whoever holds them reads again and hands them over anew).
     func setReminders(_ due: [TaskReminderDue], as account: String) async {
         guard signedIn() == account else { return }
         await refreshPermission()
@@ -335,18 +346,21 @@ final class LocalNotifications: ObservableObject {
         let stays = Set(toCome.map(\.taskID)).union(reminded)
         center.withdraw(held.subtracting(stays).sorted().map(Self.id(forTask:)))
         let details = showsDetails(for: account)
-        var handed: [String] = []
+        let choices = choicesMade
         for reminder in toCome {
             // Asked again before each: the system's answer can take a while.
-            guard signedIn() == account else { break }
+            guard signedIn() == account, choicesMade == choices else { break }
             let id = Self.id(forTask: reminder.taskID)
-            if await center.schedule(id, NotificationComposer.reminder(taskTitle: reminder.title, showsDetails: details), reminder.remindAt) {
-                handed.append(id)
+            _ = await center.schedule(id, NotificationComposer.reminder(taskTitle: reminder.title, showsDetails: details), reminder.remindAt)
+            // The account or its choices changed while the system took
+            // this one (notifications turned off took everything back;
+            // details turned off, and it names its task): it does not
+            // stay, and no more are handed over as things stood.
+            guard signedIn() == account, choicesMade == choices else {
+                center.withdraw([id])
+                break
             }
         }
-        // Another account signed in while they were handed over: what was
-        // handed over since everything of the first was taken back goes too.
-        if signedIn() != account { center.withdraw(handed) }
     }
 
     /// The thread came on screen: what was notified of it is seen.
@@ -365,6 +379,7 @@ final class LocalNotifications: ObservableObject {
             offer = nil
             offerWasAnnounced = false
             center.withdrawAll()
+            choicesMade += 1
         }
         reported = .some(account)
     }

@@ -431,7 +431,10 @@ final class TasksModel: ObservableObject {
     /// Sets the person's reminder on an open task: by a preset, measured
     /// from its due time, or at a time they picked, in the time zone of
     /// their calendar; or takes it away (neither given).
-    func setReminder(_ task: TaskItem, preset: TaskReminderPreset? = nil, at: Date? = nil, as account: String) async {
+    /// Answers whether the store kept it (whatever became of reading the
+    /// list again afterwards).
+    @discardableResult
+    func setReminder(_ task: TaskItem, preset: TaskReminderPreset? = nil, at: Date? = nil, as account: String) async -> Bool {
         let zone = calendar().timeZone.identifier
         let asked: TaskChange.Setting<TaskReminderAsk> = if let preset {
             .to(.preset(preset, timeZone: zone))
@@ -440,8 +443,8 @@ final class TasksModel: ObservableObject {
         } else {
             .cleared
         }
-        guard asked != .cleared || task.reminder != nil else { return }
-        await change(
+        guard asked != .cleared || task.reminder != nil else { return false }
+        return await change(
             task, TaskChange(reminder: asked), saying: asked == .cleared ? "Reminder removed" : "Reminder set",
             orElse: "Couldn't set the reminder on \(Self.quoted(task)). Try again.", as: account
         )
@@ -515,18 +518,21 @@ final class TasksModel: ObservableObject {
     /// list again. One change at a time for a task: a second ask while one
     /// is under way does nothing. What came of it is said, to that account
     /// only; a task that is gone is not said to have failed (the list,
-    /// read again, shows so).
-    private func change(_ task: TaskItem, _ change: TaskChange, saying done: String, orElse failed: String, as account: String) async {
-        guard saving.insert(task.id).inserted else { return }
+    /// read again, shows so). Answers whether the store made the change.
+    @discardableResult
+    private func change(_ task: TaskItem, _ change: TaskChange, saying done: String, orElse failed: String, as account: String) async -> Bool {
+        guard saving.insert(task.id).inserted else { return false }
         defer { saving.remove(task.id) }
         errorMessage = nil
+        var isMade = false
         do {
             try await source.change(task.id, change, account)
+            isMade = true
             if signedIn() == account { say(done) }
         } catch TaskError.noSuchTask {
             // Gone, with its coven or its account.
         } catch {
-            guard signedIn() == account else { return }
+            guard signedIn() == account else { return false }
             switch error {
             case TaskError.tooMany: report(Self.tooManyOpen)
             case TaskError.reminderPassed, TaskError.reminderNeedsDue: report(Self.reminderCannotBeSet)
@@ -538,10 +544,11 @@ final class TasksModel: ObservableObject {
                 report(failed)
             }
         }
-        guard signedIn() == account else { return }
+        guard signedIn() == account else { return isMade }
         // In a task of its own: whoever asked may be called off, and how
         // the task stands now is still to be shown.
         await Task { await self.load() }.value
+        return isMade
     }
 
     /// Shows what went wrong, and says it.
