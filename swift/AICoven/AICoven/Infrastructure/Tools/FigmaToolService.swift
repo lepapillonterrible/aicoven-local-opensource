@@ -157,11 +157,11 @@ nonisolated extension FigmaToolService {
         return name.isEmpty ? "Untitled" : String(name.prefix(200))
     }
 
-    /// A time from Figma, only where it reads as one (digits and what a
-    /// timestamp is written with): it is told to a model.
+    /// A time from Figma, only where it reads as one, as Figma writes
+    /// them (`2026-11-20T10:00:00Z`): it is told to a model.
     static func listedTime(_ given: Any?) -> String? {
-        guard let time = given as? String, (1 ... 40).contains(time.utf8.count),
-              time.unicodeScalars.allSatisfy({ CharacterSet(charactersIn: "0123456789-:.TZ+").contains($0) }) else { return nil }
+        guard let time = given as? String, time.utf8.count <= 40,
+              time.wholeMatch(of: /[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})/) != nil else { return nil }
         return time
     }
 

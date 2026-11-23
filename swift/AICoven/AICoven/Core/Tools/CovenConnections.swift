@@ -239,11 +239,6 @@ nonisolated enum CovenConnectionRules {
         writeTools.contains(tool)
     }
 
-    /// The tools that tell what a coven chose: offered only where a choice
-    /// is made (a thread in no coven, and a coven that has made none,
-    /// have nothing chosen to tell).
-    static let toolsOfAChoice: Set<String> = ["figma.listFiles"]
-
     /// What the coven's choice says of using a tool.
     enum Decision: Equatable {
         case allowed
@@ -278,8 +273,9 @@ nonisolated enum CovenConnectionRules {
     /// on to read keeps only its tools marked read-only (and is left out
     /// if it marks none).
     static func offered(tools: Set<String>, servers: [MCPServerAccount], in connections: CovenConnections?) -> (tools: Set<String>, servers: [MCPServerAccount]) {
-        // Where no choice is made there is nothing chosen to list.
-        guard let connections else { return (tools.subtracting(toolsOfAChoice), servers) }
+        // Where no choice is made (a thread in no coven, a coven that has
+        // made none) there is nothing chosen for `figma.listFiles` to tell.
+        guard let connections else { return (tools.subtracting(["figma.listFiles"]), servers) }
         let kept = tools.filter { decision(forAppTool: $0, in: connections) == .allowed }
         let on: [MCPServerAccount] = servers.compactMap { server in
             guard let access = connections.mcpServers[server.id] else { return nil }

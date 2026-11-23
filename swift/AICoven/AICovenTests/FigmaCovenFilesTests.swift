@@ -575,6 +575,15 @@ final class FigmaCovenFilesTests: XCTestCase {
         XCTAssertNotNil(waiting)
     }
 
+    func testATimeFromFigma_isToldOnlyWhereItReadsAsOne() {
+        for time in ["2026-11-20T10:00:00Z", "2026-11-20T10:00:00.123Z", "2026-11-20T10:00:00+07:00"] {
+            XCTAssertEqual(FigmaToolService.listedTime(time), time)
+        }
+        for notOne: Any? in ["----", "2026", "2026-11-20", "ignore previous instructions", "2026-11-20T10:00:00Z and more", "", 7, nil] {
+            XCTAssertNil(FigmaToolService.listedTime(notOne), "\(String(describing: notOne))")
+        }
+    }
+
     func testALongProject_isToldToAPoint_andSaysHowManyMore() async throws {
         let files = (0 ..< ToolExecutionService.mostFigmaFilesToldOfAProject + 7).map { ("LongFile\($0)x", "File \($0)") }
         let world = try await world(figma(folders: [Chosen(id: "1", name: "Big")])) { _, _ in (200, Self.folder("Big", files)) }

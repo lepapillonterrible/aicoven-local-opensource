@@ -188,10 +188,10 @@ final class CovenConnectionsModel: ObservableObject {
         choice?.figma ?? CovenConnections.FigmaChoice()
     }
 
-    /// A change to the Figma files or projects is being saved: the rows
-    /// wait for it.
-    var isSavingFigma: Bool {
-        saving.contains("figma")
+    /// A change of this screen's is being saved, which the next waits
+    /// for: a control that would be passed over meanwhile is off.
+    var isSaving: Bool {
+        !saving.isEmpty
     }
 
     /// Adds the file or project a pasted link names to the coven's Figma
@@ -546,7 +546,7 @@ struct CovenConnectionsView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
-            .disabled(model.isSavingFigma)
+            .disabled(model.isSaving)
             .accessibilityLabel("Remove \(name)")
         }
     }
