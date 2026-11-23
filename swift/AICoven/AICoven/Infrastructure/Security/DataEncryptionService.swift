@@ -45,11 +45,18 @@ actor DataEncryptionService {
     private var cachedDataKey: SymmetricKey? {
         didSet {
             keyEpoch += 1
+            // Told to whatever holds something opened with the key in
+            // memory only (pictures drawn of assets): it is forgotten.
+            NotificationCenter.default.post(name: Self.keyDidChange, object: nil)
             // The key is put in memory by the unlock that just read the
             // current account's own key material.
             keyOwnerID = cachedDataKey == nil ? nil : UserScope.currentUserID
         }
     }
+
+    /// Posted at every change of the data key in memory: each unlock and
+    /// each lock.
+    nonisolated static let keyDidChange = Notification.Name("AICovenDataKeyDidChange")
 
     /// The account whose data key is in memory; `nil` while locked.
     private var keyOwnerID: String?

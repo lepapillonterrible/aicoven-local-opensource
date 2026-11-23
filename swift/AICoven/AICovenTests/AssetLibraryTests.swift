@@ -470,11 +470,13 @@ final class AssetLibraryTests: XCTestCase {
             let asset = asset("a", status: status, files: files, unreadable: unreadable)
             return [AssetLibraryRules.reviewActions(asset), AssetLibraryRules.otherActions(asset)]
         }
-        XCTAssertEqual(offered(.draft), [[.propose], [.download, .archive]])
-        XCTAssertEqual(offered(.draft, files: []), [[], [.archive]], "An asset with no file is not proposed, and has nothing to save")
-        XCTAssertEqual(offered(.proposed), [[.approve, .sendBack], [.sendToAgent, .download, .archive]])
-        XCTAssertEqual(offered(.approved), [[], [.sendToAgent, .download, .archive]], "What is proposed or approved is sent to an agent")
-        XCTAssertEqual(offered(.archived), [[.unarchive], [.download]])
+        XCTAssertEqual(offered(.draft), [[.propose], [.copyReference, .download, .archive]])
+        XCTAssertEqual(offered(.draft, files: []), [[], [.copyReference, .archive]], "An asset with no file is not proposed, and has nothing to save")
+        XCTAssertEqual(offered(.proposed), [[.approve, .sendBack], [.sendToAgent, .copyReference, .download, .archive]])
+        XCTAssertEqual(
+            offered(.approved), [[], [.sendToAgent, .copyReference, .download, .archive]], "What is proposed or approved is sent to an agent"
+        )
+        XCTAssertEqual(offered(.archived), [[.unarchive], [.copyReference, .download]])
         // One the key cannot open is not reviewed or saved: only put away, or taken out again.
         XCTAssertEqual(offered(.proposed, unreadable: true), [[], [.archive]])
         XCTAssertEqual(offered(.draft, unreadable: true), [[], [.archive]])

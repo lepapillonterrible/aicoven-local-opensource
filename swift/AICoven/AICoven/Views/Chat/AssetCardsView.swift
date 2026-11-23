@@ -45,7 +45,7 @@ struct AssetCardsView: View {
     private func card(_ asset: Asset) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: Spacing.sm) {
-                AssetThumbnail(type: asset.type, isLocked: asset.isUnreadable, width: 64, height: 48)
+                AssetThumbnail(asset: asset, width: 64, height: 48)
                 VStack(alignment: .leading, spacing: Spacing.xxs) {
                     Text(asset.isUnreadable ? AssetLibraryRules.unreadable : asset.title)
                         .font(.aicovenBodyMedium)

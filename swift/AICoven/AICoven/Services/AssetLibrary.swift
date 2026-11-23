@@ -1,5 +1,6 @@
 internal import Combine
 import Foundation
+import SwiftUI
 
 /// What the person can do with an asset, in the cloud app's words.
 nonisolated enum AssetAction: String, Identifiable {
@@ -8,6 +9,7 @@ nonisolated enum AssetAction: String, Identifiable {
     case sendBack
     case unarchive
     case sendToAgent
+    case copyReference
     case download
     case archive
 
@@ -22,6 +24,7 @@ nonisolated enum AssetAction: String, Identifiable {
         case .sendBack: "Send Back"
         case .unarchive: "Unarchive"
         case .sendToAgent: "Send to Agent…"
+        case .copyReference: "Copy Reference"
         case .download: "Download…"
         case .archive: "Archive"
         }
@@ -34,6 +37,7 @@ nonisolated enum AssetAction: String, Identifiable {
         case .sendBack: "arrow.uturn.backward"
         case .unarchive: "tray.and.arrow.up"
         case .sendToAgent: "arrowshape.turn.up.right"
+        case .copyReference: "link"
         case .download: "arrow.down.circle"
         case .archive: "archivebox"
         }
@@ -46,8 +50,23 @@ nonisolated enum AssetAction: String, Identifiable {
         case .approve: .approved
         case .sendBack, .unarchive: .draft
         case .archive: .archived
-        case .download, .sendToAgent: nil
+        case .download, .sendToAgent, .copyReference: nil
         }
+    }
+}
+
+/// How the Mac's library lays its assets out, as the cloud Mac's: its
+/// table, or a grid of cards.
+nonisolated enum AssetLibraryLayout: String, CaseIterable, Identifiable {
+    case list
+    case grid
+
+    var id: String {
+        rawValue
+    }
+
+    var title: String {
+        self == .list ? "List" : "Grid"
     }
 }
 
@@ -75,8 +94,53 @@ nonisolated enum AssetLibraryRules {
     /// saved somewhere (one that can be opened and has a file), and the
     /// asset put out of the way.
     static func otherActions(_ asset: Asset) -> [AssetAction] {
-        (canBeSentToAnAgent(asset) ? [.sendToAgent] : []) + (asset.isUnreadable || asset.files.isEmpty ? [] : [.download])
-            + (asset.status == .archived ? [] : [.archive])
+        (canBeSentToAnAgent(asset) ? [.sendToAgent] : []) + (asset.isUnreadable ? [] : [.copyReference])
+            + (asset.isUnreadable || asset.files.isEmpty ? [] : [.download]) + (asset.status == .archived ? [] : [.archive])
+    }
+
+    /// What Copy Reference puts on the pasteboard, as the cloud app's
+    /// library does: the asset's address and its title. Pasted into a
+    /// thread, it tells an agent which asset is meant: the id is what
+    /// `asset.get` takes. (The address itself opens nothing here.)
+    static func reference(to asset: Asset) -> String {
+        "aicoven://assets/\(asset.id) " + AttachmentContext.plainName(asset.title)
+    }
+
+    /// Copies an asset's reference, and tells VoiceOver whether it was
+    /// copied: nothing on screen changes for a copy.
+    @MainActor
+    static func copyReference(to asset: Asset) {
+        let copied = ThreadMarkdownExport.writeClipboard(reference(to: asset))
+        AccessibilityNotification.Announcement(copied ? "Reference copied" : "Couldn't copy the reference").post()
+    }
+
+    /// Where the Mac's library keeps its layout, for each window.
+    static let layoutKey = "assets.layout"
+
+    /// The narrowest a card of the Mac's grid is, and the widest.
+    static let gridCard: ClosedRange<CGFloat> = 180 ... 260
+
+    /// How many cards a row of the grid holds in `width`: as many of the
+    /// narrowest as fit, as the grid lays them out; one at least.
+    static func gridColumns(width: CGFloat, spacing: CGFloat) -> Int {
+        max(1, Int((width + spacing) / (gridCard.lowerBound + spacing)))
+    }
+
+    /// The card chosen after a move of `step` cards from `current` (one
+    /// to the side, or a row up or down), among the cards in their order:
+    /// the first where none is chosen, the same where the move would
+    /// leave the grid, nil where there is no card.
+    static func chosen(after current: Asset.ID?, movingBy step: Int, among ids: [Asset.ID]) -> Asset.ID? {
+        guard let first = ids.first else { return nil }
+        guard let current, let index = ids.firstIndex(of: current) else { return first }
+        let next = index + step
+        return ids.indices.contains(next) ? ids[next] : current
+    }
+
+    /// The line under a card's title in the Mac's grid, as the cloud
+    /// app's: "status · type · who made it", with no time.
+    static func gridLine(_ asset: Asset, agents: [String: String] = [:]) -> String {
+        [statusLabel(asset), asset.type.displayName, madeBy(asset, agents: agents)].joined(separator: " · ")
     }
 
     /// Whether an asset can be sent to an agent: one that is proposed or
