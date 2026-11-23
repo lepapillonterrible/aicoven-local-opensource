@@ -737,6 +737,29 @@ final class TasksModelTests: XCTestCase {
         XCTAssertEqual(tasks.detailsOf, "oldest", "Its details stay open")
         XCTAssertEqual(tasks.task("oldest")?.status, .closed)
 
+        // Details opened while a reading that did not ask for the task is under way: when that
+        // reading lands without it, the tasks are read again, asking for it.
+        tasks.detailsOf = nil
+        stand.kept = [task("newest", status: .done), task("newer", status: .done), task("oldest", status: .closed)]
+        stand.mostFinished = 3
+        await tasks.load()
+        stand.mostFinished = 2
+        let gate = Gate()
+        stand.readingWaits = gate
+        let reading = Task { await tasks.load() }
+        await gate.arrived(1)
+        XCTAssertEqual(stand.alsoAsked.last ?? "none", nil, "It asked for none")
+        tasks.detailsOf = "oldest"
+        await gate.letOneThrough()
+        await gate.arrived(2)
+        XCTAssertEqual(stand.alsoAsked.last, "oldest", "Read again, asking for it")
+        await gate.letOneThrough()
+        let wasRead = await reading.value
+        XCTAssertTrue(wasRead)
+        XCTAssertEqual(tasks.detailsOf, "oldest", "Its details stay open")
+        XCTAssertEqual(tasks.task("oldest")?.status, .closed, "And have their task")
+        stand.readingWaits = nil
+
         // Gone (with its coven, say): its details close.
         stand.kept = [task("newest", status: .done), task("newer", status: .done)]
         await tasks.load()

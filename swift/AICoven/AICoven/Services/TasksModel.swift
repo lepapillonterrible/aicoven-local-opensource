@@ -130,8 +130,17 @@ final class TasksModel: ObservableObject {
             finished = listing.tasks.filter(\.isFinished)
             finishedCount = listing.finished
             hasRead = true
-            // Asked for by name and not found: it is gone, not merely unlisted.
-            if let shown, detailsOf == shown, !listing.tasks.contains(where: { $0.id == shown }) { detailsOf = nil }
+            if let open = detailsOf, !listing.tasks.contains(where: { $0.id == open }) {
+                // Asked for by name and not found: it is gone, not merely
+                // unlisted, and its details close.
+                if open == shown {
+                    detailsOf = nil
+                } else {
+                    // Its details were opened while this reading was under
+                    // way, which did not ask for it: read again, asking.
+                    return await load()
+                }
+            }
             // Unless a later reading has failed since: that is still so.
             if reading > landed {
                 landed = reading
