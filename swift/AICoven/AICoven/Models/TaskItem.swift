@@ -9,10 +9,19 @@ nonisolated enum TaskStatus: String {
 }
 
 /// How far along a task is, as the cloud app's board has it.
-nonisolated enum TaskStage: String {
+nonisolated enum TaskStage: String, CaseIterable {
     case backlog
     case inProgress = "in_progress"
     case review
+
+    /// The stage as the Board names its column, in the cloud app's words.
+    var title: String {
+        switch self {
+        case .backlog: "To do"
+        case .inProgress: "In progress"
+        case .review: "Review"
+        }
+    }
 }
 
 /// The day a task is due: a day on the calendar, not a moment, so it is

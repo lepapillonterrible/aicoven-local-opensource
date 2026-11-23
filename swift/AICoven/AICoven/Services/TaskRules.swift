@@ -51,6 +51,34 @@ nonisolated enum TaskPinState: Equatable {
     }
 }
 
+/// A column of the Board: a stage of the open tasks, or Done, which holds
+/// the done and the closed.
+nonisolated enum TaskBoardColumn: Hashable, Identifiable {
+    case stage(TaskStage)
+    case done
+
+    static let all: [TaskBoardColumn] = TaskStage.allCases.map { .stage($0) } + [.done]
+
+    /// The column a task is in.
+    static func of(_ task: TaskItem) -> TaskBoardColumn {
+        task.isFinished ? .done : .stage(task.stage)
+    }
+
+    var id: String {
+        switch self {
+        case let .stage(stage): stage.rawValue
+        case .done: "done"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case let .stage(stage): stage.title
+        case .done: "Done"
+        }
+    }
+}
+
 /// Where a task handed to an agent stands, from the turn it was handed
 /// over in.
 nonisolated enum TaskHandoffState: Equatable {
@@ -256,6 +284,16 @@ nonisolated enum TaskRules {
             needsYou: ordered(needsYou, by: sort, now: now), agentsOnIt: ordered(agentsOnIt, by: sort, now: now),
             open: ordered(plain, by: sort, now: now), finished: ordered(finished, by: sort, now: now)
         )
+    }
+
+    /// The tasks of a column of the Board, ordered as the List orders a
+    /// part: what is pinned for today first and for the week after it,
+    /// then by the sort chosen.
+    static func tasks(in column: TaskBoardColumn, open: [TaskItem], finished: [TaskItem], sort: TaskSort, now: Date) -> [TaskItem] {
+        switch column {
+        case let .stage(stage): ordered(open.filter { !$0.isFinished && $0.stage == stage }, by: sort, now: now)
+        case .done: ordered(finished, by: sort, now: now)
+        }
     }
 
     /// A piece of the line under a task's title.

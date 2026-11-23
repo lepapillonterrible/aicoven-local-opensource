@@ -377,6 +377,21 @@ final class TasksModel: ObservableObject {
         await change(task, TaskChange(status: .closed), saying: "Closed \(Self.name(of: task))", orElse: Self.couldNotSave(task), as: account)
     }
 
+    /// Moves a task to a column of the Board: to a stage (a finished task
+    /// is opened again there, while its place has room), or to Done,
+    /// which marks it done. Nothing is asked for the column it is in.
+    func move(_ task: TaskItem, to column: TaskBoardColumn, as account: String) async {
+        guard TaskBoardColumn.of(task) != column else { return }
+        let moved = switch column {
+        case let .stage(stage): TaskChange(status: task.isFinished ? .open : nil, stage: stage)
+        case .done: TaskChange(status: .done)
+        }
+        await change(
+            task, moved, saying: "Moved \(Self.name(of: task)) to \(column.title)", orElse: "Couldn't move \(Self.quoted(task)). Try again.",
+            as: account
+        )
+    }
+
     /// Gives a task another title. Nothing is asked for a title that
     /// says nothing, or the one it has.
     func rename(_ task: TaskItem, to title: String, as account: String) async {

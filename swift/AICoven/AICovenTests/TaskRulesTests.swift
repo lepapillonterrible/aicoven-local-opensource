@@ -1,4 +1,5 @@
 @testable import AICoven
+import SwiftUI
 import XCTest
 
 /// What the Tasks list decides by itself: when a pin ends, how one stands,
@@ -24,10 +25,10 @@ final class TaskRulesTests: XCTestCase {
 
     private func task(
         _ id: String, status: TaskStatus = .open, due: String? = nil, time: String? = nil, pin: TaskPin? = nil, made: TimeInterval = 0,
-        changed: TimeInterval = 0
+        changed: TimeInterval = 0, stage: TaskStage = .backlog
     ) -> TaskItem {
         TaskItem(
-            id: id, covenID: nil, title: id, status: status, stage: .backlog,
+            id: id, covenID: nil, title: id, status: status, stage: stage,
             due: due.flatMap(TaskDueDate.init).flatMap { TaskDue(date: $0, time: time) }, pin: pin,
             createdAt: Date(timeIntervalSince1970: made), updatedAt: Date(timeIntervalSince1970: changed)
         )
@@ -217,6 +218,44 @@ final class TaskRulesTests: XCTestCase {
         XCTAssertEqual(TaskSort.resolve("something-else"), .dueDate)
         XCTAssertEqual(TaskSort.allCases.map(\.title), ["Recently updated", "Due date", "Newest", "Oldest"])
         XCTAssertEqual(TaskSort.allCases.map(\.rawValue), ["recently_updated", "due_date", "newest", "oldest"], "Kept on the device: they stay")
+    }
+
+    func testTheBoardsColumns() {
+        XCTAssertEqual(TaskBoardColumn.all.map(\.title), ["To do", "In progress", "Review", "Done"], "The cloud app's words")
+        XCTAssertEqual(TaskBoardColumn.all.map(\.id), ["backlog", "in_progress", "review", "done"])
+
+        // An open task is in its stage's column; a finished one in Done, whatever stage it was at.
+        XCTAssertEqual(TaskBoardColumn.of(task("a")), .stage(.backlog))
+        XCTAssertEqual(TaskBoardColumn.of(task("b", stage: .review)), .stage(.review))
+        XCTAssertEqual(TaskBoardColumn.of(task("c", status: .done, stage: .inProgress)), .done)
+        XCTAssertEqual(TaskBoardColumn.of(task("d", status: .closed)), .done)
+
+        // A column's tasks are ordered as the List orders a part: what is pinned first, then by the sort chosen.
+        let pinned = TaskPin(period: .today, expiresAt: wednesday.addingTimeInterval(3600))
+        let open = [
+            task("old", changed: 10, stage: .inProgress), task("new", changed: 30, stage: .inProgress),
+            task("pinned", pin: pinned, changed: 5, stage: .inProgress), task("todo", changed: 20), task("checked", changed: 40, stage: .review),
+        ]
+        let finished = [task("done", status: .done, changed: 50, stage: .inProgress), task("closed", status: .closed, changed: 60)]
+        func ids(_ column: TaskBoardColumn, _ sort: TaskSort = .recentlyUpdated) -> [String] {
+            TaskRules.tasks(in: column, open: open, finished: finished, sort: sort, now: wednesday).map(\.id)
+        }
+        XCTAssertEqual(ids(.stage(.inProgress)), ["pinned", "new", "old"])
+        XCTAssertEqual(ids(.stage(.backlog)), ["todo"])
+        XCTAssertEqual(ids(.stage(.review)), ["checked"])
+        XCTAssertEqual(ids(.done), ["closed", "done"], "The finished ones, of whatever stage")
+        XCTAssertEqual(ids(.done, .oldest), ["done", "closed"])
+        XCTAssertEqual(TaskBoardColumn.all.flatMap { ids($0) }.sorted(), (open + finished).map(\.id).sorted(), "Every task is in one column")
+    }
+
+    func testAColumnsWidth() {
+        // The Mac fits the four columns and their three gaps to its width, and no column is narrower than 220 pt.
+        XCTAssertEqual(TaskBoard<EmptyView, EmptyView>.columnWidth(boardWidth: 1000 + 3 * Spacing.sm, isMac: true, isPadLayout: false), 250)
+        XCTAssertEqual(TaskBoard<EmptyView, EmptyView>.columnWidth(boardWidth: 600, isMac: true, isPadLayout: false), 220)
+        XCTAssertEqual(TaskBoard<EmptyView, EmptyView>.columnWidth(boardWidth: 0, isMac: true, isPadLayout: false), 240, "Before it is measured")
+        // The iPad's are a readable 280 pt; the iPhone's fill the width, with the next column showing at the edge.
+        XCTAssertEqual(TaskBoard<EmptyView, EmptyView>.columnWidth(boardWidth: 900, isMac: false, isPadLayout: true), 280)
+        XCTAssertEqual(TaskBoard<EmptyView, EmptyView>.columnWidth(boardWidth: 390, isMac: false, isPadLayout: false), 390 - Spacing.xxl)
     }
 
     func testTheListsParts() {
