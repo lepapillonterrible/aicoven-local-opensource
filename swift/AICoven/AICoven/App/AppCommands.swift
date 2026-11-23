@@ -40,6 +40,13 @@ struct TaskSortActions {
     let select: (TaskSort) -> Void
 }
 
+/// The view of the Tasks in the front window (List or Board), and the
+/// choosing of one. A page with the List only (On me) gives none.
+struct TaskLayoutActions {
+    let selected: TasksView.Layout
+    let select: (TasksView.Layout) -> Void
+}
+
 /// What the task whose details are open in the front window can be
 /// offered, and the doing of it.
 struct TaskCommandActions {
@@ -120,6 +127,10 @@ private struct TaskSortActionsKey: FocusedValueKey {
     typealias Value = TaskSortActions
 }
 
+private struct TaskLayoutActionsKey: FocusedValueKey {
+    typealias Value = TaskLayoutActions
+}
+
 private struct TaskCommandActionsKey: FocusedValueKey {
     typealias Value = TaskCommandActions
 }
@@ -141,6 +152,12 @@ extension FocusedValues {
     var taskSort: TaskSortActions? {
         get { self[TaskSortActionsKey.self] }
         set { self[TaskSortActionsKey.self] = newValue }
+    }
+
+    /// The view of the Tasks in the front window: List or Board.
+    var taskLayout: TaskLayoutActions? {
+        get { self[TaskLayoutActionsKey.self] }
+        set { self[TaskLayoutActionsKey.self] = newValue }
     }
 
     /// The task whose details are open in the front window.
@@ -168,6 +185,7 @@ struct ShellCommands: Commands {
     @FocusedValue(\.threadCommands) private var thread
     @FocusedValue(\.stopTurn) private var stopTurn
     @FocusedValue(\.taskSort) private var taskSort
+    @FocusedValue(\.taskLayout) private var taskLayout
     @FocusedValue(\.taskCommands) private var taskCommands
 
     private var isMac: Bool {
@@ -253,6 +271,13 @@ struct ShellCommands: Commands {
             if isMac {
                 Button("New Task") { shell?.newTask() }
                     .disabled(shell == nil)
+                Divider()
+                // Toggles, not an inline Picker: the menu bar shows an inline
+                // Picker's items enabled whatever `.disabled` says.
+                ForEach(TasksView.Layout.allCases) { layout in
+                    Toggle(layout.rawValue, isOn: Binding(get: { taskLayout?.selected == layout }, set: { _ in taskLayout?.select(layout) }))
+                        .disabled(taskLayout == nil)
+                }
                 Divider()
             }
             // `.disabled` does not dim a Picker's title in the menu bar: with

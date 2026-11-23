@@ -2,7 +2,9 @@ internal import Combine
 import SwiftUI
 
 /// A place's Tasks, or On me (every place's tasks, each row naming its
-/// place, with no New task line), as the cloud app's List: what is pinned for today and
+/// place, with no New task line). A place's tasks have two views, the List
+/// and the Board (`TaskBoard`); On me has the List. The List, as the cloud
+/// app's: what is pinned for today and
 /// for this week first (and before them "Still on today?", for pins whose
 /// day is over), then the open tasks under "Open", which starts with the
 /// New task line, and the finished ones under "Done · N", closed until
@@ -21,11 +23,14 @@ struct TasksView: View {
     /// The cursor is owed to the New task line, which takes it once it is
     /// on screen: the tasks are read and the list has scrolled to it.
     @State private var focusesNewTaskWhenShown = false
-    /// Whether the New task line is built: the Mac's list builds its rows
-    /// as they come on screen.
-    @State private var newTaskLineShows = false
+    /// How many New task lines are built (the List's, the Board's): the
+    /// Mac's list builds its rows as they come on screen.
+    @State private var newTaskLinesUp = 0
     /// Counts the times the Mac's list is asked to scroll to the New task line.
     @State private var scrollsToNewTask = 0
+    /// Which view of a place's tasks shows: the window's own choice, kept
+    /// as the person goes from place to place and comes back to Tasks.
+    @SceneStorage(Layout.storageKey) private var storedLayout = Layout.list.rawValue
     /// Whether Done shows its tasks; closed until asked for.
     @State private var showsDone = false
     /// Whether Try again's reading is under way.
@@ -54,8 +59,47 @@ struct TasksView: View {
         _model = StateObject(wrappedValue: TasksModel(scope: scope))
     }
 
+    /// The two views of a place's tasks.
+    enum Layout: String, CaseIterable, Identifiable {
+        case list = "List"
+        case board = "Board"
+
+        /// Where a window keeps its choice.
+        static let storageKey = "tasks.layout"
+
+        /// The view a kept choice names; the List for one that names none.
+        static func resolve(_ kept: String) -> Layout {
+            Layout(rawValue: kept) ?? .list
+        }
+
+        var id: String {
+            rawValue
+        }
+
+        var symbol: String {
+            self == .list ? "list.bullet" : "rectangle.split.3x1"
+        }
+    }
+
     private var isOnMe: Bool {
         model.scope == .onMe
+    }
+
+    private var layout: Layout {
+        Layout.resolve(storedLayout)
+    }
+
+    private func show(_ chosen: Layout) {
+        guard chosen != layout else { return }
+        storedLayout = chosen.rawValue
+        AccessibilityNotification.Announcement("Showing the \(chosen.rawValue)").post()
+    }
+
+    /// Whether the New task line is built. Counted, not flagged: going
+    /// from the List to the Board, the Board's line can come before the
+    /// List's has gone.
+    private var newTaskLineShows: Bool {
+        newTaskLinesUp > 0
     }
 
     /// The name of the place a task is in, as On me says it on each row.
@@ -134,6 +178,7 @@ struct TasksView: View {
                 details(of: open.id, host: .sheet)
             }
             .focusedSceneValue(\.taskSort, TaskSortActions(selected: sort, select: select))
+            .focusedSceneValue(\.taskLayout, isOnMe ? nil : TaskLayoutActions(selected: layout, select: show))
             .focusedSceneValue(\.taskCommands, taskCommands)
         #else
             // Set only by the stack itself, as the details are popped: when the
@@ -276,10 +321,22 @@ struct TasksView: View {
             .frame(maxWidth: Self.readingWidth + 2 * TaskListMetrics.pageMargin(isPadLayout: isPadLayout), alignment: .leading)
             .frame(maxWidth: .infinity)
 
-            list
+            if isOnMe || layout == .list {
+                list
+            } else if model.hasRead {
+                board
+            } else {
+                // Not read yet: as the List says it.
+                if model.errorMessage == nil {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, Spacing.xl)
+                }
+                Spacer(minLength: 0)
+            }
         }
         .background(Color.aicovenSurface.ignoresSafeArea())
-        .toolbar { sortItem }
+        .toolbar { barItems }
         .task { await model.load() }
         .task {
             now = Date()
@@ -338,19 +395,37 @@ struct TasksView: View {
         .labelsHidden()
     }
 
-    /// Sort sits in the bar: a pop-up that says the order where there is
-    /// room, a menu button at phone width.
+    /// One menu in the bar for Sort and View: at phone width, and on the
+    /// iPad when the bar has no room for both controls.
+    private var usesBarMenu: Bool {
+        horizontalSizeClass == .compact || (isPadLayout && pageWidth < Self.splitMinimumWidth)
+    }
+
+    /// Sort and List/Board sit in the bar: a pop-up that says the order
+    /// and a two-part control where there is room, one menu otherwise. On
+    /// me has the List only, and so Sort alone.
     @ToolbarContentBuilder
-    private var sortItem: some ToolbarContent {
-        StoneToolbarItem(placement: .primaryAction) {
-            if horizontalSizeClass == .compact {
+    private var barItems: some ToolbarContent {
+        if usesBarMenu {
+            StoneToolbarItem(placement: .primaryAction) {
                 Menu {
                     Section("Sort") { sortPicker }
+                    if !isOnMe {
+                        Section("View") {
+                            Picker("View", selection: Binding(get: { layout }, set: show)) {
+                                ForEach(Layout.allCases) { Text($0.rawValue).tag($0) }
+                            }
+                            .pickerStyle(.inline)
+                            .labelsHidden()
+                        }
+                    }
                 } label: {
-                    Label("Sort tasks", systemImage: "ellipsis.circle")
+                    Label(isOnMe ? "Sort tasks" : "Sort and view", systemImage: "ellipsis.circle")
                 }
                 .stoneToolbarMenu()
-            } else {
+            }
+        } else {
+            StoneToolbarItem(placement: .primaryAction) {
                 Menu {
                     sortPicker
                 } label: {
@@ -363,7 +438,111 @@ struct TasksView: View {
                 .accessibilityLabel("Sort tasks")
                 .accessibilityValue(sort.title)
             }
+            if !isOnMe {
+                StoneToolbarItem(placement: .primaryAction) { layoutControl }
+            }
         }
+    }
+
+    /// List or Board: two parts in one control, the one showing marked.
+    private var layoutControl: some View {
+        HStack(spacing: 2) {
+            ForEach(Layout.allCases) { choice in
+                let isSelected = choice == layout
+                Button {
+                    show(choice)
+                } label: {
+                    HStack(spacing: Spacing.xxs) {
+                        Image(systemName: choice.symbol)
+                            .accessibilityHidden(true)
+                        Text(choice.rawValue)
+                    }
+                    .font(.aicovenBodySmall.weight(isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? Color.aicovenTextPrimary : Color.aicovenTextSecondary)
+                    .padding(.horizontal, Spacing.xs)
+                    .padding(.vertical, Spacing.xxs)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(isSelected ? Color.aicovenChrome : .clear)
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(choice.rawValue)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.aicovenSurface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.aicovenBorder, lineWidth: 1)
+                )
+        )
+        .fixedSize()
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("View")
+    }
+
+    // MARK: - Board
+
+    private var board: some View {
+        TaskBoard(
+            open: model.open, finished: model.finished, finishedCount: model.finishedCount, sort: sort, now: now, showsDone: $showsDone,
+            scrollsToNewTask: scrollsToNewTask,
+            onDrop: { taskID, column in
+                // Not a card of this Board, or a column it cannot go to
+                // (Done, while an agent is on it, which the model says):
+                // the drop is refused.
+                guard let task = model.task(taskID) else { return false }
+                let moves = model.canMove(task, to: column)
+                move(task, to: column)
+                return moves
+            },
+            card: card,
+            newTaskLine: { newTaskField }
+        )
+        #if !os(macOS)
+        .refreshable { await model.load() }
+        #endif
+    }
+
+    private func move(_ task: TaskItem, to column: TaskBoardColumn) {
+        let account = UserScope.currentUserID
+        Task { await model.move(task, to: column, as: account) }
+    }
+
+    private func card(_ task: TaskItem) -> some View {
+        let handoff = model.handoff(of: task)
+        let pin = TaskRules.pinState(of: task, now: now)
+        let column = TaskBoardColumn.of(task)
+        let others = TaskRules.moveTargets(for: task, handoff: handoff)
+        let actions = actions(for: task)
+        return TaskCard(
+            task: task,
+            context: TaskRules.context(of: task, now: now, handoff: handoff, agent: model.agentName(for: task)),
+            value: [pin.activePeriod?.title, column.title].compactMap(\.self).joined(separator: ", "),
+            isSaving: model.saving.contains(task.id),
+            onDetails: actions.onDetails,
+            menu: {
+                TaskMenu(
+                    task: task, pin: pin, handoff: handoff, moveTargets: others, onMove: { move(task, to: $0) }, onTick: actions.onTick,
+                    onClose: actions.onClose, onPin: actions.onPin, onUnpin: actions.onUnpin, onAnswer: actions.onAnswer,
+                    onDetails: actions.onDetails, onTalk: actions.onTalk, lead: actions.lead
+                )
+            },
+            voiceOverActions: {
+                TaskPinActions(task: task, pin: pin, onPin: actions.onPin, onUnpin: actions.onUnpin, onAnswer: actions.onAnswer)
+                ForEach(others) { column in
+                    Button("Move to \(column.title)") { move(task, to: column) }
+                }
+                if !task.isFinished, TaskRules.canBeTalkedThrough(task) {
+                    Button(handoff == nil ? "Talk it through" : "Open thread", action: actions.onTalk)
+                }
+            }
+        )
     }
 
     // MARK: - List
@@ -544,14 +723,24 @@ struct TasksView: View {
         Task { await model.answerLapsedPins(of: tasks, keep: keep, as: account) }
     }
 
-    private func row(_ task: TaskItem) -> some View {
-        let handoff = model.handoff(of: task)
-        return TaskRow(
-            task: task,
-            pin: TaskRules.pinState(of: task, now: now),
-            handoff: handoff,
-            context: TaskRules.context(of: task, now: now, handoff: handoff, agent: model.agentName(for: task), place: placeName(of: task)),
-            isSaving: model.saving.contains(task.id),
+    /// What a task's row or card lets the person do with it, each as the
+    /// account signed in when it is asked.
+    private struct TaskActions {
+        /// Ticks an open task done (true), or opens a finished one again.
+        let onTick: (Bool) -> Void
+        let onClose: () -> Void
+        let onPin: (TaskPinPeriod) -> Void
+        let onUnpin: () -> Void
+        /// Keeps a pin that has run out for today (true), or clears it.
+        let onAnswer: (Bool) -> Void
+        let onDetails: () -> Void
+        /// Opens the task's thread, which is made for it if it has none.
+        let onTalk: () -> Void
+        let lead: TaskLead
+    }
+
+    private func actions(for task: TaskItem) -> TaskActions {
+        TaskActions(
             onTick: { done in
                 let account = UserScope.currentUserID
                 Task { await model.setDone(task, done, as: account) }
@@ -575,6 +764,26 @@ struct TasksView: View {
         )
     }
 
+    private func row(_ task: TaskItem) -> some View {
+        let handoff = model.handoff(of: task)
+        let actions = actions(for: task)
+        return TaskRow(
+            task: task,
+            pin: TaskRules.pinState(of: task, now: now),
+            handoff: handoff,
+            context: TaskRules.context(of: task, now: now, handoff: handoff, agent: model.agentName(for: task), place: placeName(of: task)),
+            isSaving: model.saving.contains(task.id),
+            onTick: actions.onTick,
+            onClose: actions.onClose,
+            onPin: actions.onPin,
+            onUnpin: actions.onUnpin,
+            onAnswer: actions.onAnswer,
+            onDetails: actions.onDetails,
+            onTalk: actions.onTalk,
+            lead: actions.lead
+        )
+    }
+
     private var newTaskField: some View {
         HStack(spacing: 0) {
             Image(systemName: "plus")
@@ -590,10 +799,10 @@ struct TasksView: View {
         }
         .frame(minHeight: TaskListMetrics.rowMinHeight)
         .onAppear {
-            newTaskLineShows = true
+            newTaskLinesUp += 1
             focusNewTaskWhenShown()
         }
-        .onDisappear { newTaskLineShows = false }
+        .onDisappear { newTaskLinesUp = max(0, newTaskLinesUp - 1) }
     }
 
     /// Gives the New task line the cursor it is owed, unless the person
@@ -628,7 +837,7 @@ private struct OpenTask: Identifiable {
 #endif
 
 /// The sizes the Tasks list is drawn by, as the cloud app's.
-private enum TaskListMetrics {
+enum TaskListMetrics {
     /// Where a row's title starts: the tick's column, which the group
     /// headings start at too.
     static var titleInset: CGFloat {
@@ -876,17 +1085,7 @@ private struct TaskRow: View {
 
     /// The line under the title, its pieces joined by a middle dot.
     private var contextLine: Text? {
-        context.map { piece -> Text in
-            switch piece {
-            case let .plain(words): Text(words).foregroundStyle(Color.aicovenTextSecondary)
-            case let .pin(words): Text("\(Image(systemName: "pin.fill")) \(words)").foregroundStyle(Color.aicovenTextSecondary)
-            case let .overdue(words): Text(words).foregroundStyle(Color.aicovenError)
-            case let .agent(words): Text(words).foregroundStyle(Color.aicovenWater)
-            }
-        }
-        .reduce(nil as Text?) { joined, next in
-            joined.map { $0 + Text(" · ").foregroundStyle(Color.aicovenTextSecondary) + next } ?? next
-        }
+        TaskContextText.joined(context)
     }
 
     var body: some View {
@@ -931,7 +1130,7 @@ private struct TaskRow: View {
         .disabled(isSaving)
         .contextMenu { menu(showsDoItForMe: true) }
         .swipeActions(edge: .leading, allowsFullSwipe: true) {
-            if !task.isFinished, handoff == nil || handoff == .finished {
+            if !task.isFinished, TaskRules.canBeMarkedDone(handoff) {
                 Button("Mark done") { onTick(true) }
                     .tint(.aicovenWater)
             }
@@ -966,31 +1165,12 @@ private struct TaskRow: View {
         TaskPinActions(task: task, pin: pin, onPin: onPin, onUnpin: onUnpin, onAnswer: onAnswer)
     }
 
-    /// The task's menu, as the cloud app's: what can be done with it by
-    /// where it stands, then its details and its pin.
-    @ViewBuilder
+    /// The task's menu, the same as its card's on the Board.
     private func menu(showsDoItForMe: Bool) -> some View {
-        if task.isFinished {
-            Button("Reopen") { onTick(false) }
-        } else if handoff == .finished {
-            Button("Mark done") { onTick(true) }
-            Button("Open thread", action: onTalk)
-        } else if handoff == nil {
-            // A task whose title cannot be read has nothing to tell an agent.
-            if showsDoItForMe, TaskRules.canBeHandedOver(task) {
-                Menu("Do it for me…") { LeadAgentChoices(lead: lead, onChoose: lead.onDoIt) }
-            }
-            if TaskRules.canBeTalkedThrough(task) { Button("Talk it through", action: onTalk) }
-            Button("Close", action: onClose)
-        } else {
-            Button("Open thread", action: onTalk)
-        }
-        if !task.isFinished, lead.hasLead {
-            Menu("Change Lead Agent…") { LeadAgentChoices(lead: lead, onChoose: lead.onChange) }
-        }
-        Divider()
-        Button("Details…", action: onDetails)
-        pinActions
+        TaskMenu(
+            task: task, pin: pin, handoff: handoff, showsDoItForMe: showsDoItForMe, onTick: onTick, onClose: onClose, onPin: onPin,
+            onUnpin: onUnpin, onAnswer: onAnswer, onDetails: onDetails, onTalk: onTalk, lead: lead
+        )
     }
 
     /// The row's mark: a ring while an agent is on the task (still while

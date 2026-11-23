@@ -377,6 +377,38 @@ final class TasksModel: ObservableObject {
         await change(task, TaskChange(status: .closed), saying: "Closed \(Self.name(of: task))", orElse: Self.couldNotSave(task), as: account)
     }
 
+    /// Moves a task to a column of the Board: to a stage (a finished task
+    /// is opened again there, while its place has room), or to Done,
+    /// which marks it done (not while an agent is on it). Nothing is
+    /// asked for the column it is in. A
+    /// stage's column holds open tasks, so a move to one asks for the task
+    /// to be open, whatever the card showed: the store decides against
+    /// the task as it is then, also one finished since the card was drawn.
+    func move(_ task: TaskItem, to column: TaskBoardColumn, as account: String) async {
+        guard canMove(task, to: column) else {
+            // Said, since a card dropped on Done just goes back: an agent is on it.
+            if column == .done, !task.isFinished, signedIn() == account {
+                report("\(agentName(for: task) ?? "An agent") is on \(Self.quoted(task)). Open its thread to see where it stands.")
+            }
+            return
+        }
+        let moved = switch column {
+        case let .stage(stage): TaskChange(status: .open, stage: stage)
+        case .done: TaskChange(status: .done)
+        }
+        await change(
+            task, moved, saying: "Moved \(Self.name(of: task)) to \(column.title)", orElse: "Couldn't move \(Self.quoted(task)). Try again.",
+            as: account
+        )
+    }
+
+    /// Whether a task can be moved to a column of the Board: another than
+    /// its own, and not to Done while an agent is on it (its thread is
+    /// the way then, as in the List).
+    func canMove(_ task: TaskItem, to column: TaskBoardColumn) -> Bool {
+        TaskRules.moveTargets(for: task, handoff: handoff(of: task)).contains(column)
+    }
+
     /// Gives a task another title. Nothing is asked for a title that
     /// says nothing, or the one it has.
     func rename(_ task: TaskItem, to title: String, as account: String) async {

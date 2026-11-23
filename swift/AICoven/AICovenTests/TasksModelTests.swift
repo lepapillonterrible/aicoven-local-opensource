@@ -9,10 +9,10 @@ import XCTest
 final class TasksModelTests: XCTestCase {
     private func task(
         _ id: String, _ title: String? = nil, status: TaskStatus = .open, due: TaskDue? = nil, pin: TaskPin? = nil, unreadable: Bool = false,
-        coven: String? = nil
+        coven: String? = nil, stage: TaskStage = .backlog
     ) -> TaskItem {
         TaskItem(
-            id: id, covenID: coven, title: unreadable ? "" : title ?? id.capitalized, status: status, stage: .backlog, due: due, pin: pin,
+            id: id, covenID: coven, title: unreadable ? "" : title ?? id.capitalized, status: status, stage: stage, due: due, pin: pin,
             isUnreadable: unreadable, createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
         )
     }
@@ -170,7 +170,8 @@ final class TasksModelTests: XCTestCase {
                             case nil: break
                             }
                             var changed = self.task(
-                                kept.id, change.title ?? kept.title, status: change.status ?? kept.status, due: due, pin: pin, coven: kept.covenID
+                                kept.id, change.title ?? kept.title, status: change.status ?? kept.status, due: due, pin: pin, coven: kept.covenID,
+                                stage: change.stage ?? kept.stage
                             )
                             changed.threadID = change.threadID ?? kept.threadID
                             changed.leadAgentID = kept.leadAgentID
@@ -1480,6 +1481,94 @@ final class TasksModelTests: XCTestCase {
         XCTAssertEqual(stand.changed.count, changes + 1, "Its thread was given before; the turn is not kept after")
         XCTAssertEqual(stand.heard.count, heard)
         XCTAssertEqual(tasks.saving, [])
+    }
+
+    // MARK: - The Board
+
+    func testATaskIsMovedToAColumnOfTheBoard_andSaidSo() async throws {
+        let stand = Stand()
+        stand.kept = [task("a", "Call the bank"), task("b", "Renew the lease", status: .closed, stage: .review)]
+        let tasks = model(stand)
+        await tasks.load()
+
+        // To another stage: its column holds open tasks, so the move asks for the task open there.
+        await tasks.move(tasks.open[0], to: .stage(.inProgress), as: "ada")
+        XCTAssertEqual(stand.changed.map(\.change), [TaskChange(status: .open, stage: .inProgress)])
+        XCTAssertEqual(tasks.open[0].stage, .inProgress, "Read again")
+        XCTAssertEqual(stand.heard.last, "Moved Call the bank to In progress")
+        // To the column it is in: nothing is asked.
+        await tasks.move(tasks.open[0], to: .stage(.inProgress), as: "ada")
+        XCTAssertEqual(stand.changed.count, 1)
+
+        // To Done: marked done, at the stage it had.
+        await tasks.move(tasks.open[0], to: .done, as: "ada")
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(status: .done))
+        XCTAssertEqual(stand.heard.last, "Moved Call the bank to Done")
+        XCTAssertEqual(tasks.open, [])
+        let finished = tasks.finished.count
+        await tasks.move(tasks.finished[0], to: .done, as: "ada")
+        XCTAssertEqual(stand.changed.count, 2, "Already in Done")
+        XCTAssertEqual(tasks.finished.count, finished)
+
+        // Out of Done: opened again at the stage it is moved to, also the one it had.
+        let closed = try XCTUnwrap(tasks.finished.first { $0.id == "b" })
+        await tasks.move(closed, to: .stage(.review), as: "ada")
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(status: .open, stage: .review))
+        XCTAssertEqual(tasks.open.map(\.id), ["b"])
+        XCTAssertEqual(stand.heard.last, "Moved Renew the lease to Review")
+
+        // A card drawn before its task was finished elsewhere: moved to a stage, the task is opened
+        // again there, as the move says, and not left in Done.
+        let stale = try XCTUnwrap(tasks.open.first)
+        stand.kept = stand.kept.map { $0.id == stale.id ? self.task($0.id, $0.title, status: .done, stage: $0.stage) : $0 }
+        await tasks.move(stale, to: .stage(.backlog), as: "ada")
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(status: .open, stage: .backlog))
+        XCTAssertEqual(tasks.open.map(\.id), ["b"])
+        XCTAssertEqual(TaskBoardColumn.of(tasks.open[0]), .stage(.backlog))
+        XCTAssertEqual(stand.heard.last, "Moved Renew the lease to To do")
+        await tasks.move(tasks.open[0], to: .stage(.review), as: "ada")
+
+        // A task an agent is on is not moved to Done, by a drop or a menu: its thread is the way. It is still moved between stages.
+        var handed = try XCTUnwrap(tasks.open.first)
+        handed.threadID = "thread-1"
+        handed.handoff = TaskHandoff(turnID: "turn-1", outcome: .running)
+        stand.kept = stand.kept.map { $0.id == handed.id ? handed : $0 }
+        stand.live = ["thread-1": TaskLiveTurn(turnID: "turn-1")]
+        await tasks.load()
+        XCTAssertEqual(tasks.handoff(of: tasks.open[0]), .working)
+        XCTAssertFalse(tasks.canMove(tasks.open[0], to: .done))
+        XCTAssertTrue(tasks.canMove(tasks.open[0], to: .stage(.backlog)))
+        let asked = stand.changed.count
+        await tasks.move(tasks.open[0], to: .done, as: "ada")
+        XCTAssertEqual(stand.changed.count, asked, "Nothing is asked")
+        XCTAssertEqual(tasks.open.map(\.id), ["b"])
+        XCTAssertEqual(tasks.errorMessage, "Strix is on “Renew the lease”. Open its thread to see where it stands.", "A card dropped there just goes back: why is said")
+        XCTAssertEqual(stand.heard.last, tasks.errorMessage)
+        // Its agent has finished: it is moved to Done like any other. Here it is first given back, to go on.
+        stand.live = [:]
+        stand.kept = stand.kept.map { $0.id == "b" ? self.task("b", "Renew the lease", stage: .review) : $0 }
+        await tasks.load()
+        XCTAssertTrue(tasks.canMove(tasks.open[0], to: .done))
+
+        // A move that could not be made says why: no room to open it again, or a failure.
+        stand.changeFails = TaskError.tooMany
+        await tasks.move(tasks.finished[0], to: .stage(.backlog), as: "ada")
+        XCTAssertEqual(tasks.errorMessage, TasksModel.tooManyOpen)
+        stand.changeFails = RepositoryError.databaseUnavailable
+        await tasks.move(tasks.open[0], to: .stage(.backlog), as: "ada")
+        XCTAssertEqual(tasks.errorMessage, "Couldn't move “Renew the lease”. Try again.")
+        XCTAssertEqual(stand.heard.last, tasks.errorMessage)
+        // Nothing is said to another account.
+        stand.changeFails = nil
+        let heard = stand.heard.count
+        let gate = Gate()
+        stand.changingWaits = gate
+        let moving = Task { await tasks.move(tasks.open[0], to: .stage(.inProgress), as: "ada") }
+        await gate.arrived(1)
+        stand.account = "grace"
+        await gate.letOneThrough()
+        await moving.value
+        XCTAssertEqual(stand.heard.count, heard)
     }
 
     // MARK: - On me
