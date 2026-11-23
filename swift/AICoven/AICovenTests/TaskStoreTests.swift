@@ -864,11 +864,16 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(TaskReminder.time(for: .dayBefore, due: timed, timeZone: berlin), try moment(2027, 1, 31, 14, 30, in: berlin))
         XCTAssertEqual(TaskReminder.time(for: .dayBefore, due: dayOnly, timeZone: berlin), try moment(2027, 1, 31, 9, in: berlin))
 
-        // The clocks go forward in Berlin on 28 March 2027: a day before is the same time of day
-        // on the day before (23 hours earlier), and an hour before is 3,600 seconds earlier.
-        let afterTheChange = try XCTUnwrap(TaskDue(date: day("2027-03-29"), time: "10:00"))
+        // The clocks go forward in Berlin on 28 March 2027, from 02:00 to 03:00: a day before is
+        // the same time of day on the day before (here 23 hours earlier), and an hour before is
+        // 3,600 seconds earlier.
+        let afterTheChange = try XCTUnwrap(TaskDue(date: day("2027-03-28"), time: "10:00"))
         let dayBefore = try XCTUnwrap(TaskReminder.time(for: .dayBefore, due: afterTheChange, timeZone: berlin))
-        XCTAssertEqual(dayBefore, try moment(2027, 3, 28, 10, in: berlin))
+        XCTAssertEqual(dayBefore, try moment(2027, 3, 27, 10, in: berlin))
+        XCTAssertEqual(try moment(2027, 3, 28, 10, in: berlin).timeIntervalSince(dayBefore), 23 * 3600)
+        // A due time the clock skips that day is still that time the day before, when it exists.
+        let skipped = try XCTUnwrap(TaskDue(date: day("2027-03-28"), time: "02:30"))
+        XCTAssertEqual(TaskReminder.time(for: .dayBefore, due: skipped, timeZone: berlin), try moment(2027, 3, 27, 2, 30, in: berlin))
         let onTheDay = try XCTUnwrap(TaskDue(date: day("2027-03-28"), time: "03:30"))
         let hourBefore = try XCTUnwrap(TaskReminder.time(for: .hourBefore, due: onTheDay, timeZone: berlin))
         XCTAssertEqual(try moment(2027, 3, 28, 3, 30, in: berlin).timeIntervalSince(hourBefore), 3600)

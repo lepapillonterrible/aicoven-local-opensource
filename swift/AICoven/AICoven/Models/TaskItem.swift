@@ -154,18 +154,24 @@ nonisolated struct TaskReminder: Equatable {
     /// When a preset reminds for a task due on `due`, in the time zone
     /// named: at the due time (9:00 for a day with no time of day), 3,600
     /// seconds before it, or at the same time of day on the day before.
-    /// Nil for a time zone that is none.
+    /// The day before is found first and the time of day told on it, so
+    /// a due time the clock skips on the due day (the clocks go forward)
+    /// is still that time the day before. Nil for a time zone that is
+    /// none.
     static func time(for preset: TaskReminderPreset, due: TaskDue, timeZone: String) -> Date? {
         guard let zone = TimeZone(identifier: timeZone) else { return nil }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = zone
         guard let day = due.date.date(in: calendar) else { return nil }
         let parts = due.time?.split(separator: ":").compactMap { Int($0) } ?? [hourOfADayWithNoTime, 0]
-        guard parts.count == 2, let dueAt = calendar.date(bySettingHour: parts[0], minute: parts[1], second: 0, of: day) else { return nil }
+        guard parts.count == 2 else { return nil }
+        func clock(on day: Date) -> Date? {
+            calendar.date(bySettingHour: parts[0], minute: parts[1], second: 0, of: day)
+        }
         switch preset {
-        case .atDue: return dueAt
-        case .hourBefore: return dueAt.addingTimeInterval(-3600)
-        case .dayBefore: return calendar.date(byAdding: .day, value: -1, to: dueAt)
+        case .atDue: return clock(on: day)
+        case .hourBefore: return clock(on: day)?.addingTimeInterval(-3600)
+        case .dayBefore: return calendar.date(byAdding: .day, value: -1, to: day).flatMap(clock)
         }
     }
 }
