@@ -940,13 +940,16 @@ final class AssetToolsTests: XCTestCase {
         // Nothing is returned once another account has signed in while it was made.
         stand.assets["work"] = [asset("fresh", "Fresh", status: .approved)]
         stand.afterWriting = { stand.account = "grace" }
-        result = await write(call("asset.create_handoff", ["asset_id": "fresh"]), turn: TurnAssets(agentID: "scout"), stand)
+        let switched = TurnAssets(agentID: "scout")
+        result = await write(call("asset.create_handoff", ["asset_id": "fresh"]), turn: switched, stand)
         XCTAssertEqual(result.errorType, "asset_account_changed")
         XCTAssertNil(result.contextBlock)
+        XCTAssertEqual(switched.made, [], "Nor is it kept with the turn, whose reply would show its card")
         stand.account = "ada"
-        result = await write(call("asset.create", ["type": "chart", "title": "Made as Ada"]), turn: TurnAssets(agentID: "scout"), stand)
+        result = await write(call("asset.create", ["type": "chart", "title": "Made as Ada"]), turn: switched, stand)
         XCTAssertEqual(result.errorType, "asset_account_changed", "Nor of an asset made")
         XCTAssertNil(result.contextBlock)
+        XCTAssertEqual(switched.made, [])
         stand.account = "ada"
         stand.afterWriting = nil
         // Without a turn's own count nothing is made.

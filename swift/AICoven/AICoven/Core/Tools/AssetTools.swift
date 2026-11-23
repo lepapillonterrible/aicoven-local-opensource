@@ -270,10 +270,14 @@ nonisolated enum AssetTools {
             turn.made(nil)
             throw error
         }
-        turn.made(asset.id)
         // Made as the account that asked: nothing of it is returned to a
-        // turn whose account is no longer the one signed in.
-        guard await store.account() == account else { return accountChanged(call) }
+        // turn whose account is no longer the one signed in, nor kept
+        // with the turn (its reply would show a card for it).
+        guard await store.account() == account else {
+            turn.made(nil)
+            return accountChanged(call)
+        }
+        turn.made(asset.id)
         var lines = ["[Asset created] asset_id: \(asset.id); type: \(asset.type.rawValue); status: draft."]
         if let file = asset.files.first { lines[0] += " File: \(AttachmentContext.plainName(file.name))." }
         if let parent = asset.parentID { lines[0] += " Made from asset_id: \(parent)." }
@@ -312,9 +316,13 @@ nonisolated enum AssetTools {
             turn.made(nil)
             throw error
         }
+        // Asked before anything of it is kept with the turn or returned.
+        guard await store.account() == account else {
+            turn.made(nil)
+            return accountChanged(call)
+        }
         // One that was there already is no making of this turn's.
         turn.made(made.isNew ? made.brief.id : nil)
-        guard await store.account() == account else { return accountChanged(call) }
         return handedOver(call, briefID: made.brief.id, of: asset, isNew: made.isNew, status: made.brief.status)
     }
 

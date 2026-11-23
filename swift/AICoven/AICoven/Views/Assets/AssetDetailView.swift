@@ -41,6 +41,14 @@ struct AssetDetailView: View {
         _files = StateObject(wrappedValue: AssetFiles(turn: turn))
     }
 
+    /// Reads how the asset is related to others, as the account signed
+    /// in. Not for an asset the key cannot open: its page shows no
+    /// lineage, so nothing is read, shown or said of one.
+    private func readLineage() async {
+        guard !asset.isUnreadable else { return }
+        await lineage.read(asset.id, as: UserScope.currentUserID)
+    }
+
     /// Looks up the thread the asset was made in, as the account signed in.
     private func findOrigin() async {
         let threadID = asset.threadID
@@ -186,11 +194,11 @@ struct AssetDetailView: View {
             }
         }
         .presenting(files)
-        .task(id: asset.id) { await lineage.read(asset.id, as: UserScope.currentUserID) }
+        .task(id: asset.id) { await readLineage() }
         // A hand-off made while the page is open (by an agent's turn, or
         // from another page) is read for.
         .onReceive(NotificationCenter.default.publisher(for: Asset.didChange).receive(on: RunLoop.main)) { _ in
-            Task { await lineage.read(asset.id, as: UserScope.currentUserID) }
+            Task { await readLineage() }
         }
         .task(id: asset.threadID) { await findOrigin() }
         // Its thread deleted while the page is open: the way to it goes.
