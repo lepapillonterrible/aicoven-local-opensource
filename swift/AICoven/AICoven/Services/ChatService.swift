@@ -123,6 +123,9 @@ enum ToolIntentDecision {
         return false
     }
 
+    /// Words that name what the place's own tools keep: its tasks and its assets.
+    static let placeCues = ["task", "to-do", "todo", "remind me", "remember to", "asset"]
+
     /// Heuristic fast-path: classify a user message without an LLM call.
     /// Returns `.noTools` for obviously conversational requests and
     /// `.useTools` for obvious tool requests; `.ambiguous` otherwise.
@@ -134,6 +137,14 @@ enum ToolIntentDecision {
         // with `asset.get`, and what the person adds to it ("draft the
         // plan") must not take the tool away.
         if PromptTemplates.toolDefinitions.contains(where: { names($0.name.lowercased(), in: lower) }) {
+            return .useTools(suggested: [])
+        }
+
+        // What is asked of the place's own tools is no conversation,
+        // whatever else it says: "add a task to draft the brief", "remind
+        // me to summarize the notes", "save this draft as an asset" each
+        // hold a word that would otherwise keep the turn from every tool.
+        if placeCues.contains(where: { lower.contains($0) }) {
             return .useTools(suggested: [])
         }
 
@@ -439,6 +450,7 @@ actor ChatService {
         roleId: String? = nil,
         providerAccountId: String? = nil,
         attachments: [FileAttachmentDetail]? = nil,
+        offersToolsWhateverItSays: Bool = false,
         onAgentRun: (@Sendable (AgentRun) async -> Void)? = nil,
         onStateChange: @escaping (TurnState) -> Void
     ) async throws {
@@ -518,7 +530,10 @@ actor ChatService {
         // This prevents unnecessary tool loops for conversational requests
         // and avoids injecting tool protocol instructions that cause the
         // model to regurgitate its own rules.
-        let intent = ToolIntentDecision.heuristic(for: message)
+        // A turn the app itself words for the person (a task handed to an
+        // agent, an asset sent to one) is offered its tools whatever those
+        // words hold: a task's title is not a request to be read for intent.
+        let intent = offersToolsWhateverItSays ? .useTools(suggested: []) : ToolIntentDecision.heuristic(for: message)
         let toolsAllowed: Bool
         switch intent {
         case let .noTools(reason):

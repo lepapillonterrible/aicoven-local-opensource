@@ -152,14 +152,17 @@ final class TurnEngine: ObservableObject {
     /// sent, which can carry more. Throws, with nothing started, if a turn
     /// is already running in the thread, or the message, or an earlier
     /// ending still waiting to be stored, cannot be stored. Answers with
-    /// the id of the turn it started.
+    /// the id of the turn it started. `offersToolsWhateverItSays` is for
+    /// a turn the app words itself (a task handed to an agent, an asset
+    /// sent to one): its tools are not judged by those words.
     @discardableResult
     func start(
         with userMessage: ChatMessage,
         context: String,
         roleID: String?,
         agentName: String?,
-        attachments: [FileAttachmentDetail]?
+        attachments: [FileAttachmentDetail]?,
+        offersToolsWhateverItSays: Bool = false
     ) async throws -> String {
         let threadID = userMessage.threadId
         guard running[threadID] == nil else { throw TurnError.alreadyRunning }
@@ -197,6 +200,7 @@ final class TurnEngine: ObservableObject {
                     message: context,
                     roleId: roleID,
                     attachments: attachments,
+                    offersToolsWhateverItSays: offersToolsWhateverItSays,
                     onAgentRun: { run in
                         // Kept with the turn, so the run can be picked up
                         // again if this app closes on it. If it cannot be

@@ -118,6 +118,7 @@ struct AssetHandoffSheet: View {
                                 .accessibilityLabel("Sending the asset")
                         } else {
                             Button("Send", action: send)
+                                .keyboardShortcut(.defaultAction)
                                 .disabled(!model.canSend)
                         }
                     }
