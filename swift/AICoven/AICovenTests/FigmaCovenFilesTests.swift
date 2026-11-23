@@ -63,6 +63,10 @@ final class FigmaCovenFilesTests: XCTestCase {
         XCTAssertEqual(read.figma.files, [Chosen(id: Self.home, name: "Home"), Chosen(id: Self.other, name: "Untitled")])
         XCTAssertEqual(read.figma.folders, [Chosen(id: "42", name: "Site")])
 
+        // An entry that is not one is left out by itself: those beside it are still chosen.
+        let beside = try JSONDecoder().decode(CovenConnections.self, from: Data(#"{"figma": {"files": [{"id": "AbCdEfGhIjKl", "name": "Home"}, {"name": "No id"}, 7, {"id": 9}], "folders": [null, {"id": "42", "name": "Site"}]}}"#.utf8))
+        XCTAssertEqual(beside.figma, .init(files: [Chosen(id: Self.home, name: "Home")], folders: [Chosen(id: "42", name: "Site")]))
+
         // What is not a list of files chooses none; the rest is still read.
         let odd = try JSONDecoder().decode(CovenConnections.self, from: Data(#"{"apps": {"figma": "read_write"}, "figma": {"files": "all", "folders": [{"name": "No id"}]}}"#.utf8))
         XCTAssertEqual(odd.apps, ["figma": .readWrite])
@@ -230,6 +234,7 @@ final class FigmaCovenFilesTests: XCTestCase {
             case "/v2/folders/3/files": (500, "{}")
             case "/v2/folders/4/files": (429, "{}")
             case "/v2/folders/5/files": (401, "{}")
+            case "/v2/folders/6/files": (200, Self.folder("Long", (0 ..< 600).map { ("Far\($0)", "File \($0)") }))
             case "/v1/me": (401, "{}")
             default: (404, "{}")
             }
@@ -238,6 +243,11 @@ final class FigmaCovenFilesTests: XCTestCase {
         func reaches(_ file: String, files: [String] = [], folders: [String]) async throws -> Bool {
             try await FigmaToolService.reaches(file, in: .init(files: files.map { Chosen(id: $0, name: "n") }, folders: folders.map { Chosen(id: $0, name: "n") }), token: "figd_TEST", session: world.session)
         }
+
+        // Every file Figma lists of a project counts, however many.
+        let far = try await reaches("Far599", folders: ["6"])
+        XCTAssertTrue(far)
+        world.asked.forget()
 
         let chosen = try await reaches(Self.home, files: [Self.home], folders: ["3"])
         XCTAssertTrue(chosen)
@@ -403,6 +413,74 @@ final class FigmaCovenFilesTests: XCTestCase {
         XCTAssertEqual(world.asked.requests, ["GET /v2/folders/1/files", "GET /v2/folders/2/files"], "Read again as the choice then stood; the file is not read")
     }
 
+    func testFigmaTurnedOffOrToReadWhileAProjectWasRead_isNotUsed() async throws {
+        // Turned off in the coven while the project that has the file is read.
+        let chosen = figma(folders: [Chosen(id: "1", name: "Site")])
+        let off = try await world(chosen) { path, covens in
+            if path == "/v2/folders/1/files" { covens.connections = CovenConnections(apps: [:], figma: chosen.figma) }
+            return path == "/v2/folders/1/files" ? (200, Self.folder("Site", [(Self.home, "Home")])) : (200, Self.document)
+        }
+        defer { off.forget() }
+        let refused = await off.call("figma.readFile", ["file": AnyJSONValue(Self.home)])
+        XCTAssertEqual(refused.errorType, "connection_not_on")
+        XCTAssertEqual(off.asked.requests, ["GET /v2/folders/1/files"], "The file is not read")
+
+        // Set to Read while the project is read again, after the person approved a comment.
+        let reads = Counter()
+        let toRead = try await world(chosen) { path, covens in
+            if path == "/v2/folders/1/files", reads.next() == 2 { covens.connections = CovenConnections(apps: ["figma": .readOnly], figma: chosen.figma) }
+            return path == "/v2/folders/1/files" ? (200, Self.folder("Site", [(Self.home, "Home")])) : (200, #"{"id": "9"}"#)
+        }
+        defer { toRead.forget() }
+        let unposted = await toRead.call("figma.addComment", ["file": AnyJSONValue(Self.home), "message": AnyJSONValue("Hello")])
+        XCTAssertEqual(unposted.errorType, "connection_read_only")
+        XCTAssertEqual(toRead.asked.requests, ["GET /v2/folders/1/files", "GET /v2/folders/1/files"], "Nothing is posted")
+        let approvals = await toRead.seen.approvals
+        XCTAssertEqual(approvals.count, 1)
+    }
+
+    func testAProjectTakenOutWhileItCouldNotBeRead_doesNotKeepAFileThatIsNowChosen() async throws {
+        // While the project's reading fails, the project is removed and the file chosen.
+        let world = try await world(figma(folders: [Chosen(id: "1", name: "Site")])) { path, covens in
+            if path == "/v2/folders/1/files" {
+                covens.connections = self.figma(files: [Chosen(id: Self.home, name: "Home")])
+                return (500, "{}")
+            }
+            return (200, Self.document)
+        }
+        defer { world.forget() }
+
+        let read = await world.call("figma.readFile", ["file": AnyJSONValue(Self.home)])
+        XCTAssertEqual(read.status, "ok", "Decided by the choice as it stands, which the failed project is no part of")
+        XCTAssertEqual(world.asked.requests, ["GET /v2/folders/1/files", "GET /v1/files/\(Self.home)"])
+    }
+
+    func testACommentFigmasServerFailedOn_mayHaveBeenPosted_andIsNotAskedForAgain() async throws {
+        let world = try await world(figma(files: [Chosen(id: Self.home, name: "Home")])) { _, _ in (502, "{}") }
+        defer { world.forget() }
+
+        let unsure = await world.call("figma.addComment", ["file": AnyJSONValue(Self.home), "message": AnyJSONValue("Hello")])
+        XCTAssertEqual(unsure.errorType, "figma_unconfirmed")
+        XCTAssertFalse(unsure.isRetryable)
+        // A reading that failed the same way changed nothing, and can be asked again.
+        let reading = await world.call("figma.readFile", ["file": AnyJSONValue(Self.home)])
+        XCTAssertEqual(reading.errorType, "figma_failed")
+        XCTAssertTrue(reading.isRetryable)
+    }
+
+    /// Counts, under a lock.
+    private final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+
+        func next() -> Int {
+            lock.withLock {
+                count += 1
+                return count
+            }
+        }
+    }
+
     // MARK: - figma.listFiles
 
     func testTheCovensFilesAreListed_theChosenOnesAndThoseInItsProjectsNow() async throws {
@@ -536,11 +614,13 @@ final class FigmaCovenFilesTests: XCTestCase {
                 choice: { [self] _ in stored },
                 apps: { [.init(id: "figma", name: "Figma", account: "ada@example.com"), .init(id: "github", name: "GitHub", account: "octocat")] },
                 servers: { [] },
-                save: { [self] choice, _ in
+                change: { [self] _, unchosen, make in
                     try lock.withLock {
                         if failsToSave { throw CovenRepositoryError.settingsUnreadable }
-                        kept = choice
-                        keptSaves.append(choice)
+                        let after = try make(kept ?? unchosen)
+                        kept = after
+                        keptSaves.append(after)
+                        return after
                     }
                 },
                 figmaName: { [self] link in
@@ -660,6 +740,62 @@ final class FigmaCovenFilesTests: XCTestCase {
         XCTAssertFalse(failed)
         XCTAssertEqual(screen.said, [])
         XCTAssertNil(model.figmaAddError)
+    }
+
+    @MainActor
+    func testWhatIsFoundOutAboutALink_isNotSaidOfAnotherTypedSince() async {
+        let screen = Screen(stored: figma())
+        let model = CovenConnectionsModel(covenID: "coven", sources: screen.sources)
+        await model.load()
+
+        // The field is edited while Figma is asked about the first link, which then fails.
+        screen.name = { _ in
+            await MainActor.run { model.figmaLinkChanged() }
+            throw FigmaError.forbidden
+        }
+        let failed = await model.addFigma(link: "https://www.figma.com/design/\(Self.home)/Homepage")
+        XCTAssertFalse(failed)
+        XCTAssertNil(model.figmaAddError, "Nothing was found out about the link the field holds now")
+        XCTAssertEqual(screen.said, [])
+
+        // One that is added all the same was asked for, and is said.
+        screen.name = { _ in
+            await MainActor.run { model.figmaLinkChanged() }
+            return "Homepage"
+        }
+        let added = await model.addFigma(link: "https://www.figma.com/design/\(Self.home)/Homepage")
+        XCTAssertTrue(added)
+        XCTAssertEqual(screen.said, ["Added Homepage"])
+    }
+
+    @MainActor
+    func testAChangeIsMadeToTheChoiceAsItIsStored_notAsAnotherWindowLastReadIt() async {
+        let screen = Screen(stored: figma(files: [Chosen(id: Self.home, name: "Homepage")], folders: [Chosen(id: "42", name: "Website")]))
+        let one = CovenConnectionsModel(covenID: "coven", sources: screen.sources)
+        let other = CovenConnectionsModel(covenID: "coven", sources: screen.sources)
+        await one.load()
+        await other.load()
+
+        await one.removeFigma(file: Self.home)
+        // The other window still shows the file, and adds another.
+        XCTAssertEqual(other.figma.files.map(\.id), [Self.home])
+        screen.name = { _ in "Brand" }
+        let added = await other.addFigma(link: "https://www.figma.com/design/\(Self.other)/Brand")
+        XCTAssertTrue(added)
+        XCTAssertEqual(screen.stored?.figma.files, [Chosen(id: Self.other, name: "Brand")], "What the first window removed stays removed")
+        XCTAssertEqual(other.figma.files, [Chosen(id: Self.other, name: "Brand")], "And the window shows what was kept")
+
+        // Turning another app off in the stale window keeps the Figma change too.
+        await one.setApp("github", on: true)
+        XCTAssertEqual(screen.stored?.apps, ["figma": .readWrite, "github": .readOnly])
+        XCTAssertEqual(screen.stored?.figma.files, [Chosen(id: Self.other, name: "Brand")])
+
+        // A link another window added meanwhile is done with here, and the screen reads what is stored.
+        screen.name = { _ in "Brand" }
+        let twice = await one.addFigma(link: "https://www.figma.com/design/\(Self.other)/Brand")
+        XCTAssertTrue(twice)
+        XCTAssertEqual(one.figma.files, [Chosen(id: Self.other, name: "Brand")])
+        XCTAssertNil(one.figmaAddError)
     }
 
     @MainActor

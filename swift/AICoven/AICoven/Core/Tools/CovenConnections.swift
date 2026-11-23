@@ -59,15 +59,25 @@ nonisolated struct CovenConnections: Codable, Hashable {
             self.folders = folders
         }
 
+        /// One stored entry, or nil for what is not one: it is left out
+        /// by itself, and the entries beside it are still read.
+        private struct Entry: Decodable {
+            let chosen: Chosen?
+
+            init(from decoder: Decoder) {
+                chosen = try? Chosen(from: decoder)
+            }
+        }
+
         /// What was stored, leaving out what does not read as a file's
         /// key or a project's id, what is there twice, and what is past
         /// the most a coven keeps: an entry this app does not understand
-        /// reaches nothing.
+        /// reaches nothing, and takes no other entry with it.
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             func read(_ key: CodingKeys, most: Int, isID: (String) -> Bool) -> [Chosen] {
                 var seen: Set<String> = []
-                let stored = (try? container.decodeIfPresent([Chosen].self, forKey: key)) ?? []
+                let stored = ((try? container.decodeIfPresent([Entry].self, forKey: key)) ?? []).compactMap(\.chosen)
                 return Array(stored.filter { isID($0.id) && seen.insert($0.id).inserted }.prefix(most))
             }
             files = read(.files, most: Self.mostFiles) { FigmaToolService.fileKey($0) == $0 }

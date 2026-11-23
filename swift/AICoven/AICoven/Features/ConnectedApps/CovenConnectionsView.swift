@@ -28,7 +28,10 @@ final class CovenConnectionsModel: ObservableObject {
         var choice: @Sendable (_ covenID: String) async throws -> CovenConnections?
         var apps: @Sendable () async -> [App]
         var servers: @Sendable () async -> [Server]
-        var save: @Sendable (_ choice: CovenConnections, _ covenID: String) async throws -> Void
+        /// Changes the coven's stored choice in one write: `make` is given
+        /// the choice as it is stored then (`unchosen` where the coven
+        /// has made none), and what it gives back is kept and returned.
+        var change: @Sendable (_ covenID: String, _ unchosen: CovenConnections, _ make: @escaping @Sendable (CovenConnections) throws -> CovenConnections) async throws -> CovenConnections
         /// The name Figma has now for the file or project a link names,
         /// asked as the connected Figma account.
         var figmaName: @Sendable (_ link: FigmaToolService.Link) async throws -> String = { _ in throw FigmaAddError.notConnected }
@@ -53,8 +56,8 @@ final class CovenConnectionsModel: ObservableObject {
             servers: {
                 await ConnectedAccountsService.shared.getAllMCPServers().map(Server.init(account:))
             },
-            save: { choice, covenID in
-                try await CovenService.shared.setConnections(choice, forCoven: covenID)
+            change: { covenID, unchosen, make in
+                try await CovenService.shared.changeConnections(ofCoven: covenID, unchosen: unchosen, make)
             },
             figmaName: { link in
                 let accounts = ConnectedAccountsService.shared
@@ -98,6 +101,9 @@ final class CovenConnectionsModel: ObservableObject {
     @Published private(set) var isAddingFigma = false
     /// Why the last link was not added, shown under the link's field.
     @Published private(set) var figmaAddError: String?
+    /// Counts the edits of the link's field: what is found out about a
+    /// link is said only while the field still holds it.
+    private var figmaLinkEdits = 0
 
     /// Counts loads and changes: a load applies only if nothing newer
     /// started while it waited.
@@ -196,8 +202,16 @@ final class CovenConnectionsModel: ObservableObject {
     func addFigma(link pasted: String) async -> Bool {
         guard choice != nil, !isAddingFigma else { return false }
         let account = sources.account()
+        let edits = figmaLinkEdits
         guard let link = FigmaToolService.link(pasted) else {
             return failFigma("That isn't a Figma file or project link.")
+        }
+        /// Says why not, to the account that pasted the link and while
+        /// its field still holds that link: of a link typed since,
+        /// nothing was found out.
+        func fail(_ message: String) -> Bool {
+            guard sources.account() == account, figmaLinkEdits == edits else { return false }
+            return failFigma(message)
         }
         isAddingFigma = true
         defer { isAddingFigma = false }
@@ -206,54 +220,53 @@ final class CovenConnectionsModel: ObservableObject {
         do {
             name = try await sources.figmaName(link)
         } catch {
-            guard sources.account() == account else { return false }
             if error is FigmaAddError {
-                return failFigma("Figma isn't connected. Connect it in Settings, then add the link again.")
+                return fail("Figma isn't connected. Connect it in Settings, then add the link again.")
             }
             switch error as? FigmaError {
             case .tokenRefused?:
-                return failFigma("Figma refused this account's token. Replace the token in Settings, then add the link again.")
+                return fail("Figma refused this account's token. Replace the token in Settings, then add the link again.")
             case .forbidden?, .notFound?:
-                return failFigma("This Figma account can't open that.")
+                return fail("This Figma account can't open that.")
             case .rateLimited?:
-                return failFigma("Figma is limiting how often this account asks. Try again in a while.")
+                return fail("Figma is limiting how often this account asks. Try again in a while.")
             default:
-                return failFigma("Figma didn't answer. Try again.")
+                return fail("Figma didn't answer. Try again.")
             }
         }
         guard sources.account() == account else { return false }
-        // The choice as it is now, not as it was when Add was pressed: a
-        // removal saved meanwhile stays removed.
-        var refusal: CovenConnections.FigmaRefusal?
-        let saved = await change(row: "figma", saysFailure: false) { now in
-            do {
-                switch link {
-                case let .file(key): return try now.addingFigma(file: .init(id: key, name: name))
-                case let .folder(id): return try now.addingFigma(folder: .init(id: id, name: name))
-                }
-            } catch {
-                refusal = error as? CovenConnections.FigmaRefusal
-                return now
+        // Added to the choice as it is stored when it is written, not as
+        // it was when Add was pressed: a removal saved meanwhile stays
+        // removed.
+        let outcome = await change(row: "figma", saysFailure: false) { now in
+            switch link {
+            case let .file(key): try now.addingFigma(file: .init(id: key, name: name))
+            case let .folder(id): try now.addingFigma(folder: .init(id: id, name: name))
             }
         }
         guard sources.account() == account else { return false }
-        if refusal == .alreadyChosen { return true }
-        if refusal == .tooMany {
+        switch outcome {
+        case .kept:
+            sources.say("Added \(FigmaToolService.listedName(name))")
+            return true
+        case .unchanged, .refused(.alreadyChosen):
+            // Chosen already: the link is done with.
+            return true
+        case .refused(.tooMany):
             if case .file = link {
-                return failFigma("This coven already has \(CovenConnections.FigmaChoice.mostFiles) Figma files. Remove one to add another.")
+                return fail("This coven already has \(CovenConnections.FigmaChoice.mostFiles) Figma files. Remove one to add another.")
             }
-            return failFigma("This coven already has \(CovenConnections.FigmaChoice.mostFolders) Figma projects. Remove one to add another.")
+            return fail("This coven already has \(CovenConnections.FigmaChoice.mostFolders) Figma projects. Remove one to add another.")
+        case .failed:
+            return fail("That couldn't be added. Try again.")
         }
-        guard saved else { return failFigma("That couldn't be added. Try again.") }
-        sources.say("Added \(FigmaToolService.listedName(name))")
-        return true
     }
 
     /// Takes a file, or a project, out of the coven's Figma choice.
     func removeFigma(file id: String) async {
         guard let name = figma.files.first(where: { $0.id == id })?.name else { return }
         let account = sources.account()
-        if await change(row: "figma", { $0.removingFigma(file: id) }), sources.account() == account {
+        if await change(row: "figma", { $0.removingFigma(file: id) }) == .kept, sources.account() == account {
             sources.say("Removed \(name)")
         }
     }
@@ -261,15 +274,17 @@ final class CovenConnectionsModel: ObservableObject {
     func removeFigma(folder id: String) async {
         guard let name = figma.folders.first(where: { $0.id == id })?.name else { return }
         let account = sources.account()
-        if await change(row: "figma", { $0.removingFigma(folder: id) }), sources.account() == account {
+        if await change(row: "figma", { $0.removingFigma(folder: id) }) == .kept, sources.account() == account {
             sources.say("Removed \(name)")
         }
     }
 
-    /// The link's field is being typed in again: what was said of the
-    /// link before is no longer about what it holds.
+    /// The link's field holds something else now: what was said of the
+    /// link before is not about it, and what is still being found out
+    /// about that link will not be said of this one.
     func figmaLinkChanged() {
-        if !isAddingFigma { figmaAddError = nil }
+        figmaLinkEdits += 1
+        figmaAddError = nil
     }
 
     private func failFigma(_ message: String) -> Bool {
@@ -278,36 +293,58 @@ final class CovenConnectionsModel: ObservableObject {
         return false
     }
 
+    /// What came of a change to the choice.
+    enum Outcome: Equatable {
+        case kept
+        /// It changes nothing of what is shown.
+        case unchanged
+        /// The choice does not take it: there already, or too many.
+        case refused(CovenConnections.FigmaRefusal)
+        case failed
+    }
+
     /// Makes a change to the choice and keeps it. The screen shows the
     /// change at once and takes it back, saying so, if it cannot be kept.
-    /// One change is saved at a time: each is made to the whole choice,
-    /// so a second begun before the first is kept would undo it.
-    /// True if the change was kept.
+    /// One change of this screen's is saved at a time. The store makes
+    /// the change to the choice as it is stored when it is written, so
+    /// what another window changed since this one read the choice is not
+    /// undone; what was kept is then what is shown.
     @discardableResult
-    private func change(row: String, saysFailure: Bool = true, _ make: (CovenConnections) -> CovenConnections) async -> Bool {
-        guard let before = choice, saving.isEmpty else { return false }
-        let after = make(before)
-        guard after != before else { return false }
+    private func change(row: String, saysFailure: Bool = true, _ make: @escaping @Sendable (CovenConnections) throws -> CovenConnections) async -> Outcome {
+        guard let before = choice, saving.isEmpty else { return .failed }
+        let after: CovenConnections
+        do {
+            after = try make(before)
+        } catch {
+            return (error as? CovenConnections.FigmaRefusal).map(Outcome.refused) ?? .failed
+        }
+        guard after != before else { return .unchanged }
         let wasKeptFromBefore = keptFromBefore
         generation += 1
         saving.insert(row)
         choice = after
         keptFromBefore = false
-        var kept = true
+        var outcome = Outcome.kept
         do {
-            try await sources.save(after, covenID)
+            choice = try await sources.change(covenID, before, make)
         } catch {
-            kept = false
             choice = before
             keptFromBefore = wasKeptFromBefore
-            if saysFailure { errorMessage = "That change could not be saved." }
+            if let refusal = error as? CovenConnections.FigmaRefusal {
+                // What is stored is not what was shown: it is read again.
+                outcome = .refused(refusal)
+                loadWaits = true
+            } else {
+                outcome = .failed
+                if saysFailure { errorMessage = "That change could not be saved." }
+            }
         }
         saving.remove(row)
         if loadWaits {
             loadWaits = false
             await load()
         }
-        return kept
+        return outcome
     }
 }
 

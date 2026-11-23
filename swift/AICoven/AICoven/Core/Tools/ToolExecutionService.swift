@@ -1220,10 +1220,13 @@ actor ToolExecutionService {
     }
 
     /// Whether a failed call may have reached Figma and been carried out
-    /// all the same: its answer could not be read, or did not come. (A
-    /// refusal, and a request that was never sent, did nothing.)
+    /// all the same: its answer could not be read, did not come, or said
+    /// Figma's server failed. (A refusal, and a request that was never
+    /// sent, did nothing.)
     nonisolated static func mayHaveBeenCarriedOut(_ error: Error) -> Bool {
         if case FigmaError.invalidResponse = error { return true }
+        // Figma's server failing says nothing of whether it had done it.
+        if case let FigmaError.notAnswered(status) = error, status >= 500 { return true }
         guard let failure = error as? URLError else { return false }
         return [.timedOut, .networkConnectionLost, .badServerResponse, .cannotParseResponse].contains(failure.code)
     }
@@ -1324,27 +1327,37 @@ actor ToolExecutionService {
     /// file is not used and that is said (`figma_project_unread`): what
     /// cannot be checked is not taken for a project without the file. A
     /// refused token, a rate limit and a stop are thrown, for the caller
-    /// to tell as it tells its own. It is
-    /// decided by the choice as it stands once Figma has answered: where
-    /// the choice changed while the projects were read they are read
-    /// once more, and a choice that changed again is not decided by.
+    /// to tell as it tells its own.
+    ///
+    /// It is decided by the coven's choice as it stands once Figma has
+    /// answered, the whole of it: whether Figma is on there for this tool
+    /// still, and its files and projects. Where those changed while the
+    /// projects were read, whatever came of reading them is of a choice
+    /// that is no more, and they are read once more; a choice that
+    /// changed again is not decided by.
     private func figmaFileRefusal(_ file: String, tool: String, in threadID: String?, token: String) async throws -> ToolExecutionResult? {
         guard let threadID, var choice = await covenConnections(threadID)?.figma else { return nil }
-        let notChosen = ToolExecutionResult.error(tool: tool, message: Self.figmaFileNotChosen, errorType: "connected_app_resource_not_allowed")
         for _ in 0 ..< 2 {
-            let reached: Bool
+            var reached: Bool?
             do {
                 reached = try await FigmaToolService.reaches(file, in: choice, token: token, session: appSession)
             } catch {
                 if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
                 if case FigmaError.tokenRefused = error { throw error }
                 if case FigmaError.rateLimited = error { throw error }
-                return .error(tool: tool, message: Self.figmaProjectUnread, errorType: "figma_project_unread", isRetryable: true)
             }
+            let now = await covenConnections(threadID)
+            if let refused = Self.covenRefusal(ofAppTool: tool, under: now) { return refused }
             // No choice now: the thread is one that is not limited.
-            guard let now = await covenConnections(threadID)?.figma else { return nil }
-            if now == choice { return reached ? nil : notChosen }
-            choice = now
+            guard let now else { return nil }
+            if now.figma == choice {
+                switch reached {
+                case true?: return nil
+                case false?: return .error(tool: tool, message: Self.figmaFileNotChosen, errorType: "connected_app_resource_not_allowed")
+                case nil: return .error(tool: tool, message: Self.figmaProjectUnread, errorType: "figma_project_unread", isRetryable: true)
+                }
+            }
+            choice = now.figma
         }
         return .error(tool: tool, message: "This coven's Figma files were changed while this file was looked for. Ask again.", errorType: "figma_choice_changed", isRetryable: true)
     }
@@ -1394,8 +1407,9 @@ actor ToolExecutionService {
             let found = try await Self.figmaListings(asked)
             try Task.checkCancellation()
             // Nothing is told of a choice that changed while Figma answered.
-            if let refused = await covenRefusal(ofAppTool: toolCall.name, in: threadID) { return refused }
-            guard await covenConnections(threadID)?.figma == chosen else {
+            let now = await covenConnections(threadID)
+            if let refused = Self.covenRefusal(ofAppTool: toolCall.name, under: now) { return refused }
+            guard now?.figma == chosen else {
                 return .error(tool: toolCall.name, message: "This coven's Figma files were changed while they were listed. Ask again.", errorType: "figma_choice_changed", isRetryable: true)
             }
             return .success(
@@ -1601,6 +1615,11 @@ actor ToolExecutionService {
                 return refused
             }
         } catch {
+            // A token refused here waits for a new one, as one refused
+            // anywhere else does.
+            if case FigmaError.tokenRefused = error, let token = rendered.token, let account = await connectedAccountsService.getConnectedAccount(for: .figma) {
+                await connectedAccountsService.markTokenRefused(accountID: account.id, token: token)
+            }
             if !Task.isCancelled {
                 let failure = Self.figmaFailure(error)
                 return .error(tool: toolCall.name, message: failure.message, errorType: failure.code, isRetryable: failure.retry)
@@ -2322,8 +2341,14 @@ actor ToolExecutionService {
     /// coven's choice of connections has it now; nil if it may, or it is
     /// no connected app's tool. Without a thread there is no coven.
     private func covenRefusal(ofAppTool tool: String, in threadID: String?) async -> ToolExecutionResult? {
-        guard let threadID, let app = CovenConnectionRules.app(of: tool) else { return nil }
-        let decision = await CovenConnectionRules.decision(forAppTool: tool, in: covenConnections(threadID))
+        guard let threadID else { return nil }
+        return await Self.covenRefusal(ofAppTool: tool, under: covenConnections(threadID))
+    }
+
+    /// As above, under a choice that was read already.
+    private nonisolated static func covenRefusal(ofAppTool tool: String, under connections: CovenConnections?) -> ToolExecutionResult? {
+        guard let app = CovenConnectionRules.app(of: tool) else { return nil }
+        let decision = CovenConnectionRules.decision(forAppTool: tool, in: connections)
         let connection = ConnectedAppProvider(rawValue: app)?.displayName ?? app
         guard let refusal = CovenConnectionRules.refusal(decision, tool: tool, connection: connection) else { return nil }
         return .error(tool: tool, message: refusal.message, errorType: refusal.code)

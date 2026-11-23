@@ -179,12 +179,14 @@ final class CovenConnectionsTests: XCTestCase {
                         .init(id: "b", name: "Mail", line: "Can't connect. Test it in Settings.", cannotConnect: true),
                     ]
                 },
-                save: { [self] choice, _ in
+                change: { [self] _, unchosen, make in
                     if let during = lock.withLock({ whileSaving }) { await during() }
-                    try lock.withLock {
+                    return try lock.withLock {
                         if failsToSave { throw CovenRepositoryError.settingsUnreadable }
-                        stored = choice
-                        saves.append(choice)
+                        let kept = try make(stored ?? unchosen)
+                        stored = kept
+                        saves.append(kept)
+                        return kept
                     }
                 }
             )
@@ -335,6 +337,51 @@ final class CovenConnectionsTests: XCTestCase {
         let withABadChoice = try JSONDecoder().decode(CovenSettings.self, from: Data(#"{"budget_caps":{"monthly":5},"connections":"all"}"#.utf8))
         XCTAssertEqual(withABadChoice.budgetCaps, ["monthly": 5])
         XCTAssertNil(withABadChoice.connections)
+    }
+
+    func testAChoiceIsChangedAsItIsStored_inOneWrite() async throws {
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        await MainActor.run { DatabaseManager.shared.configureIfNeeded() }
+        let coven = try await CovenService.shared.createCoven(name: "Changes \(UUID().uuidString)")
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await CovenService.shared.deleteCoven(id: coven.id)
+            await DataEncryptionService.shared.lock()
+        }
+        let account = await MainActor.run { UserScope.currentUserID }
+        let unchosen = CovenConnections.everything(apps: ["github", "figma"], mcpServers: [])
+
+        // What is stored is what is changed, whatever the caller last read.
+        try await CovenService.shared.setConnections(CovenConnections(apps: ["github": .readOnly]), forCoven: coven.id)
+        let kept = try await CovenService.shared.changeConnections(ofCoven: coven.id, unchosen: unchosen) { $0.turning(app: "figma", on: true) }
+        XCTAssertEqual(kept, CovenConnections(apps: ["github": .readOnly, "figma": .readOnly]))
+        let stored = try await CovenRepository.shared.connections(ofCoven: coven.id, for: account)
+        XCTAssertEqual(stored, kept)
+
+        // What a change refuses is thrown, and nothing is written.
+        let file = CovenConnections.Chosen(id: "AbCdEfGhIjKl", name: "Home")
+        _ = try await CovenService.shared.changeConnections(ofCoven: coven.id, unchosen: unchosen) { try $0.addingFigma(file: file) }
+        do {
+            _ = try await CovenService.shared.changeConnections(ofCoven: coven.id, unchosen: unchosen) { try $0.addingFigma(file: file) }
+            XCTFail("Chosen already")
+        } catch {
+            XCTAssertEqual(error as? CovenConnections.FigmaRefusal, .alreadyChosen)
+        }
+        let after = try await CovenRepository.shared.connections(ofCoven: coven.id, for: account)
+        XCTAssertEqual(after?.figma.files, [file])
+
+        // A coven that has made no choice starts from what it lives by.
+        try await CovenService.shared.setConnections(nil, forCoven: coven.id)
+        let first = try await CovenService.shared.changeConnections(ofCoven: coven.id, unchosen: unchosen) { $0.turning(app: "github", on: false) }
+        XCTAssertEqual(first, CovenConnections(apps: ["figma": .readWrite]))
+
+        // No such coven of this account: nothing is changed.
+        do {
+            _ = try await CovenService.shared.changeConnections(ofCoven: "no-such-coven", unchosen: unchosen) { $0 }
+            XCTFail("There is no such coven")
+        } catch {
+            XCTAssertEqual(error as? CovenRepositoryError, .covenNotFound)
+        }
     }
 
     func testAThreadsConnections_areItsCovensChoice() async throws {

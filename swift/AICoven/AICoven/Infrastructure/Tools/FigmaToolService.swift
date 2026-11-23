@@ -172,16 +172,13 @@ nonisolated extension FigmaToolService {
         return ListedFile(key: key, name: listedName(file["name"]), lastChanged: listedTime(file["last_touched_at"]))
     }
 
-    /// The most files of one project that are read: a project with more
-    /// is read to there.
-    static let mostFilesOfAFolder = 500
-
-    /// A project's name and its files, as Figma lists them now. (The
-    /// project's own page answers a personal access token with 401, so
-    /// its name comes with its files, as in the cloud app.)
+    /// A project's name and its files, all that Figma lists now: what is
+    /// decided by them is decided by the whole list. (The project's own
+    /// page answers a personal access token with 401, so its name comes
+    /// with its files, as in the cloud app.)
     static func folderFiles(id: String, token: String, session: URLSession = .shared) async throws -> (name: String, files: [ListedFile]) {
         let found = try await ask("GET", ["v2", "folders", id, "files"], token: token, session: session)
-        let files: [ListedFile] = (found["files"] as? [[String: Any]] ?? []).prefix(mostFilesOfAFolder).compactMap { file in
+        let files: [ListedFile] = (found["files"] as? [[String: Any]] ?? []).compactMap { file in
             guard let key = file["key"] as? String, fileKey(key) == key else { return nil }
             return ListedFile(key: key, name: listedName(file["name"]), lastChanged: listedTime(file["last_modified"]))
         }
