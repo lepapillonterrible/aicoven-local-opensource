@@ -28,6 +28,14 @@ struct TasksView: View {
     /// The time the list is drawn for: pins run out and days pass while
     /// the page is open, so it is told again as time goes.
     @State private var now = Date()
+    /// The task whose details are open: its id only, so that the model
+    /// stays the one that holds the task.
+    @State private var selectedTaskID: String?
+    /// Whether the due day's sheet of the task whose details are open is up.
+    @State private var editingDue = false
+    /// The page's width, which says whether the iPad has room for the
+    /// details beside the list.
+    @State private var pageWidth: CGFloat = 0
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.isPadLayout) private var isPadLayout
 
@@ -40,7 +48,100 @@ struct TasksView: View {
     fileprivate static let readingWidth: CGFloat = 780
     private static let newTaskLineID = "task-new-line"
 
+    private static let paneWidth: CGFloat = 340
+    /// The narrowest the page can be and leave the list a readable row
+    /// beside the pane: a landscape iPad mini with the sidebar showing has
+    /// it, a portrait one does not.
+    private static let splitMinimumWidth: CGFloat = 760
+
+    /// The iPad's layout shows a task's details in a pane beside the list
+    /// when the list keeps a readable width; otherwise, and on the iPhone,
+    /// they are pushed. On the Mac they are a sheet.
+    private var showsPane: Bool {
+        #if os(macOS)
+        false
+        #else
+        isPadLayout && horizontalSizeClass == .regular && pageWidth >= Self.splitMinimumWidth
+        #endif
+    }
+
     var body: some View {
+        HStack(spacing: 0) {
+            page
+            if showsPane, let id = selectedTaskID {
+                Divider()
+                details(of: id, host: .pane)
+                    .frame(width: Self.paneWidth)
+                    .transition(.move(edge: .trailing))
+            }
+        }
+        .background(
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { pageWidth = proxy.size.width }
+                    .onChange(of: proxy.size.width) { _, width in pageWidth = width }
+            }
+        )
+        // A task that is gone, or among the finished ones no longer
+        // listed, has no details to show.
+        .onChange(of: model.open + model.finished) {
+            if let id = selectedTaskID, model.task(id) == nil { selectedTaskID = nil }
+        }
+        #if os(macOS)
+        .sheet(item: Binding(get: { selectedTaskID.map(OpenTask.init) }, set: { selectedTaskID = $0?.id })) { open in
+            details(of: open.id, host: .sheet)
+        }
+        .focusedSceneValue(\.taskSort, TaskSortActions(selected: sort, select: select))
+        .focusedSceneValue(\.taskCommands, taskCommands)
+        #else
+        .navigationDestination(item: Binding(get: { showsPane ? nil : selectedTaskID }, set: { selectedTaskID = $0 })) { id in
+            details(of: id, host: .page)
+                .navigationBarTitleDisplayMode(.inline)
+        }
+        #endif
+    }
+
+    private func details(of id: String, host: TaskDetailView.Host) -> some View {
+        TaskDetailView(
+            host: host, taskID: id, model: model, now: now,
+            onPin: { task, period in
+                let account = UserScope.currentUserID
+                Task { await model.pin(task, for: period, as: account) }
+            },
+            onUnpin: { task in
+                let account = UserScope.currentUserID
+                Task { await model.unpin(task, as: account) }
+            },
+            onAnswer: { task, keep in answer([task], keep: keep) },
+            editingDue: $editingDue,
+            onClose: { selectedTaskID = nil }
+        )
+    }
+
+    #if os(macOS)
+    /// What the Tasks menu offers for the task whose details are open.
+    private var taskCommands: TaskCommandActions? {
+        guard let task = selectedTaskID.flatMap(model.task) else { return nil }
+        func offered(_ task: TaskItem) -> [TaskCommand] {
+            TaskCommand.offered(for: TaskRules.pinState(of: task, now: Date()), isFinished: task.isFinished)
+        }
+        return TaskCommandActions(offered: offered(task)) { command in
+            // As the task stands when the item is chosen.
+            guard let current = model.task(task.id), offered(current).contains(command) else { return }
+            let account = UserScope.currentUserID
+            switch command {
+            case .pinToday: Task { await model.pin(current, for: .today, as: account) }
+            case .pinWeek: Task { await model.pin(current, for: .week, as: account) }
+            case .unpin: Task { await model.unpin(current, as: account) }
+            case .keepToday: answer([current], keep: true)
+            case .notToday: answer([current], keep: false)
+            case .setDueDate: editingDue = true
+            }
+        }
+    }
+    #endif
+
+    private var page: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 header
@@ -119,12 +220,14 @@ struct TasksView: View {
         TaskSort.resolve(storedSort)
     }
 
+    private func select(_ chosen: TaskSort) {
+        guard chosen != sort else { return }
+        storedSort = chosen.rawValue
+        AccessibilityNotification.Announcement("Sorted by \(chosen.title.lowercased())").post()
+    }
+
     private var sortPicker: some View {
-        Picker("Sort", selection: Binding(get: { sort }, set: { chosen in
-            guard chosen != sort else { return }
-            storedSort = chosen.rawValue
-            AccessibilityNotification.Announcement("Sorted by \(chosen.title.lowercased())").post()
-        })) {
+        Picker("Sort", selection: Binding(get: { sort }, set: select)) {
             ForEach(TaskSort.allCases) { Text($0.title).tag($0) }
         }
         .pickerStyle(.inline)
@@ -336,7 +439,8 @@ struct TasksView: View {
                 let account = UserScope.currentUserID
                 Task { await model.unpin(task, as: account) }
             },
-            onAnswer: { keep in answer([task], keep: keep) }
+            onAnswer: { keep in answer([task], keep: keep) },
+            onDetails: { selectedTaskID = task.id }
         )
     }
 
@@ -384,6 +488,13 @@ struct TasksView: View {
         }
     }
 }
+
+#if os(macOS)
+/// The task whose details the Mac's sheet shows.
+private struct OpenTask: Identifiable {
+    let id: String
+}
+#endif
 
 /// The sizes the Tasks list is drawn by, as the cloud app's.
 private enum TaskListMetrics {
@@ -445,9 +556,9 @@ private extension View {
     }
 }
 
-/// A task's pin in its menu, its swipe and VoiceOver's actions, by how the
-/// pin stands, as the cloud app offers it.
-private struct TaskPinActions: View {
+/// A task's pin in its menu, its swipe, its details and VoiceOver's
+/// actions, by how the pin stands, as the cloud app offers it.
+struct TaskPinActions: View {
     let task: TaskItem
     let pin: TaskPinState
     let onPin: (TaskPinPeriod) -> Void
@@ -547,6 +658,7 @@ private struct TaskRow: View {
     let onPin: (TaskPinPeriod) -> Void
     let onUnpin: () -> Void
     let onAnswer: (Bool) -> Void
+    let onDetails: () -> Void
     @State private var isHovering = false
 
     /// The line under the title, its pieces joined by a middle dot.
@@ -568,11 +680,15 @@ private struct TaskRow: View {
             tick
                 .frame(width: TaskListMetrics.titleInset, alignment: .leading)
             VStack(alignment: .leading, spacing: 1) {
-                Text(task.isUnreadable ? TasksModel.unreadable : task.title)
-                    .font(.aicovenBody)
-                    .foregroundStyle(task.isFinished || task.isUnreadable ? Color.aicovenTextSecondary : Color.aicovenTextPrimary)
-                    .strikethrough(task.status == .done)
-                    .multilineTextAlignment(.leading)
+                Button(action: onDetails) {
+                    Text(task.isUnreadable ? TasksModel.unreadable : task.title)
+                        .font(.aicovenBody)
+                        .foregroundStyle(task.isFinished || task.isUnreadable ? Color.aicovenTextSecondary : Color.aicovenTextPrimary)
+                        .strikethrough(task.status == .done)
+                        .multilineTextAlignment(.leading)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Details for \(TasksModel.name(of: task))")
                 if let contextLine {
                     contextLine
                         .font(.aicovenBodySmall)
@@ -593,16 +709,20 @@ private struct TaskRow: View {
                 .padding(.horizontal, -Spacing.xs)
         )
         .onHover { isHovering = $0 }
+        // A tap anywhere on the row that is not one of its controls opens
+        // the task's details.
         .contentShape(Rectangle())
+        .onTapGesture(perform: onDetails)
         .disabled(isSaving)
         .contextMenu {
             if task.isFinished {
                 Button("Reopen") { onTick(false) }
             } else {
                 Button("Close", action: onClose)
-                Divider()
-                pinActions
             }
+            Divider()
+            Button("Details…", action: onDetails)
+            pinActions
         }
         .swipeActions(edge: .leading, allowsFullSwipe: true) {
             if !task.isFinished {
@@ -618,12 +738,14 @@ private struct TaskRow: View {
                 Menu("More…") {
                     Button("Close", action: onClose)
                     Divider()
+                    Button("Details…", action: onDetails)
                     pinActions
                 }
                 .tint(.aicovenSwipeNeutral)
             }
         }
         .accessibilityElement(children: .contain)
+        .accessibilityAction(named: "Details", onDetails)
         .accessibilityActions { pinActions }
     }
 

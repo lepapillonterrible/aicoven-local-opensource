@@ -91,6 +91,18 @@ final class TaskRulesTests: XCTestCase {
         XCTAssertEqual(TaskPinPeriod.week.title, "This week")
     }
 
+    func testWhatTheTasksMenuOffersATask() {
+        XCTAssertEqual(TaskCommand.offered(for: .none, isFinished: false), [.pinToday, .pinWeek, .setDueDate])
+        XCTAssertEqual(TaskCommand.offered(for: .today, isFinished: false), [.pinWeek, .unpin, .setDueDate])
+        XCTAssertEqual(TaskCommand.offered(for: .week, isFinished: false), [.pinToday, .unpin, .setDueDate])
+        XCTAssertEqual(TaskCommand.offered(for: .review, isFinished: false), [.keepToday, .notToday, .setDueDate])
+        XCTAssertEqual(TaskCommand.offered(for: .today, isFinished: true), [], "Nothing for a finished task")
+        XCTAssertEqual(
+            [TaskCommand.pinToday, .pinWeek, .unpin, .keepToday, .notToday, .setDueDate].map(\.title),
+            ["Pin for today", "Pin for this week", "Unpin", "Keep for today", "Not today", "Set Due Date…"]
+        )
+    }
+
     // MARK: - Order
 
     func testTheOrders() {

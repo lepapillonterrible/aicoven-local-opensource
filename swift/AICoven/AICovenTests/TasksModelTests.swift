@@ -642,6 +642,94 @@ final class TasksModelTests: XCTestCase {
         XCTAssertEqual(tasks.saving, [])
     }
 
+    // MARK: - Details
+
+    func testATaskIsRenamedWithATidyTitle_andOnlyWhereItSaysSomethingNew() async {
+        let stand = Stand()
+        stand.kept = [task("a", "Call the bank"), task("x", unreadable: true)]
+        let tasks = model(stand)
+        await tasks.load()
+
+        await tasks.rename(tasks.open[0], to: "  Call \n the  branch ", as: "ada")
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(title: "Call the branch"), "The title and nothing else")
+        XCTAssertEqual(stand.changed.last?.account, "ada")
+        XCTAssertEqual(stand.heard.last, "Renamed to Call the branch")
+
+        // Nothing to say, or what it is called already: nothing is asked.
+        let asked = stand.changed.count
+        await tasks.rename(task("a", "Call the bank"), to: " \n ", as: "ada")
+        await tasks.rename(task("a", "Call the bank"), to: " Call the  bank", as: "ada")
+        XCTAssertEqual(stand.changed.count, asked)
+        // A task whose title could not be opened is named anew, whatever it was.
+        await tasks.rename(tasks.open[1], to: "Named anew", as: "ada")
+        XCTAssertEqual(stand.changed.last?.id, "x")
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(title: "Named anew"))
+
+        stand.changeFails = RepositoryError.databaseUnavailable
+        await tasks.rename(task("a", "Call the bank"), to: "Other", as: "ada")
+        XCTAssertEqual(tasks.errorMessage, "Couldn't save the change to “Call the bank”. Try again.")
+    }
+
+    func testATasksDueDayIsSetWithOrWithoutATime_andTakenAway() async throws {
+        let stand = Stand()
+        stand.kept = [task("a", "Call the bank")]
+        let tasks = model(stand)
+        await tasks.load()
+        let listed = tasks.open[0]
+        let date = try XCTUnwrap(TaskDueDate(rawValue: "2027-01-20"))
+        let withTime = try XCTUnwrap(TaskDue(date: date, time: "09:30")), dayOnly = try XCTUnwrap(TaskDue(date: date))
+
+        await tasks.setDue(listed, to: withTime, as: "ada")
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(due: .to(withTime)), "The due day and nothing else")
+        XCTAssertEqual(stand.heard.last, "Due date set")
+        await tasks.setDue(listed, to: dayOnly, as: "ada")
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(due: .to(dayOnly)))
+        await tasks.setDue(listed, to: nil, as: "ada")
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(due: .cleared))
+        XCTAssertEqual(stand.heard.last, "Due date removed")
+
+        stand.changeFails = RepositoryError.databaseUnavailable
+        await tasks.setDue(listed, to: dayOnly, as: "ada")
+        XCTAssertEqual(tasks.errorMessage, "Couldn't change the due date of “Call the bank”. Try again.")
+        XCTAssertEqual(stand.heard.last, "Couldn't change the due date of “Call the bank”. Try again.")
+
+        // The task as it was last read, by its id; none for one that is gone.
+        XCTAssertEqual(tasks.task("a")?.title, "Call the bank")
+        XCTAssertNil(tasks.task("gone"))
+    }
+
+    func testWhatTheDetailsSayOfATask() throws {
+        XCTAssertNil(TaskDetailView.stateWords(for: task("a")))
+        XCTAssertEqual(TaskDetailView.stateWords(for: task("a", status: .done)), "Done")
+        XCTAssertEqual(TaskDetailView.stateWords(for: task("a", status: .closed)), "Closed")
+
+        XCTAssertEqual(TaskDetailView.pinWords(.none, isCompact: false), "Not pinned")
+        XCTAssertEqual(TaskDetailView.pinWords(.none, isCompact: true), "Pin")
+        XCTAssertEqual(TaskDetailView.pinWords(.today, isCompact: false), "Pinned: Today")
+        XCTAssertEqual(TaskDetailView.pinWords(.week, isCompact: true), "This week")
+        XCTAssertEqual(TaskDetailView.pinWords(.review, isCompact: true), "Still on today?")
+
+        let british = Locale(identifier: "en_GB")
+        func due(_ task: TaskItem, compact: Bool) -> String {
+            TaskDetailView.dueWords(for: task, now: now, isCompact: compact, calendar: calendar, locale: british)
+        }
+        XCTAssertEqual(due(task("a"), compact: false), "Add due date")
+        XCTAssertEqual(due(task("a"), compact: true), "Add due date")
+        let date = try XCTUnwrap(TaskDueDate(rawValue: "2027-01-14"))
+        let dueTomorrow = TaskItem(
+            id: "a", covenID: nil, title: "A", status: .open, stage: .backlog, due: TaskDue(date: date, time: "09:30"), pin: nil,
+            createdAt: now, updatedAt: now
+        )
+        XCTAssertEqual(due(dueTomorrow, compact: false), "Due tomorrow, 09:30")
+        XCTAssertEqual(due(dueTomorrow, compact: true), "tomorrow, 09:30", "Without the word where there is little room")
+
+        // The day chosen in the sheet is the person's own; the time of day is theirs too.
+        let chosen = try XCTUnwrap(calendar.date(from: DateComponents(year: 2027, month: 3, day: 5, hour: 23, minute: 59)))
+        let at = try XCTUnwrap(calendar.date(from: DateComponents(year: 2000, month: 1, day: 1, hour: 7, minute: 5)))
+        XCTAssertEqual(TaskDueSheet.due(day: chosen, time: nil, calendar: calendar), try TaskDue(date: XCTUnwrap(TaskDueDate(rawValue: "2027-03-05"))))
+        XCTAssertEqual(TaskDueSheet.due(day: chosen, time: at, calendar: calendar)?.time, "07:05")
+    }
+
     // MARK: - New Task
 
     func testNewTaskOpensTheTasksOfTheScopeOnScreen_andItsLineIsAskedForOnce() {

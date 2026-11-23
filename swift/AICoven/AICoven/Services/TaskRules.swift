@@ -203,3 +203,42 @@ nonisolated enum TaskRules {
         return pieces
     }
 }
+
+/// What the Mac's Tasks menu offers for the task whose details are open,
+/// in the cloud app's words.
+nonisolated enum TaskCommand: String, Identifiable, Equatable {
+    case pinToday
+    case pinWeek
+    case unpin
+    case keepToday
+    case notToday
+    case setDueDate
+
+    var id: String {
+        rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .pinToday: "Pin for today"
+        case .pinWeek: "Pin for this week"
+        case .unpin: "Unpin"
+        case .keepToday: "Keep for today"
+        case .notToday: "Not today"
+        case .setDueDate: "Set Due Date…"
+        }
+    }
+
+    /// What a task can truthfully be offered, by how its pin stands: none
+    /// of it for a finished task.
+    static func offered(for pin: TaskPinState, isFinished: Bool) -> [TaskCommand] {
+        guard !isFinished else { return [] }
+        let pins: [TaskCommand] = switch pin {
+        case .none: [.pinToday, .pinWeek]
+        case .today: [.pinWeek, .unpin]
+        case .week: [.pinToday, .unpin]
+        case .review: [.keepToday, .notToday]
+        }
+        return pins + [.setDueDate]
+    }
+}

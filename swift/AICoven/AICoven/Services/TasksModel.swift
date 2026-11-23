@@ -93,6 +93,12 @@ final class TasksModel: ObservableObject {
         self.calendar = calendar ?? { .current }
     }
 
+    /// The task with this id, as it was last read; nil for one that is
+    /// gone, or among the finished ones no longer listed.
+    func task(_ id: String) -> TaskItem? {
+        (open + finished).first { $0.id == id }
+    }
+
     /// Whether there is no task at all, open or finished.
     var isEmpty: Bool {
         open.isEmpty && finishedCount == 0
@@ -185,6 +191,23 @@ final class TasksModel: ObservableObject {
     /// Closes a task without its being done.
     func close(_ task: TaskItem, as account: String) async {
         await change(task, TaskChange(status: .closed), saying: "Closed \(Self.name(of: task))", orElse: Self.couldNotSave(task), as: account)
+    }
+
+    /// Gives a task another title. Nothing is asked for a title that
+    /// says nothing, or the one it has.
+    func rename(_ task: TaskItem, to title: String, as account: String) async {
+        let title = TaskRepository.keptTitle(title)
+        guard !title.isEmpty, title != task.title || task.isUnreadable else { return }
+        await change(task, TaskChange(title: title), saying: "Renamed to \(title)", orElse: Self.couldNotSave(task), as: account)
+    }
+
+    /// Sets the day a task is due, with its time of day if it has one, or
+    /// takes the day away (nil).
+    func setDue(_ task: TaskItem, to due: TaskDue?, as account: String) async {
+        await change(
+            task, TaskChange(due: due.map { .to($0) } ?? .cleared), saying: due == nil ? "Due date removed" : "Due date set",
+            orElse: "Couldn't change the due date of \(Self.quoted(task)). Try again.", as: account
+        )
     }
 
     /// Pins an open task for today or for this week: until the end of the
