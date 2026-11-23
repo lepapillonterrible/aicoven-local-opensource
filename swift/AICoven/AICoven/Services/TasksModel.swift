@@ -2,7 +2,7 @@ internal import Combine
 import SwiftUI
 
 /// One place's tasks as its Tasks page shows them: a coven's, or Strix's.
-/// It reads them, adds one, and marks one done, closed or open again, each
+/// It reads them, adds one, changes one, and hands one to an agent, each
 /// as the account that asked. Only the latest reading is shown, and
 /// nothing read or done for an account that is no longer signed in.
 @MainActor
@@ -26,6 +26,110 @@ final class TasksModel: ObservableObject {
         )
     }
 
+    /// An agent a task can be handed to.
+    struct Agent: Identifiable, Equatable {
+        let id: String
+        let name: String
+        /// Where it runs, as the menu says under its name.
+        var runsOn = ""
+
+        /// Strix, which answers in Strix's own place and in a coven with
+        /// no agents: no stored agent, so a task it is handed names no
+        /// lead agent.
+        static let strix = Agent(id: "strix", name: "Strix")
+
+        /// Whether this is Strix, wherever it is said to run.
+        var isStrix: Bool {
+            id == Self.strix.id
+        }
+    }
+
+    /// The threads' and the agents' side, which a test replaces.
+    struct Hands {
+        /// A coven's agents; nil where they could not be read.
+        var agents: @Sendable (_ covenID: String) async -> [Agent]?
+        /// Strix, with where it runs for `account` (nothing said of it
+        /// where its settings could not be read).
+        var strix: @MainActor (_ account: String) async -> Agent
+        var thread: @MainActor (_ id: String, _ account: String) async throws -> Thread
+        /// Makes a thread in the place, for the agent given (Strix for nil).
+        var createThread: @MainActor (_ title: String, _ covenID: String?, _ agent: Agent?, _ account: String) async throws -> Thread
+        /// Starts a turn in the thread with these words as the person's
+        /// message, answered by the agent given (Strix as itself, whoever
+        /// the thread's own agent is; the thread's own for nil), and
+        /// answers with the turn's id.
+        var startTurn: @MainActor (_ thread: Thread, _ text: String, _ agent: Agent?) async throws -> String
+        /// Undoes a thread made for a task that could not be given it:
+        /// only as the account it was made for; one that cannot be
+        /// deleted is left, empty.
+        var discardThread: @MainActor (_ thread: Thread, _ account: String) async -> Void
+        /// Hands words that could not be sent into a thread to the
+        /// thread's composer, which says why.
+        var handBack: @MainActor (_ text: String, _ threadID: String, _ error: Error) -> Void
+        /// The turn the app is running in a thread now.
+        var liveTurn: @MainActor (_ threadID: String) -> TaskLiveTurn?
+
+        /// Who answers a turn started from a task: the agent chosen, where
+        /// Strix chosen is Strix itself (no stored agent), whoever the
+        /// thread's own agent is; the thread's own where nobody was chosen.
+        static func answering(_ agent: Agent?, in thread: Thread) -> (roleID: String?, name: String?) {
+            guard let agent else { return (thread.agentId, thread.agentName) }
+            return (agent.isStrix ? nil : agent.id, agent.name)
+        }
+
+        static let live = Hands(
+            agents: { covenID in
+                guard let roles = try? await RoleService.shared.loadRoles(covenId: covenID) else { return nil }
+                return roles.map { role in
+                    Agent(
+                        id: role.id, name: role.name,
+                        runsOn: role.provider.flatMap { $0.isEmpty ? nil : providerDisplayName(slug: $0) } ?? "No connection set"
+                    )
+                }
+            },
+            strix: { account in
+                var strix = Agent.strix
+                guard let settings = try? await StrixSettingsService.shared.loadPersonalStrix(), UserScope.currentUserID == account else {
+                    return strix
+                }
+                strix.runsOn = settings.provider.flatMap { $0.isEmpty ? nil : providerDisplayName(slug: $0) } ?? "No connection set"
+                return strix
+            },
+            thread: { id, account in
+                guard UserScope.currentUserID == account else { throw RepositoryError.accountChanged }
+                return try await ThreadService.shared.getThread(threadId: id)
+            },
+            createThread: { title, covenID, agent, account in
+                try await ThreadService.shared.createThread(title: title, covenId: covenID, agentId: agent?.id, agentName: agent?.name, as: account)
+            },
+            startTurn: { thread, text, agent in
+                let answering = answering(agent, in: thread)
+                return try await TurnEngine.shared.start(
+                    with: TurnProgress.userMessage(in: thread.id, text: text, attachments: []), context: text,
+                    roleID: answering.roleID, agentName: answering.name, attachments: nil
+                )
+            },
+            discardThread: { thread, account in
+                guard UserScope.currentUserID == account else { return }
+                do {
+                    try await ThreadService.shared.deleteThread(threadId: thread.id)
+                } catch {
+                    // The kind of failure only.
+                    AppErrorReporter.log(
+                        message: "Could not discard a thread its task was not given (\(type(of: error)))", context: "TasksModel.discardThread"
+                    )
+                }
+            },
+            handBack: { text, threadID, error in
+                TurnEngine.shared.handBack(ComposerDraft(text: text), to: threadID, because: error)
+            },
+            liveTurn: { threadID in
+                guard let turn = TurnEngine.shared.running[threadID] else { return nil }
+                return TaskLiveTurn(turnID: turn.turnID, needsOK: ToolApprovals.shared.askingThreadIDs.contains(threadID), isStopping: turn.isStopping)
+            }
+        )
+    }
+
     /// The tasks still open, the one last changed first.
     @Published private(set) var open: [TaskItem] = []
     /// The finished ones last changed, as many as a listing gives.
@@ -44,6 +148,32 @@ final class TasksModel: ObservableObject {
     @Published private(set) var isAdding = false
     /// The tasks whose change is on its way: one change at a time for a task.
     @Published private(set) var saving: Set<TaskItem.ID> = []
+    /// The agents of the place a task can be handed to: the coven's, or
+    /// Strix alone in Strix's place and in a coven with none. Nil until
+    /// they are read.
+    @Published private(set) var agents: [Agent]?
+    /// Whether the agents could not be read.
+    @Published private(set) var agentsFailed = false
+    /// The turns the app is running now in the threads of tasks handed
+    /// to an agent, by thread id.
+    @Published private(set) var liveTurns: [String: TaskLiveTurn] = [:]
+    /// The agent, still there, that the place's latest hand-off went to,
+    /// of every task of the place, listed or not.
+    private var lastHandedTo: String?
+    /// The hand-off turns whose ending is still to be told, by turn id,
+    /// each with whether it was seen at work here: one handed over on this
+    /// page, or followed on it.
+    private var awaited: [String: Bool] = [:]
+    /// The turns the tasks were read again for once already: listed as
+    /// running while nothing ran them.
+    private var readAgainFor: Set<String> = []
+    /// The reading of the agents under way: one at a time, which whoever
+    /// asks meanwhile waits for.
+    private var agentsReading: Task<Void, Never>?
+    /// How many of the place's screens are up: the page, and a task's
+    /// details where they are a screen of their own. What a hand-off's
+    /// turn comes to is said only while one is.
+    private var screensUp = 0
 
     static let couldNotLoad = "Couldn't load tasks."
     static let couldNotAdd = "Couldn't add the task. Try again."
@@ -68,6 +198,7 @@ final class TasksModel: ObservableObject {
     /// The coven whose tasks these are; nil for Strix's.
     let covenID: String?
     private let source: Source
+    private let hands: Hands
     private let signedIn: () -> String
     /// Tells VoiceOver what came of what was asked, as it happens: each
     /// is said, also two that end in the same moment.
@@ -88,11 +219,12 @@ final class TasksModel: ObservableObject {
     /// The app's own store, account, voice, clock and calendar unless a
     /// test gives others.
     init(
-        covenID: String?, source: Source? = nil, signedIn: (() -> String)? = nil, announce: ((String) -> Void)? = nil,
+        covenID: String?, source: Source? = nil, hands: Hands? = nil, signedIn: (() -> String)? = nil, announce: ((String) -> Void)? = nil,
         now: (() -> Date)? = nil, calendar: (() -> Calendar)? = nil
     ) {
         self.covenID = covenID
         self.source = source ?? .live
+        self.hands = hands ?? .live
         self.signedIn = signedIn ?? { UserScope.currentUserID }
         self.announce = announce ?? { AccessibilityNotification.Announcement($0).post() }
         self.now = now ?? { Date() }
@@ -129,6 +261,7 @@ final class TasksModel: ObservableObject {
             open = listing.tasks.filter { !$0.isFinished }
             finished = listing.tasks.filter(\.isFinished)
             finishedCount = listing.finished
+            lastHandedTo = listing.lastHandedTo
             hasRead = true
             if let open = detailsOf, !listing.tasks.contains(where: { $0.id == open }) {
                 // Asked for by name and not found: it is gone, not merely
@@ -146,6 +279,11 @@ final class TasksModel: ObservableObject {
                 landed = reading
                 if errorMessage == Self.couldNotLoad { errorMessage = nil }
             }
+            // The turns the tasks follow are those of the tasks as read.
+            // One that ended while they were read is read again for.
+            let again = turnsChanged()
+            tellEndings()
+            await again?.value
             return true
         } catch is CancellationError {
             // Whoever asked was called off: nothing was read, and what is shown stays.
@@ -332,5 +470,294 @@ final class TasksModel: ObservableObject {
 
     private func say(_ words: String) {
         announce(words)
+    }
+
+    // MARK: - Handing a task to an agent
+
+    /// Reads the agents of the place: the coven's, or Strix alone where
+    /// the place has none of its own. One reading at a time: asked again
+    /// while one is under way, it waits for that one and reads nothing
+    /// more, so no earlier answer lands over a later one, and whoever
+    /// asked has the agents when it returns. Nothing read for an account
+    /// that is no longer signed in is kept.
+    func loadAgents() async {
+        if let reading = agentsReading { return await reading.value }
+        let reading = Task { await self.readAgents() }
+        agentsReading = reading
+        await reading.value
+        if agentsReading == reading { agentsReading = nil }
+    }
+
+    private func readAgents() async {
+        let account = signedIn()
+        var read: [Agent]? = []
+        if let covenID { read = await hands.agents(covenID) }
+        if read?.isEmpty == true { read = await [hands.strix(account)] }
+        guard signedIn() == account else { return }
+        agentsFailed = read == nil
+        if let read { agents = read }
+    }
+
+    /// The page, or a task's details as a screen of their own, came on
+    /// screen or left it. Work asked for on the page can end after the
+    /// person has left it: how a hand-off's turn went is then told by its
+    /// thread, Activity and notifications, not said here.
+    func cameOnScreen() {
+        screensUp += 1
+    }
+
+    func leftScreen() {
+        screensUp = max(0, screensUp - 1)
+    }
+
+    /// Where a task handed to an agent stands.
+    func handoff(of task: TaskItem) -> TaskHandoffState? {
+        TaskRules.handoff(of: task, live: task.threadID.flatMap { liveTurns[$0] })
+    }
+
+    /// The name of the agent a task's line names: while it is handed
+    /// over, the agent it was handed to, whoever leads it by now (Strix
+    /// where it was handed to no stored agent; nil for one that is gone);
+    /// otherwise its lead agent.
+    func agentName(for task: TaskItem) -> String? {
+        handoff(of: task) == nil ? name(ofAgent: task.leadAgentID) : handoffAgentName(for: task)
+    }
+
+    /// The name of the agent a task was handed to: Strix for no stored
+    /// agent, nil for one that is gone or not read yet.
+    private func handoffAgentName(for task: TaskItem) -> String? {
+        guard let handoff = task.handoff else { return nil }
+        guard let id = handoff.agentID else { return Agent.strix.name }
+        return name(ofAgent: id)
+    }
+
+    private func name(ofAgent id: String?) -> String? {
+        id.flatMap { id in agents?.first { $0.id == id }?.name }
+    }
+
+    /// The agents a task can be handed to: its lead agent first, or else
+    /// the agent the place's latest hand-off went to. Nil while the
+    /// agents are not read.
+    func leadChoices(for task: TaskItem) -> TaskRules.LeadChoices<Agent>? {
+        guard let agents else { return nil }
+        return TaskRules.leadChoices(among: agents, id: \.id, leadAgentID: task.leadAgentID, lastUsedID: lastHandedTo)
+    }
+
+    /// The turns the app runs changed: follows those of the tasks handed
+    /// to an agent, says when one newly waits for the person's OK, and
+    /// reads the tasks again when one of them has ended, to learn how
+    /// (answering with that reading, for whoever waits for it). A turn
+    /// listed as running that nothing runs may have ended while the tasks
+    /// were read (an agent's own run too, which is otherwise paused):
+    /// they are read again for it, once.
+    @discardableResult
+    func turnsChanged() -> Task<Void, Never>? {
+        var live: [String: TaskLiveTurn] = [:]
+        var ended = false
+        for task in open {
+            guard let handoff = task.handoff, let threadID = task.threadID else { continue }
+            if let turn = hands.liveTurn(threadID), turn.turnID == handoff.turnID {
+                live[threadID] = turn
+                awaited[turn.turnID] = true
+                let asks = turn.needsOK && !turn.isStopping
+                let asked = liveTurns[threadID].map { $0.turnID == turn.turnID && $0.needsOK && !$0.isStopping } ?? false
+                if asks, !asked, screensUp > 0 { say("\(handoffAgentName(for: task) ?? "An agent") needs your OK on \(Self.name(of: task))") }
+            } else if handoff.outcome == .running, readAgainFor.insert(handoff.turnID).inserted {
+                if awaited[handoff.turnID] == nil { awaited[handoff.turnID] = false }
+                ended = true
+            }
+        }
+        if liveTurns.contains(where: { live[$0.key]?.turnID != $0.value.turnID }) { ended = true }
+        if live != liveTurns { liveTurns = live }
+        return ended ? Task { await self.load() } : nil
+    }
+
+    /// Says how the hand-off turns awaited have ended, as the tasks just
+    /// read have them: that the agent finished, or that it could not
+    /// start (a turn that failed before it was seen at work, as with no
+    /// connection to answer) or stopped on a problem. A turn the person
+    /// stopped, or that is gone, is told of by nothing, and nothing is
+    /// said once the place has left the screen.
+    private func tellEndings() {
+        for task in open + finished {
+            guard let handoff = task.handoff, let wasSeenAtWork = awaited[handoff.turnID] else { continue }
+            if let threadID = task.threadID, liveTurns[threadID]?.turnID == handoff.turnID { continue }
+            // Not stored as ended: the tasks are read again for it, or it
+            // is an agent's own run that goes on.
+            if handoff.outcome == .running { continue }
+            awaited[handoff.turnID] = nil
+            guard !task.isFinished, screensUp > 0 else { continue }
+            let agent = handoffAgentName(for: task) ?? "An agent"
+            switch handoff.outcome {
+            case .completed: say("\(agent) finished \(Self.name(of: task))")
+            case .failed:
+                report(
+                    wasSeenAtWork
+                        ? "\(agent) stopped on a problem with \(Self.quoted(task)). Its thread shows what happened."
+                        : Self.couldNotStart(agent, on: task)
+                )
+            default: break
+            }
+        }
+    }
+
+    static func couldNotStart(_ agent: String, on task: TaskItem) -> String {
+        "\(agent) couldn't start on \(quoted(task)). Its thread shows what's happening there."
+    }
+
+    /// The task's thread, for Talk it through and Open thread: the one it
+    /// has, or one made for it in its place, for an agent of the place,
+    /// and given to it. A thread made here starts with the task, so that
+    /// whoever answers knows what it is about, and none is made for a
+    /// task whose title cannot be read. If
+    /// those words could not be sent, they are handed to the thread's
+    /// composer, which says why. Nil where it could not be opened, which
+    /// is said, and where another account is signed in by then.
+    func talkItThrough(_ task: TaskItem, as account: String) async -> Thread? {
+        guard TaskRules.canBeTalkedThrough(task), saving.insert(task.id).inserted else { return nil }
+        defer { saving.remove(task.id) }
+        errorMessage = nil
+        // A thread made for it goes to an agent of the place, as a new
+        // thread there does: the agents are read first, or the reading
+        // under way waited for.
+        if task.threadID == nil, agents == nil { await loadAgents() }
+        guard signedIn() == account else { return nil }
+        guard let thread = await thread(for: task, agent: talkAgent(for: task), as: account), signedIn() == account else { return nil }
+        // A thread it had already is opened as it is.
+        guard task.threadID == nil else { return thread }
+        let words = TaskRules.talkThrough(task)
+        do {
+            _ = try await hands.startTurn(thread, words, nil)
+        } catch {
+            guard signedIn() == account else { return nil }
+            // Said there, where the person is taken.
+            hands.handBack(words, thread.id, error)
+        }
+        guard signedIn() == account else { return nil }
+        await Task { await self.load() }.value
+        return signedIn() == account ? thread : nil
+    }
+
+    /// Who a thread made for a task to be talked through goes to: the
+    /// agent that leads the task, else the one the place last handed a
+    /// task to, else the place's first; Strix (no stored agent) where
+    /// the place has none of its own, or its agents could not be read.
+    private func talkAgent(for task: TaskItem) -> Agent? {
+        guard let choices = leadChoices(for: task), let agent = choices.marked ?? choices.others.first, !agent.isStrix else { return nil }
+        return agent
+    }
+
+    /// How far a hand-off got: nothing kept, the lead agent kept but no
+    /// turn started, or the turn started and kept with the task.
+    enum HandOff: Equatable {
+        case none
+        case led
+        case started
+    }
+
+    /// Do it for me, for an open task whose title can be read: makes
+    /// `agent`, the one the person picked, the task's lead agent, sends the task to it in the task's thread, and keeps
+    /// the turn with the task, so that the task follows it. The thread
+    /// keeps its own agent; one made here starts with `agent`. One
+    /// hand-off at a time for a task.
+    @discardableResult
+    func doItForMe(_ task: TaskItem, agent: Agent, as account: String) async -> HandOff {
+        guard TaskRules.canBeHandedOver(task), saving.insert(task.id).inserted else { return .none }
+        defer { saving.remove(task.id) }
+        errorMessage = nil
+        var outcome = HandOff.none
+        // Strix is no stored agent: a task it is handed names no lead.
+        let lead = agent.isStrix ? nil : agent
+        if let lead {
+            guard await keep(TaskChange(leadAgentID: .to(lead.id)), of: task, as: account) else { return .none }
+            outcome = .led
+        }
+        var turn: String?
+        if let thread = await thread(for: task, agent: lead, as: account), signedIn() == account {
+            let words = TaskRules.request(for: task)
+            do {
+                let turnID = try await hands.startTurn(thread, words, agent)
+                if signedIn() == account, await keep(TaskChange(handoffTurnID: turnID, handoffAgentID: lead?.id), of: task, as: account) {
+                    outcome = .started
+                    turn = turnID
+                    // How it ends is told once it is read, also if it has
+                    // ended by then.
+                    if awaited[turnID] == nil { awaited[turnID] = false }
+                }
+            } catch {
+                guard signedIn() == account else { return outcome }
+                // The thread shows it: the words wait in its composer, which says why.
+                hands.handBack(words, thread.id, error)
+                report(Self.couldNotStart(agent.name, on: task))
+            }
+        }
+        guard signedIn() == account else { return outcome }
+        if outcome == .led { say("\(agent.name) leads \(Self.name(of: task))") }
+        await Task { await self.load() }.value
+        // Unless the reading has told how it ended already.
+        if let turn, awaited[turn] != nil, signedIn() == account { say("\(agent.name) is on \(Self.name(of: task))") }
+        return outcome
+    }
+
+    /// Change Lead Agent…: `agent` is listed first, as the lead agent, the
+    /// next time Do it for me… is asked. A run under way keeps its agent.
+    func changeLeadAgent(_ task: TaskItem, to agent: Agent, as account: String) async {
+        guard !agent.isStrix else { return }
+        await change(
+            task, TaskChange(leadAgentID: .to(agent.id)), saying: "\(agent.name) leads \(Self.name(of: task))", orElse: Self.couldNotSave(task),
+            as: account
+        )
+    }
+
+    /// Keeps one change of a hand-off with its task; says why not.
+    private func keep(_ change: TaskChange, of task: TaskItem, as account: String) async -> Bool {
+        do {
+            try await source.change(task.id, change, account)
+            return signedIn() == account
+        } catch {
+            guard signedIn() == account else { return false }
+            if case RepositoryError.dataLocked = error {
+                report(Self.needsUnlock)
+            } else {
+                if !(error is TaskError), !(error is RepositoryError) {
+                    AppErrorReporter.log(message: "Could not keep a hand-off (\(type(of: error)))", context: "TasksModel.keep")
+                }
+                report(Self.couldNotSave(task))
+            }
+            return false
+        }
+    }
+
+    static let couldNotOpenThread = "Couldn't open the task's thread. Try again."
+
+    /// The task's thread: the one it has, or one made in its place with
+    /// `agent` as its agent and given to the task; one that could not be
+    /// given to it is deleted again. Every step is for `account` only.
+    /// Nil where it could not be had, which is said.
+    private func thread(for task: TaskItem, agent: Agent?, as account: String) async -> Thread? {
+        do {
+            guard signedIn() == account else { return nil }
+            if let threadID = task.threadID { return try await hands.thread(threadID, account) }
+            let thread = try await hands.createThread(Self.name(of: task), covenID, agent, account)
+            guard signedIn() == account else { return nil }
+            do {
+                try await source.change(task.id, TaskChange(threadID: thread.id), account)
+            } catch {
+                // A thread the task was not given is not kept: nothing
+                // was sent into it, and asking again makes another.
+                await hands.discardThread(thread, account)
+                throw error
+            }
+            return signedIn() == account ? thread : nil
+        } catch is CancellationError {
+            return nil
+        } catch {
+            guard signedIn() == account else { return nil }
+            if !(error is TaskError), !(error is RepositoryError) {
+                AppErrorReporter.log(message: "Could not open a task's thread (\(type(of: error)))", context: "TasksModel.thread")
+            }
+            report(Self.couldNotOpenThread)
+            return nil
+        }
     }
 }

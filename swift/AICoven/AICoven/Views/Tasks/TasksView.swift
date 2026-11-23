@@ -1,3 +1,4 @@
+internal import Combine
 import SwiftUI
 
 /// A place's Tasks, as the cloud app's List: what is pinned for today and
@@ -30,6 +31,9 @@ struct TasksView: View {
     @State private var now = Date()
     /// Whether the due day's sheet of the task whose details are open is up.
     @State private var editingDue = false
+    /// The thread being opened for a task, until it is: leaving the page,
+    /// or asking for another, drops it.
+    @State private var pendingTalk: UUID?
     /// The page's width, which says whether the iPad has room for the
     /// details beside the list.
     @State private var pageWidth: CGFloat = 0
@@ -80,8 +84,23 @@ struct TasksView: View {
             }
         )
         // The due day's sheet is of the details that were open: it does not
-        // come up by itself over the next ones.
-        .onChange(of: model.detailsOf) { editingDue = false }
+        // come up by itself over the next ones. And opening or closing a
+        // task's details is asking for something else: a thread still
+        // being opened for an earlier task stays closed.
+        .onChange(of: model.detailsOf) {
+            editingDue = false
+            pendingTalk = nil
+        }
+        .onAppear { model.cameOnScreen() }
+        .onDisappear {
+            pendingTalk = nil
+            model.leftScreen()
+        }
+        .task { await model.loadAgents() }
+        // The tasks handed to an agent follow the turns the app runs: told
+        // once the change has been made, not as it is about to be.
+        .onReceive(Self.turns.receive(on: RunLoop.main)) { _ in model.turnsChanged() }
+        .onReceive(ToolApprovals.shared.$askingThreadIDs.receive(on: RunLoop.main)) { _ in model.turnsChanged() }
         #if os(macOS)
             .sheet(item: Binding(get: { model.detailsOf.map(OpenTask.init) }, set: { model.detailsOf = $0?.id })) { open in
                 details(of: open.id, host: .sheet)
@@ -94,6 +113,9 @@ struct TasksView: View {
             .navigationDestination(item: Binding(get: { showsPane ? nil : model.detailsOf }, set: { if !showsPane { model.detailsOf = $0 } })) { id in
                 details(of: id, host: .page)
                     .navigationBarTitleDisplayMode(.inline)
+                    // A screen of the place's own: what is said of a hand-off is still said here.
+                    .onAppear { model.cameOnScreen() }
+                    .onDisappear { model.leftScreen() }
             }
         #endif
     }
@@ -110,8 +132,62 @@ struct TasksView: View {
                 Task { await model.unpin(task, as: account) }
             },
             onAnswer: { task, keep in answer([task], keep: keep) },
+            onTalk: talkItThrough,
+            lead: lead,
             editingDue: $editingDue,
             onClose: { model.detailsOf = nil }
+        )
+    }
+
+    /// Opens the task's thread, unless the person has left the page or
+    /// asked for something else meanwhile: another thread, another task's
+    /// details, or anything of the shell (New Task, Search Threads), and
+    /// only while the account that asked is signed in.
+    private func talkItThrough(_ task: TaskItem) {
+        let request = UUID()
+        pendingTalk = request
+        let account = UserScope.currentUserID
+        let moves = navigator.personMoves
+        Task {
+            guard let thread = await model.talkItThrough(task, as: account), pendingTalk == request else { return }
+            pendingTalk = nil
+            guard Self.stillOpensThread(askedAt: moves, in: navigator, as: account, signedIn: UserScope.currentUserID) else { return }
+            navigator.open(thread)
+        }
+    }
+
+    /// The turns the app runs, as far as a task follows them: told when
+    /// one starts, ends or is being stopped, not with each word of a reply.
+    private static var turns: AnyPublisher<[String: TaskLiveTurn], Never> {
+        TurnEngine.shared.$running
+            .map { $0.mapValues { TaskLiveTurn(turnID: $0.turnID, isStopping: $0.isStopping) } }
+            .removeDuplicates()
+            .eraseToAnyPublisher()
+    }
+
+    /// Whether a thread made ready for a task is still to be opened: the
+    /// person has done nothing in the shell since they asked (New Task
+    /// and Search Threads are moves, also where they leave Tasks open),
+    /// and the account that asked is the one signed in.
+    static func stillOpensThread(askedAt moves: Int, in navigator: ShellNavigator, as account: String, signedIn: String) -> Bool {
+        navigator.isStill(at: moves) && signedIn == account
+    }
+
+    /// Do it for me… and Change Lead Agent… for a task.
+    private func lead(for task: TaskItem) -> TaskLead {
+        TaskLead(
+            hasLead: task.leadAgentID != nil,
+            choices: model.leadChoices(for: task),
+            failedToLoad: model.agentsFailed,
+            onRetry: { Task { await model.loadAgents() } },
+            onDoIt: { agent in
+                let account = UserScope.currentUserID
+                Task { await model.doItForMe(task, agent: agent, as: account) }
+            },
+            onChange: { agent in
+                let account = UserScope.currentUserID
+                Task { await model.changeLeadAgent(task, to: agent, as: account) }
+            }
         )
     }
 
@@ -298,7 +374,7 @@ struct TasksView: View {
                     .frame(maxWidth: .infinity)
                     .taskListRow()
             }
-            let parts = TaskRules.parts(open: model.open, finished: model.finished, sort: sort, now: now)
+            let parts = TaskRules.parts(open: model.open, finished: model.finished, sort: sort, now: now, handoff: model.handoff)
             if !parts.review.isEmpty {
                 reviewRows(parts.review)
             }
@@ -311,6 +387,18 @@ struct TasksView: View {
             if !parts.week.isEmpty {
                 heading(TaskPinPeriod.week.title)
                 ForEach(parts.week) { task in
+                    row(task).taskListRow(vertical: 0)
+                }
+            }
+            if !parts.needsYou.isEmpty {
+                heading("Needs you")
+                ForEach(parts.needsYou) { task in
+                    row(task).taskListRow(vertical: 0)
+                }
+            }
+            if !parts.agentsOnIt.isEmpty {
+                heading("Agents are on it")
+                ForEach(parts.agentsOnIt) { task in
                     row(task).taskListRow(vertical: 0)
                 }
             }
@@ -415,10 +503,12 @@ struct TasksView: View {
     }
 
     private func row(_ task: TaskItem) -> some View {
-        TaskRow(
+        let handoff = model.handoff(of: task)
+        return TaskRow(
             task: task,
             pin: TaskRules.pinState(of: task, now: now),
-            context: TaskRules.context(of: task, now: now),
+            handoff: handoff,
+            context: TaskRules.context(of: task, now: now, handoff: handoff, agent: model.agentName(for: task)),
             isSaving: model.saving.contains(task.id),
             onTick: { done in
                 let account = UserScope.currentUserID
@@ -437,7 +527,9 @@ struct TasksView: View {
                 Task { await model.unpin(task, as: account) }
             },
             onAnswer: { keep in answer([task], keep: keep) },
-            onDetails: { model.detailsOf = task.id }
+            onDetails: { model.detailsOf = task.id },
+            onTalk: { talkItThrough(task) },
+            lead: lead(for: task)
         )
     }
 
@@ -637,12 +729,61 @@ private extension TaskItem {
     }
 }
 
-/// One task in the List: its tick, its title and one line of what helps
-/// (its pin, its due day, that it was closed). What else can be done with
-/// it is in its menu and its swipes.
+/// Do it for me… and Change Lead Agent… for one task: the agents it can
+/// be handed to, and whether it has a lead agent.
+struct TaskLead {
+    let hasLead: Bool
+    /// Nil while the place's agents are not read.
+    let choices: TaskRules.LeadChoices<TasksModel.Agent>?
+    let failedToLoad: Bool
+    let onRetry: () -> Void
+    let onDoIt: (TasksModel.Agent) -> Void
+    let onChange: (TasksModel.Agent) -> Void
+}
+
+/// The agents a task can be handed to, each with where it runs: its lead
+/// agent first under Lead agent, or else the agent the place's latest
+/// hand-off went to under Last used. Nothing is chosen until the person
+/// picks one.
+struct LeadAgentChoices: View {
+    let lead: TaskLead
+    let onChoose: (TasksModel.Agent) -> Void
+
+    var body: some View {
+        if let choices = lead.choices {
+            if let marked = choices.marked {
+                Section(choices.reason == .lead ? "Lead agent" : "Last used") { choice(marked) }
+            }
+            Section {
+                ForEach(choices.others) { choice($0) }
+            }
+        } else if lead.failedToLoad {
+            Text("Couldn't load the agents")
+            Button("Try Again", action: lead.onRetry)
+        } else {
+            Text("Loading agents…")
+        }
+    }
+
+    private func choice(_ agent: TasksModel.Agent) -> some View {
+        Button {
+            onChoose(agent)
+        } label: {
+            Text(agent.name)
+            if !agent.runsOn.isEmpty { Text(agent.runsOn) }
+        }
+    }
+}
+
+/// One task in the List: its mark (the tick, or where it stands with the
+/// agent it was handed to), its title and one line of what helps (its
+/// pin, its due day, the agent on it, that it was closed). What else can
+/// be done with it is in its menu and its swipes.
 private struct TaskRow: View {
     let task: TaskItem
     let pin: TaskPinState
+    /// Where it stands with the agent it was handed to, if it was.
+    let handoff: TaskHandoffState?
     let context: [TaskRules.Context]
     let isSaving: Bool
     /// Ticks an open task done (true), or opens a finished one again.
@@ -652,6 +793,9 @@ private struct TaskRow: View {
     let onUnpin: () -> Void
     let onAnswer: (Bool) -> Void
     let onDetails: () -> Void
+    /// Opens the task's thread, which is made for it if it has none.
+    let onTalk: () -> Void
+    let lead: TaskLead
     @State private var isHovering = false
 
     /// The line under the title, its pieces joined by a middle dot.
@@ -661,6 +805,7 @@ private struct TaskRow: View {
             case let .plain(words): Text(words).foregroundStyle(Color.aicovenTextSecondary)
             case let .pin(words): Text("\(Image(systemName: "pin.fill")) \(words)").foregroundStyle(Color.aicovenTextSecondary)
             case let .overdue(words): Text(words).foregroundStyle(Color.aicovenError)
+            case let .agent(words): Text(words).foregroundStyle(Color.aicovenWater)
             }
         }
         .reduce(nil as Text?) { joined, next in
@@ -670,7 +815,7 @@ private struct TaskRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 0) {
-            tick
+            glyph
                 .frame(width: TaskListMetrics.titleInset, alignment: .leading)
             VStack(alignment: .leading, spacing: 1) {
                 Button(action: onDetails) {
@@ -694,6 +839,7 @@ private struct TaskRow: View {
             // already is.
             .padding(.vertical, 3)
             Spacer(minLength: Spacing.xs)
+            button
         }
         .frame(minHeight: TaskListMetrics.rowMinHeight)
         .background(
@@ -707,18 +853,9 @@ private struct TaskRow: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onDetails)
         .disabled(isSaving)
-        .contextMenu {
-            if task.isFinished {
-                Button("Reopen") { onTick(false) }
-            } else {
-                Button("Close", action: onClose)
-            }
-            Divider()
-            Button("Details…", action: onDetails)
-            pinActions
-        }
+        .contextMenu { menu(showsDoItForMe: true) }
         .swipeActions(edge: .leading, allowsFullSwipe: true) {
-            if !task.isFinished {
+            if !task.isFinished, handoff == nil || handoff == .finished {
                 Button("Mark done") { onTick(true) }
                     .tint(.aicovenWater)
             }
@@ -730,22 +867,95 @@ private struct TaskRow: View {
                 Button("Details…", action: onDetails)
                     .tint(.aicovenSwipeNeutral)
             } else {
-                Menu("More…") {
-                    Button("Close", action: onClose)
-                    Divider()
-                    Button("Details…", action: onDetails)
-                    pinActions
+                if handoff == nil, TaskRules.canBeHandedOver(task) {
+                    Menu("Do it for me…") { LeadAgentChoices(lead: lead, onChoose: lead.onDoIt) }
+                        .tint(.aicovenWater)
                 }
-                .tint(.aicovenSwipeNeutral)
+                // Do it for me… has its own button beside this one.
+                Menu("More…") { menu(showsDoItForMe: false) }
+                    .tint(.aicovenSwipeNeutral)
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityAction(named: "Details", onDetails)
-        .accessibilityActions { pinActions }
+        .accessibilityActions {
+            pinActions
+            if !task.isFinished, TaskRules.canBeTalkedThrough(task) {
+                Button(handoff == nil ? "Talk it through" : "Open thread", action: onTalk)
+            }
+        }
     }
 
     private var pinActions: some View {
         TaskPinActions(task: task, pin: pin, onPin: onPin, onUnpin: onUnpin, onAnswer: onAnswer)
+    }
+
+    /// The task's menu, as the cloud app's: what can be done with it by
+    /// where it stands, then its details and its pin.
+    @ViewBuilder
+    private func menu(showsDoItForMe: Bool) -> some View {
+        if task.isFinished {
+            Button("Reopen") { onTick(false) }
+        } else if handoff == .finished {
+            Button("Mark done") { onTick(true) }
+            Button("Open thread", action: onTalk)
+        } else if handoff == nil {
+            // A task whose title cannot be read has nothing to tell an agent.
+            if showsDoItForMe, TaskRules.canBeHandedOver(task) {
+                Menu("Do it for me…") { LeadAgentChoices(lead: lead, onChoose: lead.onDoIt) }
+            }
+            if TaskRules.canBeTalkedThrough(task) { Button("Talk it through", action: onTalk) }
+            Button("Close", action: onClose)
+        } else {
+            Button("Open thread", action: onTalk)
+        }
+        if !task.isFinished, lead.hasLead {
+            Menu("Change Lead Agent…") { LeadAgentChoices(lead: lead, onChoose: lead.onChange) }
+        }
+        Divider()
+        Button("Details…", action: onDetails)
+        pinActions
+    }
+
+    /// The row's mark: a ring while an agent is on the task (still while
+    /// its run is paused), the waiting mark while the task waits for the
+    /// person, and the tick otherwise.
+    @ViewBuilder
+    private var glyph: some View {
+        switch handoff {
+        case .working, .paused:
+            StatusRing(isTurning: handoff == .working)
+                .frame(width: 22, height: 22)
+                .accessibilityHidden(true)
+        case .needsOK, .finished:
+            WaitingMark()
+                .frame(width: 22, height: 22)
+                .accessibilityHidden(true)
+        case nil:
+            tick
+        }
+    }
+
+    /// The one button of a row that waits for the person: Mark done once
+    /// the agent has finished, Open thread while its turn waits for an OK.
+    @ViewBuilder
+    private var button: some View {
+        switch handoff {
+        case .finished:
+            Button("Mark done") { onTick(true) }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .fixedSize()
+                .accessibilityValue(TasksModel.name(of: task))
+        case .needsOK:
+            Button("Open thread", action: onTalk)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .fixedSize()
+                .accessibilityValue(TasksModel.name(of: task))
+        case .working, .paused, nil:
+            EmptyView()
+        }
     }
 
     /// Ticks an open task done; opens a done or closed one again.

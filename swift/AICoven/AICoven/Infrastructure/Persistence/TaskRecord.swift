@@ -33,6 +33,11 @@ nonisolated struct TaskListing: Equatable {
     let tasks: [TaskItem]
     /// How many are finished in all, listed or not.
     let finished: Int
+    /// The agent the place last handed a task to, as the cloud app tells
+    /// it: of the tasks handed to an agent that is still there, listed or
+    /// not, the one last changed says which. A later hand-off to Strix,
+    /// or to an agent deleted since, does not take its place.
+    var lastHandedTo: String?
 }
 
 /// The account's tasks, kept on the device: each in a coven of the
@@ -186,7 +191,7 @@ actor TaskRepository {
     /// What a change writes of a task, in the order it is put back by.
     private static let changed = [
         "title_ciphertext", "status", "stage", "due_date", "due_time", "pin_period", "pin_expires_at", "updated_at",
-        "thread_id", "lead_agent_id", "handoff_turn_id",
+        "thread_id", "lead_agent_id", "handoff_turn_id", "handoff_agent_id",
     ]
 
     /// Changes one of `account`'s tasks: what `change` names, and nothing
@@ -205,7 +210,8 @@ actor TaskRepository {
     /// - its lead agent is an agent of its coven (`TaskError.noSuchAgent`;
     ///   Strix's tasks have none to name);
     /// - the turn it is handed over in is a turn of its thread
-    ///   (`TaskError.noSuchTurn`).
+    ///   (`TaskError.noSuchTurn`), and the agent it is handed to in it an
+    ///   agent of its coven (`TaskError.noSuchAgent`), or Strix (none).
     /// A new title is sealed with the account's key, also for a task whose
     /// title could not be opened. It takes its turn among the changes to
     /// stored tasks (`inTurn`).
@@ -281,25 +287,31 @@ actor TaskRepository {
                 guard isTheirs else { throw TaskError.noSuchThread }
                 thread = given
             }
+            let coven: String = stored["coven_id"]
+            func isOfTheCoven(_ agent: String) throws -> Bool {
+                try !coven.isEmpty && Bool.fetchOne(
+                    db, sql: "SELECT 1 FROM roles WHERE id = ? AND user_id = ? AND coven_id = ?", arguments: [agent, account, coven]
+                ) ?? false
+            }
             var lead: String? = stored["lead_agent_id"]
             switch change.leadAgentID {
             case let .to(agent):
-                let coven: String = stored["coven_id"]
-                let isOfTheCoven = try !coven.isEmpty && Bool.fetchOne(
-                    db, sql: "SELECT 1 FROM roles WHERE id = ? AND user_id = ? AND coven_id = ?", arguments: [agent, account, coven]
-                ) ?? false
-                guard isOfTheCoven else { throw TaskError.noSuchAgent }
+                guard try isOfTheCoven(agent) else { throw TaskError.noSuchAgent }
                 lead = agent
             case .cleared: lead = nil
             case nil: break
             }
-            var handoff: String? = stored["handoff_turn_id"]
+            var handoff: (turn: String?, agent: String?) = (stored["handoff_turn_id"], stored["handoff_agent_id"])
             if let turn = change.handoffTurnID {
                 let isOfTheThread = try thread != nil && Bool.fetchOne(
                     db, sql: "SELECT 1 FROM turns WHERE id = ? AND user_id = ? AND thread_id = ?", arguments: [turn, account, thread]
                 ) ?? false
                 guard isOfTheThread else { throw TaskError.noSuchTurn }
-                handoff = turn
+                if let agent = change.handoffAgentID {
+                    guard try isOfTheCoven(agent) else { throw TaskError.noSuchAgent }
+                }
+                // The turn and who it was handed to are written together.
+                handoff = (turn, change.handoffAgentID)
             }
             // A pin alone is no change to the task.
             let touches = change != TaskChange(pin: change.pin)
@@ -307,13 +319,15 @@ actor TaskRepository {
             try db.execute(
                 sql: """
                 UPDATE tasks SET title_ciphertext = ?, status = ?, stage = ?, due_date = ?, due_time = ?, pin_period = ?, pin_expires_at = ?,
-                                 updated_at = ?, thread_id = ?, lead_agent_id = ?, handoff_turn_id = ?, revision = ?
+                                 updated_at = ?, thread_id = ?, lead_agent_id = ?, handoff_turn_id = ?, handoff_agent_id = ?,
+                                 revision = ?
                 WHERE id = ? AND user_id = ?
                 """,
                 arguments: [
                     newTitle ?? (stored["title_ciphertext"] as Data), change.status?.rawValue ?? (stored["status"] as String),
                     change.stage?.rawValue ?? (stored["stage"] as String), due.date, due.time, pin.period, pin.ends,
-                    touches ? moment.databaseValue : (stored["updated_at"] as DatabaseValue), thread, lead, handoff, revision + 1, id, account,
+                    touches ? moment.databaseValue : (stored["updated_at"] as DatabaseValue), thread, lead, handoff.turn, handoff.agent,
+                    revision + 1, id, account,
                 ]
             )
             return (Self.changed.map { stored[$0] as DatabaseValue }, revision + 1)
@@ -417,6 +431,7 @@ actor TaskRepository {
         let threadID: String?
         let leadAgentID: String?
         let handoffTurnID: String?
+        let handoffAgentID: String?
         let handoffStatus: String?
         let handoffHasRun: Bool
         let createdAt: Date
@@ -437,6 +452,7 @@ actor TaskRepository {
             threadID = row["thread_id"]
             leadAgentID = row["lead_agent_id"]
             handoffTurnID = row["handoff_turn_id"]
+            handoffAgentID = row["handoff_agent_id"]
             handoffStatus = row["handoff_status"]
             handoffHasRun = row["handoff_has_run"] ?? false
             pinEnds = Self.time(row["pin_expires_at"])
@@ -463,12 +479,12 @@ actor TaskRepository {
         let coven = covenID ?? ""
         return try await AccountSeal.reading(as: account) {
             // All in one read, so that what is listed and what is counted are of one moment.
-            let (stored, finished): ([Stored], Int) = try await dbQueue.read { db in
+            let (stored, finished, lastHandedTo): ([Stored], Int, String?) = try await dbQueue.read { db in
                 // Each task with the turn it was handed over in, as that turn stands.
                 let columns = """
                 tasks.id, tasks.coven_id, tasks.title_ciphertext, tasks.status, tasks.stage, tasks.due_date, tasks.due_time, tasks.pin_period,
-                tasks.pin_expires_at, tasks.thread_id, tasks.lead_agent_id, tasks.handoff_turn_id, tasks.created_at, tasks.updated_at,
-                turns.status AS handoff_status, (turns.run_ciphertext IS NOT NULL) AS handoff_has_run
+                tasks.pin_expires_at, tasks.thread_id, tasks.lead_agent_id, tasks.handoff_turn_id, tasks.handoff_agent_id, tasks.created_at,
+                tasks.updated_at, turns.status AS handoff_status, (turns.run_ciphertext IS NOT NULL) AS handoff_has_run
                 """
                 let from = "tasks LEFT JOIN turns ON turns.id = tasks.handoff_turn_id AND turns.user_id = tasks.user_id"
                 let open = try Row.fetchAll(
@@ -498,7 +514,21 @@ actor TaskRepository {
                     db, sql: "SELECT COUNT(*) FROM tasks WHERE user_id = ? AND coven_id = ? AND status <> ?",
                     arguments: [account, coven, TaskStatus.open.rawValue]
                 ) ?? 0
-                return ((open + done + also).map(Stored.init), count)
+                // Of the place's tasks handed to an agent that is still
+                // there, listed or not: who the one last changed went to.
+                let lastHandedTo = try String.fetchOne(
+                    db,
+                    sql: """
+                    SELECT tasks.handoff_agent_id FROM tasks
+                    WHERE tasks.user_id = ? AND tasks.coven_id = ? AND tasks.handoff_turn_id IS NOT NULL AND EXISTS (
+                        SELECT 1 FROM roles
+                        WHERE roles.id = tasks.handoff_agent_id AND roles.user_id = tasks.user_id AND roles.coven_id = tasks.coven_id
+                    )
+                    ORDER BY tasks.updated_at DESC, tasks.created_at DESC, tasks.rowid DESC LIMIT 1
+                    """,
+                    arguments: [account, coven]
+                )
+                return ((open + done + also).map(Stored.init), count, lastHandedTo)
             }
             var tasks: [TaskItem] = []
             for stored in stored {
@@ -518,12 +548,15 @@ actor TaskRepository {
                     due: stored.dueDate.flatMap(TaskDueDate.init).flatMap { TaskDue(date: $0, time: stored.dueTime) ?? TaskDue(date: $0) },
                     pin: pin, isUnreadable: title == nil, threadID: stored.threadID, leadAgentID: stored.leadAgentID,
                     handoff: stored.handoffTurnID.map {
-                        TaskHandoff(turnID: $0, outcome: stored.handoffStatus.flatMap(TurnOutcome.init), hasRun: stored.handoffHasRun)
+                        TaskHandoff(
+                            turnID: $0, outcome: stored.handoffStatus.flatMap(TurnOutcome.init), hasRun: stored.handoffHasRun,
+                            agentID: stored.handoffAgentID
+                        )
                     },
                     createdAt: stored.createdAt, updatedAt: stored.updatedAt
                 ))
             }
-            return TaskListing(tasks: tasks, finished: finished)
+            return TaskListing(tasks: tasks, finished: finished, lastHandedTo: lastHandedTo)
         }
     }
 }

@@ -729,6 +729,16 @@ final class DatabaseManager {
                 """)
             }
 
+            // Who a task was handed to, apart from who leads it: the lead
+            // agent can be changed while the hand-off's own agent works.
+            // None for Strix, which is no stored agent. (No task was
+            // handed over before this: nothing made a hand-off yet.)
+            migrator.registerMigration("v21_task_handoff_agent") { db in
+                try db.alter(table: "tasks") { t in
+                    t.add(column: "handoff_agent_id", .text)
+                }
+            }
+
             try migrator.migrate(queue)
             dbQueue = queue
         } catch {

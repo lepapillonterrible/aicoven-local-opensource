@@ -109,6 +109,10 @@ nonisolated struct TaskHandoff: Equatable {
     var outcome: TurnOutcome?
     /// Whether it is an agent's own run, which goes on without this app.
     var hasRun = false
+    /// The agent it was handed to; nil for Strix, which is no stored
+    /// agent. An agent deleted since is still named here, by an id that
+    /// is nobody's any more.
+    var agentID: String?
 }
 
 /// A task: something to do, in a coven or with Strix, as the cloud app's.
@@ -158,4 +162,7 @@ nonisolated struct TaskChange: Equatable {
     var leadAgentID: Setting<String>?
     /// The turn the task was handed to an agent in: a turn of its thread.
     var handoffTurnID: String?
+    /// The agent it was handed to in that turn, an agent of its coven;
+    /// nil for Strix. Read only with the turn.
+    var handoffAgentID: String?
 }
