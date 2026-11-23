@@ -133,16 +133,19 @@ struct TasksView: View {
     }
 
     /// Opens the task's thread, unless the person has left the page or
-    /// asked for another meanwhile.
+    /// asked for something else meanwhile: another thread, another task's
+    /// details, or anything of the shell (New Task, Search Threads), and
+    /// only while the account that asked is signed in.
     private func talkItThrough(_ task: TaskItem) {
         let request = UUID()
         pendingTalk = request
         let account = UserScope.currentUserID
+        let moves = navigator.personMoves
         Task {
-            if let thread = await model.talkItThrough(task, as: account), pendingTalk == request {
-                pendingTalk = nil
-                navigator.open(thread)
-            }
+            guard let thread = await model.talkItThrough(task, as: account), pendingTalk == request else { return }
+            pendingTalk = nil
+            guard navigator.isStill(at: moves), UserScope.currentUserID == account else { return }
+            navigator.open(thread)
         }
     }
 

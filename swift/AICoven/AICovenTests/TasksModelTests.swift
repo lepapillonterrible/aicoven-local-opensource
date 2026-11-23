@@ -80,12 +80,21 @@ final class TasksModelTests: XCTestCase {
         var heard: [String] = []
         // The threads' and the agents' side.
         var agents: [TasksModel.Agent]? = []
+        var agentsWait: Gate?
+        var agentReadings = 0
+        var strix = TasksModel.Agent.strix
+        /// The agent the place's latest hand-off went to, as the store says it.
+        var lastHandedTo: String?
         var threads: [String: AICoven.Thread] = [:]
         var threadFails: Error?
+        var threadWaits: Gate?
         var madeThreads: [(title: String, covenID: String?, agent: TasksModel.Agent?, account: String)] = []
         var started: [(threadID: String, text: String, agent: TasksModel.Agent?)] = []
         var startFails: Error?
         var startingWaits: Gate?
+        /// How a turn just started stands by the time the task is read again.
+        var startedAs = TurnOutcome.running
+        var handedBack: [(text: String, threadID: String)] = []
         var live: [String: TaskLiveTurn] = [:]
         var answered: [(ids: [String], keepUntil: Date?, account: String)] = []
         var answerFails: Error?
@@ -111,7 +120,9 @@ final class TasksModelTests: XCTestCase {
                         if let also, !listed.contains(where: { $0.id == also }), let named = finished.first(where: { $0.id == also }) {
                             listed.append(named)
                         }
-                        return .success(TaskListing(tasks: open + listed, finished: stand.finishedInAll ?? finished.count))
+                        return .success(TaskListing(
+                            tasks: open + listed, finished: stand.finishedInAll ?? finished.count, lastHandedTo: stand.lastHandedTo
+                        ))
                     }
                     await MainActor.run { stand.readingWaits }?.wait()
                     return try outcome.get()
@@ -153,8 +164,11 @@ final class TasksModelTests: XCTestCase {
                             case .cleared: changed.leadAgentID = nil
                             case nil: break
                             }
-                            // A turn just started is running, as the store would say.
-                            changed.handoff = change.handoffTurnID.map { TaskHandoff(turnID: $0, outcome: .running) } ?? kept.handoff
+                            // A turn just started stands as the store would say.
+                            changed.handoff = change.handoffTurnID.map {
+                                TaskHandoff(turnID: $0, outcome: stand.startedAs, agentID: change.handoffAgentID)
+                            } ?? kept.handoff
+                            if change.handoffTurnID != nil, let agent = change.handoffAgentID { stand.lastHandedTo = agent }
                             return changed
                         }
                     }
@@ -169,8 +183,14 @@ final class TasksModelTests: XCTestCase {
                 }
             ),
             hands: TasksModel.Hands(
-                agents: { _ in await MainActor.run { stand.agents } },
+                agents: { _ in
+                    await MainActor.run { stand.agentReadings += 1 }
+                    await MainActor.run { stand.agentsWait }?.wait()
+                    return await MainActor.run { stand.agents }
+                },
+                strix: { _ in stand.strix },
                 thread: { id, _ in
+                    await stand.threadWaits?.wait()
                     if let error = stand.threadFails { throw error }
                     guard let thread = stand.threads[id] else { throw RepositoryError.databaseUnavailable }
                     return thread
@@ -191,6 +211,7 @@ final class TasksModelTests: XCTestCase {
                     stand.started.append((thread.id, text, agent))
                     return "turn-\(stand.started.count)"
                 },
+                handBack: { text, threadID, _ in stand.handedBack.append((text, threadID)) },
                 liveTurn: { stand.live[$0] }
             ),
             signedIn: { stand.account }, announce: { stand.heard.append($0) }, now: { self.now }, calendar: { self.calendar }
@@ -883,9 +904,57 @@ final class TasksModelTests: XCTestCase {
         await tasks.loadAgents()
         XCTAssertEqual(tasks.agents, [.strix])
         XCTAssertFalse(tasks.agentsFailed)
+        // Strix says where it runs, like any agent.
+        stand.strix.runsOn = "Anthropic"
         let strixs = model(stand)
         await strixs.loadAgents()
-        XCTAssertEqual(strixs.agents, [.strix])
+        XCTAssertEqual(strixs.agents?.map(\.runsOn), ["Anthropic"])
+        XCTAssertEqual(strixs.agents?.first?.isStrix, true)
+        XCTAssertFalse(scout.isStrix)
+    }
+
+    func testTheAgentsAreReadOnceAtATime_soNoEarlierAnswerLandsOverALaterOne() async {
+        let stand = Stand()
+        stand.agents = nil
+        let tasks = model(stand, covenID: "work")
+        await tasks.loadAgents()
+        XCTAssertTrue(tasks.agentsFailed)
+
+        // Try Again pressed twice: the second press does nothing while the first is read.
+        let gate = Gate()
+        stand.agentsWait = gate
+        stand.agents = [scout]
+        let first = Task { await tasks.loadAgents() }
+        await gate.arrived(1)
+        await tasks.loadAgents()
+        XCTAssertEqual(stand.agentReadings, 2, "The failed reading, and one more")
+        await gate.letOneThrough()
+        await first.value
+        XCTAssertEqual(tasks.agents, [scout])
+        XCTAssertFalse(tasks.agentsFailed)
+
+        // Nothing read for an account that is no longer signed in is kept.
+        stand.agents = [scout, quill]
+        let anothers = Task { await tasks.loadAgents() }
+        await gate.arrived(2)
+        stand.account = "grace"
+        await gate.letOneThrough()
+        await anothers.value
+        XCTAssertEqual(tasks.agents, [scout])
+    }
+
+    func testWhoAnswersATurnStartedFromATask() {
+        let thread = AICoven.Thread(
+            id: "t", userId: "ada", covenId: "work", title: "Call the bank", agentId: "gone", agentName: "Gone",
+            createdAt: Date(timeIntervalSince1970: 0), updatedAt: nil, lastMessageAt: nil
+        )
+        // Nobody chosen (Talk it through): the thread's own agent.
+        XCTAssertEqual(TasksModel.Hands.answering(nil, in: thread).roleID, "gone")
+        XCTAssertEqual(TasksModel.Hands.answering(nil, in: thread).name, "Gone")
+        XCTAssertEqual(TasksModel.Hands.answering(quill, in: thread).roleID, "quill")
+        // Strix chosen is Strix, whoever the thread's own agent was.
+        XCTAssertNil(TasksModel.Hands.answering(.strix, in: thread).roleID)
+        XCTAssertEqual(TasksModel.Hands.answering(.strix, in: thread).name, "Strix")
     }
 
     func testTalkItThroughOpensTheTasksThread_madeForItOnce_andStartsWithTheTask() async {
@@ -930,7 +999,9 @@ final class TasksModelTests: XCTestCase {
         stand.startFails = RepositoryError.databaseUnavailable
         let opened = await tasks.talkItThrough(tasks.open[0], as: "ada")
         XCTAssertEqual(opened?.id, "thread-1")
-        XCTAssertEqual(tasks.errorMessage, "The thread opened without “Call the bank” in it. Tell the agent which task you mean.")
+        XCTAssertEqual(stand.handedBack.map(\.text), ["I'd like to talk this task through: Call the bank"], "To the thread's composer, which says why")
+        XCTAssertEqual(stand.handedBack.map(\.threadID), ["thread-1"])
+        XCTAssertNil(tasks.errorMessage, "Said in the thread, where the person is taken")
         XCTAssertEqual(tasks.task("a")?.threadID, "thread-1")
 
         // The task's change refused: no thread is opened for it.
@@ -941,6 +1012,42 @@ final class TasksModelTests: XCTestCase {
         let refused = await tasks.talkItThrough(tasks.open[0], as: "ada")
         XCTAssertNil(refused)
         XCTAssertEqual(tasks.errorMessage, TasksModel.couldNotOpenThread)
+    }
+
+    func testNoThreadIsOpenedForAnAccountThatIsNoLongerSignedIn() async {
+        let stand = Stand()
+        var has = task("a", "Call the bank")
+        has.threadID = "its-own"
+        stand.kept = [has, task("b", "Renew the lease")]
+        stand.threads["its-own"] = AICoven.Thread(
+            id: "its-own", userId: "ada", covenId: nil, title: "Call the bank", agentId: nil, agentName: nil,
+            createdAt: Date(timeIntervalSince1970: 0), updatedAt: nil, lastMessageAt: nil
+        )
+        let tasks = model(stand)
+        await tasks.load()
+
+        // The thread it has, read while another account signs in.
+        let gate = Gate()
+        stand.threadWaits = gate
+        let own = Task { await tasks.talkItThrough(has, as: "ada") }
+        await gate.arrived(1)
+        stand.account = "grace"
+        await gate.letOneThrough()
+        let none = await own.value
+        XCTAssertNil(none)
+        XCTAssertEqual(tasks.saving, [])
+
+        // A thread made for it, whose first message is sent while another account signs in.
+        stand.account = "ada"
+        stand.threadWaits = nil
+        stand.startingWaits = gate
+        let made = Task { await tasks.talkItThrough(tasks.open[1], as: "ada") }
+        await gate.arrived(2)
+        stand.account = "grace"
+        await gate.letOneThrough()
+        let alsoNone = await made.value
+        XCTAssertNil(alsoNone)
+        XCTAssertEqual(stand.heard, [])
     }
 
     func testDoItForMeHandsTheTaskToTheAgentChosen_andTheTaskFollowsTheTurn() async {
@@ -955,8 +1062,11 @@ final class TasksModelTests: XCTestCase {
         XCTAssertEqual(outcome, .started)
         XCTAssertEqual(
             stand.changed.map(\.change),
-            [TaskChange(leadAgentID: .to("quill")), TaskChange(threadID: "thread-1"), TaskChange(handoffTurnID: "turn-1")],
-            "Its lead agent, its thread, then the turn it was handed over in"
+            [
+                TaskChange(leadAgentID: .to("quill")), TaskChange(threadID: "thread-1"),
+                TaskChange(handoffTurnID: "turn-1", handoffAgentID: "quill"),
+            ],
+            "Its lead agent, its thread, then the turn it was handed over in and who to"
         )
         XCTAssertEqual(stand.madeThreads.first?.agent, quill, "A thread made for it starts with that agent")
         XCTAssertEqual(stand.started.first?.text, "Please do this for me: Call the bank")
@@ -976,14 +1086,19 @@ final class TasksModelTests: XCTestCase {
         stand.live = ["thread-1": TaskLiveTurn(turnID: "turn-1", needsOK: true)]
         tasks.turnsChanged()
         XCTAssertEqual(tasks.handoff(of: handed), .needsOK)
+        XCTAssertEqual(stand.heard.last, "Quill needs your OK on Call the bank", "Said on Tasks, where the person is")
+        let heard = stand.heard.count
+        tasks.turnsChanged()
+        XCTAssertEqual(stand.heard.count, heard, "Once")
         var ended = handed
-        ended.handoff = TaskHandoff(turnID: "turn-1", outcome: .completed)
+        ended.handoff?.outcome = .completed
         stand.kept = [ended]
         stand.live = [:]
         let readAgain = tasks.turnsChanged()
         XCTAssertNotNil(readAgain, "Its turn ended: the tasks are read again")
         await readAgain?.value
         XCTAssertEqual(tasks.handoff(of: tasks.open[0]), .finished, "As the turn stands in the store")
+        XCTAssertEqual(stand.heard.last, "Quill finished Call the bank")
         XCTAssertNil(tasks.turnsChanged(), "Nothing changed since")
 
         // A turn of another task's thread, or another turn in this one, is not followed.
@@ -995,6 +1110,126 @@ final class TasksModelTests: XCTestCase {
         XCTAssertEqual(stand.madeThreads.count, 1, "The thread it has")
         XCTAssertEqual(stand.started.last?.agent, scout)
         XCTAssertEqual(stand.started.last?.threadID, "thread-1")
+    }
+
+    func testAHandOffIsNamedByTheAgentItWentTo_whoeverLeadsTheTaskByNow() async {
+        let stand = Stand()
+        stand.agents = [scout, quill]
+        stand.kept = [task("a", "Call the bank")]
+        let tasks = model(stand, covenID: "work")
+        await tasks.load()
+        await tasks.loadAgents()
+        _ = await tasks.doItForMe(tasks.open[0], agent: scout, as: "ada")
+        stand.live = ["thread-1": TaskLiveTurn(turnID: "turn-1")]
+        tasks.turnsChanged()
+
+        // Quill is to lead it next time: Scout is still the one on it.
+        await tasks.changeLeadAgent(tasks.open[0], to: quill, as: "ada")
+        XCTAssertEqual(tasks.open[0].leadAgentID, "quill")
+        XCTAssertEqual(tasks.handoff(of: tasks.open[0]), .working)
+        XCTAssertEqual(tasks.agentName(for: tasks.open[0]), "Scout")
+        XCTAssertEqual(tasks.leadChoices(for: tasks.open[0])?.marked, quill)
+        XCTAssertEqual(tasks.leadChoices(for: task("other"))?.marked, scout, "Last used: the agent the latest hand-off went to")
+
+        // Scout is deleted while it works: the hand-off is nobody's by name, and not Strix's.
+        stand.agents = [quill]
+        await tasks.loadAgents()
+        XCTAssertNil(tasks.agentName(for: tasks.open[0]))
+        XCTAssertEqual(tasks.handoff(of: tasks.open[0])?.words(agent: tasks.agentName(for: tasks.open[0])), "An agent is on it")
+        // Its turn ended in failure: the task is the person's again, and says who leads it.
+        var failed = tasks.open[0]
+        failed.handoff?.outcome = .failed
+        stand.kept = [failed]
+        stand.live = [:]
+        await tasks.turnsChanged()?.value
+        XCTAssertNil(tasks.handoff(of: tasks.open[0]))
+        XCTAssertEqual(tasks.agentName(for: tasks.open[0]), "Quill")
+        XCTAssertEqual(tasks.errorMessage, "An agent stopped on a problem with “Call the bank”. Its thread shows what happened.")
+    }
+
+    func testLastUsedIsTheStoresAnswer_alsoWhereNoListedTaskWasHandedOver() async {
+        let stand = Stand()
+        stand.agents = [scout, quill]
+        stand.kept = [task("a", "Call the bank")]
+        // The task last handed over is finished and no longer listed.
+        stand.lastHandedTo = "quill"
+        let tasks = model(stand, covenID: "work")
+        await tasks.load()
+        await tasks.loadAgents()
+        XCTAssertEqual(tasks.leadChoices(for: tasks.open[0])?.marked, quill)
+        XCTAssertEqual(tasks.leadChoices(for: tasks.open[0])?.reason, .lastUsed)
+    }
+
+    func testATurnThatEndedWhileTheTasksWereReadIsReadAgainFor_once() async {
+        let stand = Stand()
+        stand.agents = [scout]
+        var handed = task("a", "Call the bank")
+        handed.threadID = "thread-1"
+        handed.handoff = TaskHandoff(turnID: "turn-1", outcome: .running, agentID: "scout")
+        stand.kept = [handed]
+        let tasks = model(stand, covenID: "work")
+        await tasks.loadAgents()
+
+        // The listing reads the turn as running; it ends before the listing lands,
+        // and nothing runs it by then: the page has no turn of it to see end.
+        let gate = Gate()
+        stand.readingWaits = gate
+        let reading = Task { await tasks.load() }
+        await gate.arrived(1)
+        var ended = handed
+        ended.handoff?.outcome = .completed
+        stand.kept = [ended]
+        await gate.letOneThrough()
+        await gate.arrived(2)
+        XCTAssertNil(tasks.handoff(of: tasks.open[0]), "As it was listed: running, and not run here")
+        await gate.letOneThrough()
+        await reading.value
+        XCTAssertEqual(tasks.handoff(of: tasks.open[0]), .finished, "Read again for")
+        XCTAssertEqual(stand.heard, ["Scout finished Call the bank"])
+
+        // A turn that stays recorded as running (its ending could not be stored) is read again for once, not over and over.
+        stand.readingWaits = nil
+        var stuck = task("b", "Renew the lease")
+        stuck.threadID = "thread-2"
+        stuck.handoff = TaskHandoff(turnID: "turn-2", outcome: .running, agentID: "scout")
+        stand.kept = [stuck]
+        let before = stand.readings.count
+        await tasks.load()
+        XCTAssertEqual(stand.readings.count, before + 2)
+        await tasks.load()
+        XCTAssertEqual(stand.readings.count, before + 3)
+        XCTAssertNil(tasks.turnsChanged())
+    }
+
+    func testATurnThatFailedBeforeItWasSeenAtWorkCouldNotStart_andIsSaidSoOnTheTask() async {
+        let stand = Stand()
+        stand.agents = [scout]
+        stand.kept = [task("a", "Call the bank")]
+        let tasks = model(stand, covenID: "work")
+        await tasks.load()
+        await tasks.loadAgents()
+
+        // With no connection to answer, the turn is started and fails at once.
+        stand.startedAs = .failed
+        let outcome = await tasks.doItForMe(tasks.open[0], agent: scout, as: "ada")
+        XCTAssertEqual(outcome, .started)
+        XCTAssertEqual(tasks.errorMessage, "Scout couldn't start on “Call the bank”. Its thread shows what's happening there.")
+        XCTAssertEqual(stand.heard.last, tasks.errorMessage)
+        XCTAssertFalse(stand.heard.contains("Scout is on Call the bank"))
+        XCTAssertNil(tasks.handoff(of: tasks.open[0]))
+        XCTAssertEqual(tasks.agentName(for: tasks.open[0]), "Scout", "Still led by it")
+        // Told once.
+        let heard = stand.heard.count
+        await tasks.load()
+        XCTAssertEqual(stand.heard.count, heard)
+
+        // One the person stopped is told of by nothing.
+        stand.kept = [task("b", "Renew the lease")]
+        await tasks.load()
+        stand.startedAs = .cancelled
+        _ = await tasks.doItForMe(tasks.open[0], agent: scout, as: "ada")
+        XCTAssertNil(tasks.errorMessage)
+        XCTAssertEqual(stand.heard.count, heard)
     }
 
     func testAHandOffThatDidNotStartKeepsTheLeadAgent_andSaysSo() async {
@@ -1009,6 +1244,7 @@ final class TasksModelTests: XCTestCase {
         let led = await tasks.doItForMe(tasks.open[0], agent: scout, as: "ada")
         XCTAssertEqual(led, .led)
         XCTAssertEqual(tasks.errorMessage, "Scout couldn't start on “Call the bank”. Its thread shows what's happening there.")
+        XCTAssertEqual(stand.handedBack.map(\.text), ["Please do this for me: Call the bank"], "Its thread shows it: the words wait in its composer")
         XCTAssertEqual(stand.heard.last, "Scout leads Call the bank")
         XCTAssertEqual(tasks.open[0].leadAgentID, "scout")
         XCTAssertNil(tasks.open[0].handoff)
@@ -1060,6 +1296,11 @@ final class TasksModelTests: XCTestCase {
         let outcome = await handing.value
         XCTAssertEqual(outcome, .started)
         XCTAssertEqual(stand.heard.last, "Strix is on Call the bank")
+        XCTAssertEqual(stand.started.last?.agent, .strix, "As Strix itself, not as whoever the thread's own agent is")
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(handoffTurnID: "turn-1"), "Handed to no stored agent")
+        XCTAssertNil(tasks.agentName(for: tasks.open[0]), "Recorded as running, and not run here: no hand-off to name")
+        stand.live = ["thread-1": TaskLiveTurn(turnID: "turn-1")]
+        tasks.turnsChanged()
         XCTAssertEqual(tasks.agentName(for: tasks.open[0]), "Strix")
         await tasks.changeLeadAgent(tasks.open[0], to: .strix, as: "ada")
         XCTAssertEqual(stand.changed.count, 2, "Strix is not named as a lead agent")
@@ -1118,5 +1359,21 @@ final class TasksModelTests: XCTestCase {
         navigator.requestSearch()
         XCTAssertEqual(navigator.place, .tasks(covenId: "work"), "Still on Tasks")
         XCTAssertFalse(navigator.newTaskAskStands, "The search has the cursor now")
+    }
+
+    func testAThreadBeingOpenedForATaskIsNotOpenedOverWhatThePersonAskedForSince() {
+        // Talk it through notes the person's moves as it is asked, and opens
+        // the thread only if there has been none since: New Task and Search
+        // Threads are moves, also where they leave Tasks open.
+        let navigator = ShellNavigator()
+        navigator.openPlace(.tasks)
+        var asked = navigator.personMoves
+        XCTAssertTrue(navigator.isStill(at: asked))
+        navigator.requestNewTask()
+        XCTAssertEqual(navigator.place, .tasks(covenId: nil), "Still on Tasks")
+        XCTAssertFalse(navigator.isStill(at: asked))
+        asked = navigator.personMoves
+        navigator.requestSearch()
+        XCTAssertFalse(navigator.isStill(at: asked))
     }
 }
