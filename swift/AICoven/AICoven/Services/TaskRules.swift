@@ -286,6 +286,23 @@ nonisolated enum TaskRules {
         )
     }
 
+    /// Whether an open task can be marked done where it stands with the
+    /// agent it was handed to: one no agent is on, or whose agent has
+    /// finished. While an agent works on it, is paused, or waits for an
+    /// OK, its thread is the way: neither the List nor the Board marks it
+    /// done over the agent's turn.
+    static func canBeMarkedDone(_ handoff: TaskHandoffState?) -> Bool {
+        handoff == nil || handoff == .finished
+    }
+
+    /// The columns of the Board a task can be moved to: the others, but
+    /// for Done while an agent is on it.
+    static func moveTargets(for task: TaskItem, handoff: TaskHandoffState?) -> [TaskBoardColumn] {
+        TaskBoardColumn.all.filter { column in
+            column != TaskBoardColumn.of(task) && (column != .done || canBeMarkedDone(handoff))
+        }
+    }
+
     /// The tasks of a column of the Board, ordered as the List orders a
     /// part: what is pinned for today first and for the week after it,
     /// then by the sort chosen.

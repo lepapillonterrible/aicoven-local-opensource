@@ -489,8 +489,11 @@ struct TasksView: View {
     private var board: some View {
         TaskBoard(
             open: model.open, finished: model.finished, finishedCount: model.finishedCount, sort: sort, now: now, showsDone: $showsDone,
+            scrollsToNewTask: scrollsToNewTask,
             onDrop: { taskID, column in
-                guard let task = model.task(taskID) else { return false }
+                // Not a card of this Board, or a column it cannot go to
+                // (Done, while an agent is on it): the drop is refused.
+                guard let task = model.task(taskID), model.canMove(task, to: column) else { return false }
                 move(task, to: column)
                 return true
             },
@@ -511,7 +514,7 @@ struct TasksView: View {
         let handoff = model.handoff(of: task)
         let pin = TaskRules.pinState(of: task, now: now)
         let column = TaskBoardColumn.of(task)
-        let others = TaskBoardColumn.all.filter { $0 != column }
+        let others = TaskRules.moveTargets(for: task, handoff: handoff)
         let actions = actions(for: task)
         return TaskCard(
             task: task,
@@ -1123,7 +1126,7 @@ private struct TaskRow: View {
         .disabled(isSaving)
         .contextMenu { menu(showsDoItForMe: true) }
         .swipeActions(edge: .leading, allowsFullSwipe: true) {
-            if !task.isFinished, handoff == nil || handoff == .finished {
+            if !task.isFinished, TaskRules.canBeMarkedDone(handoff) {
                 Button("Mark done") { onTick(true) }
                     .tint(.aicovenWater)
             }

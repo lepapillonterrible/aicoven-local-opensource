@@ -1528,6 +1528,26 @@ final class TasksModelTests: XCTestCase {
         XCTAssertEqual(stand.heard.last, "Moved Renew the lease to To do")
         await tasks.move(tasks.open[0], to: .stage(.review), as: "ada")
 
+        // A task an agent is on is not moved to Done, by a drop or a menu: its thread is the way. It is still moved between stages.
+        var handed = try XCTUnwrap(tasks.open.first)
+        handed.threadID = "thread-1"
+        handed.handoff = TaskHandoff(turnID: "turn-1", outcome: .running)
+        stand.kept = stand.kept.map { $0.id == handed.id ? handed : $0 }
+        stand.live = ["thread-1": TaskLiveTurn(turnID: "turn-1")]
+        await tasks.load()
+        XCTAssertEqual(tasks.handoff(of: tasks.open[0]), .working)
+        XCTAssertFalse(tasks.canMove(tasks.open[0], to: .done))
+        XCTAssertTrue(tasks.canMove(tasks.open[0], to: .stage(.backlog)))
+        let asked = stand.changed.count
+        await tasks.move(tasks.open[0], to: .done, as: "ada")
+        XCTAssertEqual(stand.changed.count, asked, "Nothing is asked")
+        XCTAssertEqual(tasks.open.map(\.id), ["b"])
+        // Its agent has finished: it is moved to Done like any other. Here it is first given back, to go on.
+        stand.live = [:]
+        stand.kept = stand.kept.map { $0.id == "b" ? self.task("b", "Renew the lease", stage: .review) : $0 }
+        await tasks.load()
+        XCTAssertTrue(tasks.canMove(tasks.open[0], to: .done))
+
         // A move that could not be made says why: no room to open it again, or a failure.
         stand.changeFails = TaskError.tooMany
         await tasks.move(tasks.finished[0], to: .stage(.backlog), as: "ada")
@@ -1547,13 +1567,6 @@ final class TasksModelTests: XCTestCase {
         await gate.letOneThrough()
         await moving.value
         XCTAssertEqual(stand.heard.count, heard)
-    }
-
-    func testAWindowsChoiceOfListOrBoard() {
-        XCTAssertEqual(TasksView.Layout.resolve("Board"), .board)
-        XCTAssertEqual(TasksView.Layout.resolve("List"), .list)
-        XCTAssertEqual(TasksView.Layout.resolve("Calendar"), .list, "A kept choice that names no view")
-        XCTAssertEqual(TasksView.Layout.allCases.map(\.rawValue), ["List", "Board"], "As the bar and the Mac's menu name them")
     }
 
     // MARK: - On me

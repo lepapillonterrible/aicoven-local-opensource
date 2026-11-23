@@ -15,8 +15,12 @@ struct TaskBoard<Card: View, NewTaskLine: View>: View {
     let sort: TaskSort
     let now: Date
     @Binding var showsDone: Bool
+    /// Counts the times the New task line is asked to be brought on
+    /// screen: New Task was asked for, and the Board can be scrolled away
+    /// from it, down or sideways.
+    let scrollsToNewTask: Int
     /// A card was dropped on a column, by its task's id. Answers whether
-    /// it was a task of this Board.
+    /// it was a task of this Board that can go there.
     let onDrop: (_ taskID: String, TaskBoardColumn) -> Bool
     @ViewBuilder let card: (TaskItem) -> Card
     @ViewBuilder let newTaskLine: () -> NewTaskLine
@@ -44,20 +48,29 @@ struct TaskBoard<Card: View, NewTaskLine: View>: View {
         Self.columnWidth(boardWidth: width, isMac: PlatformCapabilities.current.platform == .macOS, isPadLayout: isPadLayout)
     }
 
+    private static var newTaskLineID: String {
+        "board-new-task-line"
+    }
+
     var body: some View {
-        ScrollView(.vertical) {
-            ScrollView(.horizontal) {
-                HStack(alignment: .top, spacing: Self.gap) {
-                    ForEach(TaskBoardColumn.all) { column in
-                        self.column(column)
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                ScrollView(.horizontal) {
+                    HStack(alignment: .top, spacing: Self.gap) {
+                        ForEach(TaskBoardColumn.all) { column in
+                            self.column(column)
+                        }
                     }
+                    // As tall as its tallest column, which the open columns
+                    // then all are: a card is dropped anywhere in a short one.
+                    .fixedSize(horizontal: false, vertical: true)
                 }
-                // As tall as its tallest column, which the open columns
-                // then all are: a card is dropped anywhere in a short one.
-                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, TaskListMetrics.pageMargin(isPadLayout: isPadLayout))
+                .padding(.bottom, Spacing.lg)
             }
-            .padding(.horizontal, TaskListMetrics.pageMargin(isPadLayout: isPadLayout))
-            .padding(.bottom, Spacing.lg)
+            .onChange(of: scrollsToNewTask) {
+                proxy.scrollTo(Self.newTaskLineID, anchor: .topLeading)
+            }
         }
         .background(
             GeometryReader { proxy in
@@ -79,6 +92,7 @@ struct TaskBoard<Card: View, NewTaskLine: View>: View {
                 if column == .stage(.backlog) {
                     newTaskLine()
                         .padding(.horizontal, Spacing.xs)
+                        .id(Self.newTaskLineID)
                 }
                 ForEach(tasks) { task in
                     card(task)

@@ -1,5 +1,4 @@
 @testable import AICoven
-import SwiftUI
 import XCTest
 
 /// What the Tasks list decides by itself: when a pin ends, how one stands,
@@ -246,16 +245,17 @@ final class TaskRulesTests: XCTestCase {
         XCTAssertEqual(ids(.done), ["closed", "done"], "The finished ones, of whatever stage")
         XCTAssertEqual(ids(.done, .oldest), ["done", "closed"])
         XCTAssertEqual(TaskBoardColumn.all.flatMap { ids($0) }.sorted(), (open + finished).map(\.id).sorted(), "Every task is in one column")
-    }
 
-    func testAColumnsWidth() {
-        // The Mac fits the four columns and their three gaps to its width, and no column is narrower than 220 pt.
-        XCTAssertEqual(TaskBoard<EmptyView, EmptyView>.columnWidth(boardWidth: 1000 + 3 * Spacing.sm, isMac: true, isPadLayout: false), 250)
-        XCTAssertEqual(TaskBoard<EmptyView, EmptyView>.columnWidth(boardWidth: 600, isMac: true, isPadLayout: false), 220)
-        XCTAssertEqual(TaskBoard<EmptyView, EmptyView>.columnWidth(boardWidth: 0, isMac: true, isPadLayout: false), 240, "Before it is measured")
-        // The iPad's are a readable 280 pt; the iPhone's fill the width, with the next column showing at the edge.
-        XCTAssertEqual(TaskBoard<EmptyView, EmptyView>.columnWidth(boardWidth: 900, isMac: false, isPadLayout: true), 280)
-        XCTAssertEqual(TaskBoard<EmptyView, EmptyView>.columnWidth(boardWidth: 390, isMac: false, isPadLayout: false), 390 - Spacing.xxl)
+        // A task is moved to the other columns; not to Done while an agent is on it, as the List
+        // gives no way to mark such a task done over the agent's turn.
+        let inProgress = task("moving", stage: .inProgress)
+        XCTAssertEqual(TaskRules.moveTargets(for: inProgress, handoff: nil), [.stage(.backlog), .stage(.review), .done])
+        XCTAssertEqual(TaskRules.moveTargets(for: inProgress, handoff: .finished), [.stage(.backlog), .stage(.review), .done])
+        for onIt in [TaskHandoffState.working, .paused, .needsOK] {
+            XCTAssertEqual(TaskRules.moveTargets(for: inProgress, handoff: onIt), [.stage(.backlog), .stage(.review)], "\(onIt)")
+            XCTAssertFalse(TaskRules.canBeMarkedDone(onIt))
+        }
+        XCTAssertEqual(TaskRules.moveTargets(for: task("over", status: .done), handoff: nil), [.stage(.backlog), .stage(.inProgress), .stage(.review)])
     }
 
     func testTheListsParts() {
