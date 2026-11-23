@@ -615,6 +615,79 @@ final class DatabaseManager {
                 """)
             }
 
+            // v19: the account's tasks, each in a coven of the account's or
+            // with Strix (an empty coven id). A task's title is encrypted;
+            // what it is listed and ordered by is kept as it is. `revision`
+            // counts the writes of a task, so that a write that must be
+            // taken back is taken back only if nothing has written since.
+            migrator.registerMigration("v19_tasks") { db in
+                try db.create(table: "tasks") { t in
+                    t.column("id", .text).primaryKey()
+                    t.column("user_id", .text).notNull()
+                    t.column("coven_id", .text).notNull().defaults(to: "")
+                    t.column("title_ciphertext", .blob).notNull()
+                    t.column("status", .text).notNull()
+                    t.column("stage", .text).notNull()
+                    t.column("due_date", .text)
+                    t.column("due_time", .text)
+                    t.column("pin_period", .text)
+                    t.column("pin_expires_at", .datetime)
+                    t.column("revision", .integer).notNull().defaults(to: 0)
+                    t.column("created_at", .datetime).notNull()
+                    t.column("updated_at", .datetime).notNull()
+                }
+                // A place's tasks by when they were last changed, with what
+                // tells the open ones from the finished, for its listing.
+                try db.create(index: "tasks_user_coven_changed", on: "tasks", columns: ["user_id", "coven_id", "updated_at", "status"])
+                // A coven's tasks whoever's they are, for the trigger that
+                // keeps a coven from being made over another account's.
+                try db.create(index: "tasks_coven", on: "tasks", columns: ["coven_id"])
+                for (event, name) in [("INSERT", "insert"), ("UPDATE OF user_id, coven_id", "update")] {
+                    try db.execute(sql: """
+                    CREATE TRIGGER tasks_match_coven_user_\(name)
+                    BEFORE \(event) ON tasks
+                    WHEN length(trim(NEW.user_id)) = 0 OR (NEW.coven_id <> '' AND NOT EXISTS (
+                        SELECT 1 FROM covens
+                        WHERE covens.id = NEW.coven_id AND covens.user_id = NEW.user_id
+                    ))
+                    BEGIN
+                        SELECT RAISE(ABORT, 'tasks.coven_id must reference a coven owned by the same user');
+                    END;
+                    """)
+                }
+                try db.execute(sql: """
+                CREATE TRIGGER covens_take_their_tasks
+                AFTER DELETE ON covens
+                BEGIN
+                    DELETE FROM tasks WHERE user_id = OLD.user_id AND coven_id = OLD.id;
+                END;
+                """)
+                // A coven that holds tasks keeps its id and its account,
+                // whoever writes: its tasks are bound to both, and would
+                // otherwise be left in a coven of another account's, and
+                // behind when it is deleted.
+                try db.execute(sql: """
+                CREATE TRIGGER covens_with_tasks_keep_their_account
+                BEFORE UPDATE OF id, user_id ON covens
+                WHEN (NEW.id IS NOT OLD.id OR NEW.user_id IS NOT OLD.user_id)
+                    AND EXISTS (SELECT 1 FROM tasks WHERE tasks.coven_id = OLD.id AND tasks.user_id = OLD.user_id)
+                BEGIN
+                    SELECT RAISE(ABORT, 'a coven that holds tasks keeps its id and its account');
+                END;
+                """)
+                // Nor is a coven made, or put in another's place (a
+                // replacing insert takes the row out without the triggers
+                // above), under an id another account's tasks are kept under.
+                try db.execute(sql: """
+                CREATE TRIGGER covens_are_not_made_over_anothers_tasks
+                BEFORE INSERT ON covens
+                WHEN EXISTS (SELECT 1 FROM tasks WHERE tasks.coven_id = NEW.id AND tasks.user_id IS NOT NEW.user_id)
+                BEGIN
+                    SELECT RAISE(ABORT, 'a coven is not made under an id that holds another account''s tasks');
+                END;
+                """)
+            }
+
             try migrator.migrate(queue)
             dbQueue = queue
         } catch {

@@ -419,6 +419,12 @@ class AuthService: ObservableObject {
                     arguments: [userId]
                 )
 
+                // Delete user's tasks
+                try db.execute(
+                    sql: "DELETE FROM tasks WHERE user_id = ?",
+                    arguments: [userId]
+                )
+
                 // Delete user's roles (cascade from covens may handle some)
                 try db.execute(
                     sql: "DELETE FROM roles WHERE user_id = ?",
