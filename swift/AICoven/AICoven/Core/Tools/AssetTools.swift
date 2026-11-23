@@ -71,10 +71,13 @@ nonisolated enum AssetTools {
         )
     }
 
-    /// Runs one of the reading tools for a turn in `threadID`.
-    static func read(_ call: ParsedToolCall, threadID: String?, store: Store = .live) async -> ToolExecutionResult {
-        guard let threadID else {
-            return .error(tool: call.name, message: "Assets are read only in a thread.", errorType: "asset_needs_a_thread")
+    /// Runs one of the reading tools for a turn in `threadID`. `turn` is
+    /// the turn's own: only a turn that was offered the asset tools has
+    /// one, so a call from any other turn reads nothing, whatever tools
+    /// some other turn has just been allowed.
+    static func read(_ call: ParsedToolCall, threadID: String?, turn: TurnAssets?, store: Store = .live) async -> ToolExecutionResult {
+        guard let threadID, turn != nil else {
+            return .error(tool: call.name, message: "Assets are read only in a turn of a thread.", errorType: "asset_needs_a_thread")
         }
         // A turn can outlive the account it was started as: the assets
         // are read as whoever is signed in now, of a thread that is theirs.
@@ -113,7 +116,8 @@ nonisolated enum AssetTools {
 
     /// Runs one of the writing tools for a turn in `threadID`. `turn` is
     /// the turn's own count of what it makes and changes, and says who its
-    /// agent is; without one nothing is made (the tools are a turn's).
+    /// agent is; only a turn that was offered the asset tools has one, so
+    /// without it nothing is made.
     static func write(_ call: ParsedToolCall, threadID: String?, turn: TurnAssets?, store: Store = .live) async -> ToolExecutionResult {
         let result = await written(call, threadID: threadID, turn: turn, store: store)
         if result.status == "ok" {
@@ -151,7 +155,7 @@ nonisolated enum AssetTools {
             guard let asset = assets.first(where: { $0.id == id }) else {
                 return .error(tool: call.name, message: "There is no asset with that id here. Find its id with asset.search.", errorType: "asset_not_found")
             }
-            guard turn.takeAChange() else {
+            guard turn.hasChangesLeft else {
                 return .error(
                     tool: call.name, message: "This turn has changed assets \(TurnAssets.mostChanges) times, which is as many as a turn may.",
                     errorType: "asset_turn_limit"
@@ -165,6 +169,7 @@ nonisolated enum AssetTools {
                     return .validationError(tool: call.name, message: "Give a 'title', a 'description', or both.", field: "title")
                 }
                 try await store.update(asset.id, title, details, account)
+                turn.changed()
                 return .success(tool: call.name, result: ["asset_id": .string(asset.id)], contextBlock: "[Asset updated] asset_id: \(asset.id).")
             case "asset.attach_file":
                 switch file(from: call) {
@@ -174,6 +179,7 @@ nonisolated enum AssetTools {
                     return .validationError(tool: call.name, message: "Missing required arguments: 'file_name' and 'content'", field: "file_name")
                 case let .success(file?):
                     let added = try await store.addFile(file, asset.id, account)
+                    turn.changed()
                     return .success(
                         tool: call.name, result: ["asset_id": .string(asset.id)],
                         contextBlock: "[File attached] asset_id: \(asset.id); file: \(AttachmentContext.plainName(added.name))."
@@ -181,6 +187,7 @@ nonisolated enum AssetTools {
                 }
             case "asset.propose":
                 try await store.propose(asset.id, account)
+                turn.changed()
                 return .success(
                     tool: call.name, result: ["asset_id": .string(asset.id)],
                     contextBlock: "[Asset proposed] asset_id: \(asset.id). It waits for the person's review in Assets. Only they approve it."

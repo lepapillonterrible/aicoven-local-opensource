@@ -226,6 +226,14 @@ actor ChatService {
         self.signedIn = signedIn
     }
 
+    /// Whether a turn answered through `provider` is offered the asset
+    /// tools: a model's turn is, but not one that goes to the person's own
+    /// OpenClaw (with a Gateway it is an agent's run; without one it is
+    /// still their own server, which is offered none).
+    nonisolated static func usesAssets(provider: String) -> Bool {
+        provider.lowercased() != "openclaw"
+    }
+
     /// What a turn that was cut off this way says in its thread.
     static let accountChangedMessage = "Another account signed in before this reply was finished, so it was stopped."
 
@@ -477,14 +485,19 @@ actor ChatService {
         let connections = await covenConnections(threadId)
         let toolConfig: ContextBuilder.ToolConfig = isLocalModel
             ? await .mlxTools(connections: connections)
-            : await .connected(deliversFiles: true, seesPictures: descriptor.takesImages, usesAssets: true, connections: connections)
+            : await .connected(
+                deliversFiles: true, seesPictures: descriptor.takesImages, usesAssets: Self.usesAssets(provider: descriptor.providerID),
+                connections: connections
+            )
         await ToolExecutionService.shared.setWhitelist(for: "chat", tools: toolConfig.enabledTools)
         // The pictures this turn's tools make for its model, where the
         // model can be sent pictures: they go with its later requests.
         let turnPictures: TurnPictures? = descriptor.takesImages ? TurnPictures() : nil
         // What this turn makes and changes of assets: for the agent it is
-        // for, and only so much.
-        let turnAssets = TurnAssets(agentID: roleId)
+        // for, and only so much. Only a turn that is offered the asset
+        // tools has one: without it they read and make nothing, whatever
+        // tools another turn running now is allowed.
+        let turnAssets: TurnAssets? = toolConfig.enabledTools.isDisjoint(with: AssetTools.all) ? nil : TurnAssets(agentID: roleId)
 
         // ── Context-aware repeat detection (ported from backend) ──────────
         // Tracks tool-call signatures across loop iterations so we can

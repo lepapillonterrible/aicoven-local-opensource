@@ -77,7 +77,7 @@ actor AssetRepository {
 
     /// Where a test may step in: nothing in the app does.
     enum Step {
-        /// A status change was asked for, before it waits its turn.
+        /// A change to a stored asset was asked for, before it waits its turn.
         case asked
         /// Just before a write, after everything it writes was looked at
         /// and sealed.
@@ -270,9 +270,32 @@ actor AssetRepository {
         guard status == AssetStatus.draft.rawValue else { throw AssetError.notAllowed }
     }
 
+    /// One change to a stored asset at a time (a draft changed, a file
+    /// added, a status moved): each waits for the one before it to be
+    /// written and, if it must be, put back. Two that overlapped while the
+    /// data was being locked could otherwise put back each other's
+    /// rejected write in place of how the asset stood.
+    private func inTurn<Done: Sendable>(_ change: @escaping @Sendable () async throws -> Done) async throws -> Done {
+        let before = lastChange
+        let changing = Task { () throws -> Done in
+            await self.at?(.asked)
+            await before?.value
+            return try await change()
+        }
+        lastChange = Task { _ = try? await changing.value }
+        return try await changing.value
+    }
+
+    /// The change last asked for, done or not.
+    private var lastChange: Task<Void, Never>?
+
     /// Changes a draft's title, or what says what it is, or both (nil
     /// leaves one as it is). Only a draft is changed.
     func update(_ id: String, title newTitle: String? = nil, details newDetails: String? = nil, as account: String) async throws {
+        try await inTurn { try await self.updateInTurn(id, title: newTitle, details: newDetails, as: account) }
+    }
+
+    private func updateInTurn(_ id: String, title newTitle: String?, details newDetails: String?, as account: String) async throws {
         let epoch = await DataEncryptionService.shared.keyEpoch
         try await AccountSeal.requireKey(of: account, since: epoch)
         let title = newTitle.map(Self.keptTitle)
@@ -325,6 +348,10 @@ actor AssetRepository {
     /// changed, and an asset has only so many files (counted in the write).
     @discardableResult
     func addFile(_ file: NewFile, to id: String, as account: String) async throws -> AssetFile {
+        try await inTurn { try await self.addFileInTurn(file, to: id, as: account) }
+    }
+
+    private func addFileInTurn(_ file: NewFile, to id: String, as account: String) async throws -> AssetFile {
         let epoch = await DataEncryptionService.shared.keyEpoch
         try await AccountSeal.requireKey(of: account, since: epoch)
         let name = AssetFile.keptName(file.name)
@@ -449,6 +476,11 @@ actor AssetRepository {
                     AssetFile(id: stored.id, name: file.name, mimeType: AttachmentImage.mimeType(forFileNamed: file.name), sizeBytes: file.size),
                 ]
             }
+            // What is stored of each asset's files, grouped once, in order.
+            var sealedFiles: [String: [(id: String, meta: Data)]] = [:]
+            for file in storedFiles {
+                sealedFiles[file.assetID, default: []].append((file.id, file.meta))
+            }
             var assets: [Asset] = []
             for stored in stored {
                 let title = await self.opened(stored.title, purpose: Self.titlePurpose)
@@ -464,10 +496,7 @@ actor AssetRepository {
                     details: isReadable ? String(decoding: details ?? Data(), as: UTF8.self) : "",
                     madeByAgentID: stored.agentID, threadID: stored.threadID, sourceMessageID: stored.messageID,
                     files: isReadable ? files ?? [] : [], isUnreadable: !isReadable,
-                    version: Self.version(
-                        title: stored.title, details: stored.details,
-                        files: storedFiles.filter { $0.assetID == stored.id }.map { ($0.id, $0.meta) }
-                    ),
+                    version: Self.version(title: stored.title, details: stored.details, files: sealedFiles[stored.id] ?? []),
                     createdAt: stored.createdAt, updatedAt: stored.updatedAt
                 ))
             }
@@ -517,24 +546,11 @@ actor AssetRepository {
     /// asset is approved only as it was listed (`version`, the listed
     /// asset's): one whose title, text or files were changed since is not
     /// approved unseen (`AssetError.changed`).
-    /// One status change at a time: each waits for the one before it to be
-    /// written and, if it must be, put back. Two that overlapped while the
-    /// data was being locked could otherwise put back each other's
-    /// rejected write in place of how the asset stood.
+    /// It takes its turn among the changes to stored assets (`inTurn`).
     @discardableResult
     func move(_ id: String, to next: AssetStatus, listedAs version: String? = nil, as account: String) async throws -> Date {
-        let before = lastMove
-        let moving = Task { () throws -> Date in
-            await self.at?(.asked)
-            await before?.value
-            return try await self.moveInTurn(id, to: next, listedAs: version, as: account)
-        }
-        lastMove = Task { _ = try? await moving.value }
-        return try await moving.value
+        try await inTurn { try await self.moveInTurn(id, to: next, listedAs: version, as: account) }
     }
-
-    /// The status change last asked for, done or not.
-    private var lastMove: Task<Void, Never>?
 
     private func moveInTurn(_ id: String, to next: AssetStatus, listedAs version: String?, as account: String) async throws -> Date {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }

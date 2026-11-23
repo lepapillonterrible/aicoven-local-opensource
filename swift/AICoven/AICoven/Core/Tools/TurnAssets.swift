@@ -50,12 +50,13 @@ final nonisolated class TurnAssets: @unchecked Sendable {
         }
     }
 
-    /// Takes one of the turn's changes; false if it has none left.
-    func takeAChange() -> Bool {
-        lock.withLock {
-            guard changes < Self.mostChanges else { return false }
-            changes += 1
-            return true
-        }
+    /// Whether the turn may still change an asset.
+    var hasChangesLeft: Bool {
+        lock.withLock { changes < Self.mostChanges }
+    }
+
+    /// The turn changed an asset: counted once it was done.
+    func changed() {
+        lock.withLock { changes += 1 }
     }
 }

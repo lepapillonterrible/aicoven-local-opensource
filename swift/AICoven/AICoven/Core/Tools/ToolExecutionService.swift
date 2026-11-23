@@ -410,7 +410,7 @@ actor ToolExecutionService {
 
         // --- Assets ---
         case _ where AssetTools.reading.contains(toolCall.name):
-            return await AssetTools.read(toolCall, threadID: threadID)
+            return await AssetTools.read(toolCall, threadID: threadID, turn: assets)
 
         case _ where AssetTools.writing.contains(toolCall.name):
             return await AssetTools.write(toolCall, threadID: threadID, turn: assets)

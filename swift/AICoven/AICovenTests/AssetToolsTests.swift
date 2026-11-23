@@ -134,7 +134,7 @@ final class AssetToolsTests: XCTestCase {
     }
 
     private func run(_ call: ParsedToolCall, in threadID: String? = "t-work", _ stand: Stand) async -> ToolExecutionResult {
-        await AssetTools.read(call, threadID: threadID, store: store(stand))
+        await AssetTools.read(call, threadID: threadID, turn: TurnAssets(agentID: "scout"), store: store(stand))
     }
 
     // MARK: - asset.search
@@ -306,6 +306,15 @@ final class AssetToolsTests: XCTestCase {
         XCTAssertEqual(stand.created.count, TurnAssets.mostMade)
         XCTAssertEqual(turn.made.count, TurnAssets.mostMade)
 
+        // What changed nothing is not counted: a call that says nothing, and one the store refuses.
+        for _ in 0 ..< TurnAssets.mostChanges + 5 {
+            let said = await write(call("asset.update", ["asset_id": "made-1"]), turn: turn, stand)
+            XCTAssertEqual(said.field, "title")
+            stand.writeFails = AssetError.needsAFile
+            let refused = await write(call("asset.propose", ["asset_id": "made-1"]), turn: turn, stand)
+            XCTAssertEqual(refused.errorType, "asset_needs_a_file")
+            stand.writeFails = nil
+        }
         for _ in 0 ..< TurnAssets.mostChanges {
             let changed = await write(call("asset.update", ["asset_id": "made-1", "title": "Again"]), turn: turn, stand)
             XCTAssertEqual(changed.status, "ok")
@@ -470,6 +479,11 @@ final class AssetToolsTests: XCTestCase {
 
         var result = await run(call("asset.search"), in: nil, stand)
         XCTAssertEqual(result.errorType, "asset_needs_a_thread")
+        // The tools are a turn's own: a call that is no such turn's reads nothing.
+        result = await AssetTools.read(call("asset.search"), threadID: "t-strix", turn: nil, store: store(stand))
+        XCTAssertEqual(result.errorType, "asset_needs_a_thread")
+        XCTAssertNil(result.contextBlock)
+        XCTAssertEqual(stand.asked.count, 0)
         result = await run(call("asset.search"), in: "someone-elses-thread", stand)
         XCTAssertEqual(result.errorType, "asset_thread_unreadable")
         XCTAssertFalse(result.isRetryable, "Asking again would not help")
@@ -637,7 +651,9 @@ final class AssetToolsTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(asked.count, 2, "Asked again once the asset was read")
         let second = asked[1]
         // Exactly what the tool returned, all of it.
-        let returned = await AssetTools.read(ParsedToolCall(name: "asset.get", args: ["asset_id": .string(made.id)]), threadID: thread.id).contextBlock
+        let returned = await AssetTools.read(
+            ParsedToolCall(name: "asset.get", args: ["asset_id": .string(made.id)]), threadID: thread.id, turn: TurnAssets(agentID: nil)
+        ).contextBlock
         XCTAssertTrue(try second.contains(XCTUnwrap(returned)), "The request holds the tool's whole result")
         XCTAssertTrue(second.contains(AssetTools.dataNote), "The note that what follows is content is still there")
         XCTAssertTrue(second.contains("title: Launch brief"))
@@ -733,6 +749,14 @@ final class AssetToolsTests: XCTestCase {
         let withNothingOn = await ContextBuilder.ToolConfig.connected(usesAssets: true, connections: CovenConnections())
         XCTAssertTrue(withNothingOn.enabledTools.isSuperset(of: AssetTools.all))
         XCTAssertEqual(AssetTools.writing, ["asset.create", "asset.update", "asset.propose", "asset.attach_file"], "Named as the cloud app names them")
+        // Not to a model on this device, nor to the person's own OpenClaw, with a Gateway or without.
+        let forALocalModel = await ContextBuilder.ToolConfig.mlxTools()
+        XCTAssertTrue(forALocalModel.enabledTools.isDisjoint(with: AssetTools.all))
+        XCTAssertFalse(ChatService.usesAssets(provider: "openclaw"))
+        XCTAssertFalse(ChatService.usesAssets(provider: "OpenClaw"))
+        for provider in ["openai", "anthropic", "google", "openrouter"] {
+            XCTAssertTrue(ChatService.usesAssets(provider: provider), provider)
+        }
         // No tool of an agent's approves, archives or takes an asset out again.
         XCTAssertTrue(AssetTools.all.allSatisfy { !$0.contains("approve") && !$0.contains("archive") })
 
