@@ -61,6 +61,7 @@ final class AssetToolsTests: XCTestCase {
         /// The hand-offs asked for; an asset that has a brief already is given that one.
         var handoffs: [(assetID: String, agentID: String, threadID: String, account: String)] = []
         var briefs: [String: Asset] = [:]
+        var afterWriting: (@MainActor () -> Void)?
     }
 
     private func store(_ stand: Stand) -> AssetTools.Store {
@@ -115,6 +116,7 @@ final class AssetToolsTests: XCTestCase {
                         createdAt: Date(), updatedAt: Date()
                     )
                     stand.assets[covenID ?? "", default: []].append(made)
+                    stand.afterWriting?()
                     return made
                 }
             },
@@ -154,6 +156,11 @@ final class AssetToolsTests: XCTestCase {
                         madeByAgentID: agentID, threadID: threadID, sourceMessageID: nil, parentID: id, files: [], createdAt: Date(), updatedAt: Date()
                     )
                     stand.briefs[id] = brief
+                    // Related to the asset from then on, as the store relates them.
+                    stand.relations[id, default: []].append(AssetRelation(
+                        id: "h-\(id)", fromAssetID: brief.id, toAssetID: id, kind: AssetRelation.handoffFor, relatedID: brief.id, relatedTitle: "Handoff"
+                    ))
+                    stand.afterWriting?()
                     return (brief, true)
                 }
             }
@@ -882,11 +889,13 @@ final class AssetToolsTests: XCTestCase {
         XCTAssertTrue(result.contextBlock?.contains("[Asset handoff] brief asset_id: brief-of-logo; source asset_id: logo; status: draft.") == true)
         XCTAssertEqual(turn.made, ["brief-of-logo"], "The turn made it: its reply shows its card")
 
-        // Asked again: the brief it has, which is no making of this turn's.
+        // Asked again: the brief it has, which is no making of this turn's, and nothing is written.
         result = await write(call("asset.create_handoff", ["asset_id": "logo"]), turn: turn, stand)
         XCTAssertEqual(result.result?["is_new"]?.value as? Bool, false)
+        XCTAssertEqual(result.result?["asset_id"]?.value as? String, "brief-of-logo")
         XCTAssertTrue(result.contextBlock?.contains("The asset had this brief already") == true)
         XCTAssertEqual(turn.made, ["brief-of-logo"])
+        XCTAssertEqual(stand.handoffs.count, 1)
 
         // Not for another place's asset, one that cannot be opened, or none.
         for (args, error) in [(["asset_id": "mine"], "asset_not_found"), (["asset_id": "locked"], "asset_locked"), (["asset_id": "nope"], "asset_not_found")] {
@@ -895,10 +904,11 @@ final class AssetToolsTests: XCTestCase {
         }
         result = await write(call("asset.create_handoff"), turn: turn, stand)
         XCTAssertEqual(result.field, "asset_id")
-        XCTAssertEqual(stand.handoffs.count, 2)
+        XCTAssertEqual(stand.handoffs.count, 1)
 
         // What the store refuses is told in words, and the making is the turn's again.
         stand.briefs = [:]
+        stand.relations = [:]
         stand.writeFails = AssetError.needsReview
         for _ in 1 ... TurnAssets.mostMade + 2 {
             result = await write(call("asset.create_handoff", ["asset_id": "logo"]), turn: turn, stand)
@@ -913,6 +923,32 @@ final class AssetToolsTests: XCTestCase {
         }
         XCTAssertEqual(result.errorType, "asset_turn_limit")
         XCTAssertEqual(other.made.count, TurnAssets.mostMade)
+        // A turn that has made all it may is still given the brief an asset has.
+        result = await write(call("asset.create_handoff", ["asset_id": "a1"]), turn: other, stand)
+        XCTAssertEqual(result.result?["is_new"]?.value as? Bool, false)
+        XCTAssertEqual(result.result?["asset_id"]?.value as? String, "brief-of-a1")
+        // One made by something else between the look and the making is the answer, and takes none of the turn's makings.
+        let third = TurnAssets(agentID: "scout")
+        stand.assets["work"] = [asset("late", "Late", status: .approved)]
+        for _ in 1 ... TurnAssets.mostMade + 2 {
+            stand.briefs["late"] = asset("brief-of-late", "Handoff", type: .implementationBrief)
+            stand.relations["late"] = nil
+            result = await write(call("asset.create_handoff", ["asset_id": "late"]), turn: third, stand)
+            XCTAssertEqual(result.result?["is_new"]?.value as? Bool, false)
+        }
+        XCTAssertEqual(third.made, [])
+        // Nothing is returned once another account has signed in while it was made.
+        stand.assets["work"] = [asset("fresh", "Fresh", status: .approved)]
+        stand.afterWriting = { stand.account = "grace" }
+        result = await write(call("asset.create_handoff", ["asset_id": "fresh"]), turn: TurnAssets(agentID: "scout"), stand)
+        XCTAssertEqual(result.errorType, "asset_account_changed")
+        XCTAssertNil(result.contextBlock)
+        stand.account = "ada"
+        result = await write(call("asset.create", ["type": "chart", "title": "Made as Ada"]), turn: TurnAssets(agentID: "scout"), stand)
+        XCTAssertEqual(result.errorType, "asset_account_changed", "Nor of an asset made")
+        XCTAssertNil(result.contextBlock)
+        stand.account = "ada"
+        stand.afterWriting = nil
         // Without a turn's own count nothing is made.
         result = await write(call("asset.create_handoff", ["asset_id": "a1"]), turn: nil, stand)
         XCTAssertEqual(result.errorType, "asset_needs_a_thread")

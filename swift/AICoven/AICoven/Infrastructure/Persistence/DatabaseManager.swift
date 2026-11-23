@@ -756,12 +756,13 @@ final class DatabaseManager {
             // the one relation this app writes is a hand-off brief's to
             // the asset it hands over, of which an asset has one. Both are
             // only between assets of one account in one place, whoever
-            // writes; a relation is written once and goes with either of
-            // its assets.
+            // writes (an asset that has either keeps its place); a
+            // relation is written once and goes with either of its assets.
             migrator.registerMigration("v23_asset_lineage") { db in
                 try db.alter(table: "assets") { t in
                     t.add(column: "parent_asset_id", .text).references("assets", onDelete: .setNull)
                 }
+                try db.create(index: "assets_parent", on: "assets", columns: ["parent_asset_id"])
                 try db.create(table: "asset_relations") { t in
                     t.column("id", .text).primaryKey()
                     t.column("user_id", .text).notNull()
@@ -798,6 +799,20 @@ final class DatabaseManager {
                 )
                 BEGIN
                     SELECT RAISE(ABORT, 'asset_relations must relate two assets of the same user in the same place');
+                END;
+                """)
+                // An asset that others were made from, or that is related
+                // to another, keeps its account and its place: moved, it
+                // would leave them across places.
+                try db.execute(sql: """
+                CREATE TRIGGER assets_keep_their_place_when_related
+                BEFORE UPDATE OF user_id, coven_id ON assets
+                WHEN (NEW.user_id <> OLD.user_id OR NEW.coven_id <> OLD.coven_id) AND (
+                    EXISTS (SELECT 1 FROM assets AS child WHERE child.parent_asset_id = OLD.id)
+                    OR EXISTS (SELECT 1 FROM asset_relations WHERE source_asset_id = OLD.id OR target_asset_id = OLD.id)
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'an asset others were made from or are related to keeps its place');
                 END;
                 """)
                 try db.execute(sql: """

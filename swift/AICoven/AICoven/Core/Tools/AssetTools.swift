@@ -271,6 +271,9 @@ nonisolated enum AssetTools {
             throw error
         }
         turn.made(asset.id)
+        // Made as the account that asked: nothing of it is returned to a
+        // turn whose account is no longer the one signed in.
+        guard await store.account() == account else { return accountChanged(call) }
         var lines = ["[Asset created] asset_id: \(asset.id); type: \(asset.type.rawValue); status: draft."]
         if let file = asset.files.first { lines[0] += " File: \(AttachmentContext.plainName(file.name))." }
         if let parent = asset.parentID { lines[0] += " Made from asset_id: \(parent)." }
@@ -290,6 +293,13 @@ nonisolated enum AssetTools {
     private static func handoff(
         _ call: ParsedToolCall, of asset: Asset, threadID: String, turn: TurnAssets, account: String, store: Store
     ) async throws -> ToolExecutionResult {
+        // The brief it has is its answer, whatever the turn has made: it
+        // takes none of the turn's makings.
+        let has = try await store.relations(asset.id, account).first { $0.kind == AssetRelation.handoffFor && $0.toAssetID == asset.id }
+        guard await store.account() == account else { return accountChanged(call) }
+        if let has {
+            return handedOver(call, briefID: has.fromAssetID, of: asset, isNew: false, status: nil)
+        }
         guard turn.takeAMaking() else {
             return .error(
                 tool: call.name, message: "This turn has made \(TurnAssets.mostMade) assets, which is as many as a turn may.", errorType: "asset_turn_limit"
@@ -304,15 +314,20 @@ nonisolated enum AssetTools {
         }
         // One that was there already is no making of this turn's.
         turn.made(made.isNew ? made.brief.id : nil)
+        guard await store.account() == account else { return accountChanged(call) }
+        return handedOver(call, briefID: made.brief.id, of: asset, isNew: made.isNew, status: made.brief.status)
+    }
+
+    private static func handedOver(_ call: ParsedToolCall, briefID: String, of asset: Asset, isNew: Bool, status: AssetStatus?) -> ToolExecutionResult {
+        var first = "[Asset handoff] brief asset_id: \(briefID); source asset_id: \(asset.id)"
+        if let status { first += "; status: \(status.rawValue)" }
         let lines = [
-            "[Asset handoff] brief asset_id: \(made.brief.id); source asset_id: \(asset.id); status: \(made.brief.status.rawValue).",
-            made.isNew
+            first + ".",
+            isNew
                 ? "The brief is a new draft made from the asset. Write what is to be done into it: asset.update for its description, asset.attach_file for its text."
                 : "The asset had this brief already: read it with asset.get.",
         ]
-        return .success(
-            tool: call.name, result: ["asset_id": .string(made.brief.id), "is_new": .bool(made.isNew)], contextBlock: lines.joined(separator: "\n")
-        )
+        return .success(tool: call.name, result: ["asset_id": .string(briefID), "is_new": .bool(isNew)], contextBlock: lines.joined(separator: "\n"))
     }
 
     /// Why a file given by a call is not taken.

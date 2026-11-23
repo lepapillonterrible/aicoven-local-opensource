@@ -176,7 +176,8 @@ actor AssetRepository {
     /// of it since. Only an asset that is proposed or approved is handed
     /// over (`AssetError.needsReview`), decided in the write against the
     /// asset as it is then; one the key cannot open is not
-    /// (`AssetError.unreadable`).
+    /// (`AssetError.unreadable`). The brief an asset has is its answer
+    /// also where its place has no room for another asset.
     func handoffBrief(
         of sourceID: String, madeBy agentID: String? = nil, inThread threadID: String? = nil, as account: String
     ) async throws -> (brief: Asset, isNew: Bool) {
@@ -262,6 +263,23 @@ actor AssetRepository {
         let toWrite = sealedFiles
         await at?(.beforeWriting)
         try await dbQueue.write { db in
+            if let sourceID {
+                // Decided here, against the asset as it is now, and before
+                // anything a new asset must pass: the brief an asset has
+                // is its answer also where the place has no room for
+                // another asset. Only what is proposed or approved is
+                // handed over.
+                let status = try String.fetchOne(
+                    db, sql: "SELECT status FROM assets WHERE id = ? AND user_id = ? AND coven_id = ?", arguments: [sourceID, account, coven]
+                )
+                guard let status else { throw AssetError.noSuchAsset }
+                let briefID = try String.fetchOne(
+                    db, sql: "SELECT source_asset_id FROM asset_relations WHERE user_id = ? AND target_asset_id = ? AND relation_type = ?",
+                    arguments: [account, sourceID, AssetRelation.handoffFor]
+                )
+                if let briefID { throw HasABrief(briefID: briefID) }
+                guard [AssetStatus.proposed.rawValue, AssetStatus.approved.rawValue].contains(status) else { throw AssetError.needsReview }
+            }
             // Counted in the write that adds it.
             let count = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM assets WHERE user_id = ? AND coven_id = ?", arguments: [account, coven]) ?? 0
             guard count < Self.most else { throw AssetError.tooMany }
@@ -288,21 +306,6 @@ actor AssetRepository {
                     db, sql: "SELECT coven_id FROM assets WHERE id = ? AND user_id = ?", arguments: [parentID, account]
                 )
                 guard parentsCoven == coven else { throw AssetError.noSuchParent }
-            }
-            if let sourceID {
-                // Decided here, against the asset as it is now: only what
-                // is proposed or approved is handed over, and an asset
-                // has one brief.
-                let status = try String.fetchOne(
-                    db, sql: "SELECT status FROM assets WHERE id = ? AND user_id = ? AND coven_id = ?", arguments: [sourceID, account, coven]
-                )
-                guard let status else { throw AssetError.noSuchAsset }
-                guard [AssetStatus.proposed.rawValue, AssetStatus.approved.rawValue].contains(status) else { throw AssetError.needsReview }
-                let briefID = try String.fetchOne(
-                    db, sql: "SELECT source_asset_id FROM asset_relations WHERE user_id = ? AND target_asset_id = ? AND relation_type = ?",
-                    arguments: [account, sourceID, AssetRelation.handoffFor]
-                )
-                if let briefID { throw HasABrief(briefID: briefID) }
             }
             try db.execute(
                 sql: """
@@ -636,36 +639,38 @@ actor AssetRepository {
         }
     }
 
-    /// How one of `account`'s assets is related to others, from either
-    /// end, in the order the relations were made; each with the other
-    /// asset's title, or none where the key cannot open it. Read only as
+    /// How one of `account`'s assets is related to others of its place,
+    /// from either end, in the order the relations were made; each with
+    /// the other asset's title, or none for one a listing gives as
+    /// unreadable (any part of it that the key cannot open). Read only as
     /// the account signed in, with its own key in memory.
     func relations(ofAsset id: String, as account: String) async throws -> [AssetRelation] {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-        return try await AccountSeal.reading(as: account) {
-            let stored: [(id: String, from: String, to: String, kind: String, title: Data)] = try await dbQueue.read { db in
+        // What relates them is kept as it is; nothing sealed is read here.
+        let stored: [(id: String, from: String, to: String, kind: String)] = try await AccountSeal.reading(as: account) {
+            try await dbQueue.read { db in
                 try Row.fetchAll(
                     db,
                     sql: """
-                    SELECT asset_relations.id, source_asset_id, target_asset_id, relation_type, other.title_ciphertext
+                    SELECT asset_relations.id, source_asset_id, target_asset_id, relation_type
                     FROM asset_relations
-                    JOIN assets AS other ON other.user_id = asset_relations.user_id
-                        AND other.id = CASE WHEN source_asset_id = ? THEN target_asset_id ELSE source_asset_id END
-                    WHERE asset_relations.user_id = ? AND (source_asset_id = ? OR target_asset_id = ?)
+                    JOIN assets AS this ON this.id = ? AND this.user_id = asset_relations.user_id
+                    JOIN assets AS other ON other.user_id = this.user_id AND other.coven_id = this.coven_id
+                        AND other.id = CASE WHEN source_asset_id = this.id THEN target_asset_id ELSE source_asset_id END
+                    WHERE asset_relations.user_id = ? AND (source_asset_id = this.id OR target_asset_id = this.id)
                     ORDER BY asset_relations.created_at, asset_relations.rowid
                     """,
-                    arguments: [id, account, id, id]
-                ).map { ($0["id"], $0["source_asset_id"], $0["target_asset_id"], $0["relation_type"], $0["title_ciphertext"]) }
+                    arguments: [id, account]
+                ).map { ($0["id"], $0["source_asset_id"], $0["target_asset_id"], $0["relation_type"]) }
             }
-            var relations: [AssetRelation] = []
-            for row in stored {
-                let title = await self.opened(row.title, purpose: Self.titlePurpose).map { String(decoding: $0, as: UTF8.self) }
-                relations.append(AssetRelation(
-                    id: row.id, fromAssetID: row.from, toAssetID: row.to, kind: row.kind, relatedID: row.from == id ? row.to : row.from,
-                    relatedTitle: title
-                ))
-            }
-            return relations
+        }
+        // The other assets as a listing gives them: one of which anything
+        // cannot be opened is not named.
+        let others = try await assets(withIDs: stored.map { $0.from == id ? $0.to : $0.from }, as: account)
+        let titles = Dictionary(others.map { ($0.id, $0.isUnreadable ? nil : $0.title) }, uniquingKeysWith: { first, _ in first })
+        return stored.map { row in
+            let other = row.from == id ? row.to : row.from
+            return AssetRelation(id: row.id, fromAssetID: row.from, toAssetID: row.to, kind: row.kind, relatedID: other, relatedTitle: titles[other] ?? nil)
         }
     }
 

@@ -206,6 +206,34 @@ final class AssetLineageTests: XCTestCase {
         } catch RepositoryError.dataLocked {}
     }
 
+    func testTheBriefAnAssetHasIsItsAnswerAlsoWhereItsPlaceHasNoRoomForAnother() async throws {
+        let logo = try await asset("Logo", .proposed)
+        let brief = try await store.handoffBrief(of: logo.id, as: account).brief
+        let unbriefed = try await asset("No brief yet", .proposed)
+        // The place is filled to what it keeps.
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        let account = account
+        try await queue.write { db in
+            for _ in 3 ..< AssetRepository.most {
+                try db.execute(
+                    sql: """
+                    INSERT INTO assets (id, user_id, coven_id, type, status, title_ciphertext, details_ciphertext, created_at, updated_at)
+                    VALUES (?, ?, '', 'image', 'draft', x'00', x'00', ?, ?)
+                    """,
+                    arguments: [UUID().uuidString, account, Date(), Date()]
+                )
+            }
+        }
+        let again = try await store.handoffBrief(of: logo.id, as: account)
+        XCTAssertFalse(again.isNew)
+        XCTAssertEqual(again.brief.id, brief.id)
+        await expect(.tooMany, "A new brief is a new asset") { _ = try await self.store.handoffBrief(of: unbriefed.id, as: self.account) }
+        // And once the asset is no longer proposed or approved: the brief it has is still the answer.
+        _ = try await store.move(logo.id, to: .archived, as: account)
+        let archived = try await store.handoffBrief(of: logo.id, as: account)
+        XCTAssertEqual(archived.brief.id, brief.id)
+    }
+
     func testAHandOffWrittenAfterTheDataWasLockedIsTakenBack_withItsRelation() async throws {
         let logo = try await asset("Logo", .proposed)
         // Locked once everything was sealed, before the write has its turn.
@@ -234,6 +262,9 @@ final class AssetLineageTests: XCTestCase {
             ("as another account's", insert, ["someone-else", other.id, logo.id, "references"]),
             ("as a second hand-off brief of one asset", insert, [account, other.id, logo.id, AssetRelation.handoffFor]),
             ("changed afterwards", "UPDATE asset_relations SET target_asset_id = ? WHERE source_asset_id = ?", [other.id, brief.id]),
+            // An asset others were made from, or that is related to another, keeps its place.
+            ("left across places by its asset moving", "UPDATE assets SET coven_id = '' WHERE id = ?", [logo.id]),
+            ("left across places by its brief moving", "UPDATE assets SET coven_id = '' WHERE id = ?", [brief.id]),
         ] as [(String, String, StatementArguments)] {
             do {
                 try await queue.write { db in try db.execute(sql: sql, arguments: arguments) }
@@ -244,6 +275,8 @@ final class AssetLineageTests: XCTestCase {
         }
         var kept = try await counts()
         XCTAssertEqual(kept.relations, 1)
+        // An asset that nothing was made from and that is related to nothing can still be moved by whoever writes the store.
+        try await queue.write { db in try db.execute(sql: "UPDATE assets SET coven_id = '' WHERE id = ?", arguments: [other.id]) }
 
         // The asset a brief was made from is gone: the brief stays, made from nothing, and related to nothing.
         try await queue.write { db in try db.execute(sql: "DELETE FROM assets WHERE id = ?", arguments: [logo.id]) }
@@ -258,7 +291,7 @@ final class AssetLineageTests: XCTestCase {
         _ = try await store.handoffBrief(of: second.id, as: account)
         try await CovenService.shared.deleteCoven(id: coven)
         kept = try await counts()
-        XCTAssertEqual(kept.assets, 1, "Strix's stays")
+        XCTAssertEqual(kept.assets, 2, "Strix's stay")
         XCTAssertEqual(kept.relations, 0)
     }
 
@@ -273,6 +306,14 @@ final class AssetLineageTests: XCTestCase {
         XCTAssertEqual(AssetRelation(id: "r", fromAssetID: "a", toAssetID: "b", kind: "references", relatedID: "b", relatedTitle: "Tokens").line, "Related to Tokens")
         // An asset that cannot be opened is not handed over.
         await expect(.unreadable, "Handed over unseen") { _ = try await self.store.handoffBrief(of: logo.id, as: self.account) }
+
+        // Nor is one named of which only something else cannot be opened: a listing gives it as unreadable, title and all.
+        let mark = try await asset("Wordmark", .proposed)
+        let second = try await store.handoffBrief(of: mark.id, as: account).brief
+        try await queue.write { db in try db.execute(sql: "UPDATE assets SET details_ciphertext = x'0102' WHERE id = ?", arguments: [mark.id]) }
+        let ofTheSecond = try await store.relations(ofAsset: second.id, as: account)
+        XCTAssertEqual(ofTheSecond.map(\.relatedID), [mark.id])
+        XCTAssertNil(ofTheSecond.first?.relatedTitle)
     }
 
     // MARK: - The page's lineage
@@ -330,9 +371,12 @@ final class AssetLineageTests: XCTestCase {
         await model.read("brief", as: "ada", signedIn: { "ada" }, relations: { _, _ in throw CancellationError() })
         XCTAssertEqual(model.relations.count, 1)
         XCTAssertFalse(model.failed)
-        await model.read("brief", as: "ada", signedIn: { "ada" }, relations: { _, _ in throw RepositoryError.databaseUnavailable })
+        var said: [String] = []
+        await model.read("brief", as: "ada", signedIn: { "ada" }, say: { said.append($0) }, relations: { _, _ in throw RepositoryError.databaseUnavailable })
         XCTAssertEqual(model.relations, [])
         XCTAssertTrue(model.failed)
+        await model.read("brief", as: "ada", signedIn: { "ada" }, say: { said.append($0) }, relations: { _, _ in throw RepositoryError.databaseUnavailable })
+        XCTAssertEqual(said, [AssetDetailView.lineageFailed], "Told to VoiceOver when it newly shows, once")
         XCTAssertEqual(AssetDetailView.lineageFailed, "Couldn't load where this came from.")
 
         // Nothing read as one account is shown once another is signed in.

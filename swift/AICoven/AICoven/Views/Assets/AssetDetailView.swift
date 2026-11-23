@@ -362,6 +362,7 @@ final class AssetLineageModel: ObservableObject {
 
     func read(
         _ assetID: String, as account: String, signedIn: () -> String = { UserScope.currentUserID },
+        say: (String) -> Void = { AccessibilityNotification.Announcement($0).post() },
         relations read: (_ assetID: String, _ account: String) async throws -> [AssetRelation] = {
             try await AssetRepository.shared.relations(ofAsset: $0, as: $1)
         }
@@ -378,6 +379,8 @@ final class AssetLineageModel: ObservableObject {
             guard reading == readings, signedIn() == account else { return }
             // The kind of failure only.
             AppErrorReporter.log(message: "An asset's relations could not be read (\(type(of: error)))", context: "AssetLineageModel")
+            // Said to VoiceOver when it newly shows, not at each reading that fails again.
+            if !failed { say(AssetDetailView.lineageFailed) }
             (relations, failed) = ([], true)
         }
     }
