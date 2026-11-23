@@ -453,7 +453,8 @@ actor AssetRepository {
 
     /// Those of `account`'s assets that have these ids, wherever each is
     /// kept, in the order of the ids; an id that is no asset of the
-    /// account's is left out. Every id is looked up, some at a time.
+    /// account's is left out, and one given twice is answered twice. Every
+    /// id is looked up, some at a time.
     func assets(withIDs ids: [String], as account: String) async throws -> [Asset] {
         var found: [String: Asset] = [:]
         var rest = ids[...]
@@ -465,8 +466,7 @@ actor AssetRepository {
                 found[asset.id] = asset
             }
         }
-        var told = Set<String>()
-        return ids.compactMap { id in told.insert(id).inserted ? found[id] : nil }
+        return ids.compactMap { found[$0] }
     }
 
     /// The most ids one read names: well under what a statement takes.

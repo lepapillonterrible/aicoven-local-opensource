@@ -15,7 +15,11 @@ struct AssetDetailView: View {
     /// Opens the thread the asset was made in.
     private let onOpenThread: ((Thread) -> Void)?
     /// The thread the asset was made in, once looked up.
-    @State private var origin = Origin.unknown
+    @StateObject private var originFound = AssetOriginModel()
+
+    private var origin: Origin {
+        originFound.origin
+    }
 
     /// What is known of the thread an asset was made in.
     enum Origin: Equatable {
@@ -36,12 +40,14 @@ struct AssetDetailView: View {
 
     /// Looks up the thread the asset was made in, as the account signed in.
     private func findOrigin() async {
-        let found = await Self.origin(
-            ofThread: asset.threadID, as: UserScope.currentUserID,
-            thread: { try await ThreadService.shared.getThread(threadId: $0) },
-            isThread: { try await ThreadRepository.shared.isThread($0, of: $1) }
-        )
-        if let found { origin = found }
+        let threadID = asset.threadID
+        await originFound.find {
+            await Self.origin(
+                ofThread: threadID, as: UserScope.currentUserID,
+                thread: { try await ThreadService.shared.getThread(threadId: $0) },
+                isThread: { try await ThreadRepository.shared.isThread($0, of: $1) }
+            )
+        }
     }
 
     /// What is known of the thread an asset was made in: the thread, where
@@ -296,5 +302,27 @@ struct AssetDetailView: View {
         }
         let account = UserScope.currentUserID
         Task { await model.perform(action, on: asset, as: account) }
+    }
+}
+
+/// The thread an asset was made in, as the asset's page shows it. It is
+/// looked up when the page comes and again when a thread is deleted, and
+/// two lookups can be under way at once: only the latest one's answer is
+/// shown, so that an earlier one landing late does not bring back the way
+/// to a thread that has since been deleted.
+@MainActor
+final class AssetOriginModel: ObservableObject {
+    @Published private(set) var origin = AssetDetailView.Origin.unknown
+    private var lookups = 0
+
+    /// Looks the origin up with `lookUp` (nil for an answer that is not
+    /// to be shown) and shows what it finds, unless a later lookup was
+    /// asked for meanwhile.
+    func find(_ lookUp: () async -> AssetDetailView.Origin?) async {
+        lookups += 1
+        let lookup = lookups
+        let found = await lookUp()
+        guard lookup == lookups, let found else { return }
+        origin = found
     }
 }

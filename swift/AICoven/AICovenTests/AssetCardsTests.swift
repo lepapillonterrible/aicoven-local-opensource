@@ -297,6 +297,34 @@ final class AssetCardsTests: XCTestCase {
         XCTAssertNil(late, "Nothing is said once another account is signed in")
     }
 
+    func testOnlyTheLatestLookupOfAnAssetsThreadIsShown() async {
+        let thread = AICoven.Thread(
+            id: "t", userId: "ada", covenId: nil, title: "Plans", createdAt: Date(timeIntervalSince1970: 0), updatedAt: nil, lastMessageAt: nil
+        )
+        let model = AssetOriginModel()
+        let gate = Gate()
+
+        // The page's first lookup reads the thread and is held; the thread is deleted and looked up again.
+        let earlier = Task {
+            await model.find {
+                await gate.wait()
+                return .thread(thread)
+            }
+        }
+        await gate.arrived(1)
+        await model.find { .gone }
+        XCTAssertEqual(model.origin, .gone)
+        await gate.letOneThrough()
+        await earlier.value
+        XCTAssertEqual(model.origin, .gone, "An earlier lookup landing late does not bring back the way to a deleted thread")
+
+        // An answer that is not to be shown (another account by then) changes nothing; a later one is shown.
+        await model.find { nil }
+        XCTAssertEqual(model.origin, .gone)
+        await model.find { .thread(thread) }
+        XCTAssertEqual(model.origin, .thread(thread))
+    }
+
     private actor Gate {
         private var held: [CheckedContinuation<Void, Never>] = []
         private var arrivals = 0
