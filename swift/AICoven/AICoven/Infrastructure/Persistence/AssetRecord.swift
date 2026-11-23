@@ -34,6 +34,11 @@ enum AssetError: Error, Equatable {
     case needsAFile
     /// What is kept cannot be opened with the account's key.
     case unreadable
+    /// The asset it is said to be made from is not an asset of the
+    /// account's in the same place.
+    case noSuchParent
+    /// A hand-off is of an asset that is proposed or approved.
+    case needsReview
 }
 
 /// The account's assets, kept on the device: each in a coven of the
@@ -135,8 +140,10 @@ actor AssetRepository {
     /// it (nil for one the person added); `threadID` and `messageID` say
     /// where it came from, and are kept only for a thread of the account's
     /// in the same coven (or, for Strix's, in none) and a message of that
-    /// thread. Throws unless `account` is the one
-    /// signed in with its own key in memory.
+    /// thread. `parentID` is the asset it was made from: an asset of the
+    /// account's in the same place (`AssetError.noSuchParent` otherwise).
+    /// Throws unless `account` is the one signed in with its own key in
+    /// memory.
     func create(
         type: AssetType,
         title: String,
@@ -146,6 +153,61 @@ actor AssetRepository {
         madeBy agentID: String? = nil,
         inThread threadID: String? = nil,
         fromMessage messageID: String? = nil,
+        parent parentID: String? = nil,
+        as account: String
+    ) async throws -> Asset {
+        try await make(
+            type: type, title: title, details: details, files: files, inCoven: covenID, madeBy: agentID, inThread: threadID,
+            fromMessage: messageID, parent: parentID, handingOver: nil, as: account
+        )
+    }
+
+    /// The hand-off brief an asset has already, found in the write that
+    /// would have made another.
+    private struct HasABrief: Error {
+        let briefID: String
+    }
+
+    /// The hand-off brief of one of `account`'s assets, as the cloud app
+    /// makes it: an implementation brief titled "Handoff: <its title>",
+    /// a draft in the same place, made from the asset (its parent) and
+    /// related to it as its hand-off. An asset has one: asked for again,
+    /// the one it has is the answer (`isNew` false), whatever has become
+    /// of it since. Only an asset that is proposed or approved is handed
+    /// over (`AssetError.needsReview`), decided in the write against the
+    /// asset as it is then; one the key cannot open is not
+    /// (`AssetError.unreadable`). The brief an asset has is its answer
+    /// also where its place has no room for another asset.
+    func handoffBrief(
+        of sourceID: String, madeBy agentID: String? = nil, inThread threadID: String? = nil, as account: String
+    ) async throws -> (brief: Asset, isNew: Bool) {
+        guard let source = try await assets(withIDs: [sourceID], as: account).first else { throw AssetError.noSuchAsset }
+        guard !source.isUnreadable else { throw AssetError.unreadable }
+        do {
+            let brief = try await make(
+                type: .implementationBrief, title: "Handoff: " + source.title, details: "", files: [], inCoven: source.covenID, madeBy: agentID,
+                inThread: threadID, fromMessage: nil, parent: source.id, handingOver: source.id, as: account
+            )
+            return (brief, true)
+        } catch let has as HasABrief {
+            guard let brief = try await assets(withIDs: [has.briefID], as: account).first else { throw AssetError.noSuchAsset }
+            return (brief, false)
+        }
+    }
+
+    /// Keeps a new asset: `create`, and for `handingOver` the hand-off
+    /// brief of that asset, related to it in the same write.
+    private func make(
+        type: AssetType,
+        title: String,
+        details: String,
+        files: [NewFile],
+        inCoven covenID: String?,
+        madeBy agentID: String?,
+        inThread threadID: String?,
+        fromMessage messageID: String?,
+        parent parentID: String?,
+        handingOver sourceID: String?,
         as account: String
     ) async throws -> Asset {
         // Whoever asks is the account signed in, before anything is said
@@ -201,6 +263,23 @@ actor AssetRepository {
         let toWrite = sealedFiles
         await at?(.beforeWriting)
         try await dbQueue.write { db in
+            if let sourceID {
+                // Decided here, against the asset as it is now, and before
+                // anything a new asset must pass: the brief an asset has
+                // is its answer also where the place has no room for
+                // another asset. Only what is proposed or approved is
+                // handed over.
+                let status = try String.fetchOne(
+                    db, sql: "SELECT status FROM assets WHERE id = ? AND user_id = ? AND coven_id = ?", arguments: [sourceID, account, coven]
+                )
+                guard let status else { throw AssetError.noSuchAsset }
+                let briefID = try String.fetchOne(
+                    db, sql: "SELECT source_asset_id FROM asset_relations WHERE user_id = ? AND target_asset_id = ? AND relation_type = ?",
+                    arguments: [account, sourceID, AssetRelation.handoffFor]
+                )
+                if let briefID { throw HasABrief(briefID: briefID) }
+                guard [AssetStatus.proposed.rawValue, AssetStatus.approved.rawValue].contains(status) else { throw AssetError.needsReview }
+            }
             // Counted in the write that adds it.
             let count = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM assets WHERE user_id = ? AND coven_id = ?", arguments: [account, coven]) ?? 0
             guard count < Self.most else { throw AssetError.tooMany }
@@ -221,18 +300,34 @@ actor AssetRepository {
                     guard isOfTheThread else { throw AssetError.noSuchThread }
                 }
             }
+            if let parentID {
+                // Made from an asset of the account's in the same place.
+                let parentsCoven = try String.fetchOne(
+                    db, sql: "SELECT coven_id FROM assets WHERE id = ? AND user_id = ?", arguments: [parentID, account]
+                )
+                guard parentsCoven == coven else { throw AssetError.noSuchParent }
+            }
             try db.execute(
                 sql: """
                 INSERT INTO assets (
                     id, user_id, coven_id, type, status, title_ciphertext, details_ciphertext,
-                    made_by_agent_id, thread_id, source_message_id, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    made_by_agent_id, thread_id, source_message_id, parent_asset_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 arguments: [
                     id, account, coven, type.rawValue, AssetStatus.draft.rawValue, sealedTitle, sealedDetails,
-                    agentID, threadID, messageID, now, now,
+                    agentID, threadID, messageID, parentID, now, now,
                 ]
             )
+            if let sourceID {
+                try db.execute(
+                    sql: """
+                    INSERT INTO asset_relations (id, user_id, source_asset_id, target_asset_id, relation_type, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    arguments: [UUID().uuidString, account, id, sourceID, AssetRelation.handoffFor, now]
+                )
+            }
             for file in toWrite {
                 try db.execute(
                     sql: "INSERT INTO asset_files (id, asset_id, meta_ciphertext, created_at, body_ciphertext) VALUES (?, ?, ?, ?, ?)",
@@ -252,7 +347,7 @@ actor AssetRepository {
         }
         return Asset(
             id: id, covenID: covenID, type: type, status: .draft, title: title, details: details,
-            madeByAgentID: agentID, threadID: threadID, sourceMessageID: messageID, files: kept,
+            madeByAgentID: agentID, threadID: threadID, sourceMessageID: messageID, parentID: parentID, files: kept,
             version: Self.version(title: sealedTitle, details: sealedDetails, files: sealedFiles.map { ($0.id, $0.meta) }),
             createdAt: now, updatedAt: now
         )
@@ -424,6 +519,7 @@ actor AssetRepository {
         let agentID: String?
         let threadID: String?
         let messageID: String?
+        let parentID: String?
         let createdAt: Date
         let updatedAt: Date
 
@@ -437,6 +533,7 @@ actor AssetRepository {
             agentID = row["made_by_agent_id"]
             threadID = row["thread_id"]
             messageID = row["source_message_id"]
+            parentID = row["parent_asset_id"]
             createdAt = row["created_at"]
             updatedAt = row["updated_at"]
         }
@@ -484,7 +581,7 @@ actor AssetRepository {
                     db,
                     sql: """
                     SELECT id, coven_id, type, status, title_ciphertext, details_ciphertext, made_by_agent_id, thread_id,
-                           source_message_id, created_at, updated_at
+                           source_message_id, parent_asset_id, created_at, updated_at
                     FROM assets WHERE assets.user_id = ? AND \(condition) ORDER BY updated_at DESC, rowid DESC
                     """,
                     arguments: arguments
@@ -532,13 +629,48 @@ actor AssetRepository {
                     status: AssetStatus(rawValue: stored.status) ?? .draft,
                     title: isReadable ? String(decoding: title ?? Data(), as: UTF8.self) : "",
                     details: isReadable ? String(decoding: details ?? Data(), as: UTF8.self) : "",
-                    madeByAgentID: stored.agentID, threadID: stored.threadID, sourceMessageID: stored.messageID,
+                    madeByAgentID: stored.agentID, threadID: stored.threadID, sourceMessageID: stored.messageID, parentID: stored.parentID,
                     files: isReadable ? files ?? [] : [], isUnreadable: !isReadable,
                     version: Self.version(title: stored.title, details: stored.details, files: sealedFiles[stored.id] ?? []),
                     createdAt: stored.createdAt, updatedAt: stored.updatedAt
                 ))
             }
             return assets
+        }
+    }
+
+    /// How one of `account`'s assets is related to others of its place,
+    /// from either end, in the order the relations were made; each with
+    /// the other asset's title, or none for one a listing gives as
+    /// unreadable (any part of it that the key cannot open). Read only as
+    /// the account signed in, with its own key in memory.
+    func relations(ofAsset id: String, as account: String) async throws -> [AssetRelation] {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        // What relates them is kept as it is; nothing sealed is read here.
+        let stored: [(id: String, from: String, to: String, kind: String)] = try await AccountSeal.reading(as: account) {
+            try await dbQueue.read { db in
+                try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT asset_relations.id, source_asset_id, target_asset_id, relation_type
+                    FROM asset_relations
+                    JOIN assets AS this ON this.id = ? AND this.user_id = asset_relations.user_id
+                    JOIN assets AS other ON other.user_id = this.user_id AND other.coven_id = this.coven_id
+                        AND other.id = CASE WHEN source_asset_id = this.id THEN target_asset_id ELSE source_asset_id END
+                    WHERE asset_relations.user_id = ? AND (source_asset_id = this.id OR target_asset_id = this.id)
+                    ORDER BY asset_relations.created_at, asset_relations.rowid
+                    """,
+                    arguments: [id, account]
+                ).map { ($0["id"], $0["source_asset_id"], $0["target_asset_id"], $0["relation_type"]) }
+            }
+        }
+        // The other assets as a listing gives them: one of which anything
+        // cannot be opened is not named.
+        let others = try await assets(withIDs: stored.map { $0.from == id ? $0.to : $0.from }, as: account)
+        let titles = Dictionary(others.map { ($0.id, $0.isUnreadable ? nil : $0.title) }, uniquingKeysWith: { first, _ in first })
+        return stored.map { row in
+            let other = row.from == id ? row.to : row.from
+            return AssetRelation(id: row.id, fromAssetID: row.from, toAssetID: row.to, kind: row.kind, relatedID: other, relatedTitle: titles[other] ?? nil)
         }
     }
 

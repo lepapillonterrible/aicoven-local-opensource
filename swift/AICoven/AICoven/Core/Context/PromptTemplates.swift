@@ -131,8 +131,17 @@ enum PromptTemplates {
                 ToolParameter(name: "description", type: "string", description: "Optional: what the asset is, in a few sentences", required: false),
                 ToolParameter(name: "file_name", type: "string", description: "The name of the file that holds the work, like 'brief.md'; required with content", required: false),
                 ToolParameter(name: "content", type: "string", description: "The file's whole text; required with file_name", required: false),
+                ToolParameter(name: "parent_asset_id", type: "string", description: "Optional: the id of the asset kept here that this one is made from (a variant, a revision, work done from a brief)", required: false),
             ],
             example: #"{"tool": "asset.create", "input": {"type": "implementation_brief", "title": "Checkout redesign brief", "file_name": "brief.md", "content": "Checkout redesign: what changes, and why."}, "reason": "The user asked to keep the brief as an asset"}"#
+        ),
+        ToolDefinition(
+            name: "asset.create_handoff",
+            description: "Make the hand-off brief for an asset that is proposed or approved: an implementation brief kept as a draft, made from that asset, for whoever builds from it. An asset has one brief: asking again gives the one it has.",
+            parameters: [
+                ToolParameter(name: "asset_id", type: "string", description: "The id of the asset to hand over", required: true),
+            ],
+            example: #"{"tool": "asset.create_handoff", "input": {"asset_id": "6F1C2B0E-5A3D-4E9B-8C7A-1D2E3F4A5B6C"}, "reason": "Brief the build from the approved mockup"}"#
         ),
         ToolDefinition(
             name: "asset.update",
