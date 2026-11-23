@@ -99,7 +99,7 @@ struct TasksView: View {
         .task { await model.loadAgents() }
         // The tasks handed to an agent follow the turns the app runs: told
         // once the change has been made, not as it is about to be.
-        .onReceive(TurnEngine.shared.$running.receive(on: RunLoop.main)) { _ in model.turnsChanged() }
+        .onReceive(Self.turns.receive(on: RunLoop.main)) { _ in model.turnsChanged() }
         .onReceive(ToolApprovals.shared.$askingThreadIDs.receive(on: RunLoop.main)) { _ in model.turnsChanged() }
         #if os(macOS)
             .sheet(item: Binding(get: { model.detailsOf.map(OpenTask.init) }, set: { model.detailsOf = $0?.id })) { open in
@@ -154,6 +154,15 @@ struct TasksView: View {
             guard Self.stillOpensThread(askedAt: moves, in: navigator, as: account, signedIn: UserScope.currentUserID) else { return }
             navigator.open(thread)
         }
+    }
+
+    /// The turns the app runs, as far as a task follows them: told when
+    /// one starts, ends or is being stopped, not with each word of a reply.
+    private static var turns: AnyPublisher<[String: TaskLiveTurn], Never> {
+        TurnEngine.shared.$running
+            .map { $0.mapValues { TaskLiveTurn(turnID: $0.turnID, isStopping: $0.isStopping) } }
+            .removeDuplicates()
+            .eraseToAnyPublisher()
     }
 
     /// Whether a thread made ready for a task is still to be opened: the
@@ -720,9 +729,6 @@ private extension TaskItem {
     }
 }
 
-/// One task in the List: its tick, its title and one line of what helps
-/// (its pin, its due day, that it was closed). What else can be done with
-/// it is in its menu and its swipes.
 /// Do it for me… and Change Lead Agent… for one task: the agents it can
 /// be handed to, and whether it has a lead agent.
 struct TaskLead {
@@ -745,9 +751,6 @@ struct LeadAgentChoices: View {
 
     var body: some View {
         if let choices = lead.choices {
-            if choices.marked == nil, choices.others.isEmpty {
-                Text("No agents to choose from")
-            }
             if let marked = choices.marked {
                 Section(choices.reason == .lead ? "Lead agent" : "Last used") { choice(marked) }
             }
@@ -772,6 +775,10 @@ struct LeadAgentChoices: View {
     }
 }
 
+/// One task in the List: its mark (the tick, or where it stands with the
+/// agent it was handed to), its title and one line of what helps (its
+/// pin, its due day, the agent on it, that it was closed). What else can
+/// be done with it is in its menu and its swipes.
 private struct TaskRow: View {
     let task: TaskItem
     let pin: TaskPinState
@@ -860,7 +867,7 @@ private struct TaskRow: View {
                 Button("Details…", action: onDetails)
                     .tint(.aicovenSwipeNeutral)
             } else {
-                if handoff == nil {
+                if handoff == nil, TaskRules.canBeHandedOver(task) {
                     Menu("Do it for me…") { LeadAgentChoices(lead: lead, onChoose: lead.onDoIt) }
                         .tint(.aicovenWater)
                 }
@@ -871,7 +878,12 @@ private struct TaskRow: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityAction(named: "Details", onDetails)
-        .accessibilityActions { pinActions }
+        .accessibilityActions {
+            pinActions
+            if !task.isFinished, TaskRules.canBeTalkedThrough(task) {
+                Button(handoff == nil ? "Talk it through" : "Open thread", action: onTalk)
+            }
+        }
     }
 
     private var pinActions: some View {
@@ -888,10 +900,11 @@ private struct TaskRow: View {
             Button("Mark done") { onTick(true) }
             Button("Open thread", action: onTalk)
         } else if handoff == nil {
-            if showsDoItForMe {
+            // A task whose title cannot be read has nothing to tell an agent.
+            if showsDoItForMe, TaskRules.canBeHandedOver(task) {
                 Menu("Do it for me…") { LeadAgentChoices(lead: lead, onChoose: lead.onDoIt) }
             }
-            Button("Talk it through", action: onTalk)
+            if TaskRules.canBeTalkedThrough(task) { Button("Talk it through", action: onTalk) }
             Button("Close", action: onClose)
         } else {
             Button("Open thread", action: onTalk)
@@ -933,11 +946,13 @@ private struct TaskRow: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
                 .fixedSize()
+                .accessibilityValue(TasksModel.name(of: task))
         case .needsOK:
             Button("Open thread", action: onTalk)
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .fixedSize()
+                .accessibilityValue(TasksModel.name(of: task))
         case .working, .paused, nil:
             EmptyView()
         }

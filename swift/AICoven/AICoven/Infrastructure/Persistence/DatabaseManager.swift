@@ -731,13 +731,12 @@ final class DatabaseManager {
 
             // Who a task was handed to, apart from who leads it: the lead
             // agent can be changed while the hand-off's own agent works.
-            // None for Strix, which is no stored agent. A hand-off made
-            // before this went to the task's lead agent.
+            // None for Strix, which is no stored agent. (No task was
+            // handed over before this: nothing made a hand-off yet.)
             migrator.registerMigration("v21_task_handoff_agent") { db in
                 try db.alter(table: "tasks") { t in
                     t.add(column: "handoff_agent_id", .text)
                 }
-                try db.execute(sql: "UPDATE tasks SET handoff_agent_id = lead_agent_id WHERE handoff_turn_id IS NOT NULL")
             }
 
             try migrator.migrate(queue)

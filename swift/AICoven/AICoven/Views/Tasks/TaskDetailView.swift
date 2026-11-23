@@ -183,12 +183,15 @@ struct TaskDetailView: View {
             case .working, .paused, .needsOK:
                 Button("Open thread") { onTalk(task) }
             case nil:
-                Menu("Do it for me…") { LeadAgentChoices(lead: lead, onChoose: lead.onDoIt) }
-                    .menuStyle(.button)
-                    .buttonStyle(.borderedProminent)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                Button("Talk it through") { onTalk(task) }
+                // A task whose title cannot be read has nothing to tell an agent.
+                if TaskRules.canBeHandedOver(task) {
+                    Menu("Do it for me…") { LeadAgentChoices(lead: lead, onChoose: lead.onDoIt) }
+                        .menuStyle(.button)
+                        .buttonStyle(.borderedProminent)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                }
+                if TaskRules.canBeTalkedThrough(task) { Button("Talk it through") { onTalk(task) } }
                 Button("Close") { close(task) }
             }
             if lead.hasLead {

@@ -584,16 +584,21 @@ final class TasksModel: ObservableObject {
     }
 
     /// The task's thread, for Talk it through and Open thread: the one it
-    /// has, or one made for it in its place and given to it, which starts
-    /// with the task so that whoever answers knows what it is about; if
+    /// has, or one made for it in its place, for an agent of the place,
+    /// and given to it, which starts with the task so that whoever
+    /// answers knows what it is about (none is made for a task whose
+    /// title cannot be read); if
     /// those words could not be sent, they are handed to the thread's
     /// composer, which says why. Nil where it could not be opened, which
     /// is said, and where another account is signed in by then.
     func talkItThrough(_ task: TaskItem, as account: String) async -> Thread? {
-        guard saving.insert(task.id).inserted else { return nil }
+        guard TaskRules.canBeTalkedThrough(task), saving.insert(task.id).inserted else { return nil }
         defer { saving.remove(task.id) }
         errorMessage = nil
-        guard let thread = await thread(for: task, agent: nil, as: account), signedIn() == account else { return nil }
+        // A thread made for it goes to an agent of the place, as a new thread there does.
+        if task.threadID == nil, agents == nil { await loadAgents() }
+        guard signedIn() == account else { return nil }
+        guard let thread = await thread(for: task, agent: talkAgent(for: task), as: account), signedIn() == account else { return nil }
         // A thread it had already is opened as it is.
         guard task.threadID == nil else { return thread }
         let words = TaskRules.talkThrough(task)
@@ -609,6 +614,15 @@ final class TasksModel: ObservableObject {
         return signedIn() == account ? thread : nil
     }
 
+    /// Who a thread made for a task to be talked through goes to: the
+    /// agent that leads the task, else the one the place last handed a
+    /// task to, else the place's first; Strix (no stored agent) where
+    /// the place has none of its own, or its agents could not be read.
+    private func talkAgent(for task: TaskItem) -> Agent? {
+        guard let choices = leadChoices(for: task), let agent = choices.marked ?? choices.others.first, !agent.isStrix else { return nil }
+        return agent
+    }
+
     /// How far a hand-off got: nothing kept, the lead agent kept but no
     /// turn started, or the turn started and kept with the task.
     enum HandOff: Equatable {
@@ -617,14 +631,14 @@ final class TasksModel: ObservableObject {
         case started
     }
 
-    /// Do it for me: makes `agent`, the one the person picked, the task's
-    /// lead agent, sends the task to it in the task's thread, and keeps
+    /// Do it for me, for an open task whose title can be read: makes
+    /// `agent`, the one the person picked, the task's lead agent, sends the task to it in the task's thread, and keeps
     /// the turn with the task, so that the task follows it. The thread
     /// keeps its own agent; one made here starts with `agent`. One
     /// hand-off at a time for a task.
     @discardableResult
     func doItForMe(_ task: TaskItem, agent: Agent, as account: String) async -> HandOff {
-        guard !task.isFinished, saving.insert(task.id).inserted else { return .none }
+        guard TaskRules.canBeHandedOver(task), saving.insert(task.id).inserted else { return .none }
         defer { saving.remove(task.id) }
         errorMessage = nil
         var outcome = HandOff.none

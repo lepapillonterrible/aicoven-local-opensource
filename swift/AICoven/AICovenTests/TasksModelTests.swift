@@ -970,7 +970,7 @@ final class TasksModelTests: XCTestCase {
         XCTAssertEqual(thread?.id, "thread-1")
         XCTAssertEqual(stand.madeThreads.map(\.title), ["Call the bank"], "Named after the task")
         XCTAssertEqual(stand.madeThreads.map(\.covenID), ["work"], "In the task's place")
-        XCTAssertNil(stand.madeThreads[0].agent, "With no agent chosen: whoever answers there")
+        XCTAssertNil(stand.madeThreads[0].agent, "A place with no agents of its own: Strix answers there")
         XCTAssertEqual(stand.changed.map(\.change), [TaskChange(threadID: "thread-1")], "Given to the task")
         XCTAssertEqual(stand.started.map(\.text), ["I'd like to talk this task through: Call the bank"])
         XCTAssertEqual(stand.started.map(\.threadID), ["thread-1"])
@@ -1015,6 +1015,63 @@ final class TasksModelTests: XCTestCase {
         let refused = await tasks.talkItThrough(tasks.open[0], as: "ada")
         XCTAssertNil(refused)
         XCTAssertEqual(tasks.errorMessage, TasksModel.couldNotOpenThread)
+    }
+
+    func testAThreadMadeForATaskGoesToAnAgentOfThePlace_asANewThreadThereDoes() async {
+        let stand = Stand()
+        stand.agents = [scout, quill]
+        var led = task("a", "Call the bank")
+        led.leadAgentID = "quill"
+        stand.kept = [led, task("b", "Renew the lease"), task("c", "File the return")]
+        // Asked before the agents were read: they are read for it.
+        let tasks = model(stand, covenID: "work")
+        await tasks.load()
+
+        _ = await tasks.talkItThrough(tasks.open[0], as: "ada")
+        XCTAssertEqual(stand.madeThreads.last?.agent, quill, "The agent that leads the task")
+        XCTAssertNil(stand.started.last?.agent, "Answered by the thread's own agent")
+        _ = await tasks.talkItThrough(tasks.open[1], as: "ada")
+        XCTAssertEqual(stand.madeThreads.last?.agent, scout, "Else the place's first")
+        stand.lastHandedTo = "quill"
+        await tasks.load()
+        _ = await tasks.talkItThrough(tasks.open[2], as: "ada")
+        XCTAssertEqual(stand.madeThreads.last?.agent, quill, "Or the one a task was last handed to there")
+    }
+
+    func testATaskWhoseTitleCannotBeReadIsNotHandedOver_andTalkedThroughOnlyInAThreadItHas() async {
+        let stand = Stand()
+        stand.agents = [scout]
+        var has = task("b", unreadable: true)
+        has.threadID = "its-own"
+        stand.kept = [task("a", unreadable: true), has]
+        stand.threads["its-own"] = AICoven.Thread(
+            id: "its-own", userId: "ada", covenId: "work", title: "Call the bank", agentId: nil, agentName: nil,
+            createdAt: Date(timeIntervalSince1970: 0), updatedAt: nil, lastMessageAt: nil
+        )
+        let tasks = model(stand, covenID: "work")
+        await tasks.load()
+        await tasks.loadAgents()
+        XCTAssertFalse(TaskRules.canBeHandedOver(tasks.open[0]))
+        XCTAssertFalse(TaskRules.canBeTalkedThrough(tasks.open[0]))
+        XCTAssertTrue(TaskRules.canBeTalkedThrough(tasks.open[1]), "It has a thread to open")
+        XCTAssertFalse(TaskRules.canBeHandedOver(tasks.open[1]))
+        XCTAssertFalse(TaskRules.canBeHandedOver(task("done", status: .done)))
+        XCTAssertTrue(TaskRules.canBeHandedOver(task("plain")))
+
+        // Its title is what an agent is told: nothing is made, sent or kept for it.
+        let outcome = await tasks.doItForMe(tasks.open[0], agent: scout, as: "ada")
+        XCTAssertEqual(outcome, .none)
+        let none = await tasks.talkItThrough(tasks.open[0], as: "ada")
+        XCTAssertNil(none)
+        let handed = await tasks.doItForMe(tasks.open[1], agent: scout, as: "ada")
+        XCTAssertEqual(handed, .none)
+        XCTAssertEqual(stand.madeThreads.count, 0)
+        XCTAssertEqual(stand.started.count, 0)
+        XCTAssertEqual(stand.changed.count, 0)
+        // The thread it has is opened as it is.
+        let own = await tasks.talkItThrough(tasks.open[1], as: "ada")
+        XCTAssertEqual(own?.id, "its-own")
+        XCTAssertEqual(stand.started.count, 0)
     }
 
     func testNoThreadIsOpenedForAnAccountThatIsNoLongerSignedIn() async {

@@ -33,8 +33,10 @@ nonisolated struct TaskListing: Equatable {
     let tasks: [TaskItem]
     /// How many are finished in all, listed or not.
     let finished: Int
-    /// The agent the place's latest hand-off went to, of every task of
-    /// the place, listed or not: an agent that is still there.
+    /// The agent the place last handed a task to, as the cloud app tells
+    /// it: of the tasks handed to an agent that is still there, listed or
+    /// not, the one last changed says which. A later hand-off to Strix,
+    /// or to an agent deleted since, does not take its place.
     var lastHandedTo: String?
 }
 
@@ -512,8 +514,8 @@ actor TaskRepository {
                     db, sql: "SELECT COUNT(*) FROM tasks WHERE user_id = ? AND coven_id = ? AND status <> ?",
                     arguments: [account, coven, TaskStatus.open.rawValue]
                 ) ?? 0
-                // Of every task of the place, listed or not: the agent,
-                // still there, that the one last changed was handed to.
+                // Of the place's tasks handed to an agent that is still
+                // there, listed or not: who the one last changed went to.
                 let lastHandedTo = try String.fetchOne(
                     db,
                     sql: """

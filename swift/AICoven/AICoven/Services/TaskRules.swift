@@ -322,6 +322,18 @@ nonisolated enum TaskRules {
         return LeadChoices(marked: nil, reason: nil, others: agents)
     }
 
+    /// Whether a task can be handed to an agent: an open one whose title
+    /// can be read, since its title is what the agent is told.
+    static func canBeHandedOver(_ task: TaskItem) -> Bool {
+        !task.isFinished && !task.isUnreadable
+    }
+
+    /// Whether a task can be talked through: one that has a thread to
+    /// open, or whose title can be read to start one with.
+    static func canBeTalkedThrough(_ task: TaskItem) -> Bool {
+        task.threadID != nil || !task.isUnreadable
+    }
+
     /// What an agent is told when a task is handed to it, and when the
     /// person wants to talk one through, in the cloud app's words.
     static func request(for task: TaskItem) -> String {

@@ -768,6 +768,9 @@ final class TaskStoreTests: XCTestCase {
     }
 
     func testAHandOffKeepsTheAgentItWentTo_whoeverLeadsTheTaskAfterwards() async throws {
+        // Each write a second after the one before: which task was changed last is certain.
+        let clock = Clock()
+        let store = TaskRepository(now: { clock.next() })
         let coven = try await newCoven(), other = try await newCoven()
         let made = try await store.create(title: "Handed over", inCoven: coven, as: account)
         let scout = "scout-\(UUID().uuidString)", quill = "quill-\(UUID().uuidString)", elsewhere = "elsewhere-\(UUID().uuidString)"
@@ -780,7 +783,7 @@ final class TaskStoreTests: XCTestCase {
         try await insertTurn(second, inThread: thread, status: "running")
 
         await expect(.noSuchAgent, "Handed to an agent of another coven") {
-            try await self.store.change(made.id, TaskChange(threadID: thread, handoffTurnID: first, handoffAgentID: elsewhere), as: self.account)
+            try await store.change(made.id, TaskChange(threadID: thread, handoffTurnID: first, handoffAgentID: elsewhere), as: self.account)
         }
         var task = try await read(made.id, inCoven: coven)
         XCTAssertNil(task.handoff, "Nothing of a change that was refused is kept")
@@ -816,13 +819,28 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(listing.tasks.last?.handoff, TaskHandoff(turnID: second, outcome: .running, hasRun: false, agentID: nil))
         XCTAssertNil(listing.lastHandedTo)
 
-        // An agent that is deleted is nobody's last hand-off; a hand-off of its own still says it went to someone.
+        // Of the tasks handed to an agent that is still there, the one last changed says who was
+        // last used, as the cloud app tells it: a later hand-off to Strix, or to an agent deleted
+        // since, does not take its place.
+        let earlier = try await store.create(title: "Handed to Quill", inCoven: coven, as: account)
+        let quills = try await newThread(inCoven: coven)
+        try await insertTurn("turn-\(quills)", inThread: quills, status: "completed")
+        try await store.change(earlier.id, TaskChange(threadID: quills, handoffTurnID: "turn-\(quills)", handoffAgentID: quill), as: account)
+        try await store.change(made.id, TaskChange(handoffTurnID: second), as: account)
+        listing = try await store.tasks(inCoven: coven, as: account)
+        XCTAssertEqual(listing.lastHandedTo, quill, "The later one went to Strix")
         try await store.change(made.id, TaskChange(handoffTurnID: first, handoffAgentID: scout), as: account)
+        listing = try await store.tasks(inCoven: coven, as: account)
+        XCTAssertEqual(listing.lastHandedTo, scout)
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
         try await queue.write { db in try db.execute(sql: "DELETE FROM roles WHERE id = ?", arguments: [scout]) }
         listing = try await store.tasks(inCoven: coven, alsoListing: made.id, as: account)
-        XCTAssertNil(listing.lastHandedTo)
+        XCTAssertEqual(listing.lastHandedTo, quill, "The later one went to an agent that is gone")
         XCTAssertEqual(listing.tasks.last?.handoff?.agentID, scout, "Not Strix's: an agent that is gone")
+        // With no agent left that a task was handed to, nobody was last used.
+        try await queue.write { db in try db.execute(sql: "DELETE FROM roles WHERE id = ?", arguments: [quill]) }
+        listing = try await store.tasks(inCoven: coven, as: account)
+        XCTAssertNil(listing.lastHandedTo)
     }
 
     func testAPlaceKeepsNoMoreOpenTasksThanItMay_countedAsATaskIsMadeOrOpenedAgain() async throws {
