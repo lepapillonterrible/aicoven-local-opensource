@@ -1491,9 +1491,9 @@ final class TasksModelTests: XCTestCase {
         let tasks = model(stand)
         await tasks.load()
 
-        // To another stage: the stage alone changes.
+        // To another stage: its column holds open tasks, so the move asks for the task open there.
         await tasks.move(tasks.open[0], to: .stage(.inProgress), as: "ada")
-        XCTAssertEqual(stand.changed.map(\.change), [TaskChange(stage: .inProgress)])
+        XCTAssertEqual(stand.changed.map(\.change), [TaskChange(status: .open, stage: .inProgress)])
         XCTAssertEqual(tasks.open[0].stage, .inProgress, "Read again")
         XCTAssertEqual(stand.heard.last, "Moved Call the bank to In progress")
         // To the column it is in: nothing is asked.
@@ -1517,6 +1517,17 @@ final class TasksModelTests: XCTestCase {
         XCTAssertEqual(tasks.open.map(\.id), ["b"])
         XCTAssertEqual(stand.heard.last, "Moved Renew the lease to Review")
 
+        // A card drawn before its task was finished elsewhere: moved to a stage, the task is opened
+        // again there, as the move says, and not left in Done.
+        let stale = try XCTUnwrap(tasks.open.first)
+        stand.kept = stand.kept.map { $0.id == stale.id ? self.task($0.id, $0.title, status: .done, stage: $0.stage) : $0 }
+        await tasks.move(stale, to: .stage(.backlog), as: "ada")
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(status: .open, stage: .backlog))
+        XCTAssertEqual(tasks.open.map(\.id), ["b"])
+        XCTAssertEqual(TaskBoardColumn.of(tasks.open[0]), .stage(.backlog))
+        XCTAssertEqual(stand.heard.last, "Moved Renew the lease to To do")
+        await tasks.move(tasks.open[0], to: .stage(.review), as: "ada")
+
         // A move that could not be made says why: no room to open it again, or a failure.
         stand.changeFails = TaskError.tooMany
         await tasks.move(tasks.finished[0], to: .stage(.backlog), as: "ada")
@@ -1536,6 +1547,13 @@ final class TasksModelTests: XCTestCase {
         await gate.letOneThrough()
         await moving.value
         XCTAssertEqual(stand.heard.count, heard)
+    }
+
+    func testAWindowsChoiceOfListOrBoard() {
+        XCTAssertEqual(TasksView.Layout.resolve("Board"), .board)
+        XCTAssertEqual(TasksView.Layout.resolve("List"), .list)
+        XCTAssertEqual(TasksView.Layout.resolve("Calendar"), .list, "A kept choice that names no view")
+        XCTAssertEqual(TasksView.Layout.allCases.map(\.rawValue), ["List", "Board"], "As the bar and the Mac's menu name them")
     }
 
     // MARK: - On me

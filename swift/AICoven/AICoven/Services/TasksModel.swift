@@ -379,11 +379,14 @@ final class TasksModel: ObservableObject {
 
     /// Moves a task to a column of the Board: to a stage (a finished task
     /// is opened again there, while its place has room), or to Done,
-    /// which marks it done. Nothing is asked for the column it is in.
+    /// which marks it done. Nothing is asked for the column it is in. A
+    /// stage's column holds open tasks, so a move to one asks for the task
+    /// to be open, whatever the card showed: the store decides against
+    /// the task as it is then, also one finished since the card was drawn.
     func move(_ task: TaskItem, to column: TaskBoardColumn, as account: String) async {
         guard TaskBoardColumn.of(task) != column else { return }
         let moved = switch column {
-        case let .stage(stage): TaskChange(status: task.isFinished ? .open : nil, stage: stage)
+        case let .stage(stage): TaskChange(status: .open, stage: stage)
         case .done: TaskChange(status: .done)
         }
         await change(

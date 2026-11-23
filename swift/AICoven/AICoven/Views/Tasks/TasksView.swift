@@ -28,8 +28,9 @@ struct TasksView: View {
     @State private var newTaskLinesUp = 0
     /// Counts the times the Mac's list is asked to scroll to the New task line.
     @State private var scrollsToNewTask = 0
-    /// Which view of a place's tasks shows; kept while the page is open.
-    @State private var layout = Layout.list
+    /// Which view of a place's tasks shows: the window's own choice, kept
+    /// as the person goes from place to place and comes back to Tasks.
+    @SceneStorage(Layout.storageKey) private var storedLayout = Layout.list.rawValue
     /// Whether Done shows its tasks; closed until asked for.
     @State private var showsDone = false
     /// Whether Try again's reading is under way.
@@ -63,6 +64,14 @@ struct TasksView: View {
         case list = "List"
         case board = "Board"
 
+        /// Where a window keeps its choice.
+        static let storageKey = "tasks.layout"
+
+        /// The view a kept choice names; the List for one that names none.
+        static func resolve(_ kept: String) -> Layout {
+            Layout(rawValue: kept) ?? .list
+        }
+
         var id: String {
             rawValue
         }
@@ -74,6 +83,14 @@ struct TasksView: View {
 
     private var isOnMe: Bool {
         model.scope == .onMe
+    }
+
+    private var layout: Layout {
+        Layout.resolve(storedLayout)
+    }
+
+    private func show(_ chosen: Layout) {
+        storedLayout = chosen.rawValue
     }
 
     /// Whether the New task line is built. Counted, not flagged: going
@@ -159,7 +176,7 @@ struct TasksView: View {
                 details(of: open.id, host: .sheet)
             }
             .focusedSceneValue(\.taskSort, TaskSortActions(selected: sort, select: select))
-            .focusedSceneValue(\.taskLayout, isOnMe ? nil : TaskLayoutActions(selected: layout, select: { layout = $0 }))
+            .focusedSceneValue(\.taskLayout, isOnMe ? nil : TaskLayoutActions(selected: layout, select: show))
             .focusedSceneValue(\.taskCommands, taskCommands)
         #else
             // Set only by the stack itself, as the details are popped: when the
@@ -393,7 +410,7 @@ struct TasksView: View {
                     Section("Sort") { sortPicker }
                     if !isOnMe {
                         Section("View") {
-                            Picker("View", selection: $layout) {
+                            Picker("View", selection: Binding(get: { layout }, set: show)) {
                                 ForEach(Layout.allCases) { Text($0.rawValue).tag($0) }
                             }
                             .pickerStyle(.inline)
@@ -431,7 +448,7 @@ struct TasksView: View {
             ForEach(Layout.allCases) { choice in
                 let isSelected = choice == layout
                 Button {
-                    layout = choice
+                    show(choice)
                 } label: {
                     HStack(spacing: Spacing.xxs) {
                         Image(systemName: choice.symbol)
