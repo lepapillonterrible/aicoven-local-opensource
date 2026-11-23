@@ -20,6 +20,8 @@ struct TasksView: View {
     @State private var scrollsToNewTask = 0
     /// Whether Done shows its tasks; closed until asked for.
     @State private var showsDone = false
+    /// Whether Try again's reading is under way.
+    @State private var isTryingAgain = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.isPadLayout) private var isPadLayout
 
@@ -42,8 +44,19 @@ struct TasksView: View {
                             .font(.aicovenBodySmall)
                             .foregroundStyle(Color.aicovenError)
                         if !model.hasRead {
-                            Button("Try again") { Task { await model.load() } }
-                                .buttonStyle(.bordered)
+                            Button("Try again") {
+                                isTryingAgain = true
+                                Task {
+                                    await model.load()
+                                    isTryingAgain = false
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(isTryingAgain)
+                            if isTryingAgain {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
                         }
                     }
                     .padding(.bottom, Spacing.sm)
@@ -222,7 +235,6 @@ struct TasksView: View {
                 .textFieldStyle(.plain)
                 .font(.aicovenBody)
                 .foregroundStyle(Color.aicovenTextPrimary)
-                .disabled(model.isAdding)
                 .focused($newTaskFocused)
                 .onSubmit(addTask)
         }
@@ -244,10 +256,13 @@ struct TasksView: View {
     }
 
     /// Adds what the line holds, and empties it unless something else was
-    /// typed meanwhile.
+    /// typed meanwhile. The cursor stays in the line, for the next task:
+    /// the line is not turned off while one is added (the model adds one
+    /// at a time), since a field turned off gives the cursor up.
     private func addTask() {
         let title = newTaskTitle
         let account = UserScope.currentUserID
+        newTaskFocused = true
         Task {
             guard await model.add(title: title, as: account) else { return }
             if newTaskTitle == title { newTaskTitle = "" }

@@ -124,11 +124,12 @@ extension FocusedValues {
     }
 }
 
-/// The menus for the shell, as the cloud app's: New Thread and New Coven
-/// under File, a Go menu and a Thread menu. An item with nothing to act on
-/// in the front window is disabled, not hidden. The iPad's menu bar, and a
-/// keyboard on an iPad or iPhone, have them without the Mac's own (New
-/// Coven…, the scope's places, Rename… and Delete…), as in the cloud app.
+/// The menus for the shell, as the cloud app's: New Thread, New Task and
+/// New Coven under File, a Go menu and a Thread menu. An item with nothing
+/// to act on in the front window is disabled, not hidden. The iPad's menu
+/// bar, and a keyboard on an iPad or iPhone, have them without the Mac's
+/// own (New Task, New Coven…, the scope's places, Rename… and Delete…), as
+/// in the cloud app.
 struct ShellCommands: Commands {
     @FocusedValue(\.shellCommands) private var shell
     @FocusedValue(\.threadCommands) private var thread
