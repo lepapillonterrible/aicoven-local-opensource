@@ -229,16 +229,22 @@ nonisolated enum TaskCommand: String, Identifiable, Equatable {
         }
     }
 
-    /// What a task can truthfully be offered, by how its pin stands: none
-    /// of it for a finished task.
-    static func offered(for pin: TaskPinState, isFinished: Bool) -> [TaskCommand] {
+    /// What a task's pin can be offered, by how it stands: nothing for a
+    /// finished task. A row's menu, its swipe, its details and the Mac's
+    /// Tasks menu all offer these.
+    static func pins(for pin: TaskPinState, isFinished: Bool) -> [TaskCommand] {
         guard !isFinished else { return [] }
-        let pins: [TaskCommand] = switch pin {
+        return switch pin {
         case .none: [.pinToday, .pinWeek]
         case .today: [.pinWeek, .unpin]
         case .week: [.pinToday, .unpin]
         case .review: [.keepToday, .notToday]
         }
-        return pins + [.setDueDate]
+    }
+
+    /// What the Tasks menu offers a task: its pin's commands and the due
+    /// day; none of it for a finished task.
+    static func offered(for pin: TaskPinState, isFinished: Bool) -> [TaskCommand] {
+        isFinished ? [] : pins(for: pin, isFinished: false) + [.setDueDate]
     }
 }

@@ -201,7 +201,7 @@ struct TaskDetailView: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .disabled(task.isFinished)
-            .accessibilityLabel("Pin: \(Self.pinWords(pin, isCompact: false))")
+            .accessibilityLabel(Self.pinWords(pin, isCompact: false))
 
             Button {
                 editingDue = true

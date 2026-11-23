@@ -97,6 +97,10 @@ final class TaskRulesTests: XCTestCase {
         XCTAssertEqual(TaskCommand.offered(for: .week, isFinished: false), [.pinToday, .unpin, .setDueDate])
         XCTAssertEqual(TaskCommand.offered(for: .review, isFinished: false), [.keepToday, .notToday, .setDueDate])
         XCTAssertEqual(TaskCommand.offered(for: .today, isFinished: true), [], "Nothing for a finished task")
+        // A row's menu, its swipe and its details offer the pin's own commands, from the same table.
+        XCTAssertEqual(TaskCommand.pins(for: .none, isFinished: false), [.pinToday, .pinWeek])
+        XCTAssertEqual(TaskCommand.pins(for: .review, isFinished: false), [.keepToday, .notToday])
+        XCTAssertEqual(TaskCommand.pins(for: .week, isFinished: true), [])
         XCTAssertEqual(
             [TaskCommand.pinToday, .pinWeek, .unpin, .keepToday, .notToday, .setDueDate].map(\.title),
             ["Pin for today", "Pin for this week", "Unpin", "Keep for today", "Not today", "Set Due Date…"]

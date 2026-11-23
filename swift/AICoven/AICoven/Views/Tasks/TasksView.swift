@@ -79,17 +79,22 @@ struct TasksView: View {
                     .onChange(of: proxy.size.width) { _, width in pageWidth = width }
             }
         )
+        // The due day's sheet is of the details that were open: it does not
+        // come up by itself over the next ones.
+        .onChange(of: model.detailsOf) { editingDue = false }
         #if os(macOS)
-        .sheet(item: Binding(get: { model.detailsOf.map(OpenTask.init) }, set: { model.detailsOf = $0?.id })) { open in
-            details(of: open.id, host: .sheet)
-        }
-        .focusedSceneValue(\.taskSort, TaskSortActions(selected: sort, select: select))
-        .focusedSceneValue(\.taskCommands, taskCommands)
+            .sheet(item: Binding(get: { model.detailsOf.map(OpenTask.init) }, set: { model.detailsOf = $0?.id })) { open in
+                details(of: open.id, host: .sheet)
+            }
+            .focusedSceneValue(\.taskSort, TaskSortActions(selected: sort, select: select))
+            .focusedSceneValue(\.taskCommands, taskCommands)
         #else
-        .navigationDestination(item: Binding(get: { showsPane ? nil : model.detailsOf }, set: { model.detailsOf = $0 })) { id in
-            details(of: id, host: .page)
-                .navigationBarTitleDisplayMode(.inline)
-        }
+            // Set only by the stack itself, as the details are popped: when the
+            // pane takes them over the pushed screen goes, and the details stay.
+            .navigationDestination(item: Binding(get: { showsPane ? nil : model.detailsOf }, set: { if !showsPane { model.detailsOf = $0 } })) { id in
+                details(of: id, host: .page)
+                    .navigationBarTitleDisplayMode(.inline)
+            }
         #endif
     }
 
@@ -559,20 +564,16 @@ struct TaskPinActions: View {
     let onAnswer: (Bool) -> Void
 
     var body: some View {
-        if !task.isFinished {
-            switch pin {
-            case .today:
-                Button("Pin for this week") { onPin(.week) }
-                Button("Unpin", action: onUnpin)
-            case .week:
-                Button("Pin for today") { onPin(.today) }
-                Button("Unpin", action: onUnpin)
-            case .review:
-                Button("Keep for today") { onAnswer(true) }
-                Button("Not today") { onAnswer(false) }
-            case .none:
-                Button("Pin for today") { onPin(.today) }
-                Button("Pin for this week") { onPin(.week) }
+        ForEach(TaskCommand.pins(for: pin, isFinished: task.isFinished)) { command in
+            Button(command.title) {
+                switch command {
+                case .pinToday: onPin(.today)
+                case .pinWeek: onPin(.week)
+                case .unpin: onUnpin()
+                case .keepToday: onAnswer(true)
+                case .notToday: onAnswer(false)
+                case .setDueDate: break
+                }
             }
         }
     }
