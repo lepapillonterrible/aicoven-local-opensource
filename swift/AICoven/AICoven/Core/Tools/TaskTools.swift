@@ -229,6 +229,8 @@ nonisolated enum TaskTools {
         for action in actions {
             guard await store.account() == account else { return accountChanged(call) }
             do {
+                // A turn that was stopped does no more of its command.
+                try Task.checkCancellation()
                 if let said = try await perform(action, inCoven: covenID, threadID: threadID, turn: turn, account: account, store: store) {
                     done.append(said)
                     changed += 1
@@ -286,21 +288,24 @@ nonisolated enum TaskTools {
             let dueWords = due.map { "; due: \($0.date.rawValue)" } ?? ""
             return "Added: " + AttachmentContext.plainName(made.title) + " (task_id: \(made.id)\(dueWords))"
         }
-        let (words, change, saying): (String, TaskChange, String)
+        let (words, asked, done): (String, TaskChange, String)
+        // The day a task is moved to, where it is moved to one.
+        var movedTo: TaskDue?
         switch action {
         case .add:
             return nil
         case let .complete(title):
-            (words, change, saying) = (title, TaskChange(status: .done, onlyWhileOpen: true), "Marked done")
+            (words, asked, done) = (title, TaskChange(status: .done, onlyWhileOpen: true), "Marked done")
         case let .move(title, stage?):
-            (words, change, saying) = (title, TaskChange(stage: stage, onlyWhileOpen: true), "Moved to \(stage.title)")
+            (words, asked, done) = (title, TaskChange(stage: stage, onlyWhileOpen: true), "Moved to \(stage.title)")
         case let .move(title, nil):
-            (words, change, saying) = (title, TaskChange(status: .done, onlyWhileOpen: true), "Marked done")
+            (words, asked, done) = (title, TaskChange(status: .done, onlyWhileOpen: true), "Marked done")
         case let .reschedule(title, when):
             guard let day = TaskCommandReader.day(named: when, from: store.now(), calendar: store.calendar()), let due = TaskDue(date: day) else {
                 throw Refusal(words: "Not changed: '\(AttachmentContext.plainName(when))' names no day.")
             }
-            (words, change, saying) = (title, TaskChange(due: .to(due), onlyWhileOpen: true), "Due \(day.rawValue)")
+            (words, asked, done) = (title, TaskChange(onlyWhileOpen: true), "Due \(day.rawValue)")
+            movedTo = due
         }
         // Among the place's open tasks whose titles can be read: the one
         // whose title is these words (of several, the one last changed),
@@ -318,6 +323,14 @@ nonisolated enum TaskTools {
                 words: "Not changed: \(holding.count) open tasks here have '\(AttachmentContext.plainName(words))' in their titles ("
                     + titles + (holding.count > mostNamed ? "; …" : "") + "). Name one by its whole title."
             )
+        }
+        var (change, saying) = (asked, done)
+        if let movedTo {
+            // Another day, at the time of day it was due: the command
+            // names a day, and the time is the person's own.
+            let due = TaskDue(date: movedTo.date, time: task.due?.time) ?? movedTo
+            change.due = .to(due)
+            if let time = due.time { saying += " \(time)" }
         }
         guard turn.takeAChange() else {
             throw Refusal(words: "Not changed: this turn has changed tasks \(TurnTasks.mostChanges) times, which is as many as a turn may.")
@@ -379,7 +392,9 @@ nonisolated enum TaskTools {
     /// A whole number given as such or as its digits, within `range`;
     /// `otherwise` for none given, nil for one that is no such number.
     private static func number(_ value: AnyJSONValue?, otherwise: Int, in range: ClosedRange<Int>) -> Int? {
-        guard let given = value?.value else { return otherwise }
+        // Left out, or null (which a model sends for what it does not use).
+        guard let value, value != .null else { return otherwise }
+        let given = value.value
         let number: Int? = if let whole = given as? Int {
             whole
         } else if let real = given as? Double, real == real.rounded(), abs(real) < 1e12 {

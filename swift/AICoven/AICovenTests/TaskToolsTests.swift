@@ -88,12 +88,12 @@ final class TaskToolsTests: XCTestCase {
     }
 
     private func task(
-        _ id: String, _ title: String, status: TaskStatus = .open, stage: TaskStage = .backlog, due: String? = nil, thread: String? = nil,
-        unreadable: Bool = false, made: TimeInterval = 0, changed: TimeInterval = 0
+        _ id: String, _ title: String, status: TaskStatus = .open, stage: TaskStage = .backlog, due: String? = nil, at time: String? = nil,
+        thread: String? = nil, unreadable: Bool = false, made: TimeInterval = 0, changed: TimeInterval = 0
     ) -> TaskItem {
         var item = TaskItem(
             id: id, covenID: nil, title: unreadable ? "" : title, status: status, stage: stage,
-            due: due.flatMap { TaskDueDate(rawValue: $0) }.flatMap { TaskDue(date: $0) }, pin: nil, isUnreadable: unreadable,
+            due: due.flatMap { TaskDueDate(rawValue: $0) }.flatMap { TaskDue(date: $0, time: time) }, pin: nil, isUnreadable: unreadable,
             createdAt: Date(timeIntervalSince1970: made), updatedAt: Date(timeIntervalSince1970: changed)
         )
         item.threadID = thread
@@ -273,7 +273,7 @@ final class TaskToolsTests: XCTestCase {
         XCTAssertEqual(page.contextBlock, "[Tasks] None found.")
 
         // A filter left out, null or of no words is none.
-        found = await ids(["status": "", "stage": "  ", "query": NSNull()])
+        found = await ids(["status": "", "stage": "  ", "query": NSNull(), "limit": NSNull(), "offset": NSNull()])
         XCTAssertEqual(found, ["a", "b", "c", "d"])
         // What is given and is no filter is said: it is not read as left out, nor as another.
         for (args, field) in [
@@ -404,7 +404,8 @@ final class TaskToolsTests: XCTestCase {
         let stand = stand()
         stand.tasks["work"] = [
             task("web", "Auth QA for web", changed: 1), task("ios", "Auth QA for iOS", changed: 5), task("done", "Auth QA of last year", status: .done, changed: 9),
-            task("locked", "", unreadable: true, changed: 10), task("cafe", "Café invoice", changed: 7), task("inv", "Invoice", changed: 2),
+            task("locked", "", unreadable: true, changed: 10), task("cafe", "Café invoice", due: "2027-01-15", at: "15:00", changed: 7),
+            task("inv", "Invoice", changed: 2),
             task("twin", "Invoice", changed: 3),
         ]
         stand.tasks[""] = [task("mine", "Auth QA at home", changed: 20)]
@@ -443,6 +444,13 @@ final class TaskToolsTests: XCTestCase {
         XCTAssertTrue(result.contextBlock?.contains("- Due 2027-01-18: Invoice (task_id: twin)") == true)
         XCTAssertEqual(stand.changed.map(\.account), ["ada", "ada", "ada", "ada"])
 
+        // A task due at a time of day is moved to the day named at that time: the time is the person's own.
+        result = await command("Move the cafe invoice to Monday", stand)
+        XCTAssertEqual(stand.changed.last?.id, "cafe")
+        let mondayAtThree = try XCTUnwrap(TaskDueDate(rawValue: "2027-01-18").flatMap { TaskDue(date: $0, time: "15:00") })
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(due: .to(mondayAtThree), onlyWhileOpen: true))
+        XCTAssertTrue(result.contextBlock?.contains("- Due 2027-01-18 15:00: Café invoice (task_id: cafe)") == true)
+
         // No open task of the place holds the words: nothing is changed, and it says so.
         let before = stand.changed.count
         result = await command("mark the dentist done and mark Auth QA at home done", stand)
@@ -473,6 +481,19 @@ final class TaskToolsTests: XCTestCase {
             lines.suffix(3).map { String($0.prefix(12)) }, ["- Added: boo", "- Marked don", "- Not found:"]
         )
         XCTAssertEqual(stand.created.first?.due?.date.rawValue, "2027-01-15")
+    }
+
+    func testAStoppedTurnDoesNoMoreOfACommand() async {
+        let stand = stand()
+        stand.tasks["work"] = [task("qa", "Auth QA")]
+        let stopped = Task { () -> ToolExecutionResult in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await self.command("add task one and mark Auth QA done", stand)
+        }
+        let result = await stopped.value
+        XCTAssertEqual(stand.created.count + stand.changed.count, 0)
+        XCTAssertTrue(result.contextBlock?.contains("[Tasks] 0 of 2 done.") == true)
+        XCTAssertTrue(result.contextBlock?.contains("- Stopped before the rest was done.") == true)
     }
 
     func testWhatIsNoCommandDoesNothing() async {
