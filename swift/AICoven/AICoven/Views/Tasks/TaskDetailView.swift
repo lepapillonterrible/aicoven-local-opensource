@@ -264,13 +264,18 @@ struct TaskDueSheet: View {
         let start = task.due?.date.date() ?? Calendar.current.startOfDay(for: Date())
         _day = State(initialValue: start)
         _hasTime = State(initialValue: task.due?.time != nil)
-        _time = State(initialValue: Self.time(task.due?.time, on: start) ?? start.addingTimeInterval(9 * 3600))
+        _time = State(initialValue: Self.pickerTime(task.due?.time))
     }
 
-    /// A time of day, `HH:mm`, on `day`, for the picker to start at.
-    private static func time(_ clock: String?, on day: Date) -> Date? {
-        guard let parts = clock?.split(separator: ":").compactMap({ Int($0) }), parts.count == 2 else { return nil }
-        return Calendar.current.date(bySettingHour: parts[0], minute: parts[1], second: 0, of: day)
+    /// Where the time picker starts: the task's time of day, or nine in
+    /// the morning for a task with none. It is a time of day only, told
+    /// on a day of its own on which the clocks do not change, not on the
+    /// due day: there a time the clock skips would be moved on, and saved
+    /// so without the person having touched it.
+    static func pickerTime(_ clock: String?, calendar: Calendar = .current) -> Date {
+        let parts = clock?.split(separator: ":").compactMap { Int($0) } ?? []
+        let (hour, minute) = parts.count == 2 ? (parts[0], parts[1]) : (9, 0)
+        return calendar.date(from: DateComponents(year: 2001, month: 1, day: 1, hour: hour, minute: minute)) ?? Date(timeIntervalSinceReferenceDate: 0)
     }
 
     var body: some View {

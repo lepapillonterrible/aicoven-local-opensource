@@ -28,9 +28,6 @@ struct TasksView: View {
     /// The time the list is drawn for: pins run out and days pass while
     /// the page is open, so it is told again as time goes.
     @State private var now = Date()
-    /// The task whose details are open: its id only, so that the model
-    /// stays the one that holds the task.
-    @State private var selectedTaskID: String?
     /// Whether the due day's sheet of the task whose details are open is up.
     @State private var editingDue = false
     /// The page's width, which says whether the iPad has room for the
@@ -68,7 +65,7 @@ struct TasksView: View {
     var body: some View {
         HStack(spacing: 0) {
             page
-            if showsPane, let id = selectedTaskID {
+            if showsPane, let id = model.detailsOf {
                 Divider()
                 details(of: id, host: .pane)
                     .frame(width: Self.paneWidth)
@@ -82,19 +79,14 @@ struct TasksView: View {
                     .onChange(of: proxy.size.width) { _, width in pageWidth = width }
             }
         )
-        // A task that is gone, or among the finished ones no longer
-        // listed, has no details to show.
-        .onChange(of: model.open + model.finished) {
-            if let id = selectedTaskID, model.task(id) == nil { selectedTaskID = nil }
-        }
         #if os(macOS)
-        .sheet(item: Binding(get: { selectedTaskID.map(OpenTask.init) }, set: { selectedTaskID = $0?.id })) { open in
+        .sheet(item: Binding(get: { model.detailsOf.map(OpenTask.init) }, set: { model.detailsOf = $0?.id })) { open in
             details(of: open.id, host: .sheet)
         }
         .focusedSceneValue(\.taskSort, TaskSortActions(selected: sort, select: select))
         .focusedSceneValue(\.taskCommands, taskCommands)
         #else
-        .navigationDestination(item: Binding(get: { showsPane ? nil : selectedTaskID }, set: { selectedTaskID = $0 })) { id in
+        .navigationDestination(item: Binding(get: { showsPane ? nil : model.detailsOf }, set: { model.detailsOf = $0 })) { id in
             details(of: id, host: .page)
                 .navigationBarTitleDisplayMode(.inline)
         }
@@ -114,14 +106,14 @@ struct TasksView: View {
             },
             onAnswer: { task, keep in answer([task], keep: keep) },
             editingDue: $editingDue,
-            onClose: { selectedTaskID = nil }
+            onClose: { model.detailsOf = nil }
         )
     }
 
     #if os(macOS)
     /// What the Tasks menu offers for the task whose details are open.
     private var taskCommands: TaskCommandActions? {
-        guard let task = selectedTaskID.flatMap(model.task) else { return nil }
+        guard let task = model.detailsOf.flatMap(model.task) else { return nil }
         func offered(_ task: TaskItem) -> [TaskCommand] {
             TaskCommand.offered(for: TaskRules.pinState(of: task, now: Date()), isFinished: task.isFinished)
         }
@@ -331,7 +323,7 @@ struct TasksView: View {
                         row(task).taskListRow(vertical: 0)
                     }
                     if model.finishedCount > model.finished.count {
-                        Text("The \(model.finished.count) finished last are listed.")
+                        Text("Older finished tasks are not listed.")
                             .font(.aicovenBodySmall)
                             .foregroundStyle(Color.aicovenTextSecondary)
                             .padding(.leading, TaskListMetrics.titleInset)
@@ -440,7 +432,7 @@ struct TasksView: View {
                 Task { await model.unpin(task, as: account) }
             },
             onAnswer: { keep in answer([task], keep: keep) },
-            onDetails: { selectedTaskID = task.id }
+            onDetails: { model.detailsOf = task.id }
         )
     }
 
@@ -733,6 +725,8 @@ private struct TaskRow: View {
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             if task.isFinished {
                 Button("Reopen") { onTick(false) }
+                    .tint(.aicovenSwipeNeutral)
+                Button("Details…", action: onDetails)
                     .tint(.aicovenSwipeNeutral)
             } else {
                 Menu("More…") {

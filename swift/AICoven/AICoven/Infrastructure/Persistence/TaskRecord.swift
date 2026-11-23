@@ -380,8 +380,11 @@ actor TaskRepository {
     /// gives, with how many are finished in all. Within each, the one
     /// last changed comes first (of two changed at once, the one made
     /// later). A task whose title cannot be opened with the account's key
-    /// is listed as unreadable, with no title.
-    func tasks(inCoven covenID: String?, as account: String) async throws -> TaskListing {
+    /// is listed as unreadable, with no title. `alsoListing` names a task
+    /// of that place to list even where it is finished and not among the
+    /// ones last changed (the one whose details are on screen): it then
+    /// comes after them.
+    func tasks(inCoven covenID: String?, alsoListing shown: String? = nil, as account: String) async throws -> TaskListing {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         let coven = covenID ?? ""
         return try await AccountSeal.reading(as: account) {
@@ -404,11 +407,17 @@ actor TaskRepository {
                     """,
                     arguments: [account, coven, TaskStatus.open.rawValue, Self.mostFinishedListed]
                 )
+                var also: [Row] = []
+                if let shown, !(open + done).contains(where: { ($0["id"] as String) == shown }) {
+                    also = try Row.fetchAll(
+                        db, sql: "SELECT \(columns) FROM tasks WHERE id = ? AND user_id = ? AND coven_id = ?", arguments: [shown, account, coven]
+                    )
+                }
                 let count = try Int.fetchOne(
                     db, sql: "SELECT COUNT(*) FROM tasks WHERE user_id = ? AND coven_id = ? AND status <> ?",
                     arguments: [account, coven, TaskStatus.open.rawValue]
                 ) ?? 0
-                return ((open + done).map(Stored.init), count)
+                return ((open + done + also).map(Stored.init), count)
             }
             var tasks: [TaskItem] = []
             for stored in stored {

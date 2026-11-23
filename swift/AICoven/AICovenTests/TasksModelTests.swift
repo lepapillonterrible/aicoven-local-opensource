@@ -7,10 +7,10 @@ import XCTest
 @MainActor
 final class TasksModelTests: XCTestCase {
     private func task(
-        _ id: String, _ title: String? = nil, status: TaskStatus = .open, pin: TaskPin? = nil, unreadable: Bool = false
+        _ id: String, _ title: String? = nil, status: TaskStatus = .open, due: TaskDue? = nil, pin: TaskPin? = nil, unreadable: Bool = false
     ) -> TaskItem {
         TaskItem(
-            id: id, covenID: nil, title: unreadable ? "" : title ?? id.capitalized, status: status, stage: .backlog, due: nil, pin: pin,
+            id: id, covenID: nil, title: unreadable ? "" : title ?? id.capitalized, status: status, stage: .backlog, due: due, pin: pin,
             isUnreadable: unreadable, createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
         )
     }
@@ -66,6 +66,10 @@ final class TasksModelTests: XCTestCase {
         var readFails: Error?
         var readingWaits: Gate?
         var readings: [(covenID: String?, account: String)] = []
+        /// The most finished tasks a reading lists, as the store's listing has a most.
+        var mostFinished: Int?
+        /// The task each reading was asked to list besides.
+        var alsoAsked: [String?] = []
         var created: [(title: String, covenID: String?, account: String)] = []
         var createFails: Error?
         var creatingWaits: Gate?
@@ -84,15 +88,21 @@ final class TasksModelTests: XCTestCase {
         TasksModel(
             covenID: covenID,
             source: TasksModel.Source(
-                tasks: { covenID, account in
+                tasks: { covenID, also, account in
                     // What is kept is read, or fails to be, as the reading is asked;
                     // what came of it is given once it is let through.
                     let outcome: Result<TaskListing, Error> = await MainActor.run {
                         stand.readings.append((covenID, account))
+                        stand.alsoAsked.append(also)
                         if let error = stand.readFails { return .failure(error) }
                         let open = stand.kept.filter { !$0.isFinished }
                         let finished = stand.kept.filter(\.isFinished)
-                        return .success(TaskListing(tasks: open + finished, finished: stand.finishedInAll ?? finished.count))
+                        // As the store: the finished ones it lists, and the one asked for by name besides.
+                        var listed = Array(finished.prefix(stand.mostFinished ?? finished.count))
+                        if let also, !listed.contains(where: { $0.id == also }), let named = finished.first(where: { $0.id == also }) {
+                            listed.append(named)
+                        }
+                        return .success(TaskListing(tasks: open + listed, finished: stand.finishedInAll ?? finished.count))
                     }
                     await MainActor.run { stand.readingWaits }?.wait()
                     return try outcome.get()
@@ -120,7 +130,13 @@ final class TasksModelTests: XCTestCase {
                             case .cleared: pin = nil
                             case nil: break
                             }
-                            return self.task(kept.id, kept.title, status: change.status ?? kept.status, pin: pin)
+                            var due = kept.due
+                            switch change.due {
+                            case let .to(new): due = new
+                            case .cleared: due = nil
+                            case nil: break
+                            }
+                            return self.task(kept.id, change.title ?? kept.title, status: change.status ?? kept.status, due: due, pin: pin)
                         }
                     }
                 },
@@ -588,7 +604,7 @@ final class TasksModelTests: XCTestCase {
         let tasks = TasksModel(
             covenID: nil,
             source: TasksModel.Source(
-                tasks: { _, _ in await MainActor.run { TaskListing(tasks: stand.kept, finished: 0) } },
+                tasks: { _, _, _ in await MainActor.run { TaskListing(tasks: stand.kept, finished: 0) } },
                 create: { _, _, _ in throw TaskError.tooMany },
                 change: { _, _, _ in },
                 answerLapsedPins: { ids, keepUntil, _ in
@@ -654,11 +670,12 @@ final class TasksModelTests: XCTestCase {
         XCTAssertEqual(stand.changed.last?.change, TaskChange(title: "Call the branch"), "The title and nothing else")
         XCTAssertEqual(stand.changed.last?.account, "ada")
         XCTAssertEqual(stand.heard.last, "Renamed to Call the branch")
+        XCTAssertEqual(tasks.task("a")?.title, "Call the branch", "Read again, the list shows it")
 
         // Nothing to say, or what it is called already: nothing is asked.
         let asked = stand.changed.count
-        await tasks.rename(task("a", "Call the bank"), to: " \n ", as: "ada")
-        await tasks.rename(task("a", "Call the bank"), to: " Call the  bank", as: "ada")
+        await tasks.rename(task("a", "Call the branch"), to: " \n ", as: "ada")
+        await tasks.rename(task("a", "Call the branch"), to: " Call the  branch", as: "ada")
         XCTAssertEqual(stand.changed.count, asked)
         // A task whose title could not be opened is named anew, whatever it was.
         await tasks.rename(tasks.open[1], to: "Named anew", as: "ada")
@@ -666,8 +683,9 @@ final class TasksModelTests: XCTestCase {
         XCTAssertEqual(stand.changed.last?.change, TaskChange(title: "Named anew"))
 
         stand.changeFails = RepositoryError.databaseUnavailable
-        await tasks.rename(task("a", "Call the bank"), to: "Other", as: "ada")
-        XCTAssertEqual(tasks.errorMessage, "Couldn't save the change to “Call the bank”. Try again.")
+        await tasks.rename(task("a", "Call the branch"), to: "Other", as: "ada")
+        XCTAssertEqual(tasks.errorMessage, "Couldn't save the change to “Call the branch”. Try again.")
+        XCTAssertEqual(tasks.task("a")?.title, "Call the branch", "As it was")
     }
 
     func testATasksDueDayIsSetWithOrWithoutATime_andTakenAway() async throws {
@@ -682,11 +700,14 @@ final class TasksModelTests: XCTestCase {
         await tasks.setDue(listed, to: withTime, as: "ada")
         XCTAssertEqual(stand.changed.last?.change, TaskChange(due: .to(withTime)), "The due day and nothing else")
         XCTAssertEqual(stand.heard.last, "Due date set")
+        XCTAssertEqual(tasks.task("a")?.due, withTime, "Read again, the list shows it")
         await tasks.setDue(listed, to: dayOnly, as: "ada")
         XCTAssertEqual(stand.changed.last?.change, TaskChange(due: .to(dayOnly)))
+        XCTAssertEqual(tasks.task("a")?.due, dayOnly)
         await tasks.setDue(listed, to: nil, as: "ada")
         XCTAssertEqual(stand.changed.last?.change, TaskChange(due: .cleared))
         XCTAssertEqual(stand.heard.last, "Due date removed")
+        XCTAssertNil(tasks.task("a")?.due)
 
         stand.changeFails = RepositoryError.databaseUnavailable
         await tasks.setDue(listed, to: dayOnly, as: "ada")
@@ -696,6 +717,35 @@ final class TasksModelTests: XCTestCase {
         // The task as it was last read, by its id; none for one that is gone.
         XCTAssertEqual(tasks.task("a")?.title, "Call the bank")
         XCTAssertNil(tasks.task("gone"))
+    }
+
+    func testTheTaskWhoseDetailsAreOpenStaysListed_andItsDetailsCloseOnlyWhenItIsGone() async {
+        let stand = Stand()
+        stand.kept = [task("open"), task("newer", status: .done), task("oldest", status: .closed)]
+        stand.mostFinished = 2
+        let tasks = model(stand)
+        await tasks.load()
+        XCTAssertEqual(stand.alsoAsked, [nil], "No details open: nothing more is asked for")
+
+        // The details of the oldest finished task listed are opened; another task is then finished,
+        // which leaves it out of the ones last changed.
+        tasks.detailsOf = "oldest"
+        stand.kept = [task("newest", status: .done), task("newer", status: .done), task("oldest", status: .closed)]
+        await tasks.load()
+        XCTAssertEqual(stand.alsoAsked.last, "oldest", "Every reading asks for it by name")
+        XCTAssertEqual(tasks.finished.map(\.id), ["newest", "newer", "oldest"], "Listed all the same, after the others")
+        XCTAssertEqual(tasks.detailsOf, "oldest", "Its details stay open")
+        XCTAssertEqual(tasks.task("oldest")?.status, .closed)
+
+        // Gone (with its coven, say): its details close.
+        stand.kept = [task("newest", status: .done), task("newer", status: .done)]
+        await tasks.load()
+        XCTAssertNil(tasks.detailsOf)
+        // A reading that fails closes nothing.
+        tasks.detailsOf = "newer"
+        stand.readFails = RepositoryError.databaseUnavailable
+        await tasks.load()
+        XCTAssertEqual(tasks.detailsOf, "newer")
     }
 
     func testWhatTheDetailsSayOfATask() throws {
@@ -728,6 +778,17 @@ final class TasksModelTests: XCTestCase {
         let at = try XCTUnwrap(calendar.date(from: DateComponents(year: 2000, month: 1, day: 1, hour: 7, minute: 5)))
         XCTAssertEqual(TaskDueSheet.due(day: chosen, time: nil, calendar: calendar), try TaskDue(date: XCTUnwrap(TaskDueDate(rawValue: "2027-03-05"))))
         XCTAssertEqual(TaskDueSheet.due(day: chosen, time: at, calendar: calendar)?.time, "07:05")
+
+        // The time picker starts at the task's time of day, on a day of its own: a time the clock
+        // skips on the due day comes back from the sheet as it was set, not an hour on.
+        var berlin = Calendar(identifier: .gregorian)
+        berlin.timeZone = try XCTUnwrap(TimeZone(identifier: "Europe/Berlin"))
+        let skipped = TaskDueSheet.pickerTime("02:30", calendar: berlin)
+        XCTAssertEqual(berlin.dateComponents([.hour, .minute], from: skipped), DateComponents(hour: 2, minute: 30))
+        let dueDay = try XCTUnwrap(berlin.date(from: DateComponents(year: 2027, month: 3, day: 28, hour: 12)))
+        XCTAssertEqual(TaskDueSheet.due(day: dueDay, time: skipped, calendar: berlin), try TaskDue(date: XCTUnwrap(TaskDueDate(rawValue: "2027-03-28")), time: "02:30"))
+        XCTAssertEqual(berlin.dateComponents([.hour, .minute], from: TaskDueSheet.pickerTime(nil, calendar: berlin)), DateComponents(hour: 9, minute: 0))
+        XCTAssertEqual(berlin.dateComponents([.hour, .minute], from: TaskDueSheet.pickerTime("soon", calendar: berlin)), DateComponents(hour: 9, minute: 0))
     }
 
     // MARK: - New Task
