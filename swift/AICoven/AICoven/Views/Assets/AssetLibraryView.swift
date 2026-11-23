@@ -21,6 +21,8 @@ struct AssetLibraryView: View {
     #if os(macOS)
     /// List or Grid, as the cloud Mac's library: the window's own choice.
     @SceneStorage(AssetLibraryRules.layoutKey) private var layout = AssetLibraryLayout.list
+    /// How many cards a row of the grid holds, as it is laid out now.
+    @State private var gridColumns = 1
     #endif
     #if os(macOS)
     /// The row selected in the table, shown in the inspector.
@@ -404,8 +406,41 @@ struct AssetLibraryView: View {
     /// then in the inspector), a double click or Return opens it.
     private var grid: some View {
         let shown = model.shown
-        return ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 180, maximum: 260), spacing: Spacing.md, alignment: .top)], alignment: .leading, spacing: Spacing.md) {
+        let ids = (shown.needsReview + shown.others).map(\.id)
+        return ScrollViewReader { scroller in
+            gridCards(shown)
+                // The arrow keys choose a card (the first where none is
+                // chosen), Return opens it and Space previews it, as in the table.
+                .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow]) { press in
+                    let step = switch press.key {
+                    case .leftArrow: -1
+                    case .rightArrow: 1
+                    case .upArrow: -gridColumns
+                    default: gridColumns
+                    }
+                    guard let next = AssetLibraryRules.chosen(after: selectedID, movingBy: step, among: ids) else { return .ignored }
+                    selectedID = next
+                    scroller.scrollTo(next)
+                    return .handled
+                }
+                .onKeyPress(.return) {
+                    guard let chosen = selectedID ?? ids.first else { return .ignored }
+                    selectedID = chosen
+                    openID = chosen
+                    return .handled
+                }
+        }
+    }
+
+    private func gridCards(_ shown: (needsReview: [Asset], others: [Asset])) -> some View {
+        ScrollView {
+            LazyVGrid(
+                columns: [GridItem(
+                    .adaptive(minimum: AssetLibraryRules.gridCard.lowerBound, maximum: AssetLibraryRules.gridCard.upperBound), spacing: Spacing.md,
+                    alignment: .top
+                )],
+                alignment: .leading, spacing: Spacing.md
+            ) {
                 if !shown.needsReview.isEmpty {
                     Section {
                         ForEach(shown.needsReview) { card($0) }
@@ -422,15 +457,18 @@ struct AssetLibraryView: View {
                 }
             }
             .padding(Spacing.md)
+            // How many cards a row holds, for the up and down arrows.
+            .background(GeometryReader { proxy in
+                Color.clear
+                    .onAppear { gridColumns = AssetLibraryRules.gridColumns(width: proxy.size.width - 2 * Spacing.md, spacing: Spacing.md) }
+                    .onChange(of: proxy.size.width) { _, width in
+                        gridColumns = AssetLibraryRules.gridColumns(width: width - 2 * Spacing.md, spacing: Spacing.md)
+                    }
+            })
         }
         .background(Color.aicovenSurface)
         .focusable()
         .focusEffectDisabled()
-        .onKeyPress(.return) {
-            guard let selectedID else { return .ignored }
-            openID = selectedID
-            return .handled
-        }
     }
 
     private func gridHeader(_ words: String) -> some View {
@@ -467,6 +505,7 @@ struct AssetLibraryView: View {
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { selectedID = asset.id }
         .accessibilityAction(named: "Open") { openID = asset.id }
+        .id(asset.id)
     }
 
     /// The asset open full size, as a sheet takes it.
@@ -590,8 +629,21 @@ struct AssetThumbnail: View {
     var width: CGFloat?
     var height: CGFloat?
     /// The asset's picture, once drawn (`AssetThumbnails`): of its latest
-    /// picture or PDF. Any other asset keeps its type's well.
-    @State private var picture: CGImage?
+    /// picture or PDF. Any other asset keeps its type's well. Kept with
+    /// what it was drawn for (the files, and the thumbnails' generation):
+    /// it is shown only while that is still what the view asks for, so a
+    /// picture is gone at once when the thumbnails are forgotten, and one
+    /// drawn for an earlier file never shows over a later one's.
+    @State private var drawn: (key: String, picture: CGImage)?
+    @ObservedObject private var thumbnails = AssetThumbnails.shared
+
+    private var key: String {
+        "\(AssetThumbnails.key(of: asset))#\(thumbnails.generation)"
+    }
+
+    private var picture: CGImage? {
+        drawn?.key == key ? drawn?.picture : nil
+    }
 
     private var type: AssetType {
         asset.type
@@ -639,10 +691,13 @@ struct AssetThumbnail: View {
                     .strokeBorder(Color.aicovenBorder, lineWidth: 1)
             )
             .accessibilityHidden(true)
-            // Drawn for the file it is drawn from: again when that changes
-            // (a newer file, or an asset the key can open again).
-            .task(id: AssetThumbnails.file(of: asset)?.id) {
-                picture = await AssetThumbnails.shared.picture(of: asset, as: UserScope.currentUserID)
+            // Drawn for the files it can be drawn from: again when they
+            // change (a newer file, an asset the key can open again) and
+            // when the thumbnails were forgotten.
+            .task(id: key) {
+                let asked = key
+                guard let picture = await thumbnails.picture(of: asset, as: UserScope.currentUserID), !Task.isCancelled else { return }
+                drawn = (asked, picture)
             }
     }
 

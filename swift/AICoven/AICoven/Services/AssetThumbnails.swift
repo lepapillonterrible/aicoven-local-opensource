@@ -1,3 +1,4 @@
+internal import Combine
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -8,10 +9,18 @@ import ImageIO
 /// keeps them in a cache on disk; here a picture or a PDF is drawn in
 /// memory, and any other kind of file keeps its type's symbol.) What is
 /// held is one account's, under the key it was opened with: it is
-/// forgotten when another account signs in and when the data is locked.
+/// forgotten when another account signs in and whenever the data key in
+/// memory changes (the data locked, unlocked, or changing hands), at once,
+/// whether or not anything is asked for then; and a view that shows a
+/// picture drops it when that happens (`generation`).
 @MainActor
-final class AssetThumbnails {
-    static let shared = AssetThumbnails()
+final class AssetThumbnails: ObservableObject {
+    static let shared = AssetThumbnails(followsTheKey: true)
+
+    /// Advances each time everything held is forgotten: what a view shows
+    /// was drawn under the generation it was asked in, and is no longer
+    /// shown under another.
+    @Published private(set) var generation = 0
 
     /// The longest edge of a thumbnail in pixels: 360 points at 2x, as the cloud app's.
     static let longestEdge = 720
@@ -56,16 +65,31 @@ final class AssetThumbnails {
 
     /// Whose pictures these are, and under which unlocking of their data.
     private var owner: (account: String, epoch: Int)?
+    private var keyWatch: NSObjectProtocol?
 
-    init(hands: Hands = .live, room: Int = AssetThumbnails.room) {
+    /// `followsTheKey` is for the app's own: it forgets everything as
+    /// soon as the data key in memory changes.
+    init(hands: Hands = .live, room: Int = AssetThumbnails.room, followsTheKey: Bool = false) {
         self.hands = hands
         self.room = room
+        if followsTheKey {
+            keyWatch = NotificationCenter.default.addObserver(forName: DataEncryptionService.keyDidChange, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.forgetAll() }
+            }
+        }
     }
 
-    /// The file an asset's picture is drawn from: its latest file that can
-    /// be drawn; nil for an asset with none, and for one the key cannot open.
-    nonisolated static func file(of asset: Asset) -> AssetFile? {
-        asset.isUnreadable ? nil : asset.files.last { canDraw($0.mimeType) }
+    /// The files an asset's picture can be drawn from, by their kind, the
+    /// latest first: none for an asset the key cannot open. The picture
+    /// is of the first of them that is in fact drawn.
+    nonisolated static func files(of asset: Asset) -> [AssetFile] {
+        asset.isUnreadable ? [] : asset.files.reversed().filter { canDraw($0.mimeType) }
+    }
+
+    /// What tells one asking for an asset's picture from another: the
+    /// files it can be drawn from. A view asks again when it changes.
+    nonisolated static func key(of asset: Asset) -> String {
+        files(of: asset).map(\.id).joined(separator: "|")
     }
 
     /// Whether a file of this type is drawn: a picture ImageIO reads, or a PDF.
@@ -73,63 +97,73 @@ final class AssetThumbnails {
         mimeType == "application/pdf" || (mimeType.hasPrefix("image/") && mimeType != "image/svg+xml")
     }
 
-    /// Everything held is forgotten: another account signed in, or the data was locked.
+    /// Everything held is forgotten: another account signed in, or the
+    /// data key in memory changed.
     func forgetAll() {
         drawing.values.forEach { $0.cancel() }
         (pictures, order, held, undrawable, drawing, owner) = ([:], [], 0, [], [:], nil)
+        generation += 1
     }
 
-    /// The asset's picture, drawn once and then kept; nil where it has
-    /// none. Read as `account`, and nothing is answered or kept once
-    /// another account is signed in or the data was locked meanwhile.
+    /// The asset's picture, drawn once and then kept: of its latest file
+    /// that is in fact drawn (an older one where a later one cannot be);
+    /// nil where it has none. Read as `account`, and nothing is answered
+    /// or kept once another account is signed in or the data key changed
+    /// meanwhile.
     func picture(of asset: Asset, as account: String) async -> CGImage? {
-        guard let file = Self.file(of: asset), hands.signedIn() == account else { return nil }
+        let files = Self.files(of: asset)
+        guard !files.isEmpty, hands.signedIn() == account else { return nil }
         let epoch = await hands.keyEpoch()
         guard hands.signedIn() == account else { return nil }
         // Held for this account as its data is unlocked now, or not at all.
         if let owner, owner.account != account || owner.epoch != epoch { forgetAll() }
         owner = (account, epoch)
-        if let picture = pictures[file.id] {
-            order.removeAll { $0 == file.id }
-            order.append(file.id)
-            return picture
-        }
-        guard !undrawable.contains(file.id) else { return nil }
-        // One drawing of a file at a time: whoever asks meanwhile waits for it.
-        let task = drawing[file.id] ?? Task { [hands] () -> Drawn in
-            guard let data = try? await hands.data(file.id, account), !Task.isCancelled else { return .unread }
-            return await hands.draw(data, file.mimeType).map(Drawn.picture) ?? .undrawable
-        }
-        drawing[file.id] = task
-        let outcome = await task.value
-        // Done, whatever comes of it: nobody who asks later is answered
-        // by this drawing, which was made for whoever was signed in then.
-        if drawing[file.id] == task { drawing[file.id] = nil }
-        // Still the same account under the same unlocking: what was read is theirs to keep and show.
-        let now = await hands.keyEpoch()
-        guard hands.signedIn() == account, let owner, owner.account == account, owner.epoch == epoch, now == epoch else { return nil }
-        guard !task.isCancelled else { return nil }
-        let drawn: CGImage
-        switch outcome {
-        case let .picture(picture):
-            drawn = picture
-        case .undrawable:
-            undrawable.insert(file.id)
-            return nil
-        case .unread:
-            return nil
-        }
-        if pictures[file.id] == nil {
-            pictures[file.id] = drawn
-            order.append(file.id)
-            held += drawn.bytesPerRow * drawn.height
-            // The ones asked for longest ago make room.
-            while held > room, order.count > 1, let oldest = order.first {
-                order.removeFirst()
-                if let gone = pictures.removeValue(forKey: oldest) { held -= gone.bytesPerRow * gone.height }
+        for file in files {
+            if let picture = pictures[file.id] {
+                order.removeAll { $0 == file.id }
+                order.append(file.id)
+                return picture
+            }
+            guard !undrawable.contains(file.id) else { continue }
+            // One drawing of a file at a time: whoever asks meanwhile waits for it.
+            let task = drawing[file.id] ?? Task { [hands] () -> Drawn in
+                guard let data = try? await hands.data(file.id, account), !Task.isCancelled else { return .unread }
+                return await hands.draw(data, file.mimeType).map(Drawn.picture) ?? .undrawable
+            }
+            drawing[file.id] = task
+            let outcome = await task.value
+            let now = await hands.keyEpoch()
+            // Until here it stood for whoever asked meanwhile; from here
+            // on what it came to is kept, or nobody is answered by it.
+            if drawing[file.id] == task { drawing[file.id] = nil }
+            // Still the same account under the same unlocking: what was read is theirs to keep and show.
+            guard hands.signedIn() == account, let owner, owner.account == account, owner.epoch == epoch, now == epoch, !task.isCancelled else {
+                return nil
+            }
+            switch outcome {
+            case let .picture(picture):
+                keep(picture, of: file.id)
+                return picture
+            case .undrawable:
+                // Not a picture after all: an older file may be.
+                undrawable.insert(file.id)
+            case .unread:
+                return nil
             }
         }
-        return drawn
+        return nil
+    }
+
+    private func keep(_ picture: CGImage, of fileID: String) {
+        guard pictures[fileID] == nil else { return }
+        pictures[fileID] = picture
+        order.append(fileID)
+        held += picture.bytesPerRow * picture.height
+        // The ones asked for longest ago make room.
+        while held > room, order.count > 1, let oldest = order.first {
+            order.removeFirst()
+            if let gone = pictures.removeValue(forKey: oldest) { held -= gone.bytesPerRow * gone.height }
+        }
     }
 
     /// Draws a picture or the first page of a PDF, no larger than a
@@ -154,8 +188,11 @@ final class AssetThumbnails {
               let page = document.page(at: 1) else { return nil }
         let box = page.getBoxRect(.cropBox)
         guard box.width > 0, box.height > 0 else { return nil }
-        let scale = min(CGFloat(longestEdge) / max(box.width, box.height), 4)
-        let size = CGSize(width: (box.width * scale).rounded(.up), height: (box.height * scale).rounded(.up))
+        // As the page is shown: one turned a quarter is as wide as its box is tall.
+        let isTurned = (page.rotationAngle / 90) % 2 != 0
+        let shown = isTurned ? CGSize(width: box.height, height: box.width) : box.size
+        let scale = min(CGFloat(longestEdge) / max(shown.width, shown.height), 4)
+        let size = CGSize(width: (shown.width * scale).rounded(.up), height: (shown.height * scale).rounded(.up))
         guard let context = CGContext(
             data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8, bytesPerRow: 0,
             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
@@ -164,7 +201,8 @@ final class AssetThumbnails {
         context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
         context.fill(CGRect(origin: .zero, size: size))
         context.scaleBy(x: scale, y: scale)
-        context.translateBy(x: -box.minX, y: -box.minY)
+        // The page's own turn and origin, into a rectangle of its shown size.
+        context.concatenate(page.getDrawingTransform(.cropBox, rect: CGRect(origin: .zero, size: shown), rotate: 0, preserveAspectRatio: true))
         context.drawPDFPage(page)
         return context.makeImage()
     }

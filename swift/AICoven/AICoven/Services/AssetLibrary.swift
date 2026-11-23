@@ -108,6 +108,26 @@ nonisolated enum AssetLibraryRules {
     /// Where the Mac's library keeps its layout, for each window.
     static let layoutKey = "assets.layout"
 
+    /// The narrowest a card of the Mac's grid is, and the widest.
+    static let gridCard: ClosedRange<CGFloat> = 180 ... 260
+
+    /// How many cards a row of the grid holds in `width`: as many of the
+    /// narrowest as fit, as the grid lays them out; one at least.
+    static func gridColumns(width: CGFloat, spacing: CGFloat) -> Int {
+        max(1, Int((width + spacing) / (gridCard.lowerBound + spacing)))
+    }
+
+    /// The card chosen after a move of `step` cards from `current` (one
+    /// to the side, or a row up or down), among the cards in their order:
+    /// the first where none is chosen, the same where the move would
+    /// leave the grid, nil where there is no card.
+    static func chosen(after current: Asset.ID?, movingBy step: Int, among ids: [Asset.ID]) -> Asset.ID? {
+        guard let first = ids.first else { return nil }
+        guard let current, let index = ids.firstIndex(of: current) else { return first }
+        let next = index + step
+        return ids.indices.contains(next) ? ids[next] : current
+    }
+
     /// The line under a card's title in the Mac's grid, as the cloud
     /// app's: "status · type · who made it", with no time.
     static func gridLine(_ asset: Asset, agents: [String: String] = [:]) -> String {

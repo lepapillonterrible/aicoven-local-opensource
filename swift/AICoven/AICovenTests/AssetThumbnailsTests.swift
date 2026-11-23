@@ -1,4 +1,5 @@
 @testable import AICoven
+internal import Combine
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
@@ -27,6 +28,10 @@ final class AssetThumbnailsTests: XCTestCase {
             if arrivals == 0 { await withCheckedContinuation { hearing.append($0) } }
         }
 
+        var count: Int {
+            arrivals
+        }
+
         func open() {
             isOpen = true
             held.forEach { $0.resume() }
@@ -42,6 +47,9 @@ final class AssetThumbnailsTests: XCTestCase {
         var bytes: [String: Data] = [:]
         var read: [String] = []
         var readingWaits: Gate?
+        /// How often the key's epoch was asked for: twice by each asking for a picture that reads a file.
+        var epochAsked = 0
+        var whenEpochAsked: [Int: () -> Void] = [:]
         /// What happens once a file was read, before it is drawn.
         var afterReading: (() -> Void)?
     }
@@ -56,7 +64,11 @@ final class AssetThumbnailsTests: XCTestCase {
 
     /// Thumbnails over `stand`: a file's bytes say how large its picture is drawn (one byte, the side in pixels); none for no bytes.
     private func thumbnails(_ stand: Stand, room: Int = AssetThumbnails.room) -> AssetThumbnails {
-        AssetThumbnails(hands: AssetThumbnails.Hands(
+        AssetThumbnails(hands: hands(stand), room: room)
+    }
+
+    private func hands(_ stand: Stand) -> AssetThumbnails.Hands {
+        AssetThumbnails.Hands(
             data: { fileID, _ in
                 let data = await MainActor.run { () -> Data? in
                     stand.read.append(fileID)
@@ -68,12 +80,18 @@ final class AssetThumbnailsTests: XCTestCase {
                 return data
             },
             signedIn: { stand.account },
-            keyEpoch: { await MainActor.run { stand.epoch } },
+            keyEpoch: {
+                await MainActor.run {
+                    stand.epochAsked += 1
+                    stand.whenEpochAsked[stand.epochAsked]?()
+                    return stand.epoch
+                }
+            },
             draw: { data, _ in
                 guard let side = data.first else { return nil }
                 return await MainActor.run { self.picture(side: Int(side)) }
             }
-        ), room: room)
+        )
     }
 
     private func asset(_ id: String, files: [(String, String)], unreadable: Bool = false) -> Asset {
@@ -88,11 +106,14 @@ final class AssetThumbnailsTests: XCTestCase {
 
     func testAnAssetsPictureIsOfItsLatestFileThatCanBeDrawn() {
         let mixed = asset("a", files: [("old.png", "image/png"), ("new.jpg", "image/jpeg"), ("notes.md", "text/markdown")])
-        XCTAssertEqual(AssetThumbnails.file(of: mixed)?.id, "new.jpg")
-        XCTAssertEqual(AssetThumbnails.file(of: asset("b", files: [("deck.pdf", "application/pdf")]))?.id, "deck.pdf")
-        XCTAssertNil(AssetThumbnails.file(of: asset("c", files: [("brief.md", "text/markdown"), ("logo.svg", "image/svg+xml")])), "Kept as its type's symbol")
-        XCTAssertNil(AssetThumbnails.file(of: asset("d", files: [])))
-        XCTAssertNil(AssetThumbnails.file(of: asset("e", files: [("a.png", "image/png")], unreadable: true)), "Nothing is drawn of an asset the key cannot open")
+        XCTAssertEqual(AssetThumbnails.files(of: mixed).map(\.id), ["new.jpg", "old.png"], "The latest first")
+        XCTAssertEqual(AssetThumbnails.key(of: mixed), "new.jpg|old.png")
+        XCTAssertEqual(AssetThumbnails.files(of: asset("b", files: [("deck.pdf", "application/pdf")])).map(\.id), ["deck.pdf"])
+        XCTAssertEqual(AssetThumbnails.files(of: asset("c", files: [("brief.md", "text/markdown"), ("logo.svg", "image/svg+xml")])), [], "Kept as its type's symbol")
+        XCTAssertEqual(AssetThumbnails.files(of: asset("d", files: [])), [])
+        XCTAssertEqual(
+            AssetThumbnails.files(of: asset("e", files: [("a.png", "image/png")], unreadable: true)), [], "Nothing is drawn of an asset the key cannot open"
+        )
         XCTAssertTrue(AssetThumbnails.canDraw("image/heic"))
         XCTAssertFalse(AssetThumbnails.canDraw("application/zip"))
     }
@@ -108,8 +129,13 @@ final class AssetThumbnailsTests: XCTestCase {
         stand.readingWaits = gate
         let first = Task { await thumbnails.picture(of: logo, as: "ada") }
         await gate.arrived()
+        // The second asking has asked for the key's epoch (its first step) and found the drawing under way: then the file is let through.
+        let joined = expectation(description: "The second asking is under way")
+        stand.whenEpochAsked[2] = { joined.fulfill() }
         let second = Task { await thumbnails.picture(of: logo, as: "ada") }
-        await Task.yield()
+        await fulfillment(of: [joined], timeout: 5)
+        let reads = await gate.count
+        XCTAssertEqual(reads, 1, "It waits for the drawing under way: the file is not read again")
         await gate.open()
         let (one, two) = await (first.value, second.value)
         XCTAssertEqual(one?.width, 8)
@@ -160,6 +186,27 @@ final class AssetThumbnailsTests: XCTestCase {
         XCTAssertEqual(stand.read, ["a", "b", "c"], "Asked for lately: still kept")
         await ask("b")
         XCTAssertEqual(stand.read, ["a", "b", "c", "b"], "Asked for longest ago: it made room, and is drawn again")
+    }
+
+    func testAnOlderFileIsDrawnWhereTheLatestCannotBe() async {
+        let stand = Stand()
+        stand.bytes["old.png"] = Data([8])
+        // Named a picture, and not one.
+        stand.bytes["new.png"] = Data()
+        let thumbnails = thumbnails(stand)
+        let logo = asset("logo", files: [("old.png", "image/png"), ("new.png", "image/png")])
+        var shown = await thumbnails.picture(of: logo, as: "ada")
+        XCTAssertEqual(shown?.width, 8, "Its latest file that is in fact drawn")
+        XCTAssertEqual(stand.read, ["new.png", "old.png"])
+        shown = await thumbnails.picture(of: logo, as: "ada")
+        XCTAssertNotNil(shown)
+        XCTAssertEqual(stand.read, ["new.png", "old.png"], "Neither is read again")
+        // A later file that could not be read is not passed over for an older one: it may be read the next time.
+        let other = asset("other", files: [("older.png", "image/png"), ("unread.png", "image/png")])
+        stand.bytes["older.png"] = Data([8])
+        shown = await thumbnails.picture(of: other, as: "ada")
+        XCTAssertNil(shown)
+        XCTAssertEqual(stand.read.suffix(1), ["unread.png"])
     }
 
     // MARK: - One account's, while its data stays unlocked
@@ -215,9 +262,29 @@ final class AssetThumbnailsTests: XCTestCase {
         // Told to forget (signing out, another account): nothing is held.
         _ = await thumbnails.picture(of: logo, as: "ada")
         let reads = stand.read.count
+        let generation = thumbnails.generation
         thumbnails.forgetAll()
+        XCTAssertEqual(thumbnails.generation, generation + 1, "What a view shows of the generation before is no longer shown")
         _ = await thumbnails.picture(of: logo, as: "ada")
         XCTAssertEqual(stand.read.count, reads + 1)
+    }
+
+    func testTheAppsOwnThumbnailsAreForgottenAsSoonAsTheDataKeyChanges() async {
+        let stand = Stand()
+        stand.bytes["a.png"] = Data([8])
+        let following = AssetThumbnails(hands: hands(stand), followsTheKey: true)
+        let logo = asset("logo", files: [("a.png", "image/png")])
+        _ = await following.picture(of: logo, as: "ada")
+        let generation = following.generation
+        // Locked: nothing is asked for, and what was held is forgotten all the same.
+        let forgotten = expectation(description: "Forgotten")
+        let watching = following.$generation.dropFirst().sink { _ in forgotten.fulfill() }
+        NotificationCenter.default.post(name: DataEncryptionService.keyDidChange, object: nil)
+        await fulfillment(of: [forgotten], timeout: 5)
+        watching.cancel()
+        XCTAssertEqual(following.generation, generation + 1)
+        _ = await following.picture(of: logo, as: "ada")
+        XCTAssertEqual(stand.read, ["a.png", "a.png"], "Read anew")
     }
 
     // MARK: - Drawing
@@ -248,6 +315,29 @@ final class AssetThumbnailsTests: XCTestCase {
         return data as Data
     }
 
+    /// A PDF of one page, 200 by 100, turned a quarter (`/Rotate 90`), written out by hand.
+    private func turnedPDF() -> Data {
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Rotate 90 /Contents 4 0 R >>",
+            "<< /Length 0 >>\nstream\n\nendstream",
+        ]
+        var text = "%PDF-1.4\n"
+        var offsets: [Int] = []
+        for (index, object) in objects.enumerated() {
+            offsets.append(text.utf8.count)
+            text += "\(index + 1) 0 obj\n\(object)\nendobj\n"
+        }
+        let start = text.utf8.count
+        text += "xref\n0 \(objects.count + 1)\n0000000000 65535 f \n"
+        for offset in offsets {
+            text += String(format: "%010d 00000 n \n", offset)
+        }
+        text += "trailer\n<< /Size \(objects.count + 1) /Root 1 0 R >>\nstartxref\n\(start)\n%%EOF\n"
+        return Data(text.utf8)
+    }
+
     func testAPictureAndAPDFAreDrawnNoLargerThanAThumbnailIs_andNothingElse() throws {
         let large = try XCTUnwrap(AssetThumbnails.draw(png(width: 2400, height: 1200), mimeType: "image/png"))
         XCTAssertEqual(max(large.width, large.height), AssetThumbnails.longestEdge)
@@ -257,6 +347,10 @@ final class AssetThumbnailsTests: XCTestCase {
         let page = try XCTUnwrap(AssetThumbnails.draw(pdf(width: 612, height: 792), mimeType: "application/pdf"))
         XCTAssertEqual(page.height, AssetThumbnails.longestEdge, "The first page, its longest edge a thumbnail's")
         XCTAssertLessThan(page.width, page.height)
+        // A page turned a quarter is drawn as it is shown: a 200 by 100 page turned is taller than wide.
+        let turned = try XCTUnwrap(AssetThumbnails.draw(turnedPDF(), mimeType: "application/pdf"))
+        XCTAssertEqual(turned.height, AssetThumbnails.longestEdge)
+        XCTAssertEqual(turned.width, AssetThumbnails.longestEdge / 2)
         // A PDF named as something else is still a PDF; what is neither is not drawn.
         XCTAssertNotNil(try AssetThumbnails.draw(pdf(width: 200, height: 100), mimeType: "application/octet-stream"))
         XCTAssertNil(AssetThumbnails.draw(Data("# A brief".utf8), mimeType: "text/markdown"))
@@ -280,5 +374,21 @@ final class AssetThumbnailsTests: XCTestCase {
         XCTAssertFalse(AssetLibraryRules.otherActions(asset("locked", files: [], unreadable: true)).contains(.copyReference))
         XCTAssertEqual(AssetLibraryLayout.allCases.map(\.title), ["List", "Grid"], "The cloud Mac's two layouts")
         XCTAssertEqual(AssetLibraryLayout(rawValue: "grid"), .grid)
+    }
+
+    func testTheArrowKeysChooseACard() {
+        // As many of the narrowest cards as fit in a row, one at least.
+        XCTAssertEqual(AssetLibraryRules.gridColumns(width: 948, spacing: 16), 4)
+        XCTAssertEqual(AssetLibraryRules.gridColumns(width: 380, spacing: 16), 2)
+        XCTAssertEqual(AssetLibraryRules.gridColumns(width: 90, spacing: 16), 1)
+        let ids = ["a", "b", "c", "d", "e"]
+        XCTAssertEqual(AssetLibraryRules.chosen(after: nil, movingBy: 1, among: ids), "a", "The first where none is chosen")
+        XCTAssertEqual(AssetLibraryRules.chosen(after: "gone", movingBy: -3, among: ids), "a")
+        XCTAssertEqual(AssetLibraryRules.chosen(after: "b", movingBy: 1, among: ids), "c")
+        XCTAssertEqual(AssetLibraryRules.chosen(after: "b", movingBy: -1, among: ids), "a")
+        XCTAssertEqual(AssetLibraryRules.chosen(after: "b", movingBy: 3, among: ids), "e", "A row down, three to a row")
+        XCTAssertEqual(AssetLibraryRules.chosen(after: "d", movingBy: 3, among: ids), "d", "Nothing below: it stays")
+        XCTAssertEqual(AssetLibraryRules.chosen(after: "a", movingBy: -1, among: ids), "a")
+        XCTAssertNil(AssetLibraryRules.chosen(after: "a", movingBy: 1, among: []))
     }
 }
