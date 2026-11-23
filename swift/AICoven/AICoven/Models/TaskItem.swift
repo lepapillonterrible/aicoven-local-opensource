@@ -102,6 +102,15 @@ nonisolated struct TaskDue: Equatable {
     }
 }
 
+/// The turn a task was handed to an agent in, as the store has it.
+nonisolated struct TaskHandoff: Equatable {
+    let turnID: String
+    /// How the turn stands; nil for a turn that is no longer there.
+    var outcome: TurnOutcome?
+    /// Whether it is an agent's own run, which goes on without this app.
+    var hasRun = false
+}
+
 /// A task: something to do, in a coven or with Strix, as the cloud app's.
 nonisolated struct TaskItem: Identifiable, Equatable {
     let id: String
@@ -115,6 +124,13 @@ nonisolated struct TaskItem: Identifiable, Equatable {
     let pin: TaskPin?
     /// Whether its title cannot be opened with the account's key.
     var isUnreadable = false
+    /// The thread the task is talked through in, once it has one.
+    var threadID: String?
+    /// The agent that leads the task: the one it is handed to.
+    var leadAgentID: String?
+    /// The turn the task was last handed to an agent in, and how that
+    /// turn stands as it is stored.
+    var handoff: TaskHandoff?
     let createdAt: Date
     let updatedAt: Date
 
@@ -137,4 +153,9 @@ nonisolated struct TaskChange: Equatable {
     var stage: TaskStage?
     var due: Setting<TaskDue>?
     var pin: Setting<TaskPin>?
+    /// The thread the task is talked through in: given once.
+    var threadID: String?
+    var leadAgentID: Setting<String>?
+    /// The turn the task was handed to an agent in: a turn of its thread.
+    var handoffTurnID: String?
 }
