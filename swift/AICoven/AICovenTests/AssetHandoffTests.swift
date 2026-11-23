@@ -273,6 +273,16 @@ final class AssetHandoffTests: XCTestCase {
         XCTAssertEqual(sending.agentID, "lost", "The choice is kept")
         XCTAssertNil(sending.agentNote)
         XCTAssertTrue(sending.canSend)
+        // The only agent of its place (Strix in its own, or in a coven with none): there is no other to choose.
+        let alone = Stand()
+        alone.agents = [.init(id: AssetHandoffModel.Agent.strixID, name: "Strix", tools: .notOffered)]
+        let toStrix = model(asset(coven: nil), alone)
+        await toStrix.load(as: "ada")
+        XCTAssertEqual(
+            toStrix.agentNote,
+            "Strix can't open assets: only an agent that runs on a cloud model is given the asset tools. Set Strix to run on one, in Agents."
+        )
+        XCTAssertEqual(alone.said, [toStrix.agentNote])
         XCTAssertEqual(AssetHandoffModel.Agent.Tools(nil), .unknown)
         XCTAssertEqual(AssetHandoffModel.Agent.Tools(false), .notOffered)
         XCTAssertEqual(AssetHandoffModel.Agent.Tools(true), .offered)

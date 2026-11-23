@@ -109,11 +109,13 @@ final class AssetHandoffModel: ObservableObject {
             isBusy: { threadID, account in
                 if TurnEngine.shared.running[threadID] != nil { return true }
                 // A turn stored as running that has an agent's own run is
-                // still under way though this app runs nothing in it.
-                let marks = try await ThreadRepository.shared.threadMarks(for: account)[threadID]
+                // still under way though this app runs nothing in it. The
+                // thread's own turns are read, as the account that asked.
+                guard UserScope.currentUserID == account else { throw RepositoryError.accountChanged }
+                let stored = try await ThreadRepository.shared.runningTurns(threadID: threadID)
                 // Asked again after the wait: a turn can have started meanwhile.
                 if TurnEngine.shared.running[threadID] != nil { return true }
-                return marks?.latestTurn == .running && marks?.latestTurnHasRun == true
+                return stored.contains { $0.run != nil }
             },
             brief: {
                 let handed = try await AssetRepository.shared.handoffBrief(of: $0, as: $1)
@@ -160,8 +162,11 @@ final class AssetHandoffModel: ObservableObject {
     /// asset tools (it runs on this device or this network, on Hermes or
     /// on OpenClaw, or on nothing yet), so it could not open what it is
     /// sent. (This app's own: in the cloud app every agent's turns are.)
-    static func cannotRead(_ agent: Agent) -> String {
-        "\(agent.name) can't open assets: only an agent that runs on a cloud model is given the asset tools. Choose another agent."
+    /// Where it is the only agent of the place there is no other to
+    /// choose: the way is to set it to run on a cloud model.
+    static func cannotRead(_ agent: Agent, isTheOnlyAgent: Bool = false) -> String {
+        "\(agent.name) can't open assets: only an agent that runs on a cloud model is given the asset tools. "
+            + (isTheOnlyAgent ? "Set \(agent.name) to run on one, in Agents." : "Choose another agent.")
     }
 
     /// Why an agent cannot be sent an asset just now: no model could be
@@ -243,7 +248,7 @@ final class AssetHandoffModel: ObservableObject {
         guard let agent else { return nil }
         switch agent.tools {
         case .offered: return nil
-        case .notOffered: return Self.cannotRead(agent)
+        case .notOffered: return Self.cannotRead(agent, isTheOnlyAgent: agents.count == 1)
         case .unknown: return Self.cannotTell(agent)
         }
     }
