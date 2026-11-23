@@ -160,7 +160,7 @@ The `dev` branch of this repo implements most of the architecture described abov
   - Routes to an appropriate provider/model via `ModelRouter`.
   - Streams answers into the SwiftUI chat UI (currently using non-streaming SDK calls under the hood).
 - An `AgentRunner` capable of bounded multi-step runs, storing `AgentRun` and `AgentStep` rows.
-- A tools layer (`ToolEnvironment` + `ToolService`) wired into both the context sandwich and the enhanced message composer (web search, attachment analysis, local file generation). Images are made by the `image.generate` tool, which a chat turn's model calls.
+- A tools layer (`ToolEnvironment` + `ToolService`) wired into both the context sandwich and the enhanced message composer (web search, attachment analysis). Images are made by the `image.generate` tool, which a chat turn's model calls.
 
 Some areas remain intentionally flexible or partially implemented so contributors can help shape them:
 

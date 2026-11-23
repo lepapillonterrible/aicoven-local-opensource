@@ -64,7 +64,7 @@ Last Updated: March 9, 2026
 - LLMClient abstraction
 - ModelRouter capabilities (including user-preference routing via `findExact` and `.mcpToolCalling`)
 - Provider-specific implementations (OpenAI, Anthropic, Gemini, Ollama, MLX)
-- Tools layer (web search, file generation, attachment analysis, the `image.generate` tool)
+- Tools layer (web search, attachment analysis, the `image.generate` tool)
 - MCP server integration (MCPClient, tool discovery, semantic tool selection, benchmark suite)
 - Provider key management
 - Pre-execution of tools for local models
