@@ -1603,6 +1603,47 @@ final class TasksModelTests: XCTestCase {
         }
     }
 
+    func testAnApprovalAskedWhileTheAgentsAreReadIsSaidOnceTheyAre_byItsAgentsName() async {
+        let stand = Stand()
+        var handed = task("a", "Call the bank", coven: "work")
+        handed.threadID = "thread-1"
+        handed.handoff = TaskHandoff(turnID: "turn-1", outcome: .running, agentID: "scout")
+        stand.kept = [handed]
+        stand.agentsIn = ["work": [scout]]
+        stand.live = ["thread-1": TaskLiveTurn(turnID: "turn-1")]
+        let tasks = model(stand, covenID: "work")
+
+        // The tasks are listed, and their place's agents are still being read, when the turn asks to be allowed something.
+        let gate = Gate()
+        stand.agentsWait = gate
+        let reading = Task { await tasks.load() }
+        await gate.arrived(1)
+        XCTAssertEqual(tasks.open.map(\.id), ["a"], "Listed already")
+        stand.live = ["thread-1": TaskLiveTurn(turnID: "turn-1", needsOK: true)]
+        tasks.turnsChanged()
+        XCTAssertEqual(tasks.handoff(of: tasks.open[0]), .needsOK, "The row says so at once")
+        XCTAssertEqual(stand.heard, [], "Not said without its agent's name")
+        await gate.letOneThrough()
+        await reading.value
+        XCTAssertEqual(stand.heard, ["Scout needs your OK on Call the bank"])
+        tasks.turnsChanged()
+        XCTAssertEqual(stand.heard.count, 1, "Once")
+
+        // Answered, and asked again later: said again. Where the agents could not be read, it is said all the same.
+        stand.live = ["thread-1": TaskLiveTurn(turnID: "turn-1")]
+        tasks.turnsChanged()
+        stand.live = ["thread-1": TaskLiveTurn(turnID: "turn-1", needsOK: true)]
+        tasks.turnsChanged()
+        XCTAssertEqual(stand.heard.count, 2)
+        let failing = Stand()
+        failing.kept = [handed]
+        failing.agentsIn = ["work": nil]
+        failing.live = ["thread-1": TaskLiveTurn(turnID: "turn-1", needsOK: true)]
+        let others = model(failing, covenID: "work")
+        await others.load()
+        XCTAssertEqual(failing.heard, ["An agent needs your OK on Call the bank"])
+    }
+
     func testOnMeNamesEachTasksPlace() {
         let covens = [Coven(id: "work", name: "Work", createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0))]
         XCTAssertEqual(TasksView.placeName(ofCoven: nil, among: covens), "Strix")

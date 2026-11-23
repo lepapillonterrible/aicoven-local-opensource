@@ -182,6 +182,9 @@ final class TasksModel: ObservableObject {
     /// The turns the tasks were read again for once already: listed as
     /// running while nothing ran them.
     private var readAgainFor: Set<String> = []
+    /// The turns whose wait for an OK was told (or passed over, with no
+    /// screen up), until they stop waiting: told once for each wait.
+    private var toldNeedsOK: Set<String> = []
     /// The readings of agents under way, by place: one at a time for a
     /// place, which whoever asks meanwhile waits for.
     private var agentReadings: [String: Task<Void, Never>] = [:]
@@ -558,6 +561,13 @@ final class TasksModel: ObservableObject {
         }
     }
 
+    /// Whether the agents of a task's place are read, or could not be:
+    /// what is said of the task can name its agent, or never will.
+    private func agentsAreSettled(for task: TaskItem) -> Bool {
+        let place = place(of: task)
+        return agentsByPlace[place] != nil || placesWhoseAgentsFailed.contains(place)
+    }
+
     /// Whether the agents of a task's place could not be read.
     func agentsFailed(for task: TaskItem) -> Bool {
         placesWhoseAgentsFailed.contains(place(of: task))
@@ -611,7 +621,8 @@ final class TasksModel: ObservableObject {
     }
 
     /// The turns the app runs changed: follows those of the tasks handed
-    /// to an agent, says when one newly waits for the person's OK, and
+    /// to an agent, says when one newly waits for the person's OK (once
+    /// the agents of its place are read, so that it names its agent), and
     /// reads the tasks again when one of them has ended, to learn how
     /// (answering with that reading, for whoever waits for it). A turn
     /// listed as running that nothing runs may have ended while the tasks
@@ -626,9 +637,14 @@ final class TasksModel: ObservableObject {
             if let turn = hands.liveTurn(threadID), turn.turnID == handoff.turnID {
                 live[threadID] = turn
                 awaited[turn.turnID] = true
-                let asks = turn.needsOK && !turn.isStopping
-                let asked = liveTurns[threadID].map { $0.turnID == turn.turnID && $0.needsOK && !$0.isStopping } ?? false
-                if asks, !asked, screensUp > 0 { say("\(handoffAgentName(for: task) ?? "An agent") needs your OK on \(Self.name(of: task))") }
+                if !turn.needsOK || turn.isStopping {
+                    toldNeedsOK.remove(turn.turnID)
+                } else if agentsAreSettled(for: task), toldNeedsOK.insert(turn.turnID).inserted, screensUp > 0 {
+                    // Once the agents of its place are read (the tasks'
+                    // reading comes back to this when they are): it is
+                    // said by its agent's name.
+                    say("\(handoffAgentName(for: task) ?? "An agent") needs your OK on \(Self.name(of: task))")
+                }
             } else if handoff.outcome == .running, readAgainFor.insert(handoff.turnID).inserted {
                 if awaited[handoff.turnID] == nil { awaited[handoff.turnID] = false }
                 ended = true
