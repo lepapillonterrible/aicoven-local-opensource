@@ -400,7 +400,7 @@ final class FigmaToolsTests: XCTestCase {
     }
 
     func testFigmasToolsAreOfferedWhereItIsConnected_andACommentIsAChange() async throws {
-        XCTAssertEqual(PromptTemplates.figmaTools, ["figma.readFile", "figma.readComments", "figma.addComment"])
+        XCTAssertEqual(PromptTemplates.figmaTools, ["figma.listFiles", "figma.readFile", "figma.readComments", "figma.addComment"])
         for tool in PromptTemplates.figmaTools {
             XCTAssertNotNil(PromptTemplates.toolDefinitions.first { $0.name == tool }, "\(tool) is described to models")
             XCTAssertEqual(CovenConnectionRules.app(of: tool), "figma")
@@ -408,7 +408,7 @@ final class FigmaToolsTests: XCTestCase {
         }
         XCTAssertEqual(
             CovenConnectionRules.offered(tools: PromptTemplates.figmaTools, servers: [], in: CovenConnections(apps: ["figma": .readOnly])).tools,
-            ["figma.readFile", "figma.readComments"]
+            ["figma.listFiles", "figma.readFile", "figma.readComments"]
         )
 
         // A coven that lets Figma only be read is refused a comment before anyone is asked.

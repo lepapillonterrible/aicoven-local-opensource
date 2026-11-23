@@ -29,6 +29,13 @@ final class CovenConnectionsModel: ObservableObject {
         var apps: @Sendable () async -> [App]
         var servers: @Sendable () async -> [Server]
         var save: @Sendable (_ choice: CovenConnections, _ covenID: String) async throws -> Void
+        /// The name Figma has now for the file or project a link names,
+        /// asked as the connected Figma account.
+        var figmaName: @Sendable (_ link: FigmaToolService.Link) async throws -> String = { _ in throw FigmaAddError.notConnected }
+        /// Who is signed in.
+        var account: @MainActor @Sendable () -> String = { UserScope.currentUserID }
+        /// Tells VoiceOver what came of something.
+        var say: @MainActor @Sendable (String) -> Void = { AccessibilityNotification.Announcement($0).post() }
 
         static let live = Sources(
             choice: { covenID in
@@ -48,8 +55,28 @@ final class CovenConnectionsModel: ObservableObject {
             },
             save: { choice, covenID in
                 try await CovenService.shared.setConnections(choice, forCoven: covenID)
+            },
+            figmaName: { link in
+                let accounts = ConnectedAccountsService.shared
+                guard let account = await accounts.getConnectedAccount(for: .figma) else { throw FigmaAddError.notConnected }
+                let token = try await accounts.getAccessToken(forAccountId: account.id)
+                do {
+                    switch link {
+                    case let .file(key): return try await FigmaToolService.fileMeta(key: key, token: token).name
+                    case let .folder(id): return try await FigmaToolService.folderFiles(id: id, token: token).name
+                    }
+                } catch FigmaError.tokenRefused {
+                    // The token that was refused is the one marked.
+                    await accounts.markTokenRefused(accountID: account.id, token: token)
+                    throw FigmaError.tokenRefused
+                }
             }
         )
+    }
+
+    /// Why a link's file or project could not be asked for.
+    enum FigmaAddError: Error {
+        case notConnected
     }
 
     let covenID: String
@@ -67,6 +94,10 @@ final class CovenConnectionsModel: ObservableObject {
     /// a second change cannot overtake the first.
     @Published private(set) var saving: Set<String> = []
     @Published var errorMessage: String?
+    /// A link's file or project is being looked up and added.
+    @Published private(set) var isAddingFigma = false
+    /// Why the last link was not added, shown under the link's field.
+    @Published private(set) var figmaAddError: String?
 
     /// Counts loads and changes: a load applies only if nothing newer
     /// started while it waited.
@@ -144,31 +175,139 @@ final class CovenConnectionsModel: ObservableObject {
         saving.contains("server:\(id)")
     }
 
+    // MARK: - Figma files and projects
+
+    /// The coven's Figma files and projects, as chosen.
+    var figma: CovenConnections.FigmaChoice {
+        choice?.figma ?? CovenConnections.FigmaChoice()
+    }
+
+    /// A change to the Figma files or projects is being saved: the rows
+    /// wait for it.
+    var isSavingFigma: Bool {
+        saving.contains("figma")
+    }
+
+    /// Adds the file or project a pasted link names to the coven's Figma
+    /// choice, named as Figma names it now. True once the link is done
+    /// with (added, or chosen already), when its field can be emptied.
+    /// One link at a time, as the account that pasted it: what comes of
+    /// it is said to no other.
+    func addFigma(link pasted: String) async -> Bool {
+        guard choice != nil, !isAddingFigma else { return false }
+        let account = sources.account()
+        guard let link = FigmaToolService.link(pasted) else {
+            return failFigma("That isn't a Figma file or project link.")
+        }
+        isAddingFigma = true
+        defer { isAddingFigma = false }
+        figmaAddError = nil
+        let name: String
+        do {
+            name = try await sources.figmaName(link)
+        } catch {
+            guard sources.account() == account else { return false }
+            if error is FigmaAddError {
+                return failFigma("Figma isn't connected. Connect it in Settings, then add the link again.")
+            }
+            switch error as? FigmaError {
+            case .tokenRefused?:
+                return failFigma("Figma refused this account's token. Replace the token in Settings, then add the link again.")
+            case .forbidden?, .notFound?:
+                return failFigma("This Figma account can't open that.")
+            case .rateLimited?:
+                return failFigma("Figma is limiting how often this account asks. Try again in a while.")
+            default:
+                return failFigma("Figma didn't answer. Try again.")
+            }
+        }
+        guard sources.account() == account else { return false }
+        // The choice as it is now, not as it was when Add was pressed: a
+        // removal saved meanwhile stays removed.
+        var refusal: CovenConnections.FigmaRefusal?
+        let saved = await change(row: "figma", saysFailure: false) { now in
+            do {
+                switch link {
+                case let .file(key): return try now.addingFigma(file: .init(id: key, name: name))
+                case let .folder(id): return try now.addingFigma(folder: .init(id: id, name: name))
+                }
+            } catch {
+                refusal = error as? CovenConnections.FigmaRefusal
+                return now
+            }
+        }
+        guard sources.account() == account else { return false }
+        if refusal == .alreadyChosen { return true }
+        if refusal == .tooMany {
+            if case .file = link {
+                return failFigma("This coven already has \(CovenConnections.FigmaChoice.mostFiles) Figma files. Remove one to add another.")
+            }
+            return failFigma("This coven already has \(CovenConnections.FigmaChoice.mostFolders) Figma projects. Remove one to add another.")
+        }
+        guard saved else { return failFigma("That couldn't be added. Try again.") }
+        sources.say("Added \(FigmaToolService.listedName(name))")
+        return true
+    }
+
+    /// Takes a file, or a project, out of the coven's Figma choice.
+    func removeFigma(file id: String) async {
+        guard let name = figma.files.first(where: { $0.id == id })?.name else { return }
+        let account = sources.account()
+        if await change(row: "figma", { $0.removingFigma(file: id) }), sources.account() == account {
+            sources.say("Removed \(name)")
+        }
+    }
+
+    func removeFigma(folder id: String) async {
+        guard let name = figma.folders.first(where: { $0.id == id })?.name else { return }
+        let account = sources.account()
+        if await change(row: "figma", { $0.removingFigma(folder: id) }), sources.account() == account {
+            sources.say("Removed \(name)")
+        }
+    }
+
+    /// The link's field is being typed in again: what was said of the
+    /// link before is no longer about what it holds.
+    func figmaLinkChanged() {
+        if !isAddingFigma { figmaAddError = nil }
+    }
+
+    private func failFigma(_ message: String) -> Bool {
+        figmaAddError = message
+        sources.say(message)
+        return false
+    }
+
     /// Makes a change to the choice and keeps it. The screen shows the
     /// change at once and takes it back, saying so, if it cannot be kept.
     /// One change is saved at a time: each is made to the whole choice,
     /// so a second begun before the first is kept would undo it.
-    private func change(row: String, _ make: (CovenConnections) -> CovenConnections) async {
-        guard let before = choice, saving.isEmpty else { return }
+    /// True if the change was kept.
+    @discardableResult
+    private func change(row: String, saysFailure: Bool = true, _ make: (CovenConnections) -> CovenConnections) async -> Bool {
+        guard let before = choice, saving.isEmpty else { return false }
         let after = make(before)
-        guard after != before else { return }
+        guard after != before else { return false }
         let wasKeptFromBefore = keptFromBefore
         generation += 1
         saving.insert(row)
         choice = after
         keptFromBefore = false
+        var kept = true
         do {
             try await sources.save(after, covenID)
         } catch {
+            kept = false
             choice = before
             keptFromBefore = wasKeptFromBefore
-            errorMessage = "That change could not be saved."
+            if saysFailure { errorMessage = "That change could not be saved." }
         }
         saving.remove(row)
         if loadWaits {
             loadWaits = false
             await load()
         }
+        return kept
     }
 }
 
@@ -191,6 +330,7 @@ extension CovenConnectionsModel.Server {
 struct CovenConnectionsView: View {
     let coven: Coven
     @StateObject private var model: CovenConnectionsModel
+    @State private var figmaLink = ""
 
     init(coven: Coven, sources: CovenConnectionsModel.Sources = .live) {
         self.coven = coven
@@ -201,6 +341,9 @@ struct CovenConnectionsView: View {
         SettingsForm {
             if model.isLoaded {
                 appsSection
+                if model.access(ofApp: ConnectedAppProvider.figma.rawValue) != nil, model.apps.contains(where: { $0.id == ConnectedAppProvider.figma.rawValue && $0.account != nil }) {
+                    figmaSections
+                }
                 serversSection
             } else if model.loadFailed {
                 Section {
@@ -268,6 +411,113 @@ struct CovenConnectionsView: View {
                 Text("With Read, agents can look in an app but change nothing there. Apps are connected in Settings.")
             }
             .font(.aicovenBodySmall)
+        }
+    }
+
+    // MARK: - Figma files and projects
+
+    /// The coven's Figma files and projects, as the cloud app's: each is
+    /// added by pasting its link and listed by the name Figma has for it.
+    @ViewBuilder private var figmaSections: some View {
+        Section {
+            TextField("Link", text: $figmaLink, prompt: Text("Paste a Figma file or project link"))
+                .textContentType(.URL)
+            #if os(iOS)
+                .keyboardType(.URL)
+                .textInputAutocapitalization(.never)
+            #endif
+                .autocorrectionDisabled()
+                .onSubmit { addFigmaLink() }
+                .onChange(of: figmaLink) { model.figmaLinkChanged() }
+            Button(action: addFigmaLink) {
+                HStack(spacing: Spacing.xs) {
+                    Text(model.isAddingFigma ? "Adding…" : "Add")
+                    if model.isAddingFigma { ProgressView().controlSize(.small) }
+                }
+            }
+            .disabled(model.isAddingFigma || figmaLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            if let problem = model.figmaAddError {
+                Text(problem)
+                    .font(.aicovenBodySmall)
+                    .foregroundStyle(Color.aicovenError)
+            }
+        } header: {
+            Text("Figma: Add a File or Project")
+        } footer: {
+            Text("A project's link is in Figma's address bar when the project is open; a file's link doesn't name its project.")
+                .font(.aicovenBodySmall)
+        }
+
+        Section {
+            if model.figma.files.isEmpty {
+                Text("No files").foregroundStyle(.secondary)
+            }
+            ForEach(model.figma.files) { file in
+                figmaRow(file.name, systemImage: "doc") { await model.removeFigma(file: file.id) }
+            }
+        } header: {
+            Text("Figma Files")
+        }
+
+        Section {
+            if model.figma.folders.isEmpty {
+                Text("No projects").foregroundStyle(.secondary)
+            }
+            ForEach(model.figma.folders) { folder in
+                figmaRow(folder.name, detail: "Includes files added to this folder later", systemImage: "folder") { await model.removeFigma(folder: folder.id) }
+            }
+        } header: {
+            Text("Figma Projects")
+        } footer: {
+            if model.figma.isEmpty {
+                Text(
+                    model.keptFromBefore
+                        ? "Nothing is chosen. \(coven.name) hasn't changed its connections yet, so its agents can open any Figma file this account can. Once anything here is changed, they can open only the files and projects chosen here."
+                        : "Nothing is chosen, so agents in \(coven.name) can't open any Figma file."
+                )
+                .font(.aicovenBodySmall)
+            }
+        }
+    }
+
+    private func figmaRow(_ name: String, detail: String? = nil, systemImage: String, remove: @escaping () async -> Void) -> some View {
+        HStack(spacing: Spacing.sm) {
+            Label {
+                VStack(alignment: .leading, spacing: Spacing.xxxs) {
+                    Text(name)
+                    if let detail {
+                        Text(detail)
+                            .font(.aicovenBodySmall)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } icon: {
+                Image(systemName: systemImage)
+            }
+            Spacer(minLength: 0)
+            Button {
+                Task { await remove() }
+            } label: {
+                Image(systemName: "minus.circle")
+                #if os(iOS)
+                    .frame(minWidth: 44, minHeight: 44)
+                #else
+                    .frame(minWidth: 28, minHeight: 28)
+                #endif
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .disabled(model.isSavingFigma)
+            .accessibilityLabel("Remove \(name)")
+        }
+    }
+
+    private func addFigmaLink() {
+        let pasted = figmaLink
+        guard !pasted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !model.isAddingFigma else { return }
+        Task {
+            // The field is emptied only if it still holds what was added.
+            if await model.addFigma(link: pasted), figmaLink == pasted { figmaLink = "" }
         }
     }
 

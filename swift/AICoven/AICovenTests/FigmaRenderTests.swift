@@ -434,6 +434,41 @@ final class FigmaRenderTests: XCTestCase {
         XCTAssertEqual(off.asked.requests.count, 0)
     }
 
+    func testAFileTheCovenDoesNotUse_isNotRendered_andOneItStoppedUsingMeanwhileIsNotGiven() async throws {
+        let frame = try Self.png(width: 400, height: 200)
+        let chosen = CovenConnections(apps: ["figma": .readWrite], figma: .init(files: [.init(id: "AbCdEfGhIjKl", name: "Home")]))
+        let notChosen = CovenConnections(apps: ["figma": .readWrite])
+
+        // Not one of the coven's files: Figma is not asked, and the render is the turn's still.
+        let world = try await world(images: { _ in (200, Self.links(["3:21": "https://\(Self.storage)/a"])) }, picture: { _ in (200, frame, [:]) })
+        defer { world.forget() }
+        world.covens.connections = notChosen
+        let pictures = TurnPictures()
+        for _ in 0 ... TurnPictures.mostRenders {
+            let refused = await world.render(["file": AnyJSONValue("AbCdEfGhIjKl"), "nodes": AnyJSONValue("3:21")], pictures: pictures)
+            XCTAssertEqual(refused.errorType, "connected_app_resource_not_allowed")
+        }
+        XCTAssertEqual(world.asked.requests.count, 0)
+        world.covens.connections = chosen
+        let rendered = await world.render(["file": AnyJSONValue("AbCdEfGhIjKl"), "nodes": AnyJSONValue("3:21")], pictures: pictures)
+        XCTAssertEqual(rendered.status, "ok", "A refusal was none of the turn's renders")
+        XCTAssertEqual(pictures.images.count, 1)
+
+        // Taken out of the coven's files while Figma rendered: no picture is given.
+        let changing = try await self.world(
+            images: { _ in (200, Self.links(["3:21": "https://\(Self.storage)/a"])) },
+            picture: { _ in (200, frame, [:]) },
+            whileRendering: { $0.connections = notChosen }
+        )
+        defer { changing.forget() }
+        changing.covens.connections = chosen
+        let taken = TurnPictures()
+        let late = await changing.render(["file": AnyJSONValue("AbCdEfGhIjKl"), "nodes": AnyJSONValue("3:21")], pictures: taken)
+        XCTAssertEqual(late.errorType, "connected_app_resource_not_allowed")
+        XCTAssertNil(late.contextBlock)
+        XCTAssertEqual(taken.images, [], "No picture reaches the model")
+    }
+
     func testAStoppedRender_isToldAsStopped_andIsNotOneOfTheTurnsTwo() async throws {
         let frame = try Self.png(width: 400, height: 200)
         let world = try await world(
