@@ -14,12 +14,17 @@ final class AssetHandoffTests: XCTestCase {
         var threadsFail = false
         var busy: Set<String> = []
         var busyAsked: [String] = []
+        /// What happens as the thread is looked at, by how many times it has been.
+        var whenBusyAsked: [Int: () -> Void] = [:]
         /// The agents whose turns are no longer offered the asset tools, as things are set up by the time Send asks.
         var noLongerReads: Set<String> = []
         /// How the asset stands as the store looks when the brief is asked for.
         var sourceStatus = AssetStatus.approved
         /// Where reading the agents waits, if anywhere.
         var agentsWait: Gate?
+        /// A gate for each reading of the agents, in the order they are asked for.
+        var agentsWaits: [Gate] = []
+        var agentsAsked = 0
         /// Where making the brief waits, if anywhere.
         var briefWaits: Gate?
         var briefFails: Error?
@@ -80,7 +85,10 @@ final class AssetHandoffTests: XCTestCase {
             agents: { _, _ in
                 // As they are when asked for, however long the answer takes.
                 let agents = stand.agents
+                let asked = stand.agentsAsked
+                stand.agentsAsked += 1
                 await stand.agentsWait?.wait()
+                if asked < stand.agentsWaits.count { await stand.agentsWaits[asked].wait() }
                 return agents
             },
             threads: { _, _ in
@@ -94,6 +102,7 @@ final class AssetHandoffTests: XCTestCase {
             },
             isBusy: { threadID, _ in
                 stand.busyAsked.append(threadID)
+                stand.whenBusyAsked[stand.busyAsked.count]?()
                 return stand.busy.contains(threadID)
             },
             brief: { assetID, account in
@@ -326,6 +335,14 @@ final class AssetHandoffTests: XCTestCase {
         XCTAssertNil(sent)
         XCTAssertEqual(stand.steps, ["reads", "brief"])
         XCTAssertEqual(sending.failure, AssetHandoffModel.threadIsBusy)
+        // One that starts between the last look and the start is refused by the engine: said in the same words.
+        stand.busy = []
+        stand.whenAsked["brief"] = nil
+        stand.startFails = TurnEngine.TurnError.alreadyRunning
+        sent = await sending.send(as: "ada")
+        XCTAssertNil(sent)
+        XCTAssertEqual(sending.failure, AssetHandoffModel.threadIsBusy)
+        stand.startFails = nil
         // A new thread is the way round it.
         sending.startsNewThread = true
         sent = await sending.send(as: "ada")
@@ -355,7 +372,7 @@ final class AssetHandoffTests: XCTestCase {
         XCTAssertNil(sent)
         XCTAssertEqual(sending.failure, "AICoven could not confirm the handoff. Try again.")
         stand.threadFails = nil
-        stand.startFails = TurnEngine.TurnError.alreadyRunning
+        stand.startFails = RepositoryError.databaseUnavailable
         sent = await sending.send(as: "ada")
         XCTAssertNil(sent)
         XCTAssertEqual(sending.failure, AssetHandoffModel.notConfirmed)
@@ -386,6 +403,20 @@ final class AssetHandoffTests: XCTestCase {
             case "thread": XCTAssertEqual(stand.steps, ["reads", "brief", "thread"], "No turn is started")
             default: XCTAssertEqual(stand.steps, ["reads", "brief", "thread", "turn"])
             }
+        }
+        // Signed in while the thread was looked at, the first time or the second: nothing more is done, though it is not busy.
+        for look in [1, 2] {
+            let stand = Stand()
+            stand.threads = [thread("its-own")]
+            let sending = model(asset(thread: "its-own"), stand)
+            await sending.load(as: "ada")
+            stand.whenBusyAsked[look] = { stand.account = "grace" }
+            let sent = await sending.send(as: "ada")
+            XCTAssertNil(sent, "\(look)")
+            XCTAssertEqual(stand.started.count, 0, "No turn is started for another account (\(look))")
+            XCTAssertEqual(stand.steps, look == 1 ? [] : ["reads", "brief"])
+            XCTAssertNil(sending.failure)
+            XCTAssertEqual(stand.said, [])
         }
         // Signed in before Send's task began: nothing is looked at or said, though the thread chosen is busy.
         let late = Stand()
@@ -450,26 +481,30 @@ final class AssetHandoffTests: XCTestCase {
     func testOnlyTheLatestReadingIsTaken_andOneSendingAtATime() async {
         // Two readings under way: the earlier one, landing last, is not taken over the later one.
         let stand = Stand()
-        let gate = Gate()
-        stand.agentsWait = gate
+        let (first, second) = (Gate(), Gate())
+        stand.agentsWaits = [first, second]
         stand.agents = [.init(id: "old", name: "Old")]
         let sending = model(asset(), stand)
         let early = Task { await sending.load(as: "ada") }
-        await gate.arrived()
+        await first.arrived()
         stand.agents = [.init(id: "new", name: "New")]
         let later = Task { await sending.load(as: "ada") }
-        await gate.arrived(2)
-        await gate.open()
-        await early.value
+        await second.arrived()
+        // The later one lands first, and is what the sheet shows.
+        await second.open()
         await later.value
         XCTAssertEqual(sending.agents.map(\.id), ["new"])
         XCTAssertEqual(sending.agentID, "new")
+        XCTAssertFalse(sending.isLoading, "Read, though the earlier reading is still under way")
+        await first.open()
+        await early.value
+        XCTAssertEqual(sending.agents.map(\.id), ["new"], "The earlier one, landing last, is not taken over it")
         XCTAssertFalse(sending.isLoading)
 
         // A second Send while one is on its way does nothing.
         let making = Gate()
         stand.briefWaits = making
-        let first = Task { await sending.send(as: "ada") }
+        let sendingFirst = Task { await sending.send(as: "ada") }
         await making.arrived()
         XCTAssertTrue(sending.isSending)
         XCTAssertFalse(sending.canSend)
@@ -477,7 +512,7 @@ final class AssetHandoffTests: XCTestCase {
         XCTAssertNil(again)
         XCTAssertNil(sending.failure, "Nor is anything said of it")
         await making.open()
-        let sent = await first.value
+        let sent = await sendingFirst.value
         XCTAssertEqual(sent?.id, "made-1")
         XCTAssertEqual(stand.started.count, 1)
         XCTAssertEqual(stand.madeThreads.count, 1)
@@ -493,6 +528,9 @@ final class AssetHandoffTests: XCTestCase {
         XCTAssertFalse(ToolIntentDecision.names("file.read", in: "explain how file.reading works"))
         XCTAssertFalse(ToolIntentDecision.names("file.read", in: "my.file.read"))
         XCTAssertFalse(ToolIntentDecision.names("web_search", in: "a web_searching habit"))
+        XCTAssertFalse(ToolIntentDecision.names("file.read", in: "how file.read-extra would open it"))
+        XCTAssertFalse(ToolIntentDecision.names("file.read", in: "the other-file.read helper"))
+        XCTAssertTrue(ToolIntentDecision.names("file.read", in: "file.read - then tell me"), "A hyphen that joins nothing")
         XCTAssertTrue(ToolIntentDecision.names("file.read", in: "file.reading is not file.read"), "A later whole mention counts")
         guard case .noTools = ToolIntentDecision.heuristic(for: "Explain how file.reading would open the file /tmp/example") else {
             XCTFail("A longer name names no tool")

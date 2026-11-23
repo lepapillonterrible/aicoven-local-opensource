@@ -100,19 +100,24 @@ enum ToolIntentDecision {
 
     /// Whether `text` holds `name` as a whole name: not as the start or
     /// the end of a longer one ("file.reading" does not name `file.read`,
-    /// nor "asset.get.all" `asset.get`; "use asset.get." does).
+    /// nor "asset.get.all", "file.read-extra" or "other-file.read"; "use
+    /// asset.get." does).
     static func names(_ name: String, in text: String) -> Bool {
         func isOfAName(_ character: Character?) -> Bool {
             character.map { $0.isLetter || $0.isNumber || $0 == "_" } ?? false
+        }
+        /// A dot or a hyphen joins a name to more of it.
+        func joins(_ character: Character?) -> Bool {
+            character == "." || character == "-"
         }
         var from = text.startIndex
         while let found = text.range(of: name, range: from ..< text.endIndex) {
             let before = found.lowerBound > text.startIndex ? text[text.index(before: found.lowerBound)] : nil
             let after = found.upperBound < text.endIndex ? text[found.upperBound] : nil
             let afterThat = after == nil ? nil : (text.index(after: found.upperBound) < text.endIndex ? text[text.index(after: found.upperBound)] : nil)
-            // A dot goes on with a name only where a name's character follows it.
-            let goesOn = isOfAName(after) || (after == "." && isOfAName(afterThat))
-            if !isOfAName(before), before != ".", !goesOn { return true }
+            // A dot or a hyphen goes on with a name only where a name's character follows it.
+            let goesOn = isOfAName(after) || (joins(after) && isOfAName(afterThat))
+            if !isOfAName(before), !joins(before), !goesOn { return true }
             from = found.upperBound
         }
         return false
@@ -271,7 +276,7 @@ actor ChatService {
         provider.lowercased() != AgentRun.hermes && usesAssets(provider: provider) && !isLocal
     }
 
-    /// Whether a turn for this agent (Strix for nil) would be offered the
+    /// Whether a turn for an agent (Strix for nil) would be offered the
     /// tools of its thread's place, as the agent and the connections are
     /// set up now: asked before an asset is sent to an agent, which reads
     /// it with those tools. Decided as a turn decides it: after the same
@@ -279,14 +284,31 @@ actor ChatService {
     /// answer (the agent's own where it is there, else the one the turn
     /// would fall back to), and not for a turn that would be handed to
     /// Hermes or an OpenClaw Gateway, or that no model can answer.
-    func offersPlaceTools(toAgent roleID: String?) async -> Bool {
+    ///
+    /// Asked for several agents at once (nil for Strix), with one refresh
+    /// for all of them, as `account`: an agent's settings and the
+    /// connections are the signed-in account's, so nothing is answered
+    /// (nil) once another account is signed in, before or after the wait.
+    func offersPlaceTools(toAgents roleIDs: [String?], as account: String) async -> [Bool]? {
+        guard await signedIn() == account else { return nil }
         await ensureEnvironment()
-        let preferred = await preferredProviderAndModel(roleId: roleID)
-        if preferred.provider == AgentRun.hermes, hermesAgent() != nil { return false }
-        if preferred.provider == AgentRun.openClaw, openClawTurn("") != nil { return false }
-        guard let answering = answeringModel(provider: preferred.provider, model: preferred.model) else { return false }
-        let provider = answering.descriptor.providerID
-        return Self.givesPlaceTools(provider: provider, isLocal: isLocalDeployment(providerID: provider))
+        var offered: [Bool] = []
+        for roleID in roleIDs {
+            guard await signedIn() == account else { return nil }
+            let preferred = await preferredProviderAndModel(roleId: roleID)
+            if preferred.provider == AgentRun.hermes, hermesAgent() != nil {
+                offered.append(false)
+            } else if preferred.provider == AgentRun.openClaw, openClawTurn("") != nil {
+                offered.append(false)
+            } else if let answering = answeringModel(provider: preferred.provider, model: preferred.model) {
+                let provider = answering.descriptor.providerID
+                offered.append(Self.givesPlaceTools(provider: provider, isLocal: isLocalDeployment(providerID: provider)))
+            } else {
+                offered.append(false)
+            }
+        }
+        guard await signedIn() == account else { return nil }
+        return offered
     }
 
     /// The model that answers a turn whose agent prefers `provider` and

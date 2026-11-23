@@ -64,8 +64,12 @@ final class AssetHandoffModel: ObservableObject {
                     agents = roles.map { Agent(id: $0.id, name: $0.name) }
                 }
                 if agents.isEmpty { agents = [Agent(id: Agent.strixID, name: "Strix")] }
-                for index in agents.indices {
-                    agents[index].readsAssets = await ChatService.shared.offersPlaceTools(toAgent: agents[index].isStrix ? nil : agents[index].id)
+                // One refresh of what is connected for all of them, as the account that asked.
+                guard let offered = await ChatService.shared.offersPlaceTools(toAgents: agents.map { $0.isStrix ? nil : $0.id }, as: account) else {
+                    return nil
+                }
+                for (index, reads) in zip(agents.indices, offered) {
+                    agents[index].readsAssets = reads
                 }
                 guard UserScope.currentUserID == account else { return nil }
                 return agents
@@ -75,13 +79,17 @@ final class AssetHandoffModel: ObservableObject {
                 let threads = try await ThreadService.shared.loadThreads(covenId: covenID)
                 return ThreadListRules.ordered(threads)
             },
-            readsAssets: { agent, _ in await ChatService.shared.offersPlaceTools(toAgent: agent.isStrix ? nil : agent.id) },
+            readsAssets: { agent, account in
+                await ChatService.shared.offersPlaceTools(toAgents: [agent.isStrix ? nil : agent.id], as: account)?.first ?? false
+            },
             isBusy: { threadID, account in
                 if TurnEngine.shared.running[threadID] != nil { return true }
                 // A turn stored as running that has an agent's own run is
                 // still under way though this app runs nothing in it.
-                guard let marks = try await ThreadRepository.shared.threadMarks(for: account)[threadID] else { return false }
-                return marks.latestTurn == .running && marks.latestTurnHasRun
+                let marks = try await ThreadRepository.shared.threadMarks(for: account)[threadID]
+                // Asked again after the wait: a turn can have started meanwhile.
+                if TurnEngine.shared.running[threadID] != nil { return true }
+                return marks?.latestTurn == .running && marks?.latestTurnHasRun == true
             },
             brief: {
                 let handed = try await AssetRepository.shared.handoffBrief(of: $0, as: $1)
@@ -247,9 +255,14 @@ final class AssetHandoffModel: ObservableObject {
         var made: Thread?
         do {
             let existing = startsNewThread ? nil : thread
-            if let existing, try await hands.isBusy(existing.id, account) {
-                if hands.signedIn() == account { fail(Self.threadIsBusy) }
-                return nil
+            if let existing {
+                let isBusy = try await hands.isBusy(existing.id, account)
+                // Asked after every wait, whatever it answered.
+                guard hands.signedIn() == account else { return nil }
+                if isBusy {
+                    fail(Self.threadIsBusy)
+                    return nil
+                }
             }
             guard await hands.readsAssets(agent, account) else {
                 guard hands.signedIn() == account else { return nil }
@@ -274,9 +287,13 @@ final class AssetHandoffModel: ObservableObject {
                 target = made
             }
             guard let target, hands.signedIn() == account else { return nil }
-            if made == nil, try await hands.isBusy(target.id, account) {
-                if hands.signedIn() == account { fail(Self.threadIsBusy) }
-                return nil
+            if made == nil {
+                let isBusy = try await hands.isBusy(target.id, account)
+                guard hands.signedIn() == account else { return nil }
+                if isBusy {
+                    fail(Self.threadIsBusy)
+                    return nil
+                }
             }
             let words = Self.message(
                 briefID: handed.brief.id, sourceID: asset.id, isApproved: handed.sourceStatus == .approved, direction: direction
@@ -289,6 +306,9 @@ final class AssetHandoffModel: ObservableObject {
             switch error {
             case AssetError.needsReview, AssetError.noSuchAsset, AssetError.unreadable:
                 fail(Self.cannotBeSent)
+            case TurnEngine.TurnError.alreadyRunning:
+                // A turn started in the thread between the last look and the start: the engine refused.
+                fail(Self.threadIsBusy)
             default:
                 // The kind of failure only.
                 AppErrorReporter.log(message: "An asset could not be sent to an agent (\(type(of: error)))", context: "AssetHandoffModel")
