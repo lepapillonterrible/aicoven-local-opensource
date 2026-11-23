@@ -1,9 +1,11 @@
 import SwiftUI
 
-/// A place's Tasks, as the cloud app's List: the open tasks under "Open",
-/// which starts with the New task line, and the finished ones under
-/// "Done · N", closed until asked for. A task is ticked done, closed
-/// without being done, or opened again.
+/// A place's Tasks, as the cloud app's List: what is pinned for today and
+/// for this week first (and before them "Still on today?", for pins whose
+/// day is over), then the open tasks under "Open", which starts with the
+/// New task line, and the finished ones under "Done · N", closed until
+/// asked for. A task is ticked done, closed without being done, opened
+/// again, pinned and unpinned; Sort orders each part.
 struct TasksView: View {
     @ObservedObject var navigator: ShellNavigator
     @StateObject private var model: TasksModel
@@ -22,6 +24,10 @@ struct TasksView: View {
     @State private var showsDone = false
     /// Whether Try again's reading is under way.
     @State private var isTryingAgain = false
+    @AppStorage(TaskSort.storageKey) private var storedSort = TaskSort.standard.rawValue
+    /// The time the list is drawn for: pins run out and days pass while
+    /// the page is open, so it is told again as time goes.
+    @State private var now = Date()
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.isPadLayout) private var isPadLayout
 
@@ -69,7 +75,14 @@ struct TasksView: View {
             list
         }
         .background(Color.aicovenSurface.ignoresSafeArea())
+        .toolbar { sortItem }
         .task { await model.load() }
+        .task {
+            now = Date()
+            while await (try? Task.sleep(for: .seconds(30))) != nil {
+                now = Date()
+            }
+        }
         // New Task asked for the cursor in the New task line.
         .onChange(of: navigator.newTaskAsked, initial: true) { _, _ in
             guard navigator.takeNewTaskRequest() else { return }
@@ -96,6 +109,52 @@ struct TasksView: View {
                     .accessibilityAddTraits(.isHeader)
             } else {
                 Color.clear.frame(height: Spacing.xs)
+            }
+        }
+    }
+
+    // MARK: - Sort
+
+    private var sort: TaskSort {
+        TaskSort.resolve(storedSort)
+    }
+
+    private var sortPicker: some View {
+        Picker("Sort", selection: Binding(get: { sort }, set: { chosen in
+            guard chosen != sort else { return }
+            storedSort = chosen.rawValue
+            AccessibilityNotification.Announcement("Sorted by \(chosen.title.lowercased())").post()
+        })) {
+            ForEach(TaskSort.allCases) { Text($0.title).tag($0) }
+        }
+        .pickerStyle(.inline)
+        .labelsHidden()
+    }
+
+    /// Sort sits in the bar: a pop-up that says the order where there is
+    /// room, a menu button at phone width.
+    @ToolbarContentBuilder
+    private var sortItem: some ToolbarContent {
+        StoneToolbarItem(placement: .primaryAction) {
+            if horizontalSizeClass == .compact {
+                Menu {
+                    Section("Sort") { sortPicker }
+                } label: {
+                    Label("Sort tasks", systemImage: "ellipsis.circle")
+                }
+                .stoneToolbarMenu()
+            } else {
+                Menu {
+                    sortPicker
+                } label: {
+                    StonePopUpLabel(icon: "arrow.up.arrow.down", text: "Sort: \(sort.title)")
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel("Sort tasks")
+                .accessibilityValue(sort.title)
             }
         }
     }
@@ -139,17 +198,33 @@ struct TasksView: View {
                     .frame(maxWidth: .infinity)
                     .taskListRow()
             }
+            let parts = TaskRules.parts(open: model.open, finished: model.finished, sort: sort, now: now)
+            if !parts.review.isEmpty {
+                reviewRows(parts.review)
+            }
+            if !parts.today.isEmpty {
+                heading(TaskPinPeriod.today.title)
+                ForEach(parts.today) { task in
+                    row(task).taskListRow(vertical: 0)
+                }
+            }
+            if !parts.week.isEmpty {
+                heading(TaskPinPeriod.week.title)
+                ForEach(parts.week) { task in
+                    row(task).taskListRow(vertical: 0)
+                }
+            }
             heading("Open")
             newTaskField
                 .id(Self.newTaskLineID)
                 .taskListRow(vertical: 0)
-            ForEach(model.open) { task in
+            ForEach(parts.open) { task in
                 row(task).taskListRow(vertical: 0)
             }
             if model.finishedCount > 0 {
                 doneHeading.taskListRow(vertical: 0)
                 if showsDone {
-                    ForEach(model.finished) { task in
+                    ForEach(parts.finished) { task in
                         row(task).taskListRow(vertical: 0)
                     }
                     if model.finishedCount > model.finished.count {
@@ -210,9 +285,40 @@ struct TasksView: View {
         .accessibilityAddTraits(.isHeader)
     }
 
+    /// "Still on today?": the tasks pinned for a day that is over, each to
+    /// be kept for today or not, or all at once. Each is in Open too.
+    @ViewBuilder
+    private func reviewRows(_ tasks: [TaskItem]) -> some View {
+        heading("Still on today?")
+        HStack(spacing: Spacing.xs) {
+            Button("Keep all") { answer(tasks, keep: true) }
+                .buttonStyle(.borderedProminent)
+            Button("Clear") { answer(tasks, keep: false) }
+                .buttonStyle(.bordered)
+            Spacer(minLength: 0)
+        }
+        .disabled(tasks.contains { model.saving.contains($0.id) })
+        .taskListRow()
+        // Each of these tasks has its row in Open too: this one is told
+        // apart from that one, or the list takes the two for one row.
+        ForEach(tasks, id: \.reviewRowID) { task in
+            TaskReviewRow(
+                task: task, isSaving: model.saving.contains(task.id), onKeep: { answer([task], keep: true) }, onClear: { answer([task], keep: false) }
+            )
+            .taskListRow()
+        }
+    }
+
+    private func answer(_ tasks: [TaskItem], keep: Bool) {
+        let account = UserScope.currentUserID
+        Task { await model.answerLapsedPins(of: tasks, keep: keep, as: account) }
+    }
+
     private func row(_ task: TaskItem) -> some View {
         TaskRow(
             task: task,
+            pin: TaskRules.pinState(of: task, now: now),
+            context: TaskRules.context(of: task, now: now),
             isSaving: model.saving.contains(task.id),
             onTick: { done in
                 let account = UserScope.currentUserID
@@ -221,7 +327,16 @@ struct TasksView: View {
             onClose: {
                 let account = UserScope.currentUserID
                 Task { await model.close(task, as: account) }
-            }
+            },
+            onPin: { period in
+                let account = UserScope.currentUserID
+                Task { await model.pin(task, for: period, as: account) }
+            },
+            onUnpin: {
+                let account = UserScope.currentUserID
+                Task { await model.unpin(task, as: account) }
+            },
+            onAnswer: { keep in answer([task], keep: keep) }
         )
     }
 
@@ -330,28 +445,145 @@ private extension View {
     }
 }
 
-/// One task in the List: its tick and its title. What else can be done
-/// with it is in its menu and its swipes.
+/// A task's pin in its menu, its swipe and VoiceOver's actions, by how the
+/// pin stands, as the cloud app offers it.
+private struct TaskPinActions: View {
+    let task: TaskItem
+    let pin: TaskPinState
+    let onPin: (TaskPinPeriod) -> Void
+    let onUnpin: () -> Void
+    /// Keeps a pin that has run out for today (true), or clears it.
+    let onAnswer: (Bool) -> Void
+
+    var body: some View {
+        if !task.isFinished {
+            switch pin {
+            case .today:
+                Button("Pin for this week") { onPin(.week) }
+                Button("Unpin", action: onUnpin)
+            case .week:
+                Button("Pin for today") { onPin(.today) }
+                Button("Unpin", action: onUnpin)
+            case .review:
+                Button("Keep for today") { onAnswer(true) }
+                Button("Not today") { onAnswer(false) }
+            case .none:
+                Button("Pin for today") { onPin(.today) }
+                Button("Pin for this week") { onPin(.week) }
+            }
+        }
+    }
+}
+
+/// A task pinned for a day that is over, with the two answers.
+private struct TaskReviewRow: View {
+    let task: TaskItem
+    let isSaving: Bool
+    let onKeep: () -> Void
+    let onClear: () -> Void
+
+    var body: some View {
+        Panel(padding: Spacing.sm, cornerRadius: BorderRadius.md) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: Spacing.sm) {
+                    title
+                    Spacer(minLength: Spacing.sm)
+                    answers
+                }
+                VStack(alignment: .leading, spacing: Spacing.xs) {
+                    title
+                    answers
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .disabled(isSaving)
+        .contextMenu {
+            Button("Keep for today", action: onKeep)
+            Button("Not today", action: onClear)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Still on today: \(TasksModel.name(of: task))")
+    }
+
+    private var title: some View {
+        Text(task.isUnreadable ? TasksModel.unreadable : task.title)
+            .font(.aicovenH2)
+            .foregroundStyle(Color.aicovenTextPrimary)
+    }
+
+    private var answers: some View {
+        HStack(spacing: Spacing.xs) {
+            Button("Keep for today", action: onKeep)
+                .buttonStyle(.borderedProminent)
+            Button("Not today", action: onClear)
+                .buttonStyle(.bordered)
+        }
+        .fixedSize()
+        #if os(macOS)
+            .controlSize(.small)
+        #endif
+    }
+}
+
+private extension TaskItem {
+    /// What tells a task's row under "Still on today?" from its row in Open.
+    var reviewRowID: String {
+        "review-\(id)"
+    }
+}
+
+/// One task in the List: its tick, its title and one line of what helps
+/// (its pin, its due day, that it was closed). What else can be done with
+/// it is in its menu and its swipes.
 private struct TaskRow: View {
     let task: TaskItem
+    let pin: TaskPinState
+    let context: [TaskRules.Context]
     let isSaving: Bool
     /// Ticks an open task done (true), or opens a finished one again.
     let onTick: (Bool) -> Void
     let onClose: () -> Void
+    let onPin: (TaskPinPeriod) -> Void
+    let onUnpin: () -> Void
+    let onAnswer: (Bool) -> Void
     @State private var isHovering = false
+
+    /// The line under the title, its pieces joined by a middle dot.
+    private var contextLine: Text? {
+        context.map { piece -> Text in
+            switch piece {
+            case let .plain(words): Text(words).foregroundStyle(Color.aicovenTextSecondary)
+            case let .pin(words): Text("\(Image(systemName: "pin.fill")) \(words)").foregroundStyle(Color.aicovenTextSecondary)
+            case let .overdue(words): Text(words).foregroundStyle(Color.aicovenError)
+            }
+        }
+        .reduce(nil as Text?) { joined, next in
+            joined.map { $0 + Text(" · ").foregroundStyle(Color.aicovenTextSecondary) + next } ?? next
+        }
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 0) {
             tick
                 .frame(width: TaskListMetrics.titleInset, alignment: .leading)
-            Text(task.isUnreadable ? TasksModel.unreadable : task.title)
-                .font(.aicovenBody)
-                .foregroundStyle(task.isFinished || task.isUnreadable ? Color.aicovenTextSecondary : Color.aicovenTextPrimary)
-                .strikethrough(task.status == .done)
-                .multilineTextAlignment(.leading)
-                // Room around a title that runs to a second line; one
-                // line is no taller for it than the row already is.
-                .padding(.vertical, 3)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(task.isUnreadable ? TasksModel.unreadable : task.title)
+                    .font(.aicovenBody)
+                    .foregroundStyle(task.isFinished || task.isUnreadable ? Color.aicovenTextSecondary : Color.aicovenTextPrimary)
+                    .strikethrough(task.status == .done)
+                    .multilineTextAlignment(.leading)
+                if let contextLine {
+                    contextLine
+                        .font(.aicovenBodySmall)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            // Room around a title that runs to a second line, or has the
+            // line under it; one line is no taller for it than the row
+            // already is.
+            .padding(.vertical, 3)
             Spacer(minLength: Spacing.xs)
         }
         .frame(minHeight: TaskListMetrics.rowMinHeight)
@@ -368,6 +600,8 @@ private struct TaskRow: View {
                 Button("Reopen") { onTick(false) }
             } else {
                 Button("Close", action: onClose)
+                Divider()
+                pinActions
             }
         }
         .swipeActions(edge: .leading, allowsFullSwipe: true) {
@@ -381,11 +615,20 @@ private struct TaskRow: View {
                 Button("Reopen") { onTick(false) }
                     .tint(.aicovenSwipeNeutral)
             } else {
-                Button("Close", action: onClose)
-                    .tint(.aicovenSwipeNeutral)
+                Menu("More…") {
+                    Button("Close", action: onClose)
+                    Divider()
+                    pinActions
+                }
+                .tint(.aicovenSwipeNeutral)
             }
         }
         .accessibilityElement(children: .contain)
+        .accessibilityActions { pinActions }
+    }
+
+    private var pinActions: some View {
+        TaskPinActions(task: task, pin: pin, onPin: onPin, onUnpin: onUnpin, onAnswer: onAnswer)
     }
 
     /// Ticks an open task done; opens a done or closed one again.

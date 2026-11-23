@@ -1,0 +1,197 @@
+import Foundation
+
+/// The ways a person can order the tasks inside each part of the list, as
+/// the cloud app's. The raw values are kept on the device, so they stay.
+nonisolated enum TaskSort: String, CaseIterable, Identifiable {
+    static let storageKey = "tasks.sortOrder.v1"
+
+    case recentlyUpdated = "recently_updated"
+    case dueDate = "due_date"
+    case newest
+    case oldest
+
+    var id: String {
+        rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .recentlyUpdated: "Recently updated"
+        case .dueDate: "Due date"
+        case .newest: "Newest"
+        case .oldest: "Oldest"
+        }
+    }
+
+    /// The order until the person picks one: what is pinned, then the
+    /// soonest due, then the rest by when they were last changed.
+    static let standard = TaskSort.dueDate
+
+    static func resolve(_ stored: String) -> TaskSort {
+        TaskSort(rawValue: stored) ?? standard
+    }
+}
+
+/// How a task's pin stands at a moment.
+nonisolated enum TaskPinState: Equatable {
+    /// Pinned for today, or for this week, and the pin has not run out.
+    case today
+    case week
+    /// Pinned for a day that is over: "Still on today?".
+    case review
+    case none
+
+    /// The period the task is pinned for now.
+    var activePeriod: TaskPinPeriod? {
+        switch self {
+        case .today: .today
+        case .week: .week
+        case .review, .none: nil
+        }
+    }
+}
+
+/// When a task is due, in words: "Due today", "Due tomorrow", "Due Mon 3
+/// Nov", "Due 3 Nov 2028", with the time of day if it has one, and
+/// "Overdue · " before it for an open task whose day has passed.
+nonisolated struct TaskDueLine: Equatable {
+    let text: String
+    let isOverdue: Bool
+
+    init?(task: TaskItem, now: Date, calendar: Calendar = .current, locale: Locale = .current) {
+        guard let due = task.due, let date = due.date.date(in: calendar) else { return nil }
+        isOverdue = !task.isFinished && due.date.isOverdue(asOf: now, calendar: calendar)
+        let style = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone)
+        var words: String = if calendar.isDate(date, inSameDayAs: now) {
+            "today"
+        } else if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(date, inSameDayAs: tomorrow) {
+            "tomorrow"
+        } else if calendar.isDate(date, equalTo: now, toGranularity: .year) {
+            date.formatted(style.weekday(.abbreviated).day().month(.abbreviated))
+        } else {
+            date.formatted(style.day().month(.abbreviated).year())
+        }
+        if let at = Self.time(due.time, on: date, calendar: calendar) {
+            words += ", \(at.formatted(style.hour().minute()))"
+        }
+        text = isOverdue ? "Overdue · Due \(words)" : "Due \(words)"
+    }
+
+    /// A time of day, `HH:mm`, on `day`.
+    static func time(_ clock: String?, on day: Date, calendar: Calendar = .current) -> Date? {
+        guard let clock else { return nil }
+        let parts = clock.split(separator: ":").compactMap { Int($0) }
+        guard parts.count == 2 else { return nil }
+        return calendar.date(bySettingHour: parts[0], minute: parts[1], second: 0, of: day)
+    }
+}
+
+/// What the Tasks list decides, apart from how it is drawn: when a pin
+/// ends, how one stands, the order inside each part, the parts themselves,
+/// and the line under a task's title.
+nonisolated enum TaskRules {
+    /// When a pin made now runs out: at the end of the person's day, or of
+    /// their week. A calendar day is added (not 24 hours), so that today
+    /// is right through a change of the clocks; the week starts on the
+    /// person's own first weekday.
+    static func pinEnd(for period: TaskPinPeriod, now: Date, calendar: Calendar) -> Date {
+        let today = calendar.startOfDay(for: now)
+        switch period {
+        case .today:
+            return calendar.date(byAdding: .day, value: 1, to: today) ?? today.addingTimeInterval(86400)
+        case .week:
+            let weekday = calendar.component(.weekday, from: today)
+            let sinceWeekStart = (weekday - calendar.firstWeekday + 7) % 7
+            let weekStart = calendar.date(byAdding: .day, value: -sinceWeekStart, to: today) ?? today
+            return calendar.date(byAdding: .day, value: 7, to: weekStart) ?? weekStart.addingTimeInterval(7 * 86400)
+        }
+    }
+
+    /// How a task's pin stands at `now`. A finished task has none; a pin
+    /// for today that has run out waits to be answered; one for the week
+    /// that has run out is no pin.
+    static func pinState(of task: TaskItem, now: Date) -> TaskPinState {
+        guard !task.isFinished, let pin = task.pin else { return .none }
+        if pin.expiresAt <= now { return pin.period == .today ? .review : .none }
+        return pin.period == .today ? .today : .week
+    }
+
+    /// Tasks in the order `sort` gives, what is pinned for today first and
+    /// for the week after it; of two that `sort` cannot tell apart, the one
+    /// that came first stays first.
+    static func ordered(_ tasks: [TaskItem], by sort: TaskSort, now: Date) -> [TaskItem] {
+        func rank(_ task: TaskItem) -> Int {
+            switch pinState(of: task, now: now) {
+            case .today: 0
+            case .week: 1
+            case .review, .none: 2
+            }
+        }
+        return tasks.enumerated().sorted { first, second in
+            let (one, other) = (first.element, second.element)
+            if rank(one) != rank(other) { return rank(one) < rank(other) }
+            switch sort {
+            case .recentlyUpdated:
+                if one.updatedAt != other.updatedAt { return one.updatedAt > other.updatedAt }
+            case .newest:
+                if one.createdAt != other.createdAt { return one.createdAt > other.createdAt }
+            case .oldest:
+                if one.createdAt != other.createdAt { return one.createdAt < other.createdAt }
+            case .dueDate:
+                switch (one.due?.date, other.due?.date) {
+                case let (first?, second?) where first != second: return first < second
+                case (_?, nil): return true
+                case (nil, _?): return false
+                default:
+                    if one.updatedAt != other.updatedAt { return one.updatedAt > other.updatedAt }
+                }
+            }
+            return first.offset < second.offset
+        }.map(\.element)
+    }
+
+    /// The list's parts.
+    struct Parts: Equatable {
+        /// Pinned for a day that is over: asked about first. Each is also
+        /// in `open`.
+        var review: [TaskItem] = []
+        var today: [TaskItem] = []
+        var week: [TaskItem] = []
+        /// The open tasks not pinned now.
+        var open: [TaskItem] = []
+        var finished: [TaskItem] = []
+    }
+
+    /// The parts of the list at `now`, each in the order `sort` gives.
+    static func parts(open: [TaskItem], finished: [TaskItem], sort: TaskSort, now: Date) -> Parts {
+        func those(_ state: TaskPinState) -> [TaskItem] {
+            ordered(open.filter { pinState(of: $0, now: now) == state }, by: sort, now: now)
+        }
+        return Parts(
+            review: those(.review), today: those(.today), week: those(.week),
+            open: ordered(open.filter { pinState(of: $0, now: now).activePeriod == nil }, by: sort, now: now),
+            finished: ordered(finished, by: sort, now: now)
+        )
+    }
+
+    /// A piece of the line under a task's title.
+    enum Context: Equatable {
+        case plain(String)
+        /// What it is pinned for.
+        case pin(String)
+        /// Its due day, passed.
+        case overdue(String)
+    }
+
+    /// The line under a task's title, which says only what helps: its pin,
+    /// its due day, and that it was closed. Empty for a task with none.
+    static func context(of task: TaskItem, now: Date, calendar: Calendar = .current, locale: Locale = .current) -> [Context] {
+        var pieces: [Context] = []
+        if let period = pinState(of: task, now: now).activePeriod { pieces.append(.pin(period.title)) }
+        if let due = TaskDueLine(task: task, now: now, calendar: calendar, locale: locale) {
+            pieces.append(due.isOverdue ? .overdue(due.text) : .plain(due.text))
+        }
+        if task.status == .closed { pieces.append(.plain("Closed")) }
+        return pieces
+    }
+}

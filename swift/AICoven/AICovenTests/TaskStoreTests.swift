@@ -460,6 +460,86 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(raw[5], "\"week\"")
     }
 
+    func testPinsThatHaveRunOutAreKeptForTodayOrCleared_andOnlyThose() async throws {
+        let clock = Clock()
+        let store = TaskRepository(now: { clock.next() })
+        func make(_ title: String, _ pin: TaskPin? = nil, done: Bool = false) async throws -> TaskItem {
+            let made = try await store.create(title: title, inCoven: nil, as: account)
+            if let pin { try await store.change(made.id, TaskChange(pin: .to(pin)), as: account) }
+            if done { try await store.change(made.id, TaskChange(status: .done), as: account) }
+            return made
+        }
+        let soon = clock.next().addingTimeInterval(30)
+        let far = soon.addingTimeInterval(86400)
+        let yesterdays = try await make("Yesterday's", TaskPin(period: .today, expiresAt: soon))
+        let another = try await make("Another of yesterday's", TaskPin(period: .today, expiresAt: soon))
+        let todays = try await make("Today's", TaskPin(period: .today, expiresAt: far))
+        let weeks = try await make("Last week's", TaskPin(period: .week, expiresAt: soon))
+        let unpinned = try await make("Not pinned")
+        // The clock moves on past the first pins' end.
+        for _ in 0 ..< 40 {
+            _ = clock.next()
+        }
+        func read() async throws -> [String: TaskItem] {
+            let listing = try await store.tasks(inCoven: nil, as: account)
+            return Dictionary(uniqueKeysWithValues: listing.tasks.map { ($0.id, $0) })
+        }
+        let before = try await read()
+        let everyone = [yesterdays.id, another.id, todays.id, weeks.id, unpinned.id, "no-such-task", yesterdays.id]
+
+        // Kept for today: only what was pinned for a day that is over.
+        let until = clock.next().addingTimeInterval(3600)
+        let kept = try await store.answerLapsedPins(of: [yesterdays.id, todays.id, weeks.id, unpinned.id, "no-such-task", yesterdays.id], keepUntil: until, as: account)
+        XCTAssertEqual(kept, [yesterdays.id])
+        var after = try await read()
+        XCTAssertEqual(after[yesterdays.id]?.pin, TaskPin(period: .today, expiresAt: until))
+        XCTAssertEqual(after[yesterdays.id]?.updatedAt, before[yesterdays.id]?.updatedAt, "A pin is no change to the task")
+        XCTAssertEqual(after[todays.id]?.pin, before[todays.id]?.pin, "One that has not run out is left")
+        XCTAssertEqual(after[weeks.id]?.pin, before[weeks.id]?.pin, "A week's is not asked about")
+        XCTAssertNil(after[unpinned.id]?.pin)
+
+        // Cleared: again only those; one kept a moment ago has not run out now.
+        let cleared = try await store.answerLapsedPins(of: everyone, keepUntil: nil, as: account)
+        XCTAssertEqual(cleared, [another.id])
+        after = try await read()
+        XCTAssertNil(after[another.id]?.pin)
+        XCTAssertNotNil(after[yesterdays.id]?.pin)
+        XCTAssertNotNil(after[weeks.id]?.pin)
+
+        // Nothing to answer for; a time to keep until that has passed; another account.
+        let none = try await store.answerLapsedPins(of: [], keepUntil: nil, as: account)
+        XCTAssertEqual(none, [])
+        await expect(.pinEnded, "Kept until a time still to come") {
+            _ = try await store.answerLapsedPins(of: everyone, keepUntil: Date(timeIntervalSince1970: 1_800_000_000), as: self.account)
+        }
+        do {
+            _ = try await store.answerLapsedPins(of: everyone, keepUntil: nil, as: "someone-else")
+            XCTFail("Nothing is done as an account that is not signed in")
+        } catch RepositoryError.accountChanged {}
+    }
+
+    func testAnAnswerForPinsWrittenAfterTheDataWasLockedIsPutBack() async throws {
+        let clock = Clock()
+        let made = try await store.create(title: "Yesterday's", inCoven: nil, as: account)
+        let writer = TaskRepository(now: { clock.next() })
+        try await writer.change(made.id, TaskChange(pin: .to(TaskPin(period: .today, expiresAt: clock.next().addingTimeInterval(10)))), as: account)
+        for _ in 0 ..< 20 {
+            _ = clock.next()
+        }
+        let before = try await stored(made.id)
+
+        let late = TaskRepository(at: { step in if step == .beforeWriting { await DataEncryptionService.shared.lock() } }, now: { clock.next() })
+        for until in [clock.next().addingTimeInterval(3600), nil] {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            do {
+                _ = try await late.answerLapsedPins(of: [made.id], keepUntil: until, as: account)
+                XCTFail("Nothing is answered once the account's data is locked")
+            } catch RepositoryError.dataLocked {}
+            let after = try await stored(made.id)
+            XCTAssertEqual(after, before, "Its pin as it stood")
+        }
+    }
+
     func testAPlaceKeepsNoMoreOpenTasksThanItMay_countedAsATaskIsMadeOrOpenedAgain() async throws {
         let coven = try await newCoven()
         let first = try await store.create(title: "First", inCoven: nil, as: account)

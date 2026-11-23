@@ -357,3 +357,36 @@ enum StoneChrome {
     }
     #endif
 }
+
+/// A small stone control that opens a menu: its words, and the pop-up
+/// chevrons.
+struct StonePopUpLabel: View {
+    var icon: String?
+    let text: String
+
+    var body: some View {
+        HStack(spacing: Spacing.xxs) {
+            if let icon {
+                Image(systemName: icon)
+                    .accessibilityHidden(true)
+            }
+            Text(text)
+                .lineLimit(1)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .accessibilityHidden(true)
+        }
+        .font(.aicovenBodySmall)
+        .foregroundStyle(Color.aicovenTextPrimary)
+        .padding(.horizontal, Spacing.xs)
+        .padding(.vertical, Spacing.xxs)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color.aicovenSurface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .strokeBorder(Color.aicovenBorder, lineWidth: 1)
+                )
+        )
+    }
+}

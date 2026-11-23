@@ -6,12 +6,23 @@ import XCTest
 /// asked.
 @MainActor
 final class TasksModelTests: XCTestCase {
-    private func task(_ id: String, _ title: String? = nil, status: TaskStatus = .open, unreadable: Bool = false) -> TaskItem {
+    private func task(
+        _ id: String, _ title: String? = nil, status: TaskStatus = .open, pin: TaskPin? = nil, unreadable: Bool = false
+    ) -> TaskItem {
         TaskItem(
-            id: id, covenID: nil, title: unreadable ? "" : title ?? id.capitalized, status: status, stage: .backlog, due: nil, pin: nil,
+            id: id, covenID: nil, title: unreadable ? "" : title ?? id.capitalized, status: status, stage: .backlog, due: nil, pin: pin,
             isUnreadable: unreadable, createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
         )
     }
+
+    /// Wednesday 13 January 2027, 10:00 UTC, in a calendar whose week starts on Monday.
+    private let now = Date(timeIntervalSince1970: 1_799_834_400)
+    private let calendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        calendar.firstWeekday = 2
+        return calendar
+    }()
 
     /// Holds whoever comes to it until the test lets them through.
     private actor Gate {
@@ -63,6 +74,9 @@ final class TasksModelTests: XCTestCase {
         var changingWaits: Gate?
         /// What VoiceOver was told, in order.
         var heard: [String] = []
+        var answered: [(ids: [String], keepUntil: Date?, account: String)] = []
+        var answerFails: Error?
+        var answers: Set<String>?
     }
 
     private func model(_ stand: Stand, covenID: String? = nil) -> TasksModel {
@@ -97,11 +111,27 @@ final class TasksModelTests: XCTestCase {
                     try await MainActor.run {
                         if let error = stand.changeFails { throw error }
                         stand.changed.append((id, change, account))
-                        stand.kept = stand.kept.map { $0.id == id ? self.task($0.id, $0.title, status: change.status ?? $0.status) : $0 }
+                        stand.kept = stand.kept.map { kept in
+                            guard kept.id == id else { return kept }
+                            var pin = kept.pin
+                            switch change.pin {
+                            case let .to(new): pin = new
+                            case .cleared: pin = nil
+                            case nil: break
+                            }
+                            return self.task(kept.id, kept.title, status: change.status ?? kept.status, pin: pin)
+                        }
+                    }
+                },
+                answerLapsedPins: { ids, keepUntil, account in
+                    try await MainActor.run {
+                        if let error = stand.answerFails { throw error }
+                        stand.answered.append((ids, keepUntil, account))
+                        return stand.answers ?? Set(ids)
                     }
                 }
             ),
-            signedIn: { stand.account }, announce: { stand.heard.append($0) }
+            signedIn: { stand.account }, announce: { stand.heard.append($0) }, now: { self.now }, calendar: { self.calendar }
         )
     }
 
@@ -455,6 +485,94 @@ final class TasksModelTests: XCTestCase {
         await marking.value
         await closing.value
         XCTAssertEqual(Set(stand.heard), ["Marked Call the bank done", "Closed Renew the lease"], "Each is said, not only the last")
+    }
+
+    // MARK: - Pins
+
+    func testATaskIsPinnedUntilTheEndOfThePersonsDayOrWeek_andUnpinned() async {
+        let stand = Stand()
+        stand.kept = [task("a", "Call the bank"), task("b", status: .done)]
+        let tasks = model(stand)
+        await tasks.load()
+        let midnight = Date(timeIntervalSince1970: 1_799_884_800), monday = Date(timeIntervalSince1970: 1_800_230_400)
+
+        await tasks.pin(tasks.open[0], for: .today, as: "ada")
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(pin: .to(TaskPin(period: .today, expiresAt: midnight))), "The pin and nothing else")
+        XCTAssertEqual(stand.changed.last?.account, "ada")
+        XCTAssertEqual(stand.heard.last, "Pinned Call the bank for today")
+        XCTAssertEqual(tasks.open[0].pin?.period, .today, "Read again")
+
+        await tasks.pin(tasks.open[0], for: .week, as: "ada")
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(pin: .to(TaskPin(period: .week, expiresAt: monday))))
+        XCTAssertEqual(stand.heard.last, "Pinned Call the bank for this week")
+
+        await tasks.unpin(tasks.open[0], as: "ada")
+        XCTAssertEqual(stand.changed.last?.change, TaskChange(pin: .cleared))
+        XCTAssertEqual(stand.heard.last, "Unpinned Call the bank")
+        XCTAssertNil(tasks.open[0].pin)
+
+        // Nothing to unpin, and a finished task is not pinned: nothing is asked.
+        let asked = stand.changed.count
+        await tasks.unpin(tasks.open[0], as: "ada")
+        await tasks.pin(tasks.finished[0], for: .today, as: "ada")
+        XCTAssertEqual(stand.changed.count, asked)
+
+        // Why not, in words.
+        stand.changeFails = RepositoryError.databaseUnavailable
+        await tasks.pin(tasks.open[0], for: .today, as: "ada")
+        XCTAssertEqual(tasks.errorMessage, "Couldn't pin “Call the bank”. Try again.")
+        stand.kept = [task("a", "Call the bank", pin: TaskPin(period: .today, expiresAt: midnight))]
+        stand.changeFails = nil
+        await tasks.load()
+        stand.changeFails = RepositoryError.databaseUnavailable
+        await tasks.unpin(tasks.open[0], as: "ada")
+        XCTAssertEqual(tasks.errorMessage, "Couldn't unpin “Call the bank”. Try again.")
+        XCTAssertEqual(stand.heard.last, "Couldn't unpin “Call the bank”. Try again.")
+    }
+
+    func testPinsThatHaveRunOutAreAnsweredFor_keptOrCleared_andSaidHowMany() async {
+        let stand = Stand()
+        let over = TaskPin(period: .today, expiresAt: now.addingTimeInterval(-60))
+        stand.kept = [
+            task("a", pin: over), task("b", pin: over), task("c", pin: TaskPin(period: .today, expiresAt: now.addingTimeInterval(60))),
+            task("d", pin: TaskPin(period: .week, expiresAt: now.addingTimeInterval(-60))), task("e"),
+        ]
+        let tasks = model(stand)
+        await tasks.load()
+        let midnight = Date(timeIntervalSince1970: 1_799_884_800)
+
+        await tasks.answerLapsedPins(of: tasks.open, keep: true, as: "ada")
+        XCTAssertEqual(stand.answered.last?.ids, ["a", "b"], "Only those whose day is over")
+        XCTAssertEqual(stand.answered.last?.keepUntil, midnight, "Until the end of today")
+        XCTAssertEqual(stand.answered.last?.account, "ada")
+        XCTAssertEqual(stand.heard.last, "Kept for today 2 tasks")
+        XCTAssertEqual(tasks.saving, [])
+
+        stand.answers = ["a"]
+        await tasks.answerLapsedPins(of: [tasks.open[0]], keep: false, as: "ada")
+        XCTAssertNil(stand.answered.last?.keepUntil ?? nil)
+        XCTAssertEqual(stand.heard.last, "Cleared 1 task")
+
+        // None answered (answered elsewhere meanwhile): nothing is said. None to answer for: nothing is asked.
+        let said = stand.heard.count
+        stand.answers = []
+        await tasks.answerLapsedPins(of: tasks.open, keep: true, as: "ada")
+        XCTAssertEqual(stand.heard.count, said)
+        let asked = stand.answered.count
+        await tasks.answerLapsedPins(of: tasks.open.filter { $0.id == "e" }, keep: true, as: "ada")
+        XCTAssertEqual(stand.answered.count, asked)
+
+        // Why not, in words; and nothing to another account.
+        stand.answerFails = RepositoryError.databaseUnavailable
+        await tasks.answerLapsedPins(of: tasks.open, keep: true, as: "ada")
+        XCTAssertEqual(tasks.errorMessage, "Couldn't update 2 tasks.")
+        stand.answerFails = RepositoryError.dataLocked
+        await tasks.answerLapsedPins(of: [tasks.open[0]], keep: true, as: "ada")
+        XCTAssertEqual(tasks.errorMessage, TasksModel.needsUnlock)
+        stand.account = "grace"
+        stand.answerFails = RepositoryError.databaseUnavailable
+        await tasks.answerLapsedPins(of: tasks.open, keep: true, as: "ada")
+        XCTAssertNil(tasks.errorMessage)
     }
 
     // MARK: - New Task

@@ -47,6 +47,15 @@ nonisolated struct TaskDueDate: Equatable, Comparable {
         lhs.rawValue < rhs.rawValue
     }
 
+    /// The start of the day in `calendar`'s time zone.
+    func date(in calendar: Calendar = .current) -> Date? {
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = calendar.timeZone
+        let parts = rawValue.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        return gregorian.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
+    }
+
     /// Whether the day is before today.
     func isOverdue(asOf now: Date = Date(), calendar: Calendar = .current) -> Bool {
         guard let today = TaskDueDate(day: now, in: calendar) else { return false }
@@ -58,6 +67,14 @@ nonisolated struct TaskDueDate: Equatable, Comparable {
 nonisolated enum TaskPinPeriod: String {
     case today
     case week
+
+    /// As a section and a row name it.
+    var title: String {
+        switch self {
+        case .today: "Today"
+        case .week: "This week"
+        }
+    }
 }
 
 /// A task pinned for today or for this week, until the pin runs out.
