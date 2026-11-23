@@ -280,8 +280,9 @@ nonisolated enum TaskTools {
                 throw error
             }
             // Its thread is the one it was asked for in: Talk it through
-            // opens it. A task that could not be given it is a task all the same.
-            try? await store.change(made.id, TaskChange(threadID: threadID), account)
+            // opens it. A task that could not be given it is a task all the
+            // same, and one the person has finished already is left as it is.
+            try? await store.change(made.id, TaskChange(threadID: threadID, onlyWhileOpen: true), account)
             let dueWords = due.map { "; due: \($0.date.rawValue)" } ?? ""
             return "Added: " + AttachmentContext.plainName(made.title) + " (task_id: \(made.id)\(dueWords))"
         }

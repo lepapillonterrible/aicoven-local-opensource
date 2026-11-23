@@ -384,7 +384,10 @@ final class TaskToolsTests: XCTestCase {
         XCTAssertEqual(stand.created.first?.covenID, "work")
         XCTAssertEqual(stand.created.first?.account, "ada")
         XCTAssertEqual(stand.changed.map(\.id), ["made-1"])
-        XCTAssertEqual(stand.changed.first?.change, TaskChange(threadID: "t-work"), "Its thread is the one it was asked for in")
+        XCTAssertEqual(
+            stand.changed.first?.change, TaskChange(threadID: "t-work", onlyWhileOpen: true),
+            "Its thread is the one it was asked for in; one finished already is left as it is"
+        )
         XCTAssertTrue(result.contextBlock?.contains("[Tasks] 1 of 1 done.") == true)
         XCTAssertTrue(result.contextBlock?.contains("- Added: review launch copy (task_id: made-1; due: 2027-01-14)") == true)
         XCTAssertTrue(result.contextBlock?.contains(TaskTools.dataNote) == true)
