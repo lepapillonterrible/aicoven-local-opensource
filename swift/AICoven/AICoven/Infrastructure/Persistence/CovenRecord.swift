@@ -81,7 +81,11 @@ struct RoleRecord: Codable, FetchableRecord, PersistableRecord {
     var name: String
     var emoji: String?
     var description: String?
+    /// The agent's instructions, opened: kept on disk only sealed, in
+    /// `systemPromptCiphertext` (an agent stored before then keeps them as
+    /// text until its account next reads its agents).
     var systemPrompt: String?
+    var systemPromptCiphertext: Data?
     var model: String?
     var provider: String?
     var providerAccountId: String?
@@ -99,6 +103,7 @@ struct RoleRecord: Codable, FetchableRecord, PersistableRecord {
         case emoji
         case description
         case systemPrompt = "system_prompt"
+        case systemPromptCiphertext = "system_prompt_ciphertext"
         case model
         case provider
         case providerAccountId = "provider_account_id"
@@ -117,6 +122,7 @@ struct RoleRecord: Codable, FetchableRecord, PersistableRecord {
         emoji: String?,
         description: String?,
         systemPrompt: String?,
+        systemPromptCiphertext: Data? = nil,
         model: String?,
         provider: String?,
         providerAccountId: String?,
@@ -133,6 +139,7 @@ struct RoleRecord: Codable, FetchableRecord, PersistableRecord {
         self.emoji = emoji
         self.description = description
         self.systemPrompt = systemPrompt
+        self.systemPromptCiphertext = systemPromptCiphertext
         self.model = model
         self.provider = provider
         self.providerAccountId = providerAccountId
@@ -151,6 +158,7 @@ struct RoleRecord: Codable, FetchableRecord, PersistableRecord {
         emoji = row[Columns.emoji]
         description = row[Columns.description]
         systemPrompt = row[Columns.systemPrompt]
+        systemPromptCiphertext = row[Columns.systemPromptCiphertext]
         model = row[Columns.model]
         provider = row[Columns.provider]
         providerAccountId = row[Columns.providerAccountId]
@@ -168,7 +176,9 @@ struct RoleRecord: Codable, FetchableRecord, PersistableRecord {
         container[Columns.name] = name
         container[Columns.emoji] = emoji
         container[Columns.description] = description
-        container[Columns.systemPrompt] = systemPrompt
+        // Sealed instructions are never written back as text.
+        container[Columns.systemPrompt] = systemPromptCiphertext == nil ? systemPrompt : nil
+        container[Columns.systemPromptCiphertext] = systemPromptCiphertext
         container[Columns.model] = model
         container[Columns.provider] = provider
         container[Columns.providerAccountId] = providerAccountId
@@ -506,8 +516,13 @@ actor CovenRepository {
                 .order(RoleRecord.Columns.createdAt.asc)
                 .fetchAll(db)
         }
+        await sealPlainInstructions(of: records, as: uid, in: dbQueue)
 
-        return records.map { mapRecordToRole($0) }
+        var roles: [Role] = []
+        for record in records {
+            await roles.append(mapRecordToRole(opened(record, as: uid)))
+        }
+        return roles
     }
 
     /// An agent of the signed-in account's, by its id: or of `account`'s,
@@ -526,7 +541,8 @@ actor CovenRepository {
         }
 
         guard let record else { throw CovenRepositoryError.roleNotFound }
-        return mapRecordToRole(record)
+        await sealPlainInstructions(of: [record], as: uid, in: dbQueue)
+        return await mapRecordToRole(opened(record, as: uid))
     }
 
     func createRole(
@@ -565,6 +581,7 @@ actor CovenRepository {
 
         let now = Date()
         let id = UUID().uuidString
+        let sealedInstructions: Data? = if let systemPrompt { try await AccountSeal.seal(systemPrompt, purpose: Self.instructionsPurpose, for: uid) } else { nil }
 
         // A new agent starts with a face: the one chosen for it, or the
         // symbol its emoji stands for (or none, which shows `cpu`) on the
@@ -612,6 +629,7 @@ actor CovenRepository {
                 emoji: emoji,
                 description: description,
                 systemPrompt: systemPrompt,
+                systemPromptCiphertext: sealedInstructions,
                 model: model,
                 provider: provider,
                 providerAccountId: providerAccountId,
@@ -650,6 +668,7 @@ actor CovenRepository {
         // Whose agent it is, read once: only that account's is changed.
         let uid = await MainActor.run { UserScope.currentUserID }
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        let sealedInstructions: Data? = if let systemPrompt { try await AccountSeal.seal(systemPrompt, purpose: Self.instructionsPurpose, for: uid) } else { nil }
 
         try await dbQueue.write { db in
             guard var record = try RoleRecord.fetchOne(db, key: roleId), record.userId == uid else {
@@ -658,7 +677,10 @@ actor CovenRepository {
             if let name { record.name = name }
             if let emoji { record.emoji = emoji }
             if let description { record.description = description }
-            if let systemPrompt { record.systemPrompt = systemPrompt }
+            if let systemPrompt {
+                record.systemPrompt = systemPrompt
+                record.systemPromptCiphertext = sealedInstructions
+            }
             if let model { record.model = model }
             if let provider { record.provider = provider }
             if let providerAccountId { record.providerAccountId = providerAccountId }
@@ -708,6 +730,9 @@ actor CovenRepository {
         guard IconRules.isSymbolName(agent.iconSymbol) else { throw CovenRepositoryError.notASymbol }
         guard await MainActor.run(body: { UserScope.currentUserID }) == account else { throw RepositoryError.accountChanged }
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        // Sealed with the account's own key, before the write.
+        let sealedInstructions = agent.instructions.isEmpty
+            ? nil : try await AccountSeal.seal(agent.instructions, purpose: Self.instructionsPurpose, for: account)
         // Asked again once the database is in hand, just before the write.
         guard await MainActor.run(body: { UserScope.currentUserID }) == account else { throw RepositoryError.accountChanged }
 
@@ -719,6 +744,7 @@ actor CovenRepository {
             record.name = agent.name
             record.description = agent.description.isEmpty ? nil : agent.description
             record.systemPrompt = agent.instructions.isEmpty ? nil : agent.instructions
+            record.systemPromptCiphertext = sealedInstructions
             record.provider = agent.provider
             record.model = agent.model
             record.providerAccountId = agent.providerAccountId
@@ -777,6 +803,40 @@ actor CovenRepository {
     }
 
     // MARK: - Helpers
+
+    /// What an agent's instructions are sealed for.
+    private static let instructionsPurpose = "agent_instructions"
+
+    /// The record with its instructions opened with `account`'s key; where
+    /// they cannot be opened (the data locked, another key), none.
+    private func opened(_ record: RoleRecord, as account: String) async -> RoleRecord {
+        guard let sealed = record.systemPromptCiphertext else { return record }
+        var record = record
+        record.systemPrompt = try? await AccountSeal.reading(as: account) {
+            try await String(decoding: DataEncryptionService.shared.decrypt(sealed, purpose: Self.instructionsPurpose), as: UTF8.self)
+        }
+        return record
+    }
+
+    /// Agents stored before instructions were sealed are sealed, and the
+    /// text taken out of the row, when their account next reads them with
+    /// its key in memory. Where that cannot be done now, it is done at a
+    /// later reading.
+    private func sealPlainInstructions(of records: [RoleRecord], as account: String, in dbQueue: DatabaseQueue) async {
+        for record in records where record.systemPromptCiphertext == nil && record.userId == account {
+            guard let text = record.systemPrompt, !text.isEmpty,
+                  let sealed = try? await AccountSeal.seal(text, purpose: Self.instructionsPurpose, for: account) else { continue }
+            try? await dbQueue.write { db in
+                try db.execute(
+                    sql: """
+                    UPDATE roles SET system_prompt_ciphertext = ?, system_prompt = NULL
+                    WHERE id = ? AND user_id = ? AND system_prompt_ciphertext IS NULL AND system_prompt = ?
+                    """,
+                    arguments: [sealed, record.id, account, text]
+                )
+            }
+        }
+    }
 
     private func mapRecordToRole(_ rec: RoleRecord) -> Role {
         let settings: RoleSettings? = if let settingsJSON = rec.settings,
