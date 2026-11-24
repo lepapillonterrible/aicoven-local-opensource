@@ -141,8 +141,8 @@ extension Font {
         )
     }
 
-    /// A reply's text and the person's bubbles, as `MarkdownView` draws
-    /// them: the body style.
+    /// The text of a message in a thread, as `MarkdownView` draws it: the
+    /// body style.
     static var aicovenReply: Font {
         aicovenBody
     }

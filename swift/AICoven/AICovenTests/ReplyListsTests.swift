@@ -35,6 +35,14 @@ final class ReplyListsTests: XCTestCase {
         ])
     }
 
+    /// What the Mac draws: each item on a line of its own, with its marker.
+    func testOnTheMac_eachItemIsDrawnOnALineOfItsOwnWithItsMarker() {
+        let drawn = String(MarkdownView.attributedMessage(
+            MarkdownBlockParser.parse("- Apple\n- Banana\n- Orange\n\n1. Carrot\n2. Broccoli\n3. Spinach"), compact: false
+        ).characters)
+        XCTAssertEqual(drawn, "• Apple\n• Banana\n• Orange\n\n1. Carrot\n2. Broccoli\n3. Spinach")
+    }
+
     /// On the Mac a reply's prose is one selectable text: its lists are in it.
     func testOnTheMac_aReplysListsAreInItsSelectableText() {
         XCTAssertEqual(MarkdownView.macOSRenderPlan(for: "Fruits:\n- Apple\n- Banana"), [

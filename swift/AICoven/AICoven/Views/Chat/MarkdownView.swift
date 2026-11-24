@@ -101,7 +101,9 @@ struct MarkdownView: View {
         }
     }
 
-    private static func attributedMessage(_ blocks: [MarkdownBlock], compact: Bool) -> AttributedString {
+    /// A reply's prose as the Mac draws it: its blocks, an empty line
+    /// between each.
+    static func attributedMessage(_ blocks: [MarkdownBlock], compact: Bool) -> AttributedString {
         var result = AttributedString()
 
         for (index, block) in blocks.enumerated() {
@@ -197,7 +199,7 @@ struct MarkdownView: View {
             var attributed = AttributedString("\(id): ")
             attributed.foregroundColor = .aicovenTextSecondary
             attributed.append(MarkdownInlineText.attributedInline(content))
-            // A footnote stays at body size, under the larger Mac reply text.
+            // A footnote stays at body size.
             for run in attributed.runs where run.font == nil {
                 attributed[run.range].font = .aicovenBody
             }
@@ -380,6 +382,8 @@ struct MarkdownView: View {
                             .foregroundColor(.aicovenTextSecondary)
                             .frame(width: 16, alignment: .center)
                             .padding(.leading, CGFloat(item.indent) * 16)
+                            // Its state, for VoiceOver, which would read the symbol's name.
+                            .accessibilityLabel(item.isChecked == true ? "Done" : "Not done")
                         MarkdownInlineText(item.text)
                             .font(bodyFont)
                     }
@@ -483,40 +487,95 @@ struct MarkdownInlineText: View {
         )) ?? AttributedString(prepared.plainText)
         dropLinksThatDoNotOpen(in: &attributed)
 
-        for range in prepared.underlinedRanges {
-            if let attributedRange = Range(range, in: attributed) {
-                attributed[attributedRange].underlineStyle = .single
+        // The marks are found where the parsed text has their markers, so
+        // they cover the words they were put around whatever Markdown took
+        // out before them (delimiters, a link's address, backticks).
+        for (mark, range) in takeMarks(from: &attributed) {
+            switch mark {
+            case .underline:
+                attributed[range].underlineStyle = .single
+            case .strikethrough:
+                attributed[range].strikethroughStyle = .single
+            case .superscript:
+                attributed[range].baselineOffset = 5
+                attributed[range].font = .aicovenCaption
+            case .subscript:
+                attributed[range].baselineOffset = -3
+                attributed[range].font = .aicovenCaption
+            case .keyboard:
+                attributed[range].font = .system(.body, design: .monospaced)
+                attributed[range].foregroundColor = .aicovenTextPrimary
             }
         }
-        for range in prepared.struckRanges {
-            if let attributedRange = Range(range, in: attributed) {
-                attributed[attributedRange].strikethroughStyle = .single
-            }
-        }
-        for range in prepared.superscriptRanges {
-            if let attributedRange = Range(range, in: attributed) {
-                attributed[attributedRange].baselineOffset = 5
-                attributed[attributedRange].font = .aicovenCaption
-            }
-        }
-        for range in prepared.subscriptRanges {
-            if let attributedRange = Range(range, in: attributed) {
-                attributed[attributedRange].baselineOffset = -3
-                attributed[attributedRange].font = .aicovenCaption
-            }
-        }
-        for range in prepared.keyboardRanges {
-            if let attributedRange = Range(range, in: attributed) {
-                attributed[attributedRange].font = .system(.body, design: .monospaced)
-                attributed[attributedRange].foregroundColor = .aicovenTextPrimary
-            }
-        }
-        for range in prepared.specialTokenRanges {
+        let shown = String(attributed.characters)
+        for range in specialTokenRanges(in: shown) {
             if let attributedRange = Range(range, in: attributed) {
                 attributed[attributedRange].foregroundColor = .aicovenTextSecondary
             }
         }
         return attributed
+    }
+
+    /// An inline mark of the few HTML tags (and `~~`) the renderer draws.
+    /// Each has a pair of markers, private-use code points that no reply
+    /// keeps (they are taken out of its text first), put around its words
+    /// before Markdown is parsed.
+    enum InlineMark: Int, CaseIterable {
+        case underline, strikethrough, superscript, `subscript`, keyboard
+
+        static let firstMarker: UInt32 = 0xE000
+
+        var open: Unicode.Scalar {
+            Unicode.Scalar(Self.firstMarker + UInt32(rawValue * 2))!
+        }
+
+        var close: Unicode.Scalar {
+            Unicode.Scalar(Self.firstMarker + UInt32(rawValue * 2 + 1))!
+        }
+
+        /// The mark a marker stands for, and whether it opens it.
+        static func of(_ scalar: Unicode.Scalar) -> (mark: InlineMark, opens: Bool)? {
+            guard scalar.value >= firstMarker, let mark = InlineMark(rawValue: Int(scalar.value - firstMarker) / 2) else { return nil }
+            return (mark, (scalar.value - firstMarker) % 2 == 0)
+        }
+
+        static func isMarker(_ scalar: Unicode.Scalar) -> Bool {
+            of(scalar) != nil
+        }
+    }
+
+    /// Takes the markers out of the parsed text and gives the ranges they
+    /// stood around. A marker without its pair marks nothing.
+    private static func takeMarks(from attributed: inout AttributedString) -> [(InlineMark, Range<AttributedString.Index>)] {
+        var opened: [InlineMark: [Int]] = [:]
+        var found: [(InlineMark, Range<Int>)] = []
+        var markers: [Range<AttributedString.Index>] = []
+        var offset = 0
+        var index = attributed.unicodeScalars.startIndex
+        while index < attributed.unicodeScalars.endIndex {
+            let next = attributed.unicodeScalars.index(after: index)
+            if let (mark, opens) = InlineMark.of(attributed.unicodeScalars[index]) {
+                if opens {
+                    opened[mark, default: []].append(offset)
+                } else if let start = opened[mark]?.popLast() {
+                    found.append((mark, start ..< offset))
+                }
+                markers.append(index ..< next)
+            } else {
+                offset += 1
+            }
+            index = next
+        }
+        for marker in markers.reversed() {
+            attributed.unicodeScalars.removeSubrange(marker)
+        }
+        let scalars = attributed.unicodeScalars
+        return found.compactMap { mark, range in
+            guard range.lowerBound < range.upperBound,
+                  let lower = scalars.index(scalars.startIndex, offsetBy: range.lowerBound, limitedBy: scalars.endIndex),
+                  let upper = scalars.index(scalars.startIndex, offsetBy: range.upperBound, limitedBy: scalars.endIndex) else { return nil }
+            return (mark, lower ..< upper)
+        }
     }
 
     private static func dropLinksThatDoNotOpen(in attributed: inout AttributedString) {
@@ -532,68 +591,37 @@ struct MarkdownInlineText: View {
     private struct PreparedInline {
         let markdown: String
         let plainText: String
-        let underlinedRanges: [Range<String.Index>]
-        let struckRanges: [Range<String.Index>]
-        let superscriptRanges: [Range<String.Index>]
-        let subscriptRanges: [Range<String.Index>]
-        let keyboardRanges: [Range<String.Index>]
-        let specialTokenRanges: [Range<String.Index>]
     }
 
     private static func prepareInlineMarkdown(_ source: String) -> PreparedInline {
+        // A reply's own private-use markers would mark its words.
+        var cleaned = source
+        cleaned.unicodeScalars.removeAll(where: InlineMark.isMarker)
+        // Images first, over the whole text: an image's alt text can hold
+        // code, which would otherwise split it across segments.
+        let withPlaceholders = replaceInlineImageMarkdown(in: cleaned)
         var markdown = ""
         var plainText = ""
-        var underlineOffsets: [Range<Int>] = []
-        var strikeOffsets: [Range<Int>] = []
-        var supOffsets: [Range<Int>] = []
-        var subOffsets: [Range<Int>] = []
-        var kbdOffsets: [Range<Int>] = []
-        var plainOffset = 0
 
-        for segment in inlineCodeSegments(in: source) {
+        for segment in inlineCodeSegments(in: withPlaceholders) {
             if segment.isCode {
                 markdown.append(segment.text)
                 plainText.append(segment.text)
-                plainOffset += segment.text.count
                 continue
             }
 
-            var output = replaceInlineImageMarkdown(in: segment.text)
-            output = replaceAngleBracketAutolinks(in: output)
-            var underlineRanges: [Range<String.Index>] = []
-            var strikeRanges: [Range<String.Index>] = []
-            var supRanges: [Range<String.Index>] = []
-            var subRanges: [Range<String.Index>] = []
-            var kbdRanges: [Range<String.Index>] = []
-
-            extractTag("u", from: &output, ranges: &underlineRanges)
-            extractTag("sup", from: &output, ranges: &supRanges)
-            extractTag("sub", from: &output, ranges: &subRanges)
-            extractTag("kbd", from: &output, ranges: &kbdRanges)
-            extractPairedMarkers("~~", from: &output, ranges: &strikeRanges)
-
-            appendOffsetRanges(underlineRanges, in: output, offset: plainOffset, to: &underlineOffsets)
-            appendOffsetRanges(strikeRanges, in: output, offset: plainOffset, to: &strikeOffsets)
-            appendOffsetRanges(supRanges, in: output, offset: plainOffset, to: &supOffsets)
-            appendOffsetRanges(subRanges, in: output, offset: plainOffset, to: &subOffsets)
-            appendOffsetRanges(kbdRanges, in: output, offset: plainOffset, to: &kbdOffsets)
+            var output = replaceAngleBracketAutolinks(in: segment.text)
+            markTag("u", as: .underline, in: &output)
+            markTag("sup", as: .superscript, in: &output)
+            markTag("sub", as: .subscript, in: &output)
+            markTag("kbd", as: .keyboard, in: &output)
+            markPairedMarkers("~~", as: .strikethrough, in: &output)
 
             plainText.append(output)
             markdown.append(autolinkRawURLs(in: escapeRawHTML(in: output)))
-            plainOffset += output.count
         }
 
-        let tokenRanges = specialTokenRanges(in: plainText)
-        return PreparedInline(
-            markdown: markdown,
-            plainText: plainText,
-            underlinedRanges: stringRanges(from: underlineOffsets, in: plainText),
-            struckRanges: stringRanges(from: strikeOffsets, in: plainText),
-            superscriptRanges: stringRanges(from: supOffsets, in: plainText),
-            subscriptRanges: stringRanges(from: subOffsets, in: plainText),
-            keyboardRanges: stringRanges(from: kbdOffsets, in: plainText),
-            specialTokenRanges: tokenRanges
-        )
+        return PreparedInline(markdown: markdown, plainText: plainText)
     }
 
     private struct InlineSegment {
@@ -640,40 +668,27 @@ struct MarkdownInlineText: View {
         return segments
     }
 
-    private static func appendOffsetRanges(
-        _ ranges: [Range<String.Index>],
-        in text: String,
-        offset: Int,
-        to output: inout [Range<Int>]
-    ) {
-        for range in ranges {
-            let lower = text.distance(from: text.startIndex, to: range.lowerBound) + offset
-            let upper = text.distance(from: text.startIndex, to: range.upperBound) + offset
-            output.append(lower ..< upper)
-        }
-    }
-
-    private static func stringRanges(from ranges: [Range<Int>], in text: String) -> [Range<String.Index>] {
-        ranges.compactMap { range in
-            guard range.lowerBound >= 0,
-                  range.upperBound >= range.lowerBound,
-                  range.upperBound <= text.count,
-                  let lower = text.index(text.startIndex, offsetBy: range.lowerBound, limitedBy: text.endIndex),
-                  let upper = text.index(text.startIndex, offsetBy: range.upperBound, limitedBy: text.endIndex) else {
-                return nil
-            }
-            return lower ..< upper
-        }
-    }
-
     /// Swift/Foundation Markdown can attach `NSImageURL` attributes for inline
     /// image syntax. Convert inline images to inert placeholder text before
     /// parsing markdown so only block-level `.image` entries own image policy.
+    /// An image inside a code span is code, and stays as it is.
     private static func replaceInlineImageMarkdown(in text: String) -> String {
+        var codeSpans: [Range<String.Index>] = []
+        var spanStart = text.startIndex
+        for segment in inlineCodeSegments(in: text) {
+            let end = text.index(spanStart, offsetBy: segment.text.count)
+            if segment.isCode { codeSpans.append(spanStart ..< end) }
+            spanStart = end
+        }
         var output = ""
         var index = text.startIndex
 
         while index < text.endIndex {
+            if let span = codeSpans.first(where: { $0.contains(index) }) {
+                output.append(contentsOf: text[span])
+                index = span.upperBound
+                continue
+            }
             if text[index] == "!" {
                 let bracketIndex = text.index(after: index)
                 if bracketIndex < text.endIndex,
@@ -754,27 +769,20 @@ struct MarkdownInlineText: View {
         return destination.isEmpty ? source : destination
     }
 
-    private static func extractTag(_ tag: String, from text: inout String, ranges: inout [Range<String.Index>]) {
+    /// Puts the mark's markers where a tag's opening and closing are.
+    private static func markTag(_ tag: String, as mark: InlineMark, in text: inout String) {
         let open = "<\(tag)>"
         let close = "</\(tag)>"
         while let openRange = text.range(of: open), let closeRange = text.range(of: close, range: openRange.upperBound ..< text.endIndex) {
-            let contentCount = text.distance(from: openRange.upperBound, to: closeRange.lowerBound)
-            text.removeSubrange(closeRange)
-            text.removeSubrange(openRange)
-            if let upperBound = text.index(openRange.lowerBound, offsetBy: contentCount, limitedBy: text.endIndex) {
-                ranges.append(openRange.lowerBound ..< upperBound)
-            }
+            text.replaceSubrange(closeRange, with: String(mark.close))
+            text.replaceSubrange(openRange, with: String(mark.open))
         }
     }
 
-    private static func extractPairedMarkers(_ marker: String, from text: inout String, ranges: inout [Range<String.Index>]) {
+    private static func markPairedMarkers(_ marker: String, as mark: InlineMark, in text: inout String) {
         while let openRange = text.range(of: marker), let closeRange = text.range(of: marker, range: openRange.upperBound ..< text.endIndex) {
-            let contentCount = text.distance(from: openRange.upperBound, to: closeRange.lowerBound)
-            text.removeSubrange(closeRange)
-            text.removeSubrange(openRange)
-            if let upperBound = text.index(openRange.lowerBound, offsetBy: contentCount, limitedBy: text.endIndex) {
-                ranges.append(openRange.lowerBound ..< upperBound)
-            }
+            text.replaceSubrange(closeRange, with: String(mark.close))
+            text.replaceSubrange(openRange, with: String(mark.open))
         }
     }
 
@@ -833,7 +841,7 @@ struct MarkdownInlineText: View {
     }
 
     private static func autolinkRawURLs(in text: String) -> String {
-        let pattern = #"(?<!\]\()\bhttps?://[^\s<>]+"#
+        let pattern = #"(?<!\]\()\bhttps?://[^\s<>\x{E000}-\x{E009}]+"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
         let nsText = text as NSString
         let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length)).reversed()
