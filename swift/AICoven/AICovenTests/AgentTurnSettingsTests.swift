@@ -190,7 +190,7 @@ final class AgentTurnSettingsTests: XCTestCase {
             openClawTurn: { _ in nil }
         )
 
-        try await chat.streamMessage(threadId: thread, message: "Hello", roleId: agent.id, onStateChange: { _ in })
+        try await chat.streamMessage(threadId: thread, as: UserScope.currentUserID, message: "Hello", roleId: agent.id, onStateChange: { _ in })
 
         XCTAssertFalse(model.asked.isEmpty, "The model on this device answers, not one elsewhere")
         XCTAssertEqual(Set(model.asked), ["active-now"], "The one that is active, whichever was stored with the agent")
@@ -229,7 +229,8 @@ final class AgentTurnSettingsTests: XCTestCase {
         // An agent on Anthropic: its temperature and its longest answer.
         let claude = OptionsHearingModel()
         try await chat(with: claude, as: "anthropic").streamMessage(
-            threadId: thread(inCoven: coven.id), message: "Hello", roleId: agent(on: "anthropic").id, onStateChange: { _ in }
+            threadId: thread(inCoven: coven.id),
+            as: UserScope.currentUserID, message: "Hello", roleId: agent(on: "anthropic").id, onStateChange: { _ in }
         )
         XCTAssertFalse(claude.asked.isEmpty)
         XCTAssertEqual(Set(claude.asked.map(\.temperature)), [0.3])
@@ -238,14 +239,15 @@ final class AgentTurnSettingsTests: XCTestCase {
         // An agent on OpenAI: its temperature; no longest answer is sent there.
         let gpt = OptionsHearingModel()
         try await chat(with: gpt, as: "openai").streamMessage(
-            threadId: thread(inCoven: coven.id), message: "Hello", roleId: agent(on: "openai").id, onStateChange: { _ in }
+            threadId: thread(inCoven: coven.id),
+            as: UserScope.currentUserID, message: "Hello", roleId: agent(on: "openai").id, onStateChange: { _ in }
         )
         XCTAssertEqual(Set(gpt.asked.map(\.temperature)), [0.3])
         XCTAssertEqual(Set(gpt.asked.map(\.maxTokens)), [nil])
 
         // A turn for no agent is Strix's: the app's own while Strix has none stored.
         let strix = OptionsHearingModel()
-        try await chat(with: strix, as: "anthropic").streamMessage(threadId: thread(inCoven: nil), message: "Hello", onStateChange: { _ in })
+        try await chat(with: strix, as: "anthropic").streamMessage(threadId: thread(inCoven: nil), as: UserScope.currentUserID, message: "Hello", onStateChange: { _ in })
         XCTAssertEqual(Set(strix.asked.map(\.temperature)), [0.7])
         XCTAssertEqual(Set(strix.asked.map(\.maxTokens)), [nil])
 
@@ -254,7 +256,7 @@ final class AgentTurnSettingsTests: XCTestCase {
             JSONEncoder().encode(LocalStrixSettings(model: "model", provider: "anthropic", temperature: 1.2, maxTokens: 1500)), forKey: keys[3]
         )
         let set = OptionsHearingModel()
-        try await chat(with: set, as: "anthropic").streamMessage(threadId: thread(inCoven: nil), message: "Hello", onStateChange: { _ in })
+        try await chat(with: set, as: "anthropic").streamMessage(threadId: thread(inCoven: nil), as: UserScope.currentUserID, message: "Hello", onStateChange: { _ in })
         XCTAssertEqual(Set(set.asked.map(\.temperature)), [1.2])
         XCTAssertEqual(Set(set.asked.map(\.maxTokens)), [1500])
     }
@@ -278,7 +280,7 @@ final class AgentTurnSettingsTests: XCTestCase {
         let model = OptionsHearingModel { number in
             #"{"tool":"current_time","input":{"timezone":"\#(places[number % places.count])"},"reason":"to know the time there"}"#
         }
-        try await chat(with: model, as: provider).streamMessage(threadId: id, message: "What time is it?", roleId: role, onStateChange: { _ in })
+        try await chat(with: model, as: provider).streamMessage(threadId: id, as: UserScope.currentUserID, message: "What time is it?", roleId: role, onStateChange: { _ in })
         return model.asked
     }
 

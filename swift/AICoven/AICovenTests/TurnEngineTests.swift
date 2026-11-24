@@ -141,7 +141,7 @@ final class TurnEngineTests: XCTestCase {
         let engine = makeEngine(provider: provider, approvals: approvals)
         // An answer left by a turn that never ended here.
         let stale = ToolApproval(threadID: threadID, question: "Run this command?", details: "rm old", toolName: "shell.execute")
-        let leaving = Task { await approvals.ask(stale) }
+        let leaving = Task { await approvals.ask(stale, for: UserScope.currentUserID) }
         while approvals.showing == nil {
             await Task.yield()
         }
@@ -151,7 +151,7 @@ final class TurnEngineTests: XCTestCase {
         try await engine.start(with: question("Push it"), context: "Push it", roleID: nil, agentName: nil, attachments: nil)
         XCTAssertNil(approvals.answered[threadID], "A turn starts with no answers")
         let asked = ToolApproval(threadID: threadID, question: "Run this command?", details: "git push\nIn /tmp", toolName: "shell.execute")
-        let asking = Task { await approvals.ask(asked) }
+        let asking = Task { await approvals.ask(asked, for: UserScope.currentUserID) }
         while approvals.showing?.approval.id != asked.id {
             await Task.yield()
         }
@@ -183,7 +183,7 @@ final class TurnEngineTests: XCTestCase {
         let engine = makeEngine(provider: provider, approvals: approvals)
         try await engine.start(with: question("Push it"), context: "Push it", roleID: nil, agentName: nil, attachments: nil)
         let asked = ToolApproval(threadID: threadID, question: "Run this command?", details: "git push\nIn /tmp", toolName: "shell.execute")
-        let asking = Task { await approvals.ask(asked) }
+        let asking = Task { await approvals.ask(asked, for: UserScope.currentUserID) }
         while approvals.showing?.approval.id != asked.id {
             await Task.yield()
         }

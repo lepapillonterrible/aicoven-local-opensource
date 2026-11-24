@@ -8,7 +8,7 @@ nonisolated struct HermesTurn {
     let client: HermesAgentClient
     let threadID: String
     /// Asks the person, and waits for the answer.
-    var ask: @Sendable (ToolApproval) async -> ApprovalAnswer = ToolExecutionService.askInItsThread
+    var ask: @Sendable (ToolApproval) async -> ApprovalAnswer = { await ToolExecutionService.askInItsThread($0) }
     /// How long to wait before looking again for a run whose events were
     /// lost, and how many looks in a row may fail to reach Hermes.
     var lookAgainAfter: Duration = .seconds(2)

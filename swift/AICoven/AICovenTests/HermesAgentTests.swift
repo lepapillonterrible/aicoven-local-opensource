@@ -636,7 +636,7 @@ final class HermesAgentTests: XCTestCase {
             await DataEncryptionService.shared.lock()
         }
 
-        try await chat.streamMessage(threadId: threadID, message: "Hello", onStateChange: reports.add)
+        try await chat.streamMessage(threadId: threadID, as: UserScope.currentUserID, message: "Hello", onStateChange: reports.add)
 
         XCTAssertEqual(reports.all.last?.status, .completed)
         XCTAssertEqual(reports.all.last?.answer, "From Hermes.")
@@ -647,7 +647,7 @@ final class HermesAgentTests: XCTestCase {
         // by the time it ends.
         try await ThreadRepository.shared.appendChatMessage(TurnProgress.message(in: threadID, role: "user", content: "Hello"))
         defaults.set("openai", forKey: keys[0])
-        await chat.updateThreadSummary(threadId: threadID)
+        await chat.updateThreadSummary(threadId: threadID, roleId: nil, as: UserScope.currentUserID)
         XCTAssertEqual(model.calls, 0)
         await DataEncryptionService.shared.lock()
     }
@@ -703,7 +703,7 @@ final class HermesAgentTests: XCTestCase {
         }
         let reports = Reports()
 
-        try await chat.streamMessage(threadId: threadID, message: "Hello", roleId: scout.id, onStateChange: reports.add)
+        try await chat.streamMessage(threadId: threadID, as: UserScope.currentUserID, message: "Hello", roleId: scout.id, onStateChange: reports.add)
 
         XCTAssertEqual(reports.all.last?.status, .completed)
         XCTAssertEqual(reports.all.last?.answer, "From Hermes.")
@@ -734,7 +734,7 @@ final class HermesAgentTests: XCTestCase {
         )
         let requestsBefore = HermesStub.requests.count
         // These stand-in models answer with a failure: which of them was asked is what is looked at.
-        try? await withoutHermes.streamMessage(threadId: threadID, message: "Hello again", roleId: scout.id, onStateChange: { _ in })
+        try? await withoutHermes.streamMessage(threadId: threadID, as: UserScope.currentUserID, message: "Hello again", roleId: scout.id, onStateChange: { _ in })
         XCTAssertEqual(HermesStub.requests.count, requestsBefore, "Hermes is not asked")
         XCTAssertGreaterThan(model.calls, 0, "The model chosen in Settings is asked")
         XCTAssertEqual(better.calls, 0, "Not whichever model is ranked highest")
@@ -778,7 +778,7 @@ final class HermesAgentTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: file) }
         let notes = FileAttachmentDetail(id: "notes", name: "notes.txt", mimeType: "text/plain", sizeBytes: nil, width: nil, height: nil, url: file)
 
-        try await chat.streamMessage(threadId: threadID, message: "Sum this up", attachments: [notes], onStateChange: { _ in })
+        try await chat.streamMessage(threadId: threadID, as: UserScope.currentUserID, message: "Sum this up", attachments: [notes], onStateChange: { _ in })
 
         let start = try XCTUnwrap(HermesStub.requests.first)
         let sent = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(start.body.utf8)) as? [String: Any])

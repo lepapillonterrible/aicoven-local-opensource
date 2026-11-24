@@ -99,7 +99,7 @@ final class TurnOwnToolsTests: XCTestCase {
             hermesAgent: { nil },
             openClawTurn: { _ in nil }
         )
-        try await chat.streamMessage(threadId: thread.id, message: "What is on my list?", onStateChange: { _ in })
+        try await chat.streamMessage(threadId: thread.id, as: UserScope.currentUserID, message: "What is on my list?", onStateChange: { _ in })
         return model
     }
 

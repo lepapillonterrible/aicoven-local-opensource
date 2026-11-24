@@ -127,7 +127,7 @@ final class TurnAccountTests: XCTestCase {
             whenFirstAsked: { signedIn.now = "someone-else" }
         )
         let states = States()
-        try await chat(with: model, signedIn: signedIn).streamMessage(threadId: thread, message: "What time is it?", onStateChange: { states.add($0) })
+        try await chat(with: model, signedIn: signedIn).streamMessage(threadId: thread, as: UserScope.currentUserID, message: "What time is it?", onStateChange: { states.add($0) })
         XCTAssertEqual(model.timesAsked, 1, "What the tool told is not sent: the model is not asked again")
         XCTAssertEqual(states.last?.status, .failed, "The turn ends there")
         XCTAssertEqual(states.last?.answer, ChatService.accountChangedMessage, "In the same words wherever the turn was cut off")
@@ -150,7 +150,8 @@ final class TurnAccountTests: XCTestCase {
             let client: any LLMClient = streams ? StreamingScriptedModel(model) : model
             let states = States()
             try await chat(with: client, signedIn: signedIn).streamMessage(
-                threadId: thread, message: "What time is it?", onStateChange: { states.add($0) }
+                threadId: thread,
+                as: UserScope.currentUserID, message: "What time is it?", onStateChange: { states.add($0) }
             )
             XCTAssertEqual(model.timesAsked, 1, "The final answer is not asked for (streams: \(streams))")
             XCTAssertEqual(states.last?.status, .failed)
@@ -189,7 +190,7 @@ final class TurnAccountTests: XCTestCase {
             answering: [#"{"tool":"current_time","input":null,"reason":"to know the time"}"#, "It is noon."], whenFirstAsked: {}
         )
         let states = States()
-        try await chat(with: model, signedIn: signedIn).streamMessage(threadId: thread, message: "What time is it?", onStateChange: { states.add($0) })
+        try await chat(with: model, signedIn: signedIn).streamMessage(threadId: thread, as: UserScope.currentUserID, message: "What time is it?", onStateChange: { states.add($0) })
         XCTAssertGreaterThanOrEqual(model.timesAsked, 2, "Asked again once the tool had run")
         XCTAssertNotEqual(states.last?.status, .failed)
     }

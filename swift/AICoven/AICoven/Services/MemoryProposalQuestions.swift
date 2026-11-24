@@ -17,7 +17,8 @@ final class MemoryProposalQuestions: ObservableObject {
     /// what lists the proposals that wait leaves these to the question.
     @Published private(set) var asked: Set<String> = []
 
-    typealias Asking = (ToolApproval) async -> ApprovalAnswer
+    /// Asks a question of the account given, and of no other.
+    typealias Asking = (ToolApproval, _ account: String) async -> ApprovalAnswer
     typealias Reviewing = (_ proposalID: String, _ approve: Bool) async throws -> Void
     /// Whether a proposal of an account's is still waiting for an answer.
     typealias Waiting = (_ proposalID: String, _ account: String) async -> Bool
@@ -33,7 +34,7 @@ final class MemoryProposalQuestions: ObservableObject {
     private var questions: [String: Task<Void, Never>] = [:]
 
     init(
-        asking: @escaping Asking = { await ToolExecutionService.askInItsThread($0) },
+        asking: @escaping Asking = { await ToolExecutionService.askInItsThread($0, for: $1) },
         reviewing: @escaping Reviewing = { proposalID, approve in
             _ = try await MemoryService.shared.reviewProposal(proposalId: proposalID, action: approve ? "approve" : "reject")
         },
@@ -78,7 +79,7 @@ final class MemoryProposalQuestions: ObservableObject {
                 let question = ToolApproval.memory(
                     proposal.proposedContent, forACoven: proposal.covenId != nil, threadID: threadID, afterAFailedAnswer: attempt > 1
                 )
-                let answer = await asking(question)
+                let answer = await asking(question, account)
                 guard answer == .approved || answer == .denied, signedIn() == account else { return }
                 do {
                     try await reviewing(proposal.id, answer == .approved)
@@ -98,6 +99,17 @@ final class MemoryProposalQuestions: ObservableObject {
     /// given up; at once where none is being asked.
     func settled(_ proposalID: String) async {
         await questions[proposalID]?.value
+    }
+
+    /// Who was last reported signed in.
+    private var reportedAccount: String?
+
+    /// Who is signed in, as the sign-in listener reports it (also the same
+    /// account again): only another account takes away what is asked.
+    func accountReported(_ account: String) {
+        defer { reportedAccount = account }
+        guard account != reportedAccount else { return }
+        accountChanged()
     }
 
     /// Another account is signed in, or none: what was being asked of the

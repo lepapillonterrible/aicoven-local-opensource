@@ -709,7 +709,7 @@ final class AssetToolsTests: XCTestCase {
             hermesAgent: { nil },
             openClawTurn: { _ in nil }
         )
-        try await chat.streamMessage(threadId: thread.id, message: "Read the launch brief and tell me what it is.", onStateChange: { _ in })
+        try await chat.streamMessage(threadId: thread.id, as: UserScope.currentUserID, message: "Read the launch brief and tell me what it is.", onStateChange: { _ in })
 
         let asked = model.asked
         XCTAssertGreaterThanOrEqual(asked.count, 2, "Asked again once the asset was read")
@@ -802,7 +802,7 @@ final class AssetToolsTests: XCTestCase {
             }
         }
         let reports = Reports()
-        try await chat.streamMessage(threadId: thread.id, message: "Keep this as an asset: ship on Friday.", onStateChange: { reports.add($0) })
+        try await chat.streamMessage(threadId: thread.id, as: UserScope.currentUserID, message: "Keep this as an asset: ship on Friday.", onStateChange: { reports.add($0) })
 
         let kept = try await AssetRepository.shared.assets(inCoven: nil, as: account).filter { $0.threadID == thread.id }
         XCTAssertEqual(kept.count, 1, "With Strix's assets, where the thread is")

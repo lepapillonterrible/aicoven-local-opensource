@@ -467,7 +467,7 @@ final class OpenClawRunPickUpTests: XCTestCase {
         XCTAssertFalse(canWithNone)
 
         do {
-            try await connected.resumeAgentRun(elsewhere, threadId: "thread-1", onStateChange: { _ in })
+            try await connected.resumeAgentRun(elsewhere, threadId: "thread-1", as: UserScope.currentUserID, onStateChange: { _ in })
             XCTFail("A run started through another Gateway is not looked for at this one")
         } catch {
             XCTAssertEqual(error as? OpenClawTurn.CannotPickUp, OpenClawTurn.CannotPickUp())

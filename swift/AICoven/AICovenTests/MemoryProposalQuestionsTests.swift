@@ -206,7 +206,7 @@ final class MemoryProposalQuestionsTests: XCTestCase {
         var asked: [ToolApproval] = []
 
         let approved = try await propose("Ships on Fridays", in: coven)
-        let approving = questions { question in
+        let approving = questions { question, _ in
             asked.append(question)
             return .approved
         }
@@ -224,7 +224,7 @@ final class MemoryProposalQuestionsTests: XCTestCase {
         XCTAssertEqual(approvedStatus, "approved")
 
         let denied = try await propose("Never ships", in: coven)
-        let denying = questions { _ in .denied }
+        let denying = questions { _, _ in .denied }
         denying.ask(denied, inThread: "thread-1", as: account)
         await denying.settled(denied.id)
         memories = try await kept(in: coven)
@@ -234,7 +234,7 @@ final class MemoryProposalQuestionsTests: XCTestCase {
 
         // With nowhere to ask (its thread is gone, say), it stays pending, and waits on Activity.
         let unasked = try await propose("Ships on Mondays", in: coven)
-        let notAsking = questions { _ in .notAsked }
+        let notAsking = questions { _, _ in .notAsked }
         notAsking.ask(unasked, inThread: "thread-1", as: account)
         await notAsking.settled(unasked.id)
         XCTAssertEqual(notAsking.asked, [], "Nor once the question was given up: the proposal is then listed where it waits")
@@ -250,7 +250,7 @@ final class MemoryProposalQuestionsTests: XCTestCase {
         var asked: [String] = []
         var reviews = 0
         let failingOnce = MemoryProposalQuestions(
-            asking: { question in
+            asking: { question, _ in
                 asked.append(question.question)
                 return .approved
             },
@@ -271,7 +271,7 @@ final class MemoryProposalQuestionsTests: XCTestCase {
         let again = try await propose("Ships on Mondays", in: coven)
         asked = []
         let alwaysFailing = MemoryProposalQuestions(
-            asking: { question in
+            asking: { question, _ in
                 asked.append(question.question)
                 return .approved
             },
@@ -292,7 +292,7 @@ final class MemoryProposalQuestionsTests: XCTestCase {
         let reviewed = try await propose("Ships on Fridays", in: coven)
         var asked = 0
         let reviewedElsewhere = MemoryProposalQuestions(
-            asking: { _ in
+            asking: { _, _ in
                 asked += 1
                 return .approved
             },
@@ -313,7 +313,7 @@ final class MemoryProposalQuestionsTests: XCTestCase {
         asked = 0
         var reviews = 0
         let underWayThenFree = MemoryProposalQuestions(
-            asking: { _ in
+            asking: { _, _ in
                 asked += 1
                 return .approved
             },
@@ -338,7 +338,7 @@ final class MemoryProposalQuestionsTests: XCTestCase {
         let (waited, wait) = AsyncStream<Void>.makeStream()
         var asked = 0
         let afterTheTurn = MemoryProposalQuestions(
-            asking: { _ in
+            asking: { _, _ in
                 asked += 1
                 return .denied
             },
@@ -406,7 +406,7 @@ final class MemoryProposalQuestionsTests: XCTestCase {
         let (reached, reach) = AsyncStream<Void>.makeStream()
         var reviewed = 0
         let asking = MemoryProposalQuestions(
-            asking: { _ in
+            asking: { _, _ in
                 reach.yield()
                 // As the approvals do: the answer of a question whose task is cancelled is that it was withdrawn.
                 while !Task.isCancelled {
@@ -430,7 +430,7 @@ final class MemoryProposalQuestionsTests: XCTestCase {
         // An answer that arrives once another account is signed in is not taken.
         var signedIn = me
         let answeredLate = MemoryProposalQuestions(
-            asking: { _ in
+            asking: { _, _ in
                 signedIn = "someone-else"
                 return .approved
             },

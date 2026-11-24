@@ -449,6 +449,7 @@ actor ChatService {
     ///   - attachments: File attachments with local URLs (optional). File contents will be read and injected into the context.
     func streamMessage(
         threadId: String,
+        as account: String,
         message: String,
         roleId: String? = nil,
         providerAccountId: String? = nil,
@@ -461,7 +462,10 @@ actor ChatService {
         state.phase = .starting
         onStateChange(state)
         // The account the turn is begun as: its requests are that account's.
-        let turnAccount = await signedIn()
+        // The engine notes it as the person sends, before anything waits;
+        // if another account has signed in since, nothing is done.
+        let turnAccount = account
+        try await requireStill(turnAccount)
         // Ensure we see any provider keys and live model lists that may have
         // been added or changed after ChatService was first initialized.
         await ensureEnvironment()
@@ -1391,6 +1395,10 @@ actor ChatService {
         }
 
         AppErrorReporter.log(message: "streamMessage completed with answer length=\(answer.count) provider=\(descriptor.providerID) model=\(descriptor.modelID) usedTools=\(maxToolSteps - remainingToolSteps)", context: "ChatService.streamMessage")
+        // An answer that came back after another account signed in is not
+        // given as the turn's, and its usage is not recorded as the next
+        // account's.
+        try await requireStill(turnAccount)
         state.phase = .finalizing
         if !streamedAnswer {
             state.answer = answer
@@ -1405,7 +1413,8 @@ actor ChatService {
             provider: descriptor.providerID,
             model: descriptor.modelID,
             usage: finalUsage,
-            threadId: threadId
+            threadId: threadId,
+            for: turnAccount
         )
 
         // Track message received. We don't currently measure precise
@@ -1420,16 +1429,20 @@ actor ChatService {
         )
     }
 
-    /// Recompute and persist a compact summary for the given thread using the
-    /// configured LLM providers. This runs independently of any one chat turn
-    /// and is safe to call opportunistically after new messages are added.
-    func updateThreadSummary(threadId: String) async {
+    /// Recompute and persist a compact summary for the given thread, after
+    /// a turn of `account`'s in it was answered for `roleId` (an agent of
+    /// the thread's coven, or Strix for none). The thread is summarised by
+    /// the model that turn is answered by, so its conversation goes to no
+    /// provider its agent does not use, and only as that account: none of
+    /// the thread is read, sent or kept once another has signed in. A
+    /// thread whose agent cannot be read is not summarised: its turn's
+    /// model is not known, and Strix's is not taken in its place.
+    func updateThreadSummary(threadId: String, roleId: String?, as account: String) async {
         guard !threadsLastAnsweredByAnAgent.contains(threadId) else { return }
         summariesAsked[threadId, default: 0] += 1
         let asked = summariesAsked[threadId]
-        // Whose thread it is, read before anything is waited for: the
-        // summary is kept for that account, or not at all.
-        let summarizedFor = await UserScope.currentUserID
+        let summarizedFor = account
+        guard await signedIn() == summarizedFor else { return }
         // On iOS, skip background summaries when only local models are
         // available. Loading a second MLX model (~1.5 GB) for an optional
         // summary will push past the jetsam memory limit and crash the app.
@@ -1442,8 +1455,21 @@ actor ChatService {
         await ensureEnvironment()
         do {
             // Checked again after each wait, up to the sending and the
-            // keeping: an agent's turn can have started in the thread since.
+            // keeping: an agent's turn can have started in the thread since,
+            // or another account signed in.
             guard !threadsLastAnsweredByAnAgent.contains(threadId) else { return }
+            // The model the turn is answered by, found exactly: a summary
+            // is not routed to some other provider where it is not there.
+            // The agent is read once, and the model taken from that reading:
+            // one that cannot be read is not answered for by Strix's model.
+            let role: Role? = if let roleId { try? await RoleService.shared.getRole(roleId: roleId) } else { nil }
+            if roleId != nil, role == nil { return }
+            let (prefProvider, prefModel, _) = await preferredProviderAndModel(roleId: roleId, role: role)
+            guard let descriptor = modelRouter.findExact(providerID: prefProvider, modelID: prefModel),
+                  let client = llmClients[descriptor.providerID] else {
+                return
+            }
+            try await requireStill(summarizedFor)
             // Use the same history seen by the chat UI.
             let history = try await loadMessages(threadId: threadId, limit: maxContextMessages)
             guard !history.isEmpty, !threadsLastAnsweredByAnAgent.contains(threadId) else { return }
@@ -1466,12 +1492,6 @@ actor ChatService {
                 content: "Please provide the concise 3-6 bullet point summary of our conversation now."
             ))
 
-            let (prefProvider, prefModel) = resolveProviderAndModel()
-            guard let descriptor = modelRouter.findExact(providerID: prefProvider, modelID: prefModel),
-                  let client = llmClients[descriptor.providerID] else {
-                return
-            }
-
             // On iOS, don't use local models for background summaries even
             // if a cloud provider is available — the chat might still be
             // using the local model and concurrent loads are fatal.
@@ -1482,6 +1502,7 @@ actor ChatService {
             #endif
 
             let options = ChatOptions(temperature: 0.2, maxTokens: nil, stream: false)
+            try await requireStill(summarizedFor)
             let response = try await client.completeChat(
                 messages: messages,
                 model: descriptor.modelID,
@@ -1494,7 +1515,7 @@ actor ChatService {
             // to no memory: a thread's summary is not something to remember
             // about the person (and a coven's thread is not theirs to keep
             // in their own pages).
-            guard await UserScope.currentUserID == summarizedFor, summariesAsked[threadId] == asked else { return }
+            guard await signedIn() == summarizedFor, summariesAsked[threadId] == asked else { return }
             try await threadStore.updateSummary(forThreadID: threadId, summary: summary)
         } catch {
             // Thread summaries are an optional optimization. In the local-only
@@ -1627,7 +1648,10 @@ actor ChatService {
     /// Picks up a run an agent was making for a turn when this app was
     /// closed on it, and follows it to its end as `streamMessage` would
     /// have.
-    func resumeAgentRun(_ run: AgentRun, threadId: String, onStateChange: @escaping @Sendable (TurnState) -> Void) async throws {
+    func resumeAgentRun(_ run: AgentRun, threadId: String, as account: String, onStateChange: @escaping @Sendable (TurnState) -> Void) async throws {
+        // Followed only as the account whose run it is, through its own
+        // connection.
+        try await requireStill(account)
         if run.provider == AgentRun.openClaw {
             guard let turn = openClawTurn(threadId), turn.address.absoluteString == run.origin else { throw OpenClawTurn.CannotPickUp() }
             threadsLastAnsweredByAnAgent.insert(threadId)
@@ -1673,6 +1697,12 @@ actor ChatService {
     /// the app's own where the agent cannot be read.
     private func preferredProviderAndModel(roleId: String?) async -> (provider: String, model: String, settings: AgentTurnSettings) {
         let role: Role? = if let roleId { try? await RoleService.shared.getRole(roleId: roleId) } else { nil }
+        return await preferredProviderAndModel(roleId: roleId, role: role)
+    }
+
+    /// The same, for an agent already read (`role`, nil where `roleId` is
+    /// none or could not be read).
+    private func preferredProviderAndModel(roleId: String?, role: Role?) async -> (provider: String, model: String, settings: AgentTurnSettings) {
         // A turn for no agent is Strix's, and takes Strix's own settings;
         // one whose agent cannot be read takes the app's.
         let settings: AgentTurnSettings = if roleId == nil {

@@ -20,6 +20,9 @@ final class TurnEngine: ObservableObject {
     /// What a running turn is doing, for the thread's status line.
     struct Activity: Equatable {
         let turnID: String
+        /// The account the turn is run for: its requests, its approvals
+        /// and its ending are that account's, and no other's.
+        let account: String
         var message: String
         /// The work so far, for Details.
         var trace: WorkTrace
@@ -142,9 +145,22 @@ final class TurnEngine: ObservableObject {
     /// while a turn runs.
     private let approvals: ToolApprovals
 
-    init(chat: ChatService, approvals: ToolApprovals = .shared) {
+    /// Who is signed in now.
+    private let currentAccount: @MainActor () -> String
+    /// Told of each turn stopped because another account signed in, once
+    /// nothing more of it will be done (tests wait on it).
+    private let dropped: @MainActor (_ turnID: String) -> Void
+
+    init(
+        chat: ChatService,
+        approvals: ToolApprovals = .shared,
+        currentAccount: @escaping @MainActor () -> String = { UserScope.currentUserID },
+        dropped: @escaping @MainActor (_ turnID: String) -> Void = { _ in }
+    ) {
         self.chat = chat
         self.approvals = approvals
+        self.currentAccount = currentAccount
+        self.dropped = dropped
     }
 
     /// Starts a turn with the person's message, which is stored as it is:
@@ -168,8 +184,11 @@ final class TurnEngine: ObservableObject {
         guard running[threadID] == nil else { throw TurnError.alreadyRunning }
         notSent[threadID] = nil
         let turnID = UUID().uuidString
+        // Whose turn it is, noted before anything waits: everything the
+        // turn does is done as this account, or not at all.
+        let account = currentAccount()
         // Marked before anything waits, so a second send cannot start too.
-        running[threadID] = Activity(turnID: turnID, message: TurnProgress.startingMessage, trace: WorkTrace(startedAt: Date()))
+        running[threadID] = Activity(turnID: turnID, account: account, message: TurnProgress.startingMessage, trace: WorkTrace(startedAt: Date()))
         // Answers left from a turn that never ended here are not this one's.
         approvals.forgetAnswers(threadID: threadID)
         let files = (attachments ?? []).map(\.id)
@@ -181,7 +200,9 @@ final class TurnEngine: ObservableObject {
             try await AttachmentStore.shared.markSent(files, with: userMessage.id, inThread: threadID)
             try await store.beginTurn(id: turnID, userMessage: userMessage)
         } catch {
-            running[threadID] = nil
+            if running[threadID]?.turnID == turnID {
+                running[threadID] = nil
+            }
             // What was set to wait for this turn, while it was being
             // started, has no turn to wait for.
             giveBackWaiting(threadID: threadID, because: error)
@@ -191,12 +212,22 @@ final class TurnEngine: ObservableObject {
             await AttachmentStore.shared.markUnsent(files, markedWith: userMessage.id)
             throw error
         }
+        // Another account signed in while the turn was being stored: the
+        // message is its account's, stored in its thread, and the turn is
+        // not run (it was stopped there, and is no longer this engine's).
+        // Its account is told, when it next opens the thread, that no reply
+        // was saved. Nothing is handed back to be sent again.
+        guard running[threadID]?.turnID == turnID, currentAccount() == account else {
+            settle(turnID, droppedFrom: threadID)
+            return turnID
+        }
         let chat = chat
         let store = store
         Task {
-            await run(turnID: turnID, threadID: threadID, agentName: agentName) { report in
+            await run(turnID: turnID, threadID: threadID, roleID: roleID, agentName: agentName) { report in
                 try await chat.streamMessage(
                     threadId: threadID,
+                    as: account,
                     message: context,
                     roleId: roleID,
                     attachments: attachments,
@@ -219,6 +250,54 @@ final class TurnEngine: ObservableObject {
             }
         }
         return turnID
+    }
+
+    /// Another account is signed in, or none: every turn running for the
+    /// account before is stopped, and is no longer this engine's. Its
+    /// reply is cancelled (an agent's run with it), nothing of it is
+    /// stored, published or announced afterwards, and nothing waiting
+    /// behind it is sent; what was waiting goes back to its thread's
+    /// composer, kept in memory for that account. Turns of the account
+    /// still signed in (the same account reported again) go on.
+    func accountChanged() {
+        let account = currentAccount()
+        for (threadID, turn) in running where turn.account != account {
+            running[threadID] = nil
+            replies[threadID]?.cancel()
+            settling.remove(turn.turnID)
+            // What waited goes back to the composer, but for the message
+            // being sent just now: it is the turn's own (stored, or handed
+            // back by `start` if it could not be).
+            guard let queue = waiting.removeValue(forKey: threadID) else { continue }
+            let sending = queue.filter { $0.id == starting[threadID] }
+            let rest = queue.filter { $0.id != starting[threadID] }
+            if !sending.isEmpty {
+                waiting[threadID] = sending
+            }
+            if !rest.isEmpty {
+                giveBack(rest, threadID: threadID)
+            }
+        }
+    }
+
+    /// Whether the thread's turn is still `turn`, and its account still
+    /// the one signed in.
+    private func stillOwns(_ turn: Activity, in threadID: String) -> Bool {
+        running[threadID]?.turnID == turn.turnID && currentAccount() == turn.account
+    }
+
+    /// Forgets a turn that another account's signing in stopped. One that
+    /// was picked up can be picked up again when its account opens the
+    /// thread once more.
+    private func settle(_ turnID: String, droppedFrom threadID: String) {
+        if running[threadID]?.turnID == turnID {
+            running[threadID] = nil
+        }
+        pickedUp.remove(turnID)
+        settling.remove(turnID)
+        announced[turnID] = nil
+        stoppedTooLate.remove(turnID)
+        dropped(turnID)
     }
 
     /// Asks the turn running in a thread to stop. The turn is shown as
@@ -343,6 +422,7 @@ final class TurnEngine: ObservableObject {
         // Made now, not when it was typed: it is stored after the reply it
         // waited for.
         let userMessage = TurnProgress.userMessage(in: threadID, text: next.userText, attachments: next.attachments)
+        let account = currentAccount()
         // It stays among the waiting until its turn has started, so the
         // thread never shows it as neither waiting nor sent; from here it
         // is on its way, and is no longer edited or removed.
@@ -357,6 +437,9 @@ final class TurnEngine: ObservableObject {
                 attachments: next.attachments.isEmpty ? nil : next.attachments
             )
             drop(next.id, from: threadID)
+            // Stored, as its account's; shown only while that account is
+            // still signed in.
+            guard currentAccount() == account else { return }
             add(userMessage, to: threadID)
         } catch TurnError.alreadyRunning {
             // A turn started meanwhile: this one waits for it, where it is.
@@ -401,6 +484,9 @@ final class TurnEngine: ObservableObject {
     /// other is ended, and the thread gets a line saying no reply was saved.
     /// An ending the engine holds unstored is tried again first.
     func settleInterruptedTurns(threadID: String) async {
+        // Whose turns these are, noted before anything waits: one is
+        // picked up only as that account, still signed in.
+        let account = currentAccount()
         do {
             do {
                 try await storeWaitingEnding(threadID: threadID)
@@ -417,8 +503,9 @@ final class TurnEngine: ObservableObject {
                 // and it can have ended since. Either way it is not this
                 // opener's to pick up or to end.
                 guard !isBeingSettled(turn.id, in: threadID) else { continue }
+                guard currentAccount() == account else { return }
                 if canResume, let run = turn.run, running[threadID] == nil {
-                    resume(turn, run, in: threadID)
+                    resume(turn, run, in: threadID, as: account)
                     continue
                 }
                 try await store.endTurn(
@@ -442,13 +529,15 @@ final class TurnEngine: ObservableObject {
     /// Takes up again a turn whose run went on in the agent while this app
     /// was closed: the thread shows it as running, with Stop, and it ends
     /// as any turn does.
-    private func resume(_ turn: RunningTurn, _ run: AgentRun, in threadID: String) {
+    private func resume(_ turn: RunningTurn, _ run: AgentRun, in threadID: String, as account: String) {
         pickedUp.insert(turn.id)
-        running[threadID] = Activity(turnID: turn.id, message: TurnProgress.pickingUpMessage, trace: WorkTrace(startedAt: turn.startedAt))
+        running[threadID] = Activity(
+            turnID: turn.id, account: account, message: TurnProgress.pickingUpMessage, trace: WorkTrace(startedAt: turn.startedAt)
+        )
         let chat = chat
         Task {
-            await self.run(turnID: turn.id, threadID: threadID, agentName: run.agentName) { report in
-                try await chat.resumeAgentRun(run, threadId: threadID, onStateChange: report)
+            await self.run(turnID: turn.id, threadID: threadID, roleID: nil, agentName: run.agentName) { report in
+                try await chat.resumeAgentRun(run, threadId: threadID, as: account, onStateChange: report)
             }
         }
     }
@@ -457,12 +546,15 @@ final class TurnEngine: ObservableObject {
     /// is one. Throws if it still cannot be.
     private func storeWaitingEnding(threadID: String) async throws {
         guard let waiting = unstored[threadID] else { return }
+        let account = currentAccount()
         let stored = try await store.endTurn(id: waiting.turnID, outcome: waiting.outcome, message: waiting.message, trace: waiting.trace)
         // Another call can have stored it while this one waited; then there
         // is nothing left to do, whatever this call's own answer.
         guard unstored[threadID]?.turnID == waiting.turnID else { return }
         guard stored else { throw TurnError.endingNotStored }
         unstored[threadID] = nil
+        // Stored as its account's; not shown once another has signed in.
+        guard currentAccount() == account else { return }
         endings[threadID] = Ending(turnID: waiting.turnID, outcome: waiting.outcome, trace: waiting.trace, messages: [waiting.message], stored: true)
     }
 
@@ -472,6 +564,7 @@ final class TurnEngine: ObservableObject {
     private func run(
         turnID: String,
         threadID: String,
+        roleID: String?,
         agentName: String?,
         work: @escaping @Sendable (_ report: @escaping @Sendable (TurnState) -> Void) async throws -> Void
     ) async {
@@ -501,6 +594,10 @@ final class TurnEngine: ObservableObject {
             // Most reports leave the line and the trace as they are; the
             // thread redraws only when one changes. A stopping turn keeps
             // saying so.
+            // Only while the thread's turn is still this one: one stopped
+            // because another account signed in can still be reporting
+            // when its account comes back and starts another.
+            guard running[threadID]?.turnID == turnID else { continue }
             if running[threadID]?.isStopping == false, running[threadID]?.message != progress.activity {
                 running[threadID]?.message = progress.activity
             }
@@ -509,11 +606,26 @@ final class TurnEngine: ObservableObject {
             }
         }
         let thrown = await reply.value
+        // Stopped because another account signed in: nothing of it is
+        // stored, shown, announced or sent on. It stays recorded as
+        // running, and its account is told, when it next opens the
+        // thread, that no reply was saved.
+        guard let turn = running[threadID], turn.turnID == turnID, turn.account == currentAccount() else {
+            if replies[threadID] == reply {
+                replies[threadID] = nil
+            }
+            settle(turnID, droppedFrom: threadID)
+            return
+        }
         replies[threadID] = nil
         settling.insert(turnID)
         let wasStopped = running[threadID]?.isStopping == true
         var ending = progress.ending(in: threadID, thrown: thrown, stopped: wasStopped)
         ending.message = await TurnProgress.keepingGeneratedFiles(of: ending.message, inThread: threadID)
+        guard stillOwns(turn, in: threadID) else {
+            settle(turnID, droppedFrom: threadID)
+            return
+        }
         // Copied, and forgotten there only once the ending is published:
         // until then the thread shows a running turn's answers from there.
         ending.trace.approvals = approvals.answered[threadID] ?? []
@@ -521,6 +633,12 @@ final class TurnEngine: ObservableObject {
         do {
             guard try await store.endTurn(id: turnID, outcome: ending.outcome, message: ending.message, trace: ending.trace) else {
                 throw TurnError.endingNotStored
+            }
+            // Stored as its account's; not published once another has
+            // signed in.
+            guard stillOwns(turn, in: threadID) else {
+                settle(turnID, droppedFrom: threadID)
+                return
             }
             endings[threadID] = Ending(turnID: turnID, outcome: ending.outcome, trace: ending.trace, messages: [ending.message], stored: true)
             add(ending.message, trace: ending.trace, to: threadID)
@@ -530,6 +648,10 @@ final class TurnEngine: ObservableObject {
             // turn; if the app closes first, the turn is still recorded as
             // running, and the next launch says no reply was saved.
             AppErrorReporter.log(error: error, context: "TurnEngine.endTurn")
+            guard stillOwns(turn, in: threadID) else {
+                settle(turnID, droppedFrom: threadID)
+                return
+            }
             unstored[threadID] = (turnID, ending.outcome, ending.message, ending.trace)
             let notice = TurnProgress.message(
                 in: threadID,
@@ -539,6 +661,12 @@ final class TurnEngine: ObservableObject {
             endings[threadID] = Ending(turnID: turnID, outcome: ending.outcome, trace: ending.trace, messages: [ending.message, notice], stored: false)
             add(ending.message, trace: ending.trace, to: threadID)
             add(notice, to: threadID)
+        }
+        // Another account signed in while the ending was being stored:
+        // nothing more of the turn is announced, sent on or summarised.
+        guard stillOwns(turn, in: threadID) else {
+            settle(turnID, droppedFrom: threadID)
+            return
         }
         // Stop pressed while the ending was being stored was too late for
         // the reply, and still means stop.
@@ -554,7 +682,7 @@ final class TurnEngine: ObservableObject {
         // A completion the person tried to stop is not a go-ahead.
         await settleWaiting(threadID: threadID, sendsNext: ending.outcome == .completed && !stopWasPressed)
         if ending.outcome == .completed {
-            await chat.updateThreadSummary(threadId: threadID)
+            await chat.updateThreadSummary(threadId: threadID, roleId: roleID, as: turn.account)
         }
     }
 }

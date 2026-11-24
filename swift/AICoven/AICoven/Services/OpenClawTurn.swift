@@ -11,7 +11,7 @@ nonisolated struct OpenClawTurn {
     let token: String?
     let threadID: String
     /// Asks the person, and waits for the answer.
-    var ask: @Sendable (ToolApproval) async -> ApprovalAnswer = ToolExecutionService.askInItsThread
+    var ask: @Sendable (ToolApproval) async -> ApprovalAnswer = { await ToolExecutionService.askInItsThread($0) }
     /// Opens a connection to the Gateway.
     var open: @Sendable (URL, String?) async throws -> (gateway: OpenClawGatewayConnection, hello: OpenClawGatewayHello) = {
         try await OpenClawGateway.open($0, token: $1)

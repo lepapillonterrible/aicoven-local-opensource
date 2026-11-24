@@ -72,8 +72,12 @@ class AuthService: ObservableObject {
                 // account before stays said: on signing in, switching,
                 // signing out, and when an account is deleted.
                 ThreadActivities.shared.accountChanged()
-                MemoryProposalQuestions.shared.accountChanged()
-                ToolApprovals.shared.accountChanged()
+                MemoryProposalQuestions.shared.accountReported(UserScope.currentUserID)
+                // What is asked of the account before leaves; the same
+                // account reported again keeps it.
+                ToolApprovals.shared.accountReported(UserScope.currentUserID)
+                // A turn still running for the account before is stopped there.
+                TurnEngine.shared.accountChanged()
                 LocalNotifications.shared.accountReported(firebaseUser?.uid)
                 // The pictures drawn of the account's assets are held in
                 // memory only, and not for whoever is signed in next.
@@ -90,7 +94,7 @@ class AuthService: ObservableObject {
                     await ThreadService.shared.reloadForCurrentUser()
                     // Read again now that the threads are this account's.
                     ThreadActivities.shared.accountChanged()
-                    MemoryProposalQuestions.shared.accountChanged()
+                    MemoryProposalQuestions.shared.accountReported(UserScope.currentUserID)
 
                     // One-time cleanup: clear stale test purchases that were cached
                     // during automated testing. This runs once per user.
@@ -207,6 +211,8 @@ class AuthService: ObservableObject {
         AssetThumbnails.shared.forgetAll()
         MemoryProposalQuestions.shared.accountChanged()
         ToolApprovals.shared.accountChanged()
+        // A turn still running for the account before is stopped there.
+        TurnEngine.shared.accountChanged()
         LocalNotifications.shared.accountReported(nil)
         currentUser = nil
         isAuthenticated = false
@@ -365,6 +371,8 @@ class AuthService: ObservableObject {
         AssetThumbnails.shared.forgetAll()
         MemoryProposalQuestions.shared.accountChanged()
         ToolApprovals.shared.accountChanged()
+        // A turn still running for the account before is stopped there.
+        TurnEngine.shared.accountChanged()
         LocalNotifications.shared.accountReported(nil)
 
         print("✅ Account deleted successfully")

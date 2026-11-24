@@ -149,26 +149,27 @@ final class AgentInstructionsTests: XCTestCase {
         let personal = try await thread(inCoven: nil)
 
         let model = HearingModel()
-        try await chat(with: model).streamMessage(threadId: inCoven, message: "Hello", roleId: scout.id, onStateChange: { _ in })
+        try await chat(with: model).streamMessage(threadId: inCoven, as: UserScope.currentUserID, message: "Hello", roleId: scout.id, onStateChange: { _ in })
         let toldScout = model.lastTold
         let account = UserScope.currentUserID
         XCTAssertEqual(toldScout.first, ContextBuilder.Agent(name: "Scout", instructions: "You review code.", account: account).systemPrompt)
         XCTAssertFalse(toldScout.contains { $0.contains("You plan the week.") }, "Not Strix's")
 
-        try await chat(with: model).streamMessage(threadId: personal, message: "Hello", onStateChange: { _ in })
+        try await chat(with: model).streamMessage(threadId: personal, as: UserScope.currentUserID, message: "Hello", onStateChange: { _ in })
         let toldStrix = model.lastTold
         XCTAssertEqual(toldStrix.first, ContextBuilder.Agent(name: "Strix", instructions: "You plan the week.", account: account).systemPrompt)
         XCTAssertFalse(toldStrix.contains { $0.contains("You review code.") })
 
         // An agent that is gone is not answered for by another: the turn is told nothing of who answers.
         try await chat(with: model).streamMessage(
-            threadId: inCoven, message: "Hello", roleId: "no-such-agent-\(UUID().uuidString)", onStateChange: { _ in }
+            threadId: inCoven,
+            as: UserScope.currentUserID, message: "Hello", roleId: "no-such-agent-\(UUID().uuidString)", onStateChange: { _ in }
         )
         XCTAssertFalse(model.lastTold.contains { $0.contains("## Identity") })
 
         // After a tool's result the model is asked again, and is told who answers again.
         let usingATool = HearingModel(answering: [#"{"tool":"current_time","input":null,"reason":"to know the time"}"#, "It is noon."])
-        try await chat(with: usingATool).streamMessage(threadId: inCoven, message: "What time is it?", roleId: scout.id, onStateChange: { _ in })
+        try await chat(with: usingATool).streamMessage(threadId: inCoven, as: UserScope.currentUserID, message: "What time is it?", roleId: scout.id, onStateChange: { _ in })
         XCTAssertGreaterThanOrEqual(usingATool.told.count, 2, "Asked again once the tool had run")
         for told in usingATool.told {
             XCTAssertEqual(told.first, ContextBuilder.Agent(name: "Scout", instructions: "You review code.", account: account).systemPrompt)
@@ -185,7 +186,7 @@ final class AgentInstructionsTests: XCTestCase {
                 try db.execute(sql: "DELETE FROM covens WHERE id = ?", arguments: [coven.id])
             }
         }
-        try await chat(with: model).streamMessage(threadId: personal, message: "Hello", roleId: scout.id, onStateChange: { _ in })
+        try await chat(with: model).streamMessage(threadId: personal, as: UserScope.currentUserID, message: "Hello", roleId: scout.id, onStateChange: { _ in })
         XCTAssertFalse(model.lastTold.contains { $0.contains("You review code.") }, "Another account's agent's instructions")
     }
 }

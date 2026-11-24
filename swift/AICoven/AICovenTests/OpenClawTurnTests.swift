@@ -383,7 +383,7 @@ final class OpenClawTurnTests: XCTestCase {
 
         // The approvals take no Approve for one that can only be denied.
         let approvals = await ToolApprovals(schedule: { _, _ in })
-        let asking = Task { await approvals.ask(denyOnly) }
+        let asking = Task { await approvals.ask(denyOnly, for: UserScope.currentUserID) }
         while await approvals.showing == nil {
             await Task.yield()
         }
@@ -662,7 +662,8 @@ final class OpenClawTurnTests: XCTestCase {
         let kept = RunsToldOf()
 
         try await chat.streamMessage(
-            threadId: threadID, message: "And now?",
+            threadId: threadID,
+            as: UserScope.currentUserID, message: "And now?",
             onAgentRun: { run in
                 XCTAssertEqual(run.provider, AgentRun.openClaw)
                 XCTAssertEqual(run.origin, "ws://127.0.0.1:18789", "With the Gateway it was started through")
@@ -684,7 +685,7 @@ final class OpenClawTurnTests: XCTestCase {
 
         // What follows a turn is made by the app's own models, and is not
         // made for a turn that went to OpenClaw.
-        await chat.updateThreadSummary(threadId: threadID)
+        await chat.updateThreadSummary(threadId: threadID, roleId: nil, as: UserScope.currentUserID)
         XCTAssertEqual(model.calls, 0)
         await DataEncryptionService.shared.lock()
     }
@@ -741,7 +742,7 @@ final class OpenClawTurnTests: XCTestCase {
             openClawTurn: { _ in made }
         )
 
-        try await chat.streamMessage(threadId: threadID, message: "Sum this up", attachments: [notes], onStateChange: { _ in })
+        try await chat.streamMessage(threadId: threadID, as: UserScope.currentUserID, message: "Sum this up", attachments: [notes], onStateChange: { _ in })
 
         let send = try XCTUnwrap(socket.sent.first { $0["method"] as? String == "chat.send" }?["params"] as? [String: Any])
         let message = try XCTUnwrap(send["message"] as? String)
@@ -783,7 +784,7 @@ final class OpenClawTurnTests: XCTestCase {
         )
 
         // The model the test stands in refuses; that it was asked is the point.
-        _ = try? await chat.streamMessage(threadId: threadID, message: "Hello", onStateChange: { _ in })
+        _ = try? await chat.streamMessage(threadId: threadID, as: UserScope.currentUserID, message: "Hello", onStateChange: { _ in })
 
         XCTAssertGreaterThan(model.calls, 0)
         await DataEncryptionService.shared.lock()
@@ -828,7 +829,7 @@ final class OpenClawTurnTests: XCTestCase {
             openClawTurn: { _ in made }
         )
 
-        await chat.updateThreadSummary(threadId: threadID)
+        await chat.updateThreadSummary(threadId: threadID, roleId: nil, as: UserScope.currentUserID)
 
         XCTAssertEqual(model.models, ["claw-model"], "The summary is asked of the model chosen for OpenClaw, by its name")
         await DataEncryptionService.shared.lock()

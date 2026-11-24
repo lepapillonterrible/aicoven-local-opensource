@@ -34,7 +34,7 @@ actor ToolExecutionService {
     /// Default initializer uses the shared ToolService singleton.
     init() {
         toolService = ToolService.shared
-        ask = Self.askInItsThread
+        ask = { await Self.askInItsThread($0) }
         covenConnections = { await CovenService.shared.connections(forThread: $0) }
         githubService = .shared
         googleDriveService = .shared
@@ -2379,8 +2379,15 @@ actor ToolExecutionService {
     /// (the thread has been deleted, its coven is gone, or either could not
     /// be read) is not asked: the person would be answering for somewhere
     /// else. Why is logged.
-    static func askInItsThread(_ approval: ToolApproval) async -> ApprovalAnswer {
+    ///
+    /// `owner` is the account it is asked for; where none is given (a
+    /// turn's tool, whose turn is stopped when the account changes), the
+    /// one signed in as it begins, noted before anything is looked up. If
+    /// another account is signed in by the time it would be shown, it is
+    /// not asked of that one.
+    static func askInItsThread(_ approval: ToolApproval, for owner: String? = nil) async -> ApprovalAnswer {
         var approval = approval
+        let account = if let owner { owner } else { await MainActor.run { UserScope.currentUserID } }
         do {
             let thread = try await ThreadService.shared.getThread(threadId: approval.threadID)
             approval.threadTitle = thread.title ?? approval.threadTitle
@@ -2395,7 +2402,7 @@ actor ToolExecutionService {
             AppErrorReporter.log(error: error, context: "ToolExecutionService.askInItsThread")
             return .notAsked
         }
-        return await ToolApprovals.shared.ask(approval)
+        return await ToolApprovals.shared.ask(approval, for: account)
     }
 
     // MARK: - Configuration Methods
