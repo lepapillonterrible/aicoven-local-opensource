@@ -256,7 +256,7 @@ actor SkillRepository {
 
     /// The skills an agent of the account's follows: those that are on and
     /// can be opened, by title, each with its text.
-    func followed(as account: String) async throws -> [(title: String, text: String)] {
+    func followed(as account: String) async throws -> [FollowedSkill] {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         // Read and opened as the account, with its own key in memory from
         // before until after, as `AccountSeal.reading` does; written out
@@ -273,26 +273,19 @@ actor SkillRepository {
             try await AccountSeal.requireKey(of: account, since: epoch)
             throw error
         }
-        var followed: [FollowedSkill] = []
+        var followed: [(id: String, skill: FollowedSkill)] = []
         for row in rows {
             let id: String = row["id"]
             let sealedTitle: Data = row["title_ciphertext"], sealedText: Data = row["text_ciphertext"]
             guard let title = await opened(sealedTitle, purpose: Self.titlePurpose),
                   let text = await opened(sealedText, purpose: Self.textPurpose) else { continue }
-            followed.append(FollowedSkill(id: id, title: title, text: text))
+            followed.append((id, FollowedSkill(title: title, text: text)))
         }
         try await AccountSeal.requireKey(of: account, since: epoch)
         followed.sort { one, other in
-            let order = one.title.localizedCaseInsensitiveCompare(other.title)
+            let order = one.skill.title.localizedCaseInsensitiveCompare(other.skill.title)
             return order == .orderedSame ? one.id < other.id : order == .orderedAscending
         }
-        return followed.map { (title: $0.title, text: $0.text) }
-    }
-
-    /// A skill an agent follows, as it is read.
-    private struct FollowedSkill {
-        let id: String
-        let title: String
-        let text: String
+        return followed.map(\.skill)
     }
 }
