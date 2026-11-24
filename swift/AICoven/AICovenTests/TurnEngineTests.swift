@@ -543,7 +543,7 @@ final class TurnEngineTests: XCTestCase {
         XCTAssertNil(engine.notSent[threadID])
     }
 
-    func testAFirstMessageThatCouldNotBeSent_isHandedBackInFrontOfWhatWasHandedBackBefore_withWhy() {
+    func testAFirstMessageThatCouldNotBeSent_isHandedBackInFrontOfWhatWasHandedBackBefore_withWhy() async {
         let engine = makeEngine()
         let file = FileAttachmentDetail(id: "a", name: "notes.txt", mimeType: "text/plain", sizeBytes: 3, width: nil, height: nil, url: nil)
         let later = FileAttachmentDetail(id: "b", name: "more.txt", mimeType: "text/plain", sizeBytes: 3, width: nil, height: nil, url: nil)
@@ -562,6 +562,9 @@ final class TurnEngineTests: XCTestCase {
         // Taken once, by the thread's composer.
         XCTAssertEqual(engine.takeReturned(threadID: threadID)?.attachments, [file, later])
         XCTAssertNil(engine.returned[threadID])
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     func testANewThreadsFirstMessageThatCouldNotBeSent_goesToItsComposerInFrontOfWhatItHolds_notOverIt() async {

@@ -431,7 +431,7 @@ final class AssetStoreTests: XCTestCase {
         await DataEncryptionService.shared.unlockForTestingEphemeral()
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
         let account = account
-        let kept = try await queue.read { db in
+        let kept: [Row] = try await queue.read { db in
             try Row.fetchAll(db, sql: "SELECT id, status FROM assets WHERE user_id = ?", arguments: [account])
         }
         XCTAssertEqual(kept.map { $0["id"] as String }, [made.id], "As it was")

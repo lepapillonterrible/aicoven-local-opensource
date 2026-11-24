@@ -25,7 +25,7 @@ final class TurnKeepAliveTests: XCTestCase {
         }
     }
 
-    func testItIsHeldFromTheFirstTurnThatRunsUntilTheLastHasEnded() {
+    func testItIsHeldFromTheFirstTurnThatRunsUntilTheLastHasEnded() async {
         let system = System()
         let keeping = TurnKeepAlive(system: system.system)
         XCTAssertEqual(system.begun, 0, "Nothing is held while no turn runs")
@@ -43,9 +43,12 @@ final class TurnKeepAliveTests: XCTestCase {
 
         keeping.turnsChanged(areRunning: true)
         XCTAssertEqual(system.begun, 2, "The next turn is held anew")
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
-    func testWhenTheSystemsTimeIsUpTheAskingEnds_andIsNotMadeAgainUntilTheAppHasBeenInFront() {
+    func testWhenTheSystemsTimeIsUpTheAskingEnds_andIsNotMadeAgainUntilTheAppHasBeenInFront() async {
         let system = System()
         let keeping = TurnKeepAlive(system: system.system)
         keeping.turnsChanged(areRunning: true)
@@ -60,9 +63,12 @@ final class TurnKeepAliveTests: XCTestCase {
         XCTAssertEqual(system.begun, 2, "With the app in front again, the turn that still runs is held")
         keeping.turnsChanged(areRunning: false)
         XCTAssertEqual(system.ended, 2)
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
-    func testTimeThatIsUpWhileTheSystemIsBeingAskedEndsTheAskingToo() {
+    func testTimeThatIsUpWhileTheSystemIsBeingAskedEndsTheAskingToo() async {
         let system = System()
         system.expiresAsItIsAsked = true
         let keeping = TurnKeepAlive(system: system.system)
@@ -73,6 +79,9 @@ final class TurnKeepAliveTests: XCTestCase {
 
         keeping.turnsChanged(areRunning: false)
         XCTAssertEqual(system.ended, 1, "And it is ended once")
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     func testItIsHeldUntilWhatTellsOfTheEndingIsDoneToo() async {
@@ -109,7 +118,7 @@ final class TurnKeepAliveTests: XCTestCase {
         XCTAssertEqual(system.ended, 1)
     }
 
-    func testAnAskingTheSystemRefusesIsNotTakenForHeld_andIsMadeAgain() {
+    func testAnAskingTheSystemRefusesIsNotTakenForHeld_andIsMadeAgain() async {
         let system = System()
         system.refuses = true
         let keeping = TurnKeepAlive(system: system.system)
@@ -121,5 +130,8 @@ final class TurnKeepAliveTests: XCTestCase {
         XCTAssertEqual(system.begun, 2, "Asked again, with the turn still running")
         keeping.turnsChanged(areRunning: false)
         XCTAssertEqual(system.ended, 1, "Only what was given is ended")
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 }

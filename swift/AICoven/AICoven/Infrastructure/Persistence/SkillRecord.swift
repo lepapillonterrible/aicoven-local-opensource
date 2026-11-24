@@ -92,7 +92,7 @@ actor SkillRepository {
     func skills(as account: String) async throws -> [Skill] {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         return try await AccountSeal.reading(as: account) {
-            let rows = try await dbQueue.read { db in
+            let rows: [Row] = try await dbQueue.read { db in
                 try Row.fetchAll(
                     db, sql: "SELECT id, title_ciphertext, text_ciphertext, is_on, updated_at FROM skills WHERE user_id = ?", arguments: [account]
                 )
@@ -155,7 +155,7 @@ actor SkillRepository {
         // memory, to know whether its text changes.
         let seen: (kept: Kept, hasTheSameText: Bool)? = try await AccountSeal.reading(as: account) {
             guard let digest else { return nil }
-            let row = try await dbQueue.read { db in
+            let row: Row? = try await dbQueue.read { db in
                 try Row.fetchOne(
                     db, sql: "SELECT \(Kept.columns) FROM skills WHERE user_id = ? AND source_digest = ?", arguments: [account, digest]
                 )
@@ -219,7 +219,7 @@ actor SkillRepository {
             return
         }
         let seen: Kept = try await AccountSeal.reading(as: account) {
-            let row = try await dbQueue.read { db in
+            let row: Row? = try await dbQueue.read { db in
                 try Row.fetchOne(db, sql: "SELECT \(Kept.columns) FROM skills WHERE id = ? AND user_id = ?", arguments: [id, account])
             }
             guard let kept = row.map(Kept.init) else { throw SkillError.noSuchSkill }
@@ -256,24 +256,34 @@ actor SkillRepository {
 
     /// The skills an agent of the account's follows: those that are on and
     /// can be opened, by title, each with its text.
-    func followed(as account: String) async throws -> [(title: String, text: String)] {
+    func followed(as account: String) async throws -> [FollowedSkill] {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-        return try await AccountSeal.reading(as: account) {
-            let rows = try await dbQueue.read { db in
+        // Read and opened as the account, with its own key in memory from
+        // before until after, as `AccountSeal.reading` does, written out.
+        let epoch = await DataEncryptionService.shared.keyEpoch
+        try await AccountSeal.requireKey(of: account, since: epoch)
+        let rows: [Row]
+        do {
+            rows = try await dbQueue.read { db in
                 try Row.fetchAll(db, sql: "SELECT id, title_ciphertext, text_ciphertext FROM skills WHERE user_id = ? AND is_on = 1", arguments: [account])
             }
-            var followed: [(id: String, title: String, text: String)] = []
-            for row in rows {
-                guard let title = await self.opened(row["title_ciphertext"], purpose: Self.titlePurpose),
-                      let text = await self.opened(row["text_ciphertext"], purpose: Self.textPurpose) else { continue }
-                followed.append((row["id"], title, text))
-            }
-            return followed
-                .sorted { one, other in
-                    let order = one.title.localizedCaseInsensitiveCompare(other.title)
-                    return order == .orderedSame ? one.id < other.id : order == .orderedAscending
-                }
-                .map { ($0.title, $0.text) }
+        } catch {
+            try await AccountSeal.requireKey(of: account, since: epoch)
+            throw error
         }
+        var followed: [(id: String, skill: FollowedSkill)] = []
+        for row in rows {
+            let id: String = row["id"]
+            let sealedTitle: Data = row["title_ciphertext"], sealedText: Data = row["text_ciphertext"]
+            guard let title = await opened(sealedTitle, purpose: Self.titlePurpose),
+                  let text = await opened(sealedText, purpose: Self.textPurpose) else { continue }
+            followed.append((id, FollowedSkill(title: title, text: text)))
+        }
+        try await AccountSeal.requireKey(of: account, since: epoch)
+        followed.sort { one, other in
+            let order = one.skill.title.localizedCaseInsensitiveCompare(other.skill.title)
+            return order == .orderedSame ? one.id < other.id : order == .orderedAscending
+        }
+        return followed.map(\.skill)
     }
 }

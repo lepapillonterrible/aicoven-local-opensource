@@ -234,7 +234,7 @@ final class TaskStoreTests: XCTestCase {
         let made = try await store.create(title: "Cancel the Lisbon offsite", inCoven: nil, as: account)
         try await store.change(made.id, TaskChange(title: "Postpone the Lisbon offsite"), as: account)
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
-        let dump = try await queue.read { db in
+        let dump: String = try await queue.read { db in
             try Row.fetchAll(db, sql: "SELECT * FROM tasks WHERE id = ?", arguments: [made.id])
                 .flatMap { row in row.databaseValues.map { value in
                     (Data.fromDatabaseValue(value).map { String(decoding: $0, as: UTF8.self) } ?? "") + value.description

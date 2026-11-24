@@ -201,7 +201,7 @@ final class ScopeOverviewTests: XCTestCase {
     }
 
     @MainActor
-    func testTheShellStartsWhereItIsTold_onItsOverview_andACovenThatIsGoneGivesWayToStrix() {
+    func testTheShellStartsWhereItIsTold_onItsOverview_andACovenThatIsGoneGivesWayToStrix() async {
         var arrivals: [ShellScope] = []
         let navigator = ShellNavigator(startingIn: .coven("work"), arrive: { scope in
             arrivals.append(scope)
@@ -219,10 +219,13 @@ final class ScopeOverviewTests: XCTestCase {
         XCTAssertEqual(navigator.selected, .strix)
         XCTAssertNil(navigator.place)
         XCTAssertEqual(arrivals, [.coven("work"), .strix])
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     @MainActor
-    func testTheNavigatorNotesEachArrival_andKnowsTheVisitBefore() {
+    func testTheNavigatorNotesEachArrival_andKnowsTheVisitBefore() async {
         // A device that was in each scope at the times given.
         var visits: [ShellScope: Date] = [.strix: Date(timeIntervalSince1970: 100), .coven("work"): Date(timeIntervalSince1970: 200)]
         var clock = Date(timeIntervalSince1970: 1000)
@@ -275,5 +278,8 @@ final class ScopeOverviewTests: XCTestCase {
 
         // A navigator that keeps no visits knows none.
         XCTAssertNil(ShellNavigator().previousVisit(in: .strix))
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 }

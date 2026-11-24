@@ -73,7 +73,7 @@ final class SkillStoreTests: XCTestCase {
 
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
         let account = account
-        let row = try await queue.read { db in
+        let row: Row? = try await queue.read { db in
             try Row.fetchOne(db, sql: "SELECT * FROM skills WHERE user_id = ?", arguments: [account])
         }
         let kept = try XCTUnwrap(row)
@@ -227,7 +227,7 @@ final class SkillStoreTests: XCTestCase {
         await DataEncryptionService.shared.unlockForTestingEphemeral()
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
         let account = account
-        let kept = try await queue.read { db in
+        let kept: [Row] = try await queue.read { db in
             try Row.fetchAll(db, sql: "SELECT id, is_on FROM skills WHERE user_id = ?", arguments: [account])
         }
         XCTAssertEqual(kept.map { $0["id"] as String }, [added.id], "As it was")
