@@ -166,6 +166,19 @@ final class VoiceCaptureService: NSObject, VoiceCapturing, AVAudioRecorderDelega
     }
 
     private static func makeRecordingURL() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("voice-note-\(UUID().uuidString).m4a")
+        FileManager.default.temporaryDirectory.appendingPathComponent("\(prefix)\(UUID().uuidString).m4a")
+    }
+
+    private nonisolated static let prefix = "voice-note-"
+
+    /// Removes the recordings left in the temporary folder by a run that
+    /// ended before it could remove them (a crash, or the system ending the
+    /// app while a message was being put into words). Called as the app
+    /// starts, before anything is recorded.
+    nonisolated static func removeLeftRecordings(in folder: URL = FileManager.default.temporaryDirectory) {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        for name in names where name.hasPrefix(prefix) && name.hasSuffix(".m4a") {
+            try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
+        }
     }
 }

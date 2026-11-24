@@ -36,8 +36,8 @@ final class MemoryProposalQuestionsTests: XCTestCase {
 
     private func propose(_ text: String, in coven: String) async throws -> MemoryProposalRecord {
         try await proposals.insertProposal(
-            eventId: nil, covenId: coven, proposedContent: text, proposedTags: ["fact"], scope: "coven", reason: nil,
-            sourceMessageId: nil, proposedBy: "agent", title: nil, as: account
+            eventId: nil, covenId: coven, proposedContent: text, proposedTags: ["fact"], scope: "coven",
+            sourceMessageId: nil, proposedBy: "agent", as: account
         )
     }
 
@@ -68,7 +68,7 @@ final class MemoryProposalQuestionsTests: XCTestCase {
         XCTAssertEqual(listed.map(\.proposedContent), ["Ships on Fridays"])
 
         // Settling it does not write its words back as text.
-        _ = try await proposals.settlePending(id: stored.id, as: "rejected", reviewedBy: "local-user", reviewFeedback: nil, for: account)
+        _ = try await proposals.settlePending(id: stored.id, as: "rejected", reviewedBy: "local-user", for: account)
         let after = try await queue.read { db in
             try String.fetchOne(db, sql: "SELECT proposed_content FROM memory_proposals WHERE id = ?", arguments: [stored.id])
         }
@@ -77,8 +77,8 @@ final class MemoryProposalQuestionsTests: XCTestCase {
         // Not proposed to an account that is not signed in, nor with another account's key in memory.
         do {
             _ = try await proposals.insertProposal(
-                eventId: nil, covenId: coven, proposedContent: "Theirs", proposedTags: nil, scope: "coven", reason: nil,
-                sourceMessageId: nil, proposedBy: "agent", title: nil, as: "someone-who-signed-out"
+                eventId: nil, covenId: coven, proposedContent: "Theirs", proposedTags: nil, scope: "coven",
+                sourceMessageId: nil, proposedBy: "agent", as: "someone-who-signed-out"
             )
             XCTFail("Stored a proposal for an account that is not signed in")
         } catch {
@@ -391,10 +391,10 @@ final class MemoryProposalQuestionsTests: XCTestCase {
         }
         // One proposed in no coven is stored.
         let personal = try await proposals.insertProposal(
-            eventId: nil, covenId: nil, proposedContent: "About the person", proposedTags: nil, scope: "user", reason: nil,
-            sourceMessageId: nil, proposedBy: "agent", title: nil, as: account
+            eventId: nil, covenId: nil, proposedContent: "About the person", proposedTags: nil, scope: "user",
+            sourceMessageId: nil, proposedBy: "agent", as: account
         )
-        _ = try await proposals.settlePending(id: personal.id, as: "rejected", reviewedBy: nil, reviewFeedback: nil, for: account)
+        _ = try await proposals.settlePending(id: personal.id, as: "rejected", reviewedBy: nil, for: account)
     }
 
     func testWhenAnotherAccountSignsIn_theQuestionLeavesUnanswered_andAnAnswerForTheFirstIsNotTaken() async throws {

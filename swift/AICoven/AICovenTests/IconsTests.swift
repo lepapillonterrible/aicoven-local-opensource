@@ -208,9 +208,21 @@ final class IconsTests: XCTestCase {
         // The same agent, once it and its coven are another account's: its id is known, and it is not found.
         let store = try await MainActor.run { try XCTUnwrap(DatabaseManager.shared.dbQueue) }
         let another = "another-\(UUID().uuidString)"
+        // A coven keeps its account, so the agent is moved into one of
+        // another account's.
+        let theirs = "theirs-\(UUID().uuidString)"
         try await store.write { db in
-            try db.execute(sql: "UPDATE covens SET user_id = ? WHERE id = ?", arguments: [another, coven.id])
-            try db.execute(sql: "UPDATE roles SET user_id = ? WHERE id = ?", arguments: [another, mine.id])
+            try db.execute(
+                sql: "INSERT INTO covens (id, user_id, name, created_at, updated_at) VALUES (?, ?, 'Theirs', ?, ?)",
+                arguments: [theirs, another, Date(), Date()]
+            )
+            try db.execute(sql: "UPDATE roles SET user_id = ?, coven_id = ? WHERE id = ?", arguments: [another, theirs, mine.id])
+        }
+        addTeardownBlock {
+            try? await store.write { db in
+                try db.execute(sql: "DELETE FROM roles WHERE id = ?", arguments: [mine.id])
+                try db.execute(sql: "DELETE FROM covens WHERE id = ?", arguments: [theirs])
+            }
         }
         do {
             _ = try await RoleService.shared.getRole(roleId: mine.id)

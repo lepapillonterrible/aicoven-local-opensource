@@ -518,6 +518,15 @@ actor MemoryProposalRepository {
 
     private static let purpose = "memory_proposal"
 
+    /// What is kept in the clear of a proposal's tags: only the page the
+    /// entry would go on (`page:<name>`, one of four), whatever words a
+    /// model chose, which can say something of what it is about. Approved,
+    /// the memory goes on the same page. Nil for no tags.
+    nonisolated static func storedTags(_ tags: [String]) -> String? {
+        guard !tags.isEmpty else { return nil }
+        return "[\"\(MemoryPage.of(tags: tags).tag)\"]"
+    }
+
     /// A stored proposal with its text opened. One whose text the key in
     /// memory cannot open is given as unreadable, with no text.
     private func opened(_ record: MemoryProposalRecord) async throws -> MemoryProposalRecord {
@@ -634,10 +643,8 @@ actor MemoryProposalRepository {
         proposedContent: String,
         proposedTags: [String]?,
         scope: String?,
-        reason: String?,
         sourceMessageId: String?,
         proposedBy: String?,
-        title: String?,
         as account: String? = nil
     ) async throws -> MemoryProposalRecord {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
@@ -646,13 +653,7 @@ actor MemoryProposalRepository {
         let sealed = try await AccountSeal.seal(proposedContent, purpose: Self.purpose, for: owner)
 
         let now = Date()
-        let tagsString: String?
-        if let proposedTags, !proposedTags.isEmpty {
-            let data = try JSONEncoder().encode(proposedTags)
-            tagsString = String(data: data, encoding: .utf8)
-        } else {
-            tagsString = nil
-        }
+        let tagsString = Self.storedTags(proposedTags ?? [])
 
         let record = MemoryProposalRecord(
             id: id,
@@ -662,14 +663,16 @@ actor MemoryProposalRepository {
             proposedContent: proposedContent,
             proposedTags: tagsString,
             scope: scope,
-            reason: reason,
+            // Kept in the clear, so none is given: a proposal's text is
+            // sealed, and nothing beside it says what it is about.
+            reason: nil,
             sourceMessageId: sourceMessageId,
             status: "pending",
             proposedBy: proposedBy,
             reviewedBy: nil,
             createdAt: now,
             reviewedAt: nil,
-            title: title,
+            title: nil,
             reviewFeedback: nil,
             contentCiphertext: sealed
         )
@@ -696,7 +699,6 @@ actor MemoryProposalRepository {
         id: String,
         as status: String,
         reviewedBy: String?,
-        reviewFeedback: String?,
         for userID: String
     ) async throws -> MemoryProposalRecord? {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
@@ -713,7 +715,8 @@ actor MemoryProposalRepository {
             record.status = status
             record.reviewedBy = reviewedBy
             record.reviewedAt = now
-            record.reviewFeedback = reviewFeedback
+            // No review notes are kept: they would be in the clear.
+            record.reviewFeedback = nil
             try record.update(db)
             return record
         }

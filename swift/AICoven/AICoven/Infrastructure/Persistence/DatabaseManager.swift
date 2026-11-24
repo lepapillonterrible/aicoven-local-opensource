@@ -56,6 +56,34 @@ final class DatabaseManager {
     WHERE status = 'pending' AND proposed_by = 'system' AND title = 'Thread Summary'
     """
 
+    /// Compacts the file once (from v25), away from the main thread: what
+    /// was in the clear before (and before secure delete was on) is not
+    /// left in its free pages. Recorded only once it has been done, so a
+    /// compaction that fails (no room, the app closed meanwhile) is tried
+    /// again at the next start.
+    nonisolated static let compacted = "compacted-after-v25"
+
+    /// The compaction started as the database was opened (tests wait on it).
+    private(set) var compaction: Task<Void, Never>?
+
+    private nonisolated static func compactOnce(_ queue: DatabaseQueue) -> Task<Void, Never> {
+        Task.detached(priority: .utility) {
+            do {
+                let done = try await queue.read { db in
+                    try Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM upkeep_done WHERE name = ?)", arguments: [compacted]) ?? false
+                }
+                guard !done else { return }
+                try await queue.vacuum()
+                try await queue.write { db in
+                    try db.execute(sql: "INSERT OR IGNORE INTO upkeep_done (name) VALUES (?)", arguments: [compacted])
+                }
+            } catch {
+                // The kind of failure only; tried again at the next start.
+                AppErrorReporter.log(message: "The database could not be compacted (\(type(of: error)))", context: "DatabaseManager.compactOnce")
+            }
+        }
+    }
+
     /// Call this early in app startup (e.g., in AICovenApp) to open the DB and run migrations.
     func configureIfNeeded() {
         guard dbQueue == nil else { return }
@@ -63,6 +91,12 @@ final class DatabaseManager {
         do {
             var configuration = Configuration()
             configuration.foreignKeysEnabled = true
+            // What is deleted or replaced is overwritten in the file, not
+            // left readable in its free pages: text that was sealed or
+            // taken away does not stay behind in the clear.
+            configuration.prepareDatabase { db in
+                try db.execute(sql: "PRAGMA secure_delete = ON")
+            }
             let queue = try DatabaseQueue(path: databaseURL.path, configuration: configuration)
             var migrator = DatabaseMigrator()
 
@@ -841,8 +875,54 @@ final class DatabaseManager {
                 try db.execute(sql: Self.summaryProposalsThatWait)
             }
 
+            // v25: what is kept in the clear says no more than it must.
+            // A proposal's text is sealed; of the rest, its tags (a word a
+            // model chose) are kept as the page the entry would go on, one
+            // of four, and its title, reason and review notes, which no
+            // caller passes today, are taken away from older rows. And a
+            // coven keeps its id and its account, whatever writes: rows of
+            // every kind are bound to it (assets, coven context, memory,
+            // agents, tasks). One with no account yet, from before
+            // accounts were kept, can still be given its account.
+            migrator.registerMigration("v25_less_in_the_clear") { db in
+                let rows = try Row.fetchAll(db, sql: "SELECT id, proposed_tags FROM memory_proposals WHERE proposed_tags IS NOT NULL")
+                for row in rows {
+                    let id: String = row["id"]
+                    let stored: String = row["proposed_tags"]
+                    try db.execute(
+                        sql: "UPDATE memory_proposals SET proposed_tags = ? WHERE id = ?",
+                        arguments: [MemoryProposalRepository.storedTags((try? JSONDecoder().decode([String].self, from: Data(stored.utf8))) ?? []), id]
+                    )
+                }
+                try db.execute(sql: "UPDATE memory_proposals SET title = NULL, reason = NULL, review_feedback = NULL")
+                try db.execute(sql: """
+                CREATE TRIGGER covens_keep_their_id_and_account
+                BEFORE UPDATE OF id, user_id ON covens
+                WHEN NEW.id IS NOT OLD.id OR (OLD.user_id IS NOT NULL AND NEW.user_id IS NOT OLD.user_id)
+                BEGIN
+                    SELECT RAISE(ABORT, 'a coven keeps its id and its account');
+                END;
+                """)
+                // Nor is it put in another account's hands by a replacing
+                // insert, which takes the row out without the trigger above.
+                try db.execute(sql: """
+                CREATE TRIGGER covens_are_not_replaced_by_anothers
+                BEFORE INSERT ON covens
+                WHEN EXISTS (SELECT 1 FROM covens WHERE id = NEW.id AND user_id IS NOT NULL AND user_id IS NOT NEW.user_id)
+                BEGIN
+                    SELECT RAISE(ABORT, 'a coven keeps its id and its account');
+                END;
+                """)
+                // The tasks' own guard is part of the one above now.
+                try db.execute(sql: "DROP TRIGGER IF EXISTS covens_with_tasks_keep_their_account")
+                // What upkeep has been done, so that what must be done once
+                // is retried until it has been.
+                try db.execute(sql: "CREATE TABLE upkeep_done (name TEXT PRIMARY KEY NOT NULL)")
+            }
+
             try migrator.migrate(queue)
             dbQueue = queue
+            compaction = Self.compactOnce(queue)
         } catch {
             AppErrorReporter.log(error: error, context: "DatabaseManager.configureIfNeeded")
         }

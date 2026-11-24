@@ -159,8 +159,8 @@ final class MemoryPlacesTests: XCTestCase {
         let gone = try await keep("Goes with its coven", in: .coven(coven))
         let stays = try await keep("Another coven's", in: .coven(other))
         let proposal = try await MemoryProposalRepository.shared.insertProposal(
-            eventId: nil, covenId: coven, proposedContent: "Proposed there", proposedTags: nil, scope: "coven", reason: nil,
-            sourceMessageId: nil, proposedBy: "tester", title: nil
+            eventId: nil, covenId: coven, proposedContent: "Proposed there", proposedTags: nil, scope: "coven",
+            sourceMessageId: nil, proposedBy: "tester"
         )
 
         try await CovenService.shared.deleteCoven(id: coven)
@@ -368,7 +368,7 @@ final class MemoryPlacesTests: XCTestCase {
             // The questions leave the screen, and what was proposed in no coven is settled.
             await MainActor.run { MemoryProposalQuestions.shared.accountChanged() }
             for left in await (try? proposals.listProposals(covenId: nil, status: "pending")) ?? [] where left.proposedContent.hasSuffix(mark) {
-                _ = try? await proposals.settlePending(id: left.id, as: "rejected", reviewedBy: nil, reviewFeedback: nil, for: account)
+                _ = try? await proposals.settlePending(id: left.id, as: "rejected", reviewedBy: nil, for: account)
             }
         }
 

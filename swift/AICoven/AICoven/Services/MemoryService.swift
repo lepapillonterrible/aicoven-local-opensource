@@ -223,8 +223,7 @@ actor MemoryService {
     /// embedding has been made, nothing is stored or marked.
     func reviewProposal(
         proposalId: String,
-        action: String,
-        feedback: String? = nil
+        action: String
     ) async throws -> MemoryProposal {
         // Normalize the new status from the requested action.
         let newStatus: String = switch action.lowercased() {
@@ -235,12 +234,12 @@ actor MemoryService {
         default:
             action
         }
-        return try await settle(proposalId: proposalId, as: newStatus, feedback: feedback, keeping: newStatus == "approved")
+        return try await settle(proposalId: proposalId, as: newStatus, keeping: newStatus == "approved")
     }
 
     /// Settles a pending proposal as `status`; with `keeping`, its content
     /// is stored as a memory where it was proposed.
-    private func settle(proposalId: String, as status: String, feedback: String?, keeping: Bool) async throws -> MemoryProposal {
+    private func settle(proposalId: String, as status: String, keeping: Bool) async throws -> MemoryProposal {
         // Whose review it is, read before anything is waited for.
         let account = await currentAccount()
         // Reserved before the first wait on anything else: a second press
@@ -254,7 +253,7 @@ actor MemoryService {
         guard existing.status == "pending" else { throw ProposalReviewError.alreadyReviewed }
 
         guard keeping else {
-            return try await mark(existing, as: status, feedback: feedback, for: account)
+            return try await mark(existing, as: status, for: account)
         }
         guard !existing.isUnreadable else { throw ProposalReviewError.unreadable }
         let text = existing.proposedContent
@@ -280,7 +279,7 @@ actor MemoryService {
         // Marked first, in one write that only a pending proposal passes:
         // the memory is then stored for a proposal no other review can
         // settle. If it cannot be stored, the proposal is pending again.
-        let settled = try await mark(existing, as: status, feedback: feedback, for: account)
+        let settled = try await mark(existing, as: status, for: account)
         do {
             try await memoryStore.storeMemory(
                 in: place,
@@ -310,9 +309,9 @@ actor MemoryService {
     /// Marks a pending proposal of `account`'s as reviewed; throws
     /// `.alreadyReviewed` if it is no longer pending. The answer carries
     /// the proposal's text as it was read before it was settled.
-    private func mark(_ proposal: MemoryProposalRecord, as status: String, feedback: String?, for account: String) async throws -> MemoryProposal {
+    private func mark(_ proposal: MemoryProposalRecord, as status: String, for account: String) async throws -> MemoryProposal {
         guard var settled = try await MemoryProposalRepository.shared.settlePending(
-            id: proposal.id, as: status, reviewedBy: "local-user", reviewFeedback: feedback, for: account
+            id: proposal.id, as: status, reviewedBy: "local-user", for: account
         ) else {
             throw ProposalReviewError.alreadyReviewed
         }

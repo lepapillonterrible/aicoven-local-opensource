@@ -38,6 +38,8 @@ struct AICovenApp: App {
         StoneChrome.configure()
         // Initialize local SQLite database and run migrations.
         DatabaseManager.shared.configureIfNeeded()
+        // A recording a crash left behind is not kept.
+        VoiceCaptureService.removeLeftRecordings()
 
         // Register accessibility fonts at process boot
         FontRegistration.register()
