@@ -212,7 +212,7 @@ final class AgentStoreTests: XCTestCase {
         } catch CovenRepositoryError.roleSettingsUnreadable {}
 
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
-        let row = try await queue.read { db in
+        let row: Row? = try await queue.read { db in
             try Row.fetchOne(db, sql: "SELECT name, settings FROM roles WHERE id = ?", arguments: [made.id])
         }
         XCTAssertEqual(row?["name"], "Scout", "Nothing of the agent is changed")

@@ -38,7 +38,7 @@ final class SkillsToldTests: XCTestCase {
     }
 
     func testTheBlockIsTheCloudApps() {
-        let block = SkillsTold.block(of: [("House style", "Be brief."), ("Review", "Read the diff.\nThen the tests.")], room: 1000)
+        let block = SkillsTold.block(of: [FollowedSkill(title: "House style", text: "Be brief."), FollowedSkill(title: "Review", text: "Read the diff.\nThen the tests.")], room: 1000)
         XCTAssertEqual(block, """
         [Local Skills Context]
 
@@ -52,9 +52,9 @@ final class SkillsToldTests: XCTestCase {
     }
 
     func testSkillsAreToldWholeWhileTheyFit_theFirstThatDoesNotIsCut_andTheRestAreNotTold() throws {
-        let first = (title: "A", text: String(repeating: "a", count: 100))
-        let second = (title: "B", text: String(repeating: "b", count: 100))
-        let third = (title: "C", text: "c")
+        let first = FollowedSkill(title: "A", text: String(repeating: "a", count: 100))
+        let second = FollowedSkill(title: "B", text: String(repeating: "b", count: 100))
+        let third = FollowedSkill(title: "C", text: "c")
         let whole = try XCTUnwrap(SkillsTold.block(of: [first, second, third], room: 1000))
         XCTAssertTrue(whole.hasSuffix("\n## Skill: C\nc"))
 
@@ -153,7 +153,7 @@ final class SkillsToldTests: XCTestCase {
             signedIn: { "ada-\(#function)" },
             followedSkills: { account in
                 asked.note(account)
-                return [("House style", "Be brief.")]
+                return [FollowedSkill(title: "House style", text: "Be brief.")]
             }
         )
 
@@ -176,7 +176,7 @@ final class SkillsToldTests: XCTestCase {
             signedIn: { signedIn.accounts.last ?? "" },
             followedSkills: { _ in
                 signedIn.note("someone-else")
-                return [("House style", "Be brief.")]
+                return [FollowedSkill(title: "House style", text: "Be brief.")]
             }
         )
 

@@ -1842,7 +1842,7 @@ final class TasksModelTests: XCTestCase {
         XCTAssertEqual(TaskReviewRow.label(for: led, place: nil), "Still on today: Call the bank")
     }
 
-    func testOnMeIsAPlaceOfThePersonsOwn_overWhateverScopeIsOnScreen() {
+    func testOnMeIsAPlaceOfThePersonsOwn_overWhateverScopeIsOnScreen() async {
         let navigator = ShellNavigator()
         navigator.select(.coven("work"))
         navigator.openPlace(.tasks)
@@ -1880,11 +1880,14 @@ final class TasksModelTests: XCTestCase {
         navigator.openPlace(.activity)
         XCTAssertEqual(navigator.personPlace, .activity)
         XCTAssertEqual(navigator.sidebarItem, .activity)
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     // MARK: - New Task
 
-    func testNewTaskOpensTheTasksOfTheScopeOnScreen_andItsLineIsAskedForOnce() {
+    func testNewTaskOpensTheTasksOfTheScopeOnScreen_andItsLineIsAskedForOnce() async {
         let navigator = ShellNavigator()
         navigator.select(.coven("work"))
         XCTAssertFalse(navigator.takeNewTaskRequest(), "Nothing asked yet")
@@ -1922,9 +1925,12 @@ final class TasksModelTests: XCTestCase {
         navigator.requestSearch()
         XCTAssertEqual(navigator.place, .tasks(covenId: "work"), "Still on Tasks")
         XCTAssertFalse(navigator.newTaskAskStands, "The search has the cursor now")
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
-    func testAThreadMadeReadyForATaskIsNotOpenedOverWhatThePersonAskedForSince() {
+    func testAThreadMadeReadyForATaskIsNotOpenedOverWhatThePersonAskedForSince() async {
         // What the page decides once the thread is ready: Talk it through notes the
         // person's moves as it is asked. New Task and Search Threads are moves, also
         // where they leave Tasks open.
@@ -1940,5 +1946,8 @@ final class TasksModelTests: XCTestCase {
         XCTAssertTrue(TasksView.stillOpensThread(askedAt: asked, in: navigator, as: "ada", signedIn: "ada"))
         navigator.requestSearch()
         XCTAssertFalse(TasksView.stillOpensThread(askedAt: asked, in: navigator, as: "ada", signedIn: "ada"), "Search Threads since")
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 }

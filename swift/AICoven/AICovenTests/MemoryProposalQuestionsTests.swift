@@ -57,7 +57,7 @@ final class MemoryProposalQuestionsTests: XCTestCase {
         XCTAssertEqual(stored.proposedContent, "Ships on Fridays")
 
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
-        let row = try await queue.read { db in
+        let row: Row? = try await queue.read { db in
             try Row.fetchOne(db, sql: "SELECT proposed_content, content_ciphertext FROM memory_proposals WHERE id = ?", arguments: [stored.id])
         }
         XCTAssertEqual(row?["proposed_content"] as String?, "", "Its words are not in the row as text")
@@ -110,7 +110,7 @@ final class MemoryProposalQuestionsTests: XCTestCase {
 
         let listed = try await proposals.listProposals(covenId: coven, status: "pending")
         XCTAssertEqual(listed.map(\.proposedContent), ["Stored as text"], "It reads as it did")
-        let row = try await queue.read { db in
+        let row: Row? = try await queue.read { db in
             try Row.fetchOne(db, sql: "SELECT proposed_content, content_ciphertext FROM memory_proposals WHERE id = ?", arguments: [id])
         }
         XCTAssertEqual(row?["proposed_content"] as String?, "")

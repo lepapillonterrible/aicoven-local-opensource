@@ -22,7 +22,7 @@ nonisolated enum SkillsTold {
     /// whole while it fits. The first that does not fit is cut where the
     /// room ends, and says so; those after it are not told. Nil where
     /// there is nothing to tell.
-    static func block(of skills: [(title: String, text: String)], room: Int) -> String? {
+    static func block(of skills: [FollowedSkill], room: Int) -> String? {
         var told = heading + "\n"
         var toldAny = false
         for skill in skills {
@@ -42,4 +42,13 @@ nonisolated enum SkillsTold {
         }
         return toldAny ? told : nil
     }
+}
+
+/// A skill an agent follows: its title and its text. A type of its own,
+/// not a labeled tuple: an array of labeled tuples returned through a
+/// stored async closure crashed, or came back empty, on the macOS 15
+/// runtime.
+nonisolated struct FollowedSkill: Equatable {
+    let title: String
+    let text: String
 }

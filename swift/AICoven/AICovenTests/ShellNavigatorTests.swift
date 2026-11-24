@@ -22,7 +22,7 @@ final class ShellNavigatorTests: XCTestCase {
     // MARK: - The navigator
 
     @MainActor
-    func testItStartsOnStrixsOverview_andAThreadOpensWhereItBelongs() {
+    func testItStartsOnStrixsOverview_andAThreadOpensWhereItBelongs() async {
         let navigator = ShellNavigator()
         XCTAssertEqual(navigator.selected, .strix)
         XCTAssertNil(navigator.place, "The Overview")
@@ -41,12 +41,15 @@ final class ShellNavigatorTests: XCTestCase {
         XCTAssertEqual(navigator.place?.id, "t2")
         XCTAssertEqual(navigator.placeTitle, "Untitled")
         XCTAssertEqual(navigator.place(in: .strix)?.id, "t1", "Strix keeps its own place meanwhile")
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     /// Switching to a scope shows its Overview, also where a thread was open
     /// in it earlier in the session.
     @MainActor
-    func testSwitchingBackToAScopeShowsItsOverviewNotTheThreadOpenedThere() {
+    func testSwitchingBackToAScopeShowsItsOverviewNotTheThreadOpenedThere() async {
         let navigator = ShellNavigator()
         navigator.open(thread("thread_a", covenID: "coven_a"))
 
@@ -63,10 +66,13 @@ final class ShellNavigatorTests: XCTestCase {
         XCTAssertEqual(navigator.place?.id, "thread_a")
         navigator.showOverview()
         XCTAssertNil(navigator.place)
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     @MainActor
-    func testASidebarRowOpensItsPlaceInTheScopeOnScreen() {
+    func testASidebarRowOpensItsPlaceInTheScopeOnScreen() async {
         let navigator = ShellNavigator()
 
         // Strix: its memory is the personal one, its agent is Strix itself, and it has no Connections place.
@@ -114,10 +120,13 @@ final class ShellNavigatorTests: XCTestCase {
         // A place with no row of its own selects none.
         navigator.open(.mcpServers)
         XCTAssertNil(navigator.sidebarItem)
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     @MainActor
-    func testClosingAFinishedFormReturnsToWhereItWasReached() {
+    func testClosingAFinishedFormReturnsToWhereItWasReached() async {
         let navigator = ShellNavigator()
         navigator.select(.coven("coven_a"))
         let add = WorkspaceTab.addRole(covenId: "coven_a")
@@ -139,10 +148,13 @@ final class ShellNavigatorTests: XCTestCase {
         XCTAssertEqual(navigator.place, memory, "Not the place on screen: nothing closes")
         navigator.close(memory)
         XCTAssertNil(navigator.place)
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     @MainActor
-    func testARenamedThreadKeepsItsPlace_andOneThatIsGoneLeavesIt() {
+    func testARenamedThreadKeepsItsPlace_andOneThatIsGoneLeavesIt() async {
         let navigator = ShellNavigator()
         navigator.open(thread("s1", title: "Old"))
         navigator.open(thread("w1", covenID: "work", title: "Work"))
@@ -162,10 +174,13 @@ final class ShellNavigatorTests: XCTestCase {
         navigator.removeThread(id: "w1")
         XCTAssertNil(navigator.place)
         XCTAssertEqual(navigator.selected, .coven("work"), "The person stays where they are")
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     @MainActor
-    func testACovenThatIsGoneGivesWayToStrixsOverview() {
+    func testACovenThatIsGoneGivesWayToStrixsOverview() async {
         let navigator = ShellNavigator()
         navigator.open(thread("s1"))
         navigator.open(.memoryList(covenId: "coven_a"), in: .coven("coven_a"))
@@ -187,10 +202,13 @@ final class ShellNavigatorTests: XCTestCase {
         navigator.handleCovenGone(covenID: "coven_b")
         XCTAssertEqual(navigator.selected, .strix)
         XCTAssertNil(navigator.place, "The Overview")
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     @MainActor
-    func testThePlaceGenerationAdvancesWhenTheScopeOnScreenOrItsPlaceChanges() {
+    func testThePlaceGenerationAdvancesWhenTheScopeOnScreenOrItsPlaceChanges() async {
         let navigator = ShellNavigator()
         var generation = navigator.placeGeneration
         func moved(_ what: String, file: StaticString = #filePath, line: UInt = #line) {
@@ -221,10 +239,13 @@ final class ShellNavigatorTests: XCTestCase {
         moved("The open thread was deleted")
         navigator.handleCovenGone(covenID: "work")
         moved("The coven on screen is gone")
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     @MainActor
-    func testSettingsCoversTheScopesPlace_untilThePersonMoves() {
+    func testSettingsCoversTheScopesPlace_untilThePersonMoves() async {
         let navigator = ShellNavigator()
         navigator.select(.coven("work"))
         navigator.open(.thread(thread("t1", covenID: "work")))
@@ -271,10 +292,13 @@ final class ShellNavigatorTests: XCTestCase {
             XCTAssertNil(navigator.personPlace, name)
             XCTAssertGreaterThan(navigator.placeGeneration, generation, name)
         }
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     @MainActor
-    func testActivityIsThePersonsOwnPlace_withARowOfItsOwn() {
+    func testActivityIsThePersonsOwnPlace_withARowOfItsOwn() async {
         let navigator = ShellNavigator()
         navigator.select(.coven("work"))
         navigator.open(.thread(thread("t1", covenID: "work")))
@@ -329,6 +353,9 @@ final class ShellNavigatorTests: XCTestCase {
         navigator.leavePhoneRoutes(notIn: [.place])
         XCTAssertNil(navigator.personPlace)
         XCTAssertEqual(navigator.place?.id, "s1")
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     /// Holds each lookup of a thread until the test lets it go, and tells when it has begun. Each
@@ -436,7 +463,7 @@ final class ShellNavigatorTests: XCTestCase {
     }
 
     @MainActor
-    func testAThreadMadeWhileSettingsIsOpen_doesNotTakeItsPlace() {
+    func testAThreadMadeWhileSettingsIsOpen_doesNotTakeItsPlace() async {
         // Asked for from an Overview, then Settings: the thread waits in its list.
         let navigator = ShellNavigator()
         let ask = navigator.askFromOverview()
@@ -451,10 +478,13 @@ final class ShellNavigatorTests: XCTestCase {
         navigator.handleCreatedThread(thread("made", covenID: nil))
         XCTAssertEqual(navigator.personPlace, .settings(pane: nil))
         XCTAssertEqual(navigator.place?.id, "made")
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     @MainActor
-    func testThePhonesStackIsTheScopesPlace_andOverItThePersonsOwn() {
+    func testThePhonesStackIsTheScopesPlace_andOverItThePersonsOwn() async {
         let navigator = ShellNavigator()
         XCTAssertEqual(navigator.phonePath, [], "The Overview is the root")
 
@@ -529,28 +559,37 @@ final class ShellNavigatorTests: XCTestCase {
         navigator.select(.strix)
         navigator.openPlace(.agents)
         XCTAssertEqual(navigator.phonePlaceTitle, "Agents", "Strix's agent is Strix itself")
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
-    func testAScopeIsStrixOrACoven() {
+    func testAScopeIsStrixOrACoven() async {
         XCTAssertEqual(ShellScope(covenID: nil), .strix)
         XCTAssertEqual(ShellScope(covenID: "work"), .coven("work"))
         XCTAssertNil(ShellScope.strix.covenID)
         XCTAssertEqual(ShellScope.coven("work").covenID, "work")
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     // MARK: - The window's title
 
-    func testTheWindowIsTitledByTheCovenAndThePlace() {
+    func testTheWindowIsTitledByTheCovenAndThePlace() async {
         XCTAssertEqual(shellWindowTitle(covenName: "Strix", covenPlaceTitle: nil), "Strix — Overview")
         XCTAssertEqual(shellWindowTitle(covenName: "Work", covenPlaceTitle: "Plans for May"), "Work — Plans for May")
         XCTAssertEqual(shellWindowTitle(covenName: "Work", personPlace: .settings(pane: .providerKeys), covenPlaceTitle: "Plans for May"), "Work — Settings")
         XCTAssertEqual(shellWindowTitle(covenName: nil, personPlace: .settings(pane: nil), covenPlaceTitle: nil), "AICoven")
         XCTAssertEqual(shellWindowTitle(covenName: nil, covenPlaceTitle: "Plans"), "AICoven", "No scope named yet")
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     // MARK: - The covens' order
 
-    func testCovensAreInThePersonsOrder_andOnesItDoesNotNameFollowOldestFirst() {
+    func testCovensAreInThePersonsOrder_andOnesItDoesNotNameFollowOldestFirst() async {
         let covens = [coven("c", made: 30), coven("a", made: 10), coven("d", made: 5), coven("b", made: 20)]
         XCTAssertEqual(CovenOrder.ordered(covens, by: ["b", "a"]).map(\.id), ["b", "a", "d", "c"])
         XCTAssertEqual(CovenOrder.ordered(covens, by: []).map(\.id), ["d", "a", "b", "c"], "No order saved: oldest first")
@@ -558,9 +597,12 @@ final class ShellNavigatorTests: XCTestCase {
         XCTAssertEqual(CovenOrder.ordered(covens, by: ["gone", "c", "c", "a"]).map(\.id), ["c", "a", "d", "b"])
         // Made at the same moment: a fixed order.
         XCTAssertEqual(CovenOrder.ordered([coven("y"), coven("x")], by: []).map(\.id), ["x", "y"])
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
-    func testMovingACoven() {
+    func testMovingACoven() async {
         let covens = [coven("a"), coven("b"), coven("c")]
         XCTAssertEqual(CovenOrder.moving("c", to: 0, in: covens), ["c", "a", "b"])
         XCTAssertEqual(CovenOrder.moving("a", to: 1, in: covens), ["b", "a", "c"])
@@ -574,9 +616,12 @@ final class ShellNavigatorTests: XCTestCase {
         XCTAssertFalse(CovenOrder.canMove("c", up: false, in: covens))
         XCTAssertFalse(CovenOrder.canMove("gone", up: true, in: covens))
         XCTAssertFalse(CovenOrder.canMove("a", up: false, in: [coven("a")]))
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
-    func testTheOrderIsKeptOnTheDevice_forEachAccount() throws {
+    func testTheOrderIsKeptOnTheDevice_forEachAccount() async throws {
         let suite = "CovenOrderStoreTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
@@ -593,5 +638,8 @@ final class ShellNavigatorTests: XCTestCase {
         store.remove(for: "ada")
         XCTAssertEqual(store.ids(for: "ada"), [])
         XCTAssertEqual(store.ids(for: "grace"), ["z"])
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 }

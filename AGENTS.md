@@ -331,6 +331,7 @@ The test suite includes 18 test files with 41+ test methods covering:
 - The README at repo root describes the overall goal of this repo as a local-only, open-source Swift client. Trust the `swift/AICoven/AICoven` tree and this file for the up-to-date architecture.
 - Covens and roles are being reintegrated into the local client. Some backend-related types (remote memory, provider accounts) remain in the tree from the original cloud app. Prefer the newer `Core/LLM`, `Core/Context`, and `Infrastructure/*` abstractions for new features.
 - Premium features (shell, GitHub, Google Drive tools) require in-app purchases via StoreKit 2. The Store UI is shown for all builds.
+- The app supports macOS 14+ and iOS 17+, and CI builds with an older Xcode (26.2) on macOS 15, where three things that pass on macOS 26 fail (issue #61): (1) write out the type of a database read nested in another closure (`let rows: [Row] = try await dbQueue.read { … }`): the older compiler takes it for `()`; (2) a stored async closure outside the main actor is `@Sendable`, and `@concurrent` where it is nonisolated (`ContextBuilder.followedSkills`): one that runs on its caller's executor crashed, or gave nothing, on the macOS 15 runtime; (3) a test that makes a main-actor object is `async` with an `await` in it, so the object is freed inside a task: one freed outside a task aborts there ("pointer being freed was not allocated").
 - When in doubt about where a new feature belongs:
   - Domain logic and persistence interfaces → `Core/`.
   - User-facing screens → `Features/`.

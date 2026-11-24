@@ -351,7 +351,7 @@ final class IconsTests: XCTestCase {
         } catch {
             XCTAssertEqual(error.localizedDescription, "This agent's settings could not be read")
         }
-        let untouched = try await queue.read { db in
+        let untouched: Row? = try await queue.read { db in
             try Row.fetchOne(db, sql: "SELECT name, settings FROM roles WHERE id = ?", arguments: [writer.id])
         }
         XCTAssertEqual(untouched?["name"], "Writer")

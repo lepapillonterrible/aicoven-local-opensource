@@ -252,7 +252,7 @@ final class AssetCardsTests: XCTestCase {
 
     // MARK: - The way to the asset
 
-    func testACardOpensItsAssetInTheAssetsOfWhereItIsKept_once() {
+    func testACardOpensItsAssetInTheAssetsOfWhereItIsKept_once() async {
         let navigator = ShellNavigator()
         navigator.open(.memoryList(covenId: nil))
 
@@ -267,9 +267,12 @@ final class AssetCardsTests: XCTestCase {
         navigator.showAsset("s1", in: .strix)
         XCTAssertEqual(navigator.place, .assets(covenId: nil))
         XCTAssertEqual(navigator.takeAssetAsk(in: .strix), "s1")
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
-    func testAnAssetAskedForIsItsScopesOwn_andNoLongerAskedOnceThePersonHasGoneElsewhere() {
+    func testAnAssetAskedForIsItsScopesOwn_andNoLongerAskedOnceThePersonHasGoneElsewhere() async {
         let navigator = ShellNavigator()
         // Asked of a coven's Assets; the person goes to Strix's Assets before the coven's are read.
         navigator.showAsset("a1", in: .coven("work"))
@@ -283,6 +286,9 @@ final class AssetCardsTests: XCTestCase {
         navigator.showAsset("a1", in: .coven("work"))
         navigator.showAsset("a2", in: .coven("work"))
         XCTAssertEqual(navigator.takeAssetAsk(in: .coven("work")), "a2")
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     // MARK: - The thread an asset was made in
