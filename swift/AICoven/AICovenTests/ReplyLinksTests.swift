@@ -3,10 +3,12 @@ import XCTest
 
 /// What a reply can have opened: an `https` or `mailto` address, and
 /// nothing else.
+@MainActor
 final class ReplyLinksTests: XCTestCase {
-    /// The addresses that are links in `markdown` as a reply shows it.
+    /// The addresses that are links in `markdown` as a reply shows it
+    /// (`MarkdownView` draws a reply's text with `MarkdownInlineText`).
     private func links(in markdown: String) -> [String] {
-        ReplyLinks.attributed(markdown).runs.compactMap { $0.link?.absoluteString }
+        MarkdownInlineText.attributedInline(markdown).runs.compactMap { $0.link?.absoluteString }
     }
 
     func testAReplysLinks_openOnlyHttpsAndMail() {
@@ -20,7 +22,7 @@ final class ReplyLinksTests: XCTestCase {
             "aicoven://settings/providers", "file:///etc/passwd", "shortcuts://run-shortcut?name=x", "tel:+15551234567",
             "javascript:alert(1)", "http://example.com", "x-apple.systempreferences:com.apple.preference.security", "relative/path",
         ] {
-            let shown = ReplyLinks.attributed("Tap [here](\(address)) now.")
+            let shown = MarkdownInlineText.attributedInline("Tap [here](\(address)) now.")
             XCTAssertEqual(shown.runs.compactMap(\.link), [], address)
             XCTAssertEqual(String(shown.characters), "Tap here now.", address)
         }

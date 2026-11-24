@@ -141,6 +141,26 @@ extension Font {
         )
     }
 
+    /// The text of a message in a thread, as `MarkdownView` draws it: the
+    /// body style.
+    static var aicovenReply: Font {
+        aicovenBody
+    }
+
+    /// A Markdown heading in a reply: above the reply's text at every level,
+    /// one step down per level, levels 3 to 6 sharing the last step.
+    static func aicovenReplyHeading(level: Int) -> Font {
+        let size: CGFloat = switch level {
+        case 1: 20
+        case 2: 17
+        default: 16
+        }
+        return TypographyManager.shared.variant.bodyFont(
+            size: size * typographyScale, weight: .bold,
+            customFontFamily: TypographyManager.shared.customFontFamily
+        )
+    }
+
     /// Caption — user-pickable.
     static var aicovenCaption: Font {
         TypographyManager.shared.variant.bodyFont(

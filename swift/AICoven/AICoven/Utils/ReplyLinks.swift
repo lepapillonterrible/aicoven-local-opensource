@@ -11,16 +11,4 @@ nonisolated enum ReplyLinks {
     static func opens(_ url: URL) -> Bool {
         url.scheme.map { schemes.contains($0.lowercased()) } ?? false
     }
-
-    /// A reply's Markdown as text, with only the links that open.
-    static func attributed(_ markdown: String) -> AttributedString {
-        var text = (try? AttributedString(markdown: markdown)) ?? AttributedString(markdown)
-        let dropped = text.runs[\.link].compactMap { link, range in
-            link.map(opens) == false ? range : nil
-        }
-        for range in dropped {
-            text[range].link = nil
-        }
-        return text
-    }
 }
