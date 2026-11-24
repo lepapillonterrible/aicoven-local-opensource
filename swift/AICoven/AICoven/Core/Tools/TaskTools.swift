@@ -270,6 +270,11 @@ nonisolated enum TaskTools {
         _ action: TaskCommandAction, inCoven covenID: String?, threadID: String, turn: TurnTasks, account: String, store: Store
     ) async throws -> String? {
         if case let .add(title, dueHint) = action {
+            // The same task asked for again in one turn (a model that did
+            // not take in that it was added) is not added twice.
+            if let told = turn.added(titled: title) {
+                throw Refusal(words: "Already added in this turn, not added again: " + told)
+            }
             guard turn.takeAMaking() else {
                 throw Refusal(words: "Not added: this turn has added \(TurnTasks.mostMade) tasks, which is as many as a turn may.")
             }
@@ -286,7 +291,9 @@ nonisolated enum TaskTools {
             // same, and one the person has finished already is left as it is.
             try? await store.change(made.id, TaskChange(threadID: threadID, onlyWhileOpen: true), account)
             let dueWords = due.map { "; due: \($0.date.rawValue)" } ?? ""
-            return "Added: " + AttachmentContext.plainName(made.title) + " (task_id: \(made.id)\(dueWords))"
+            let told = AttachmentContext.plainName(made.title) + " (task_id: \(made.id)\(dueWords))"
+            turn.noteAdded(titled: title, as: told)
+            return "Added: " + told
         }
         let (words, asked, done): (String, TaskChange, String)
         // The day a task is moved to, where it is moved to one.

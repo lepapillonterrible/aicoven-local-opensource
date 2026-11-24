@@ -26,7 +26,13 @@ nonisolated enum TaskCommandReader {
     private static let weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
     static func actions(in command: String) -> [TaskCommandAction] {
-        let line = command.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        // ", due tomorrow" is the day of the part before it, not a part
+        // of its own: the comma before it does not split.
+        let line = strip(
+            command.split(whereSeparator: \.isWhitespace).joined(separator: " "),
+            #",\s*(?=(?:due|by|on|for|until)\s+(?:"# + days + #")\s*(?:$|[.,]|\s(?:and|then)\s))"#,
+            with: " "
+        )
         guard !line.isEmpty else { return [] }
         let parts = pieces(of: line, splitBy: #"\s+(?:and|then)\s+|,\s*"#)
             .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: " .")) }
@@ -118,7 +124,10 @@ nonisolated enum TaskCommandReader {
             guard !title.isEmpty else { continue }
             var hint: String?
             if let due = groups(in: title, #"\b("# + days + #")$"#) {
-                let rest = cleaned(String(title.dropLast(due[0].count)).trimmingCharacters(in: CharacterSet(charactersIn: " ,.")))
+                // "… due tomorrow", "… by next week": the word that brings
+                // the day in is not the title's.
+                let before = String(title.dropLast(due[0].count)).trimmingCharacters(in: CharacterSet(charactersIn: " ,."))
+                let rest = cleaned(strip(before, #"(?:^|[\s,]+)(?:due|by|on|for|until)$"#).trimmingCharacters(in: CharacterSet(charactersIn: " ,.")))
                 // Words that are only a day are the title all the same,
                 // and the day it is due, as on the server.
                 if !rest.isEmpty { title = rest }
@@ -162,8 +171,8 @@ nonisolated enum TaskCommandReader {
         }
     }
 
-    private static func strip(_ text: String, _ pattern: String) -> String {
-        regex(pattern)?.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "") ?? text
+    private static func strip(_ text: String, _ pattern: String, with replacement: String = "") -> String {
+        regex(pattern)?.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: replacement) ?? text
     }
 
     private static func pieces(of text: String, splitBy pattern: String) -> [String] {

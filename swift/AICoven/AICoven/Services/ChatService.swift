@@ -240,6 +240,9 @@ actor ChatService {
     /// agent, and whichever provider is chosen by the time it ends was not
     /// given it.
     private var threadsLastAnsweredByAnAgent: Set<String> = []
+    /// Counts each thread's summaries asked for: only the latest asked is
+    /// kept, so one that comes back late does not overwrite a newer one.
+    private var summariesAsked: [String: Int] = [:]
 
     /// Maximum number of prior turns to include when building LLM context.
     private let maxContextMessages = 20
@@ -1422,8 +1425,10 @@ actor ChatService {
     /// and is safe to call opportunistically after new messages are added.
     func updateThreadSummary(threadId: String) async {
         guard !threadsLastAnsweredByAnAgent.contains(threadId) else { return }
-        // Whose thread it is, read before anything is waited for: what
-        // comes of the summary is proposed to that account, or to nobody.
+        summariesAsked[threadId, default: 0] += 1
+        let asked = summariesAsked[threadId]
+        // Whose thread it is, read before anything is waited for: the
+        // summary is kept for that account, or not at all.
         let summarizedFor = await UserScope.currentUserID
         // On iOS, skip background summaries when only local models are
         // available. Loading a second MLX model (~1.5 GB) for an optional
@@ -1485,20 +1490,12 @@ actor ChatService {
             let summary = response.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !summary.isEmpty, !threadsLastAnsweredByAnAgent.contains(threadId) else { return }
 
+            // Kept with the thread, as the cloud app keeps it, and offered
+            // to no memory: a thread's summary is not something to remember
+            // about the person (and a coven's thread is not theirs to keep
+            // in their own pages).
+            guard await UserScope.currentUserID == summarizedFor, summariesAsked[threadId] == asked else { return }
             try await threadStore.updateSummary(forThreadID: threadId, summary: summary)
-
-            _ = try? await MemoryProposalRepository.shared.insertProposal(
-                eventId: nil,
-                covenId: nil,
-                proposedContent: "Thread Summary:\n" + summary,
-                proposedTags: ["summary"],
-                scope: "user",
-                reason: "Automatic summary representing the key facts of a recent thread.",
-                sourceMessageId: nil,
-                proposedBy: "system",
-                title: "Thread Summary",
-                as: summarizedFor
-            )
         } catch {
             // Thread summaries are an optional optimization. In the local-only
             // client we treat *all* failures as non-fatal and skip logging to

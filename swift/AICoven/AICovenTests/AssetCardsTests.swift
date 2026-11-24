@@ -47,6 +47,11 @@ final class AssetCardsTests: XCTestCase {
             keyFingerprint: nil
         )
         XCTAssertEqual(MessageAdapter.toEnhanced(from: message, response: nil).assetIDs, ["a1", "a2"])
+        // And the thread shows them: its bubbles' messages keep the ids (#228 had them dropped there).
+        let shown = PersonalChatView.shown([message, message], agentName: "Scout")
+        XCTAssertEqual(shown.map(\.assetIDs), [["a1", "a2"], ["a1", "a2"]])
+        XCTAssertEqual(shown.map(\.id), [message.id, "\(message.id)-dup1"])
+        XCTAssertEqual(shown.first?.agentRole, "Scout", "The thread's agent, where the message names none")
         let plain = ChatMessage(
             id: "m2", threadId: "t", role: "assistant", content: "Nothing.", metadata: nil, tokenUsage: nil, createdAt: Date(), isEncrypted: false,
             keyFingerprint: nil
