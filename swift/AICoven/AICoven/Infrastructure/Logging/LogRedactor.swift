@@ -16,6 +16,11 @@ enum AppLogRedactor {
             #"(?i)(authorization\s*[:=]\s*bearer\s+)[A-Za-z0-9._\-+/=]{8,}"#,
             #"(?i)((api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password)\s*[:=]\s*)[^\s,;\]\}\)]+"#,
             #"\b(sk|pk|rk|xox[baprs]|gh[pousr])_[A-Za-z0-9_\-]{12,}\b"#,
+            // Keys written with a hyphen: OpenAI's (sk-, sk-proj-), Anthropic's
+            // (sk-ant-), OpenRouter's (sk-or-), xAI's (xai-), and GitHub's
+            // fine-grained tokens (github_pat_).
+            #"\b(sk|pk|rk|xai)-[A-Za-z0-9_\-]{16,}"#,
+            #"\bgithub_pat_[A-Za-z0-9_]{20,}"#,
             #"\bAIza[0-9A-Za-z_\-]{20,}\b"#,
 
             // Email addresses and long opaque IDs commonly found in auth/log output.

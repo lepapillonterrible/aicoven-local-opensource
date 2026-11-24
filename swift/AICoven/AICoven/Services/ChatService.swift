@@ -725,7 +725,7 @@ actor ChatService {
                     enabledTools: toolConfig.enabledTools
                 ) {
                     #if DEBUG
-                    AppErrorReporter.log(message: "Pre-executing native tool for local model: \(forcedNative.tool)", context: "ChatService.streamMessage.preExecute")
+                    AppErrorReporter.log(message: "Pre-executing a native tool for a local model", context: "ChatService.streamMessage.preExecute")
                     #endif
                     let toolID = UUID().uuidString
                     state.phase = .tooling
@@ -757,7 +757,7 @@ actor ChatService {
                     mcpServers: toolConfig.mcpServers
                 ) {
                     #if DEBUG
-                    AppErrorReporter.log(message: "Pre-executing MCP tool for local model: \(forcedMCP.tool)", context: "ChatService.streamMessage.preExecute")
+                    AppErrorReporter.log(message: "Pre-executing an MCP tool for a local model", context: "ChatService.streamMessage.preExecute")
                     #endif
                     let toolID = UUID().uuidString
                     state.phase = .tooling
@@ -800,7 +800,9 @@ actor ChatService {
                 // Pre-execution failed (network error, MCP timeout, etc.).
                 // Log the error and fall through — the model will still
                 // attempt to answer without tool results.
-                AppErrorReporter.log(error: error, context: "ChatService.streamMessage.preExecute")
+                // The kind of failure only: a server's message can say
+                // what the tool was asked about.
+                AppErrorReporter.log(message: "A tool run before the model could not run (\(type(of: error)))", context: "ChatService.streamMessage.preExecute")
                 toolContextLog = "[Tool Error] Pre-execution failed: \(error.localizedDescription)"
                 remainingToolSteps = 0
             }
@@ -891,9 +893,6 @@ actor ChatService {
                     options: options
                 )
                 let rawText = response.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                #if DEBUG
-                AppErrorReporter.log(message: "provider response (tool phase, truncated): \(rawText.prefix(200))", context: "ChatService.streamMessage.toolLoop")
-                #endif
                 let usage = response.usage.map { core in
                     TokenUsage(
                         promptTokens: core.promptTokens,
@@ -915,7 +914,8 @@ actor ChatService {
                         reason: "Native \(descriptor.providerID) tool call"
                     )
                     #if DEBUG
-                    AppErrorReporter.log(message: "Native tool call from \(descriptor.providerID): \(first.name)", context: "ChatService.streamMessage.nativeToolCall")
+                    // Not the tool's name: a model writes it, and it can be anything.
+                    AppErrorReporter.log(message: "Native tool call from \(descriptor.providerID)", context: "ChatService.streamMessage.nativeToolCall")
                     #endif
                 } else {
                     // Fall back to text parsing for local models or text-based calls
@@ -946,7 +946,7 @@ actor ChatService {
                         if isConsecutive, contextUnchanged {
                             #if DEBUG
                             AppErrorReporter.log(
-                                message: "Repeat loop detected: \(toolCall.tool) called \(maxConsecutiveSameCalls)x with unchanged context. Breaking.",
+                                message: "Repeat loop detected: a tool called \(maxConsecutiveSameCalls)x with unchanged context. Breaking.",
                                 context: "ChatService.streamMessage.repeatDetection"
                             )
                             #endif
@@ -960,13 +960,13 @@ actor ChatService {
                     continuationCount = 0
 
                     #if DEBUG
-                    AppErrorReporter.log(message: "Parsed chat tool call: \(toolCall.tool) (remaining before decrement=\(remainingToolSteps))", context: "ChatService.streamMessage.toolLoop")
+                    AppErrorReporter.log(message: "Parsed chat tool call (remaining before decrement=\(remainingToolSteps))", context: "ChatService.streamMessage.toolLoop")
                     #endif
                     // We only honor tool calls while there is remaining budget.
                     remainingToolSteps -= 1
 
                     // Track tool usage
-                    AnalyticsService.shared.trackToolUsed(toolName: toolCall.tool, threadId: threadId)
+                    AnalyticsService.shared.trackToolUsed(toolName: Self.analyticsToolKind(toolCall.tool), threadId: threadId)
 
                     let toolID = UUID().uuidString
                     state.phase = .tooling
@@ -1097,7 +1097,7 @@ actor ChatService {
                         ) {
                             remainingToolSteps -= 1
                             #if DEBUG
-                            AppErrorReporter.log(message: "Forcing MCP tool call: \(forcedCall.tool)", context: "ChatService.streamMessage.toolRefusal")
+                            AppErrorReporter.log(message: "Forcing an MCP tool call", context: "ChatService.streamMessage.toolRefusal")
                             #endif
 
                             // Track tool usage
@@ -1304,9 +1304,6 @@ actor ChatService {
                         options: options
                     )
                     let rawText = response.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                    #if DEBUG
-                    AppErrorReporter.log(message: "provider response (final phase, truncated): \(rawText.prefix(200))", context: "ChatService.streamMessage.finalPhase")
-                    #endif
                     let usage = response.usage.map { core in
                         TokenUsage(
                             promptTokens: core.promptTokens,
@@ -1991,7 +1988,7 @@ struct ChatToolInvocation: Codable {
 
         #if DEBUG
         AppErrorReporter.log(
-            message: "Remapped hallucinated tool '\(tool)' → '\(actualTool)'",
+            message: "Remapped a hallucinated tool name to a known one",
             context: "ChatToolInvocation.remapped"
         )
         #endif
@@ -2214,6 +2211,13 @@ extension ChatService {
     }
 
     /// Human-readable name for a tool identifier, used in user-facing summaries.
+    /// What analytics are told of a tool: its kind among the app's own, or
+    /// "Other" (an MCP server's or a model's name can say anything).
+    nonisolated static func analyticsToolKind(_ tool: String) -> String {
+        let kind = friendlyToolName(tool)
+        return kind == tool ? "Other" : kind
+    }
+
     nonisolated static func friendlyToolName(_ tool: String) -> String {
         switch tool.lowercased() {
         case "web_search": "Web Search"
@@ -2456,7 +2460,7 @@ extension ChatService {
 
         #if DEBUG
         AppErrorReporter.log(
-            message: "forceMCPToolCall matched '\(tool.name)' (score=\(bestScore)) for: \(userMessage.prefix(80))",
+            message: "forceMCPToolCall matched a tool (score=\(bestScore))",
             context: "ChatService.forceMCPToolCall"
         )
         #endif
@@ -2610,7 +2614,7 @@ extension ChatService {
 
         #if DEBUG
         AppErrorReporter.log(
-            message: "Semantic fallback matched '\(topTool.name)' (score=\(score)) for: \(userMessage.prefix(80))",
+            message: "Semantic fallback matched a tool (score=\(score))",
             context: "ChatService.forceNativeToolCallWithSemantic"
         )
         #endif

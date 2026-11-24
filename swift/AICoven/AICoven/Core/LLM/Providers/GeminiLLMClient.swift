@@ -216,7 +216,7 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
             decoded = try JSONDecoder().decode(ResponseBody.self, from: data)
         } catch {
             #if DEBUG
-            AppErrorReporter.log(message: "Gemini decode failed: \(error.localizedDescription); response body omitted", context: "GeminiLLMClient.completeChat")
+            AppErrorReporter.log(message: "Gemini decode failed (\(type(of: error))); response body omitted", context: "GeminiLLMClient.completeChat")
             #endif
             throw error
         }
@@ -256,7 +256,7 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
                 let args = fc.args ?? [:]
                 #if DEBUG
                 AppErrorReporter.log(
-                    message: "Native Gemini function call: \(fc.name) → \(toolName)",
+                    message: "Native Gemini function call",
                     context: "GeminiLLMClient.completeChat"
                 )
                 #endif

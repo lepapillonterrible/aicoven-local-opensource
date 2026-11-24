@@ -149,6 +149,35 @@ final class ErrorReportingTests: XCTestCase {
         XCTAssertTrue(redacted.contains("<redacted>"))
     }
 
+    func testLogRedactorHidesKeysWrittenWithAHyphen() {
+        // Made-up keys in each provider's shape; none is real.
+        let keys = [
+            "sk-ant-api03-" + String(repeating: "a", count: 24),
+            "sk-proj-" + String(repeating: "b", count: 24),
+            "sk-or-v1-" + String(repeating: "c", count: 24),
+            "sk-" + String(repeating: "d", count: 32),
+            "xai-" + String(repeating: "e", count: 24),
+            "pk-" + String(repeating: "g", count: 16),
+            "rk-" + String(repeating: "h", count: 16),
+            "github_pat_" + String(repeating: "f", count: 24)
+        ]
+        for key in keys {
+            let redacted = AppLogRedactor.redact("The provider refused \(key) just now")
+            XCTAssertFalse(redacted.contains(key), "A key starting \(key.prefix(7)) is hidden")
+            XCTAssertTrue(redacted.hasPrefix("The provider refused <redacted>"))
+        }
+        for words in ["a task-list of five", "the risk-assessment-framework-quarterly review", "a disk-image-of-the-build-machine"] {
+            XCTAssertEqual(AppLogRedactor.redact(words), words, "Ordinary words with a hyphen stay")
+        }
+    }
+
+    func testAnalyticsAreToldAToolsKind_notANameAModelOrAServerWrote() {
+        XCTAssertEqual(ChatService.analyticsToolKind("github.readFile"), "GitHub")
+        XCTAssertEqual(ChatService.analyticsToolKind("web_search"), "Web Search")
+        XCTAssertEqual(ChatService.analyticsToolKind("The_persons_private_message"), "Other")
+        XCTAssertEqual(ChatService.analyticsToolKind("acme_payroll.lookup_employee"), "Other")
+    }
+
     func testAppErrorReporterPassesRedactedMessagesToReporter() {
         let reporter = CapturingErrorReporter()
         AppErrorReporter.use(reporter)

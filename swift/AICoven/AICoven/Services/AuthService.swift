@@ -83,7 +83,7 @@ class AuthService: ObservableObject {
                 // memory only, and not for whoever is signed in next.
                 AssetThumbnails.shared.forgetAll()
                 if let firebaseUser {
-                    print("✅ Firebase user signed in: \(firebaseUser.email ?? "unknown")")
+                    print("✅ Firebase user signed in")
                     // Clear any previous user's data first
                     AppState.shared.clearUserData()
                     // Build user profile from Firebase user data (no backend needed)
@@ -130,7 +130,7 @@ class AuthService: ObservableObject {
         do {
             return try await Auth.auth().currentUser?.getIDToken()
         } catch {
-            print("Error getting ID token: \(error)")
+            print("Error getting ID token (\(type(of: error)))")
             return nil
         }
     }
@@ -144,16 +144,16 @@ class AuthService: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "Firebase not configured"]
             )
         }
-        print("🔐 Attempting sign in for: \(email)")
+        print("🔐 Attempting sign in")
         isLoading = true
         defer { isLoading = false }
 
         do {
             let result = try await Auth.auth().signIn(withEmail: email, password: password)
-            print("✅ Firebase sign in successful: \(result.user.uid)")
+            print("✅ Firebase sign in successful")
             // User profile will be built by auth state listener
         } catch {
-            print("❌ Firebase sign in failed: \(error.localizedDescription)")
+            print("❌ Firebase sign in failed (\(type(of: error)))")
             self.error = error
             throw error
         }
@@ -361,7 +361,7 @@ class AuthService: ObservableObject {
             try await firebaseUser.delete()
             print("✅ Firebase user deleted")
         } catch {
-            print("❌ Failed to delete Firebase user: \(error)")
+            print("❌ Failed to delete Firebase user (\(type(of: error)))")
             // Re-throw the error since the user expects account to be fully deleted
             throw error
         }
@@ -387,7 +387,7 @@ class AuthService: ObservableObject {
     /// Deletes all local data for a specific user from the SQLite database.
     /// - Parameter userId: The Firebase UID of the user whose data should be deleted
     private func deleteLocalUserData(userId: String) async {
-        print("🗑️ Deleting local data for user: \(userId)")
+        print("🗑️ Deleting local data for the account")
 
         guard let dbQueue = await DatabaseManager.shared.dbQueue else {
             print("⚠️ Database not available, skipping local data deletion")
@@ -465,7 +465,7 @@ class AuthService: ObservableObject {
                 print("✅ Local user data deleted from SQLite")
             }
         } catch {
-            print("❌ Failed to delete local user data: \(error)")
+            print("❌ Failed to delete local user data (\(type(of: error)))")
             // Don't throw here - we still want to proceed with Firebase deletion
         }
     }
