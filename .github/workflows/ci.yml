@@ -168,3 +168,21 @@ jobs:
           else
             echo "No XCTest targets configured in test plan; skipping tests."
           fi
+
+      - name: Crash reports (probe only)
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          import glob, json, os
+          files = sorted(glob.glob(os.path.expanduser("~/Library/Logs/DiagnosticReports/AICoven Dev-*.ips")), key=os.path.getmtime)
+          print(len(files), "crash reports")
+          for path in files[-4:]:
+              text = open(path).read()
+              body = json.loads(text[text.index("\n") + 1:])
+              images = body.get("usedImages", [])
+              crashed = body.get("faultingThread", 0)
+              print("=====", os.path.basename(path), body.get("exception", {}).get("type"))
+              for frame in body["threads"][crashed]["frames"][:40]:
+                  image = images[frame["imageIndex"]].get("name", "?") if frame.get("imageIndex") is not None and frame["imageIndex"] < len(images) else "?"
+                  print(" ", image, frame.get("symbol", "?"), frame.get("sourceFile", ""), frame.get("sourceLine", ""))
+          PY
