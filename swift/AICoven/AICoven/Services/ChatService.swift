@@ -240,6 +240,9 @@ actor ChatService {
     /// agent, and whichever provider is chosen by the time it ends was not
     /// given it.
     private var threadsLastAnsweredByAnAgent: Set<String> = []
+    /// Counts each thread's summaries asked for: only the latest asked is
+    /// kept, so one that comes back late does not overwrite a newer one.
+    private var summariesAsked: [String: Int] = [:]
 
     /// Maximum number of prior turns to include when building LLM context.
     private let maxContextMessages = 20
@@ -1422,6 +1425,8 @@ actor ChatService {
     /// and is safe to call opportunistically after new messages are added.
     func updateThreadSummary(threadId: String) async {
         guard !threadsLastAnsweredByAnAgent.contains(threadId) else { return }
+        summariesAsked[threadId, default: 0] += 1
+        let asked = summariesAsked[threadId]
         // Whose thread it is, read before anything is waited for: the
         // summary is kept for that account, or not at all.
         let summarizedFor = await UserScope.currentUserID
@@ -1489,7 +1494,7 @@ actor ChatService {
             // to no memory: a thread's summary is not something to remember
             // about the person (and a coven's thread is not theirs to keep
             // in their own pages).
-            guard await UserScope.currentUserID == summarizedFor else { return }
+            guard await UserScope.currentUserID == summarizedFor, summariesAsked[threadId] == asked else { return }
             try await threadStore.updateSummary(forThreadID: threadId, summary: summary)
         } catch {
             // Thread summaries are an optional optimization. In the local-only

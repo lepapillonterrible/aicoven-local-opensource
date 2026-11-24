@@ -30,7 +30,7 @@ nonisolated enum TaskCommandReader {
         // of its own: the comma before it does not split.
         let line = strip(
             command.split(whereSeparator: \.isWhitespace).joined(separator: " "),
-            #",\s*(?=(?:due|by|on|for|until)\s+(?:"# + days + #")\b)"#,
+            #",\s*(?=(?:due|by|on|for|until)\s+(?:"# + days + #")\s*(?:$|[.,]|\s(?:and|then)\s))"#,
             with: " "
         )
         guard !line.isEmpty else { return [] }
@@ -127,7 +127,7 @@ nonisolated enum TaskCommandReader {
                 // "… due tomorrow", "… by next week": the word that brings
                 // the day in is not the title's.
                 let before = String(title.dropLast(due[0].count)).trimmingCharacters(in: CharacterSet(charactersIn: " ,."))
-                let rest = cleaned(strip(before, #"[\s,]+(?:due|by|on|for|until)$"#).trimmingCharacters(in: CharacterSet(charactersIn: " ,.")))
+                let rest = cleaned(strip(before, #"(?:^|[\s,]+)(?:due|by|on|for|until)$"#).trimmingCharacters(in: CharacterSet(charactersIn: " ,.")))
                 // Words that are only a day are the title all the same,
                 // and the day it is due, as on the server.
                 if !rest.isEmpty { title = rest }

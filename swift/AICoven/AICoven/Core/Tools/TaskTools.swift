@@ -273,7 +273,7 @@ nonisolated enum TaskTools {
             // The same task asked for again in one turn (a model that did
             // not take in that it was added) is not added twice.
             if let told = turn.added(titled: title) {
-                return "Already added in this turn, not added again: " + told
+                throw Refusal(words: "Already added in this turn, not added again: " + told)
             }
             guard turn.takeAMaking() else {
                 throw Refusal(words: "Not added: this turn has added \(TurnTasks.mostMade) tasks, which is as many as a turn may.")

@@ -127,10 +127,16 @@ final class TaskToolsTests: XCTestCase {
         XCTAssertEqual(read("remind me to send the deck by next week"), [.add(title: "send the deck", dueHint: "next week")])
         XCTAssertEqual(read("add task pay the due tomorrow"), [.add(title: "pay the", dueHint: "tomorrow")], "Only a last word that brings the day in goes")
         XCTAssertEqual(read("add task file what is due"), [.add(title: "file what is due", dueHint: nil)], "With no day, it is the title's")
+        XCTAssertEqual(read("add task due tomorrow"), [.add(title: "due tomorrow", dueHint: "tomorrow")], "Nothing but the day: its words are the title, as before")
         XCTAssertEqual(
             read("add task book flights, due tomorrow, and mark Auth QA done"),
             [.add(title: "book flights", dueHint: "tomorrow"), .complete(title: "Auth QA")],
             "A comma before the day joins it to its part; the others still split"
+        )
+        XCTAssertEqual(
+            read("Add task pack, by tomorrow complete the report"),
+            [.add(title: "pack", dueHint: nil), .complete(title: "report")],
+            "Only a day that ends its part is joined to the part before"
         )
         XCTAssertEqual(
             read("remember to tomorrow"), [.add(title: "tomorrow", dueHint: "tomorrow")],
@@ -537,7 +543,8 @@ final class TaskToolsTests: XCTestCase {
         let again = await command("Add task Book flights to Lisbon tomorrow", turn: turn, stand)
         XCTAssertEqual(stand.created.map(\.title), ["book flights to Lisbon"], "Whatever its case")
         XCTAssertTrue(again.contextBlock?.contains("- Already added in this turn, not added again: book flights to Lisbon (task_id: made-1; due: 2027-01-14)") == true)
-        XCTAssertEqual(again.result?["changed"]?.value as? Int, 1)
+        XCTAssertEqual(again.result?["changed"]?.value as? Int, 0, "Nothing was changed")
+        XCTAssertTrue(again.contextBlock?.contains("[Tasks] 0 of 1 done.") == true)
 
         // Another turn adds it, as the person asked again.
         _ = await command("add task book flights to Lisbon", turn: TurnTasks(), stand)

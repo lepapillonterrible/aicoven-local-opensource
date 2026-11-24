@@ -125,10 +125,82 @@ final class ChatServiceSummaryTests: XCTestCase {
         XCTAssertEqual(summary, "This is a summary from mock client.")
     }
 
+    /// Answers its first request only once let go, and each with its own
+    /// words. Sendable by hand, under `lock`.
+    private final class HeldClient: LLMClient, @unchecked Sendable {
+        private let lock = NSLock()
+        private var answered = 0
+        private var held: CheckedContinuation<Void, Never>?
+        private var arrived: CheckedContinuation<Void, Never>?
+        private var isHeld = false
+
+        /// Waits until the first request has arrived and is held.
+        func firstArrived() async {
+            await withCheckedContinuation { continuation in
+                let already = lock.withLock {
+                    if isHeld { return true }
+                    arrived = continuation
+                    return false
+                }
+                if already { continuation.resume() }
+            }
+        }
+
+        func letGo() {
+            lock.withLock { held }?.resume()
+        }
+
+        func completeChat(messages _: [LLMMessage], model: String, options _: ChatOptions) async throws -> LLMChatResponse {
+            let number = lock.withLock {
+                answered += 1
+                return answered
+            }
+            if number == 1 {
+                await withCheckedContinuation { continuation in
+                    let waiting = lock.withLock {
+                        held = continuation
+                        isHeld = true
+                        return arrived
+                    }
+                    waiting?.resume()
+                }
+            }
+            return LLMChatResponse(message: LLMMessage(role: .assistant, content: "Summary \(number)"), providerID: "test-provider", modelID: model, usage: nil)
+        }
+
+        func embed(texts: [String], model _: String) async throws -> [[Float]] {
+            Array(repeating: [0, 0, 0], count: texts.count)
+        }
+    }
+
+    /// Of two summaries of a thread, only the one asked for last is kept:
+    /// one that comes back late does not overwrite it.
+    func testASummaryThatComesBackLate_doesNotOverwriteANewerOne() async {
+        let model = ModelDescriptor(providerID: "test-provider", modelID: "test-model", maxContextTokens: 4096, supportsTools: false, supportsEmbeddings: false, costClass: .cheap)
+        let store = MockThreadStore()
+        let client = HeldClient()
+        let chatService = ChatService(
+            contextBuilder: ContextBuilder(), modelRouter: HeuristicModelRouter(availableModels: [model]),
+            llmClients: ["test-provider": client], threadStore: store, toolService: MockChatToolService(), shouldAutoRefreshEnvironment: false
+        )
+        await chatService.addLocalMessage(ChatMessage(
+            id: UUID().uuidString, threadId: "late", role: "user", content: "Hello", metadata: nil, tokenUsage: nil,
+            createdAt: Date(), isEncrypted: false, keyFingerprint: nil
+        ))
+        let first = Task { await chatService.updateThreadSummary(threadId: "late") }
+        await client.firstArrived()
+        await chatService.updateThreadSummary(threadId: "late")
+        XCTAssertEqual(store.updatedSummaries["late"], "Summary 2")
+        client.letGo()
+        await first.value
+        XCTAssertEqual(store.updatedSummaries["late"], "Summary 2", "The older summary is not kept over it")
+    }
+
     /// A thread's summary is kept with the thread and offered to no memory:
     /// it was once proposed as one about the person after every turn.
     func testASummaryIsOfferedToNoMemory_andTheOnesThatWaitedAreTakenAway() async throws {
         await DataEncryptionService.shared.unlockForTestingEphemeral()
+        addTeardownBlock { await DataEncryptionService.shared.lock() }
         DatabaseManager.shared.configureIfNeeded()
         let account = UserScope.currentUserID
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
