@@ -55,6 +55,53 @@ final class ConnectedAccountsServiceTests: XCTestCase {
         return try (XCTUnwrap(UserDefaults(suiteName: suite)), suite)
     }
 
+    func testAnMCPServersWholeAddress_isKeptInTheKeychain_andThePreferencesKeepOnlyWhatIsShown() async throws {
+        let (defaults, suite) = try defaultsOfThisTest()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let tokens = InMemoryTokens()
+        let address = "https://actions.example.com/mcp/sk-secret-path-key/sse?api_key=secret-query"
+        let service = ConnectedAccountsService(currentUser: { "a" }, defaults: defaults, tokens: tokens.store)
+        let made = try await service.createMCPServer(name: "Actions", serverUrl: address, transport: .streamableHttp, authType: .none)
+
+        let stored = try XCTUnwrap(defaults.data(forKey: UserScope.scopedKey("mcp_servers", for: "a")))
+        let text = String(decoding: stored, as: UTF8.self)
+        XCTAssertFalse(text.contains("secret"), "Nothing of the address past its host is in the preferences")
+        XCTAssertTrue(tokens.all.values.contains { $0.values.contains(address) }, "The whole address is in the Keychain")
+        XCTAssertEqual(made.shownAddress, "https://actions.example.com/…")
+
+        // Read back whole, by a service that starts afresh.
+        let again = ConnectedAccountsService(currentUser: { "a" }, defaults: defaults, tokens: tokens.store)
+        let read = await again.getMCPServer(id: made.id)
+        XCTAssertEqual(read?.serverUrl, address)
+
+        // Removed with the server.
+        try await again.deleteMCPServer(id: made.id)
+        XCTAssertFalse(tokens.all.values.contains { $0.values.contains(address) })
+    }
+
+    func testAnMCPServerKeptInThePreferencesBefore_isMovedToTheKeychain_andStillWorks() async throws {
+        let (defaults, suite) = try defaultsOfThisTest()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let tokens = InMemoryTokens()
+        let address = "https://mcp.example.com/k/secret-in-path"
+        let old = MCPServerAccount(
+            id: "s1", name: "Old", serverUrl: address, transport: .streamableHttp, authType: .none, status: .connected,
+            createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let key = UserScope.scopedKey("mcp_servers", for: "a")
+        try defaults.set(encoder.encode([old]), forKey: key)
+
+        let service = ConnectedAccountsService(currentUser: { "a" }, defaults: defaults, tokens: tokens.store)
+        let read = await service.getMCPServer(id: "s1")
+        XCTAssertEqual(read?.serverUrl, address)
+        let text = try String(decoding: XCTUnwrap(defaults.data(forKey: key)), as: UTF8.self)
+        XCTAssertFalse(text.contains("secret"), "Moved out of the preferences as it is read")
+        XCTAssertEqual(MCPServerAccount.shown("https://mcp.example.com"), "https://mcp.example.com")
+        XCTAssertEqual(MCPServerAccount.shown("https://user:pass@mcp.example.com:8443/"), "https://mcp.example.com:8443")
+    }
+
     func testATokenIsKeptUnderItsAccountsNames_andAnotherAccountNeitherReadsNorRemovesIt() async throws {
         let (defaults, suite) = try defaultsOfThisTest()
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -63,7 +110,11 @@ final class ConnectedAccountsServiceTests: XCTestCase {
         let service = ConnectedAccountsService(currentUser: { who.id }, defaults: defaults, tokens: tokens.store)
 
         let ofA = try await service.createMCPServer(name: "A's notes", serverUrl: "https://a.example/mcp", transport: .streamableHttp, authType: .bearer, token: "token-of-a")
-        XCTAssertEqual(tokens.all, ["AICovenProviderKeys.a": ["mcp_server_token_\(ofA.id).a": "token-of-a"]], "As the Keychain names have always been spelled")
+        XCTAssertEqual(
+            tokens.all,
+            ["AICovenProviderKeys.a": ["mcp_server_token_\(ofA.id).a": "token-of-a", "mcp_server_address_\(ofA.id).a": "https://a.example/mcp"]],
+            "As the Keychain names have always been spelled, the address beside the token"
+        )
         let readByA = try await service.getMCPToken(forServerId: ofA.id)
         XCTAssertEqual(readByA, "token-of-a")
 
@@ -71,7 +122,7 @@ final class ConnectedAccountsServiceTests: XCTestCase {
         let readByB = try await service.getMCPToken(forServerId: ofA.id)
         XCTAssertNil(readByB, "A's server is not B's, so B is given no token for it")
         try await service.deleteMCPServer(id: ofA.id)
-        XCTAssertEqual(tokens.all["AICovenProviderKeys.a"]?.count, 1, "B removing it removes nothing of A's")
+        XCTAssertEqual(tokens.all["AICovenProviderKeys.a"]?.count, 2, "B removing it removes nothing of A's")
 
         who.signIn("a")
         let stillThere = try await service.getMCPToken(forServerId: ofA.id)

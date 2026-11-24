@@ -227,7 +227,7 @@ struct MCPServerCard: View {
                             .font(.aicovenH3)
                             .foregroundColor(.aicovenTextPrimary)
 
-                        Text(server.serverUrl)
+                        Text(server.shownAddress)
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextTertiary)
                             .lineLimit(1)

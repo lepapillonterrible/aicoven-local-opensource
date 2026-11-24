@@ -1,7 +1,9 @@
 import Foundation
 
 /// Represents a configured MCP server connection.
-/// Stored locally in UserDefaults with authentication tokens in Keychain.
+/// Stored locally in UserDefaults with its whole address and its token in
+/// the Keychain (an address can carry a key, in its path or its query):
+/// the preferences keep only `shownAddress`.
 /// Conforms to Sendable since all properties are value types.
 struct MCPServerAccount: Identifiable, Codable, Equatable {
     /// Unique identifier for this connection
@@ -34,6 +36,26 @@ struct MCPServerAccount: Identifiable, Codable, Equatable {
     /// When the connection was last updated
     var updatedAt: Date
 
+    /// On disk only: the whole address is in the Keychain, and
+    /// `serverUrl` in the preferences is `shownAddress`.
+    var addressInKeychain: Bool? = nil
+
+    /// The address as it is shown and kept outside the Keychain: its
+    /// scheme, host and port, with "/…" where it goes on (a path, a query
+    /// or a fragment can carry a key, and a user and password always do).
+    var shownAddress: String {
+        Self.shown(serverUrl)
+    }
+
+    static func shown(_ address: String) -> String {
+        guard let parts = URLComponents(string: address), let scheme = parts.scheme, let host = parts.host, !host.isEmpty else {
+            return "an address that cannot be read"
+        }
+        let port = parts.port.map { ":\($0)" } ?? ""
+        let goesOn = !(parts.path.isEmpty || parts.path == "/") || parts.query != nil || parts.fragment != nil
+        return "\(scheme)://\(host)\(port)" + (goesOn ? "/…" : "")
+    }
+
     // MARK: - Coding Keys
 
     enum CodingKeys: String, CodingKey {
@@ -47,6 +69,7 @@ struct MCPServerAccount: Identifiable, Codable, Equatable {
         case toolsCachedAt = "tools_cached_at"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case addressInKeychain = "address_in_keychain"
     }
 }
 
