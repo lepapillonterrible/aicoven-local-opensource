@@ -193,7 +193,10 @@ struct ContextBuilder {
     /// Who is signed in, asked each time it matters.
     private let signedIn: () -> String
     /// The skills an account's agents follow (`SkillRepository.followed`).
-    private let followedSkills: (String) async throws -> [FollowedSkill]
+    /// `@concurrent @Sendable`, as the app's other stored async closures
+    /// outside the main actor are: one that runs on its caller's executor
+    /// crashed, or gave nothing, on the macOS 15 runtime.
+    private let followedSkills: @concurrent @Sendable (String) async throws -> [FollowedSkill]
 
     init(
         threadRepository: ThreadRepository? = nil,
@@ -202,7 +205,7 @@ struct ContextBuilder {
         toolService: ToolService? = nil,
         limits: Limits = .init(maxRecentMessages: 16, maxRecentMemories: 16),
         signedIn: @escaping () -> String = { UserScope.currentUserID },
-        followedSkills: @escaping (String) async throws -> [FollowedSkill] = { try await SkillRepository.shared.followed(as: $0) }
+        followedSkills: @escaping @concurrent @Sendable (String) async throws -> [FollowedSkill] = { try await SkillRepository.shared.followed(as: $0) }
     ) {
         self.threadRepository = threadRepository ?? .shared
         self.memoryRepository = memoryRepository ?? .shared
