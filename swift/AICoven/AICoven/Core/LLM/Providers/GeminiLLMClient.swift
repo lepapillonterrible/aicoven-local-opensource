@@ -123,8 +123,8 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
         guard let resource = Self.resourceName(of: model) else {
             throw NSError(
                 domain: "GeminiLLMClient",
-                code: -2,
-                userInfo: [NSLocalizedDescriptionKey: "That is not a Gemini model's name. Choose the model again in the agent's settings."]
+                code: -3,
+                userInfo: [NSLocalizedDescriptionKey: "That is not a Gemini model's name. Choose another Gemini model."]
             )
         }
         let url = baseURL.appendingPathComponent("\(resource):generateContent")
@@ -302,8 +302,11 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
     /// digits, `-`, `.` and `_`), so that nothing else reaches the path.
     nonisolated static func resourceName(of model: String) -> String? {
         let id = model.hasPrefix("models/") ? String(model.dropFirst("models/".count)) : model
-        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._")
-        guard id.count <= 200, id.allSatisfy(allowed.contains), id.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
+        // Scalars, not characters: a `Character` compares canonically, so
+        // the Kelvin sign would pass as "K".
+        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._".unicodeScalars)
+        guard id.unicodeScalars.allSatisfy(allowed.contains),
+              id.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) else { return nil }
         return "models/\(id)"
     }
 

@@ -1085,6 +1085,20 @@ extension ProviderAccountService {
         try defaults.set(JSONEncoder().encode(settings), forKey: settingsKey)
     }
 
+    /// A page of the models a Google key can use: the key in its header,
+    /// never in the address.
+    nonisolated static func geminiModelsRequest(apiKey: String, pageToken: String?) -> URLRequest {
+        var components = URLComponents(string: "https://generativelanguage.googleapis.com/v1beta/models")!
+        if let pageToken {
+            components.queryItems = [URLQueryItem(name: "pageToken", value: pageToken)]
+        }
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+        return request
+    }
+
     private static func sanitizedHTTPError(provider: String, statusCode: Int) -> NSError {
         NSError(
             domain: "ProviderAccountService",
@@ -1204,16 +1218,7 @@ extension ProviderAccountService {
             var allModelNames: [String] = []
             var pageToken: String? = nil
             repeat {
-                var components = URLComponents(string: "https://generativelanguage.googleapis.com/v1beta/models")!
-                if let token = pageToken {
-                    components.queryItems = [URLQueryItem(name: "pageToken", value: token)]
-                }
-                let url = components.url!
-                var request = URLRequest(url: url)
-                request.httpMethod = "GET"
-                request.setValue("application/json", forHTTPHeaderField: "Accept")
-                // The key in a header, never in the address.
-                request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+                let request = Self.geminiModelsRequest(apiKey: apiKey, pageToken: pageToken)
                 let (data, response) = try await URLSession.shared.data(for: request)
                 if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
                     throw Self.sanitizedHTTPError(provider: "Gemini", statusCode: http.statusCode)

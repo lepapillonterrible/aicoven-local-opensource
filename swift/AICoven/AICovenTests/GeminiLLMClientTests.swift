@@ -88,8 +88,43 @@ final class GeminiLLMClientTests: XCTestCase {
         XCTAssertEqual(GeminiLLMClient.resourceName(of: "models/gemini-2.5-flash"), "models/gemini-2.5-flash")
         XCTAssertEqual(GeminiLLMClient.resourceName(of: "gemini-flash-latest"), "models/gemini-flash-latest")
         XCTAssertEqual(GeminiLLMClient.resourceName(of: "gemini_3.5-flash"), "models/gemini_3.5-flash")
-        for notAModel in ["", "models/", "..", "../files", "gemini/../x", "gemini?key=x", "gemini:generateContent", "gemini 2", "models/models/x", "gémini"] {
+        for notAModel in ["", "models/", "..", "../files", "gemini/../x", "gemini?key=x", "gemini:generateContent", "gemini 2", "models/models/x", "gémini", "gemini-\u{212A}", "gemini-e\u{301}"] {
             XCTAssertNil(GeminiLLMClient.resourceName(of: notAModel), notAModel)
+        }
+    }
+
+    /// A stored model that is no model's id sends nothing, and the turn is
+    /// told why.
+    func testAStoredModelThatIsNoModelsID_sendsNothing() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        MockURLProtocol.handler = { request in
+            XCTFail("Nothing is sent for a model that is no model's id: \(request.url?.absoluteString ?? "")")
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        let client = try GeminiLLMClient(apiKey: "TEST_KEY", baseURL: XCTUnwrap(URL(string: "https://example.com/v1")), urlSession: URLSession(configuration: config))
+        for model in ["", "a/b", "../files", "gemini?x=1"] {
+            do {
+                _ = try await client.completeChat(
+                    messages: [LLMMessage(role: .user, content: "Hi")], model: model,
+                    options: ChatOptions(temperature: 0.5, maxTokens: nil, stream: false)
+                )
+                XCTFail("Refused: \(model)")
+            } catch {
+                XCTAssertEqual(error.localizedDescription, "That is not a Gemini model's name. Choose another Gemini model.", model)
+            }
+        }
+    }
+
+    /// The models a Google key can use are asked for with the key in its
+    /// header, and nowhere in the address, on every page.
+    func testTheModelListIsAskedForWithTheKeyInItsHeader() {
+        for token in [nil, "next-page"] {
+            let request = ProviderAccountService.geminiModelsRequest(apiKey: "TEST_KEY", pageToken: token)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "x-goog-api-key"), "TEST_KEY")
+            XCTAssertFalse(request.url?.absoluteString.contains("TEST_KEY") ?? true)
+            XCTAssertEqual(request.url?.path, "/v1beta/models")
+            XCTAssertEqual(request.url?.query, token.map { "pageToken=\($0)" })
         }
     }
 
