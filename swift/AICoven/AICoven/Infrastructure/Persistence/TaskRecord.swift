@@ -553,7 +553,7 @@ actor TaskRepository {
     func reminders(withTitles: Bool, as account: String) async throws -> [TaskReminderDue] {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         return try await AccountSeal.reading(as: account) {
-            let rows = try await dbQueue.read { db in
+            let rows: [Row] = try await dbQueue.read { db in
                 try Row.fetchAll(
                     db,
                     sql: """
