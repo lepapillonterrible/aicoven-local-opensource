@@ -564,32 +564,26 @@ final class ShellNavigatorTests: XCTestCase {
         await Task.yield()
     }
 
-    func testAScopeIsStrixOrACoven() async {
+    func testAScopeIsStrixOrACoven() {
         XCTAssertEqual(ShellScope(covenID: nil), .strix)
         XCTAssertEqual(ShellScope(covenID: "work"), .coven("work"))
         XCTAssertNil(ShellScope.strix.covenID)
         XCTAssertEqual(ShellScope.coven("work").covenID, "work")
-        // Freed inside a task: a main-actor object released outside one
-        // aborts on macOS 15 (issue #61).
-        await Task.yield()
     }
 
     // MARK: - The window's title
 
-    func testTheWindowIsTitledByTheCovenAndThePlace() async {
+    func testTheWindowIsTitledByTheCovenAndThePlace() {
         XCTAssertEqual(shellWindowTitle(covenName: "Strix", covenPlaceTitle: nil), "Strix — Overview")
         XCTAssertEqual(shellWindowTitle(covenName: "Work", covenPlaceTitle: "Plans for May"), "Work — Plans for May")
         XCTAssertEqual(shellWindowTitle(covenName: "Work", personPlace: .settings(pane: .providerKeys), covenPlaceTitle: "Plans for May"), "Work — Settings")
         XCTAssertEqual(shellWindowTitle(covenName: nil, personPlace: .settings(pane: nil), covenPlaceTitle: nil), "AICoven")
         XCTAssertEqual(shellWindowTitle(covenName: nil, covenPlaceTitle: "Plans"), "AICoven", "No scope named yet")
-        // Freed inside a task: a main-actor object released outside one
-        // aborts on macOS 15 (issue #61).
-        await Task.yield()
     }
 
     // MARK: - The covens' order
 
-    func testCovensAreInThePersonsOrder_andOnesItDoesNotNameFollowOldestFirst() async {
+    func testCovensAreInThePersonsOrder_andOnesItDoesNotNameFollowOldestFirst() {
         let covens = [coven("c", made: 30), coven("a", made: 10), coven("d", made: 5), coven("b", made: 20)]
         XCTAssertEqual(CovenOrder.ordered(covens, by: ["b", "a"]).map(\.id), ["b", "a", "d", "c"])
         XCTAssertEqual(CovenOrder.ordered(covens, by: []).map(\.id), ["d", "a", "b", "c"], "No order saved: oldest first")
@@ -597,12 +591,9 @@ final class ShellNavigatorTests: XCTestCase {
         XCTAssertEqual(CovenOrder.ordered(covens, by: ["gone", "c", "c", "a"]).map(\.id), ["c", "a", "d", "b"])
         // Made at the same moment: a fixed order.
         XCTAssertEqual(CovenOrder.ordered([coven("y"), coven("x")], by: []).map(\.id), ["x", "y"])
-        // Freed inside a task: a main-actor object released outside one
-        // aborts on macOS 15 (issue #61).
-        await Task.yield()
     }
 
-    func testMovingACoven() async {
+    func testMovingACoven() {
         let covens = [coven("a"), coven("b"), coven("c")]
         XCTAssertEqual(CovenOrder.moving("c", to: 0, in: covens), ["c", "a", "b"])
         XCTAssertEqual(CovenOrder.moving("a", to: 1, in: covens), ["b", "a", "c"])
@@ -616,12 +607,9 @@ final class ShellNavigatorTests: XCTestCase {
         XCTAssertFalse(CovenOrder.canMove("c", up: false, in: covens))
         XCTAssertFalse(CovenOrder.canMove("gone", up: true, in: covens))
         XCTAssertFalse(CovenOrder.canMove("a", up: false, in: [coven("a")]))
-        // Freed inside a task: a main-actor object released outside one
-        // aborts on macOS 15 (issue #61).
-        await Task.yield()
     }
 
-    func testTheOrderIsKeptOnTheDevice_forEachAccount() async throws {
+    func testTheOrderIsKeptOnTheDevice_forEachAccount() throws {
         let suite = "CovenOrderStoreTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
@@ -638,8 +626,5 @@ final class ShellNavigatorTests: XCTestCase {
         store.remove(for: "ada")
         XCTAssertEqual(store.ids(for: "ada"), [])
         XCTAssertEqual(store.ids(for: "grace"), ["z"])
-        // Freed inside a task: a main-actor object released outside one
-        // aborts on macOS 15 (issue #61).
-        await Task.yield()
     }
 }

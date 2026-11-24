@@ -259,9 +259,7 @@ actor SkillRepository {
     func followed(as account: String) async throws -> [FollowedSkill] {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         // Read and opened as the account, with its own key in memory from
-        // before until after, as `AccountSeal.reading` does; written out
-        // here, with no closure around the reading, since every turn reads
-        // the skills (the closure's form crashed on macOS 15's runtime).
+        // before until after, as `AccountSeal.reading` does, written out.
         let epoch = await DataEncryptionService.shared.keyEpoch
         try await AccountSeal.requireKey(of: account, since: epoch)
         let rows: [Row]

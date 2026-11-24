@@ -193,9 +193,10 @@ struct ContextBuilder {
     /// Who is signed in, asked each time it matters.
     private let signedIn: () -> String
     /// The skills an account's agents follow (`SkillRepository.followed`).
-    /// `@concurrent @Sendable`, as the app's other stored async closures
-    /// outside the main actor are: one that runs on its caller's executor
-    /// crashed, or gave nothing, on the macOS 15 runtime.
+    /// `@concurrent @Sendable`: a nonisolated async closure stored here
+    /// runs on its caller's executor otherwise, and calling it so crashed,
+    /// or gave no skills, on the macOS 15 runtime (the app's other stored
+    /// async closures outside the main actor are `@Sendable`).
     private let followedSkills: @concurrent @Sendable (String) async throws -> [FollowedSkill]
 
     init(

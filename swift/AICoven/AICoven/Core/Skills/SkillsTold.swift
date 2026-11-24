@@ -44,10 +44,7 @@ nonisolated enum SkillsTold {
     }
 }
 
-/// A skill an agent follows: its title and its text. A type of its own,
-/// not a labeled tuple: an array of labeled tuples returned through a
-/// stored async closure crashed, or came back empty, on the macOS 15
-/// runtime.
+/// A skill an agent follows: its title and its text.
 nonisolated struct FollowedSkill: Equatable {
     let title: String
     let text: String
