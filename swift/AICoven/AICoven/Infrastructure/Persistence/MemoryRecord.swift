@@ -643,10 +643,8 @@ actor MemoryProposalRepository {
         proposedContent: String,
         proposedTags: [String]?,
         scope: String?,
-        reason: String?,
         sourceMessageId: String?,
         proposedBy: String?,
-        title: String?,
         as account: String? = nil
     ) async throws -> MemoryProposalRecord {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
@@ -665,14 +663,16 @@ actor MemoryProposalRepository {
             proposedContent: proposedContent,
             proposedTags: tagsString,
             scope: scope,
-            reason: reason,
+            // Kept in the clear, so none is given: a proposal's text is
+            // sealed, and nothing beside it says what it is about.
+            reason: nil,
             sourceMessageId: sourceMessageId,
             status: "pending",
             proposedBy: proposedBy,
             reviewedBy: nil,
             createdAt: now,
             reviewedAt: nil,
-            title: title,
+            title: nil,
             reviewFeedback: nil,
             contentCiphertext: sealed
         )
@@ -699,7 +699,6 @@ actor MemoryProposalRepository {
         id: String,
         as status: String,
         reviewedBy: String?,
-        reviewFeedback: String?,
         for userID: String
     ) async throws -> MemoryProposalRecord? {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
@@ -716,7 +715,8 @@ actor MemoryProposalRepository {
             record.status = status
             record.reviewedBy = reviewedBy
             record.reviewedAt = now
-            record.reviewFeedback = reviewFeedback
+            // No review notes are kept: they would be in the clear.
+            record.reviewFeedback = nil
             try record.update(db)
             return record
         }

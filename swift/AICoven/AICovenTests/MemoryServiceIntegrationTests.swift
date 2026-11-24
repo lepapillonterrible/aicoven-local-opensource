@@ -111,10 +111,8 @@ final class MemoryServiceIntegrationTests: XCTestCase {
             proposedContent: proposedContent,
             proposedTags: proposedTags,
             scope: "coven",
-            reason: "test",
             sourceMessageId: "source-1",
-            proposedBy: "tester",
-            title: "Test Proposal"
+            proposedBy: "tester"
         )
 
         // Act: approve the proposal via MemoryService.
@@ -145,8 +143,8 @@ final class MemoryServiceIntegrationTests: XCTestCase {
         let coven = try await newCoven()
         // Made in a coven, about the person: it is the coven's.
         let inCoven = try await MemoryProposalRepository.shared.insertProposal(
-            eventId: nil, covenId: coven, proposedContent: "Proposed in the coven", proposedTags: nil, scope: "user", reason: nil,
-            sourceMessageId: nil, proposedBy: "tester", title: nil
+            eventId: nil, covenId: coven, proposedContent: "Proposed in the coven", proposedTags: nil, scope: "user",
+            sourceMessageId: nil, proposedBy: "tester"
         )
         _ = try await service.reviewProposal(proposalId: inCoven.id, action: "approve")
         let covens = try await memories(in: coven)
@@ -155,8 +153,8 @@ final class MemoryServiceIntegrationTests: XCTestCase {
         // Made in no coven, with a coven's scope: it is the person's own.
         let content = "Proposed in no coven \(UUID().uuidString)"
         let inNone = try await MemoryProposalRepository.shared.insertProposal(
-            eventId: nil, covenId: nil, proposedContent: content, proposedTags: nil, scope: "coven", reason: nil,
-            sourceMessageId: nil, proposedBy: "tester", title: nil
+            eventId: nil, covenId: nil, proposedContent: content, proposedTags: nil, scope: "coven",
+            sourceMessageId: nil, proposedBy: "tester"
         )
         _ = try await service.reviewProposal(proposalId: inNone.id, action: "approve")
         let own = try await MemoryRepository.shared.loadMemories(in: .aboutMe, limit: 5)
@@ -168,8 +166,8 @@ final class MemoryServiceIntegrationTests: XCTestCase {
     func testAProposalMadeInNoCoven_isKeptAsThePersonsOwn() async throws {
         let content = "About the person \(UUID().uuidString)"
         let record = try await MemoryProposalRepository.shared.insertProposal(
-            eventId: nil, covenId: nil, proposedContent: content, proposedTags: nil, scope: "user", reason: nil,
-            sourceMessageId: nil, proposedBy: "tester", title: nil
+            eventId: nil, covenId: nil, proposedContent: content, proposedTags: nil, scope: "user",
+            sourceMessageId: nil, proposedBy: "tester"
         )
         _ = try await MemoryService(memoryStore: MemoryRepository.shared).reviewProposal(proposalId: record.id, action: "approve")
 
@@ -206,8 +204,8 @@ final class MemoryServiceIntegrationTests: XCTestCase {
     /// A pending proposal in a coven, whose memories can then be counted.
     private func proposal(in coven: String?, content: String = "What was proposed") async throws -> MemoryProposalRecord {
         try await MemoryProposalRepository.shared.insertProposal(
-            eventId: nil, covenId: coven, proposedContent: content, proposedTags: ["one"], scope: coven == nil ? "user" : "coven", reason: nil,
-            sourceMessageId: nil, proposedBy: "tester", title: nil
+            eventId: nil, covenId: coven, proposedContent: content, proposedTags: ["one"], scope: coven == nil ? "user" : "coven",
+            sourceMessageId: nil, proposedBy: "tester"
         )
     }
 

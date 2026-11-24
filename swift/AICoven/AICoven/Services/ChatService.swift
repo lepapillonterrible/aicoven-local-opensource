@@ -1378,10 +1378,8 @@ actor ChatService {
                         proposedContent: proposal.content,
                         proposedTags: proposal.category.map { [$0] },
                         scope: scope.covenID == nil ? "user" : "coven",
-                        reason: nil,
                         sourceMessageId: nil,
                         proposedBy: "agent",
-                        title: nil,
                         as: asked
                     )
                     await MemoryProposalQuestions.shared.ask(stored, inThread: threadId, as: asked)

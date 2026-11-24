@@ -63,7 +63,10 @@ final class DatabaseManager {
     /// again at the next start.
     nonisolated static let compacted = "compacted-after-v25"
 
-    private nonisolated static func compactOnce(_ queue: DatabaseQueue) {
+    /// The compaction started as the database was opened (tests wait on it).
+    private(set) var compaction: Task<Void, Never>?
+
+    private nonisolated static func compactOnce(_ queue: DatabaseQueue) -> Task<Void, Never> {
         Task.detached(priority: .utility) {
             do {
                 let done = try await queue.read { db in
@@ -919,7 +922,7 @@ final class DatabaseManager {
 
             try migrator.migrate(queue)
             dbQueue = queue
-            Self.compactOnce(queue)
+            compaction = Self.compactOnce(queue)
         } catch {
             AppErrorReporter.log(error: error, context: "DatabaseManager.configureIfNeeded")
         }

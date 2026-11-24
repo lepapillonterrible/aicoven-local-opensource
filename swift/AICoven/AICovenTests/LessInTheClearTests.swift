@@ -29,8 +29,7 @@ final class LessInTheClearTests: XCTestCase {
     func testAStoredProposal_keepsOnlyItsPageInTheClear() async throws {
         let account = UserScope.currentUserID
         let stored = try await MemoryProposalRepository.shared.insertProposal(
-            eventId: nil, covenId: nil, proposedContent: "Allergic to peanuts", proposedTags: ["allergy"], scope: "user",
-            reason: nil, sourceMessageId: nil, proposedBy: "agent", title: nil, as: account
+            eventId: nil, covenId: nil, proposedContent: "Allergic to peanuts", proposedTags: ["allergy"], scope: "user", sourceMessageId: nil, proposedBy: "agent", as: account
         )
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
         addTeardownBlock { try? await queue.write { db in try db.execute(sql: "DELETE FROM memory_proposals WHERE id = ?", arguments: [stored.id]) } }
@@ -46,12 +45,9 @@ final class LessInTheClearTests: XCTestCase {
         let on = try await queue.read { db in try Int.fetchOne(db, sql: "PRAGMA secure_delete") }
         XCTAssertEqual(on, 1)
         // The compaction is recorded once it has been done, and only then.
-        var done = false
-        for _ in 0 ..< 10000 where !done {
-            done = try await queue.read { db in
-                try Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM upkeep_done WHERE name = ?)", arguments: [DatabaseManager.compacted]) ?? false
-            }
-            await Task.yield()
+        await DatabaseManager.shared.compaction?.value
+        let done = try await queue.read { db in
+            try Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM upkeep_done WHERE name = ?)", arguments: [DatabaseManager.compacted]) ?? false
         }
         XCTAssertTrue(done)
     }
