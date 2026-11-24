@@ -105,10 +105,10 @@ final class MLXLLMClient: StreamingLLMClient, @unchecked Sendable {
         // silently dropped by the old flat-prompt approach.
         let chatMessages = Self.toChatMessages(from: messages)
         #if DEBUG
+        // Their roles and sizes only: what they say is the person's.
         print("🔍 [MLXLLMClient] Chat messages (\(chatMessages.count)):")
         for (i, m) in chatMessages.enumerated() {
-            let preview = m.content.prefix(120).replacingOccurrences(of: "\n", with: "⏎")
-            print("   [\(i)] role=\(m.role.rawValue) content=\"\(preview)...\"")
+            print("   [\(i)] role=\(m.role.rawValue) characters=\(m.content.count)")
         }
         #endif
         let userInput = UserInput(chat: chatMessages)

@@ -891,9 +891,6 @@ actor ChatService {
                     options: options
                 )
                 let rawText = response.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                #if DEBUG
-                AppErrorReporter.log(message: "provider response (tool phase, truncated): \(rawText.prefix(200))", context: "ChatService.streamMessage.toolLoop")
-                #endif
                 let usage = response.usage.map { core in
                     TokenUsage(
                         promptTokens: core.promptTokens,
@@ -1304,9 +1301,6 @@ actor ChatService {
                         options: options
                     )
                     let rawText = response.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                    #if DEBUG
-                    AppErrorReporter.log(message: "provider response (final phase, truncated): \(rawText.prefix(200))", context: "ChatService.streamMessage.finalPhase")
-                    #endif
                     let usage = response.usage.map { core in
                         TokenUsage(
                             promptTokens: core.promptTokens,
@@ -2456,7 +2450,7 @@ extension ChatService {
 
         #if DEBUG
         AppErrorReporter.log(
-            message: "forceMCPToolCall matched '\(tool.name)' (score=\(bestScore)) for: \(userMessage.prefix(80))",
+            message: "forceMCPToolCall matched '\(tool.name)' (score=\(bestScore))",
             context: "ChatService.forceMCPToolCall"
         )
         #endif
@@ -2610,7 +2604,7 @@ extension ChatService {
 
         #if DEBUG
         AppErrorReporter.log(
-            message: "Semantic fallback matched '\(topTool.name)' (score=\(score)) for: \(userMessage.prefix(80))",
+            message: "Semantic fallback matched '\(topTool.name)' (score=\(score))",
             context: "ChatService.forceNativeToolCallWithSemantic"
         )
         #endif

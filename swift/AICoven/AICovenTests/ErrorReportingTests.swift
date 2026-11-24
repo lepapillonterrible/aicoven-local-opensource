@@ -149,6 +149,24 @@ final class ErrorReportingTests: XCTestCase {
         XCTAssertTrue(redacted.contains("<redacted>"))
     }
 
+    func testLogRedactorHidesKeysWrittenWithAHyphen() {
+        // Made-up keys in each provider's shape; none is real.
+        let keys = [
+            "sk-ant-api03-" + String(repeating: "a", count: 24),
+            "sk-proj-" + String(repeating: "b", count: 24),
+            "sk-or-v1-" + String(repeating: "c", count: 24),
+            "sk-" + String(repeating: "d", count: 32),
+            "xai-" + String(repeating: "e", count: 24),
+            "github_pat_" + String(repeating: "f", count: 24)
+        ]
+        for key in keys {
+            let redacted = AppLogRedactor.redact("The provider refused \(key) just now")
+            XCTAssertFalse(redacted.contains(key), "A key starting \(key.prefix(7)) is hidden")
+            XCTAssertTrue(redacted.hasPrefix("The provider refused <redacted>"))
+        }
+        XCTAssertEqual(AppLogRedactor.redact("a task-list of five"), "a task-list of five", "Ordinary words with a hyphen stay")
+    }
+
     func testAppErrorReporterPassesRedactedMessagesToReporter() {
         let reporter = CapturingErrorReporter()
         AppErrorReporter.use(reporter)
