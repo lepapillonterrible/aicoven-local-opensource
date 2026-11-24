@@ -72,7 +72,7 @@ class AuthService: ObservableObject {
                 // account before stays said: on signing in, switching,
                 // signing out, and when an account is deleted.
                 ThreadActivities.shared.accountChanged()
-                MemoryProposalQuestions.shared.accountChanged()
+                MemoryProposalQuestions.shared.accountReported(UserScope.currentUserID)
                 // What is asked of the account before leaves; the same
                 // account reported again keeps it.
                 ToolApprovals.shared.accountReported(UserScope.currentUserID)
@@ -94,7 +94,7 @@ class AuthService: ObservableObject {
                     await ThreadService.shared.reloadForCurrentUser()
                     // Read again now that the threads are this account's.
                     ThreadActivities.shared.accountChanged()
-                    MemoryProposalQuestions.shared.accountChanged()
+                    MemoryProposalQuestions.shared.accountReported(UserScope.currentUserID)
 
                     // One-time cleanup: clear stale test purchases that were cached
                     // during automated testing. This runs once per user.

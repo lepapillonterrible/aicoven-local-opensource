@@ -101,6 +101,17 @@ final class MemoryProposalQuestions: ObservableObject {
         await questions[proposalID]?.value
     }
 
+    /// Who was last reported signed in.
+    private var reportedAccount: String?
+
+    /// Who is signed in, as the sign-in listener reports it (also the same
+    /// account again): only another account takes away what is asked.
+    func accountReported(_ account: String) {
+        defer { reportedAccount = account }
+        guard account != reportedAccount else { return }
+        accountChanged()
+    }
+
     /// Another account is signed in, or none: what was being asked of the
     /// first leaves the screen unanswered, and stays among its proposals.
     func accountChanged() {

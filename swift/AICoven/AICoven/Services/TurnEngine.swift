@@ -265,8 +265,17 @@ final class TurnEngine: ObservableObject {
             running[threadID] = nil
             replies[threadID]?.cancel()
             settling.remove(turn.turnID)
-            if let queue = waiting.removeValue(forKey: threadID), !queue.isEmpty {
-                giveBack(queue, threadID: threadID)
+            // What waited goes back to the composer, but for the message
+            // being sent just now: it is the turn's own (stored, or handed
+            // back by `start` if it could not be).
+            guard let queue = waiting.removeValue(forKey: threadID) else { continue }
+            let sending = queue.filter { $0.id == starting[threadID] }
+            let rest = queue.filter { $0.id != starting[threadID] }
+            if !sending.isEmpty {
+                waiting[threadID] = sending
+            }
+            if !rest.isEmpty {
+                giveBack(rest, threadID: threadID)
             }
         }
     }
@@ -413,6 +422,7 @@ final class TurnEngine: ObservableObject {
         // Made now, not when it was typed: it is stored after the reply it
         // waited for.
         let userMessage = TurnProgress.userMessage(in: threadID, text: next.userText, attachments: next.attachments)
+        let account = currentAccount()
         // It stays among the waiting until its turn has started, so the
         // thread never shows it as neither waiting nor sent; from here it
         // is on its way, and is no longer edited or removed.
@@ -427,6 +437,9 @@ final class TurnEngine: ObservableObject {
                 attachments: next.attachments.isEmpty ? nil : next.attachments
             )
             drop(next.id, from: threadID)
+            // Stored, as its account's; shown only while that account is
+            // still signed in.
+            guard currentAccount() == account else { return }
             add(userMessage, to: threadID)
         } catch TurnError.alreadyRunning {
             // A turn started meanwhile: this one waits for it, where it is.
@@ -533,12 +546,15 @@ final class TurnEngine: ObservableObject {
     /// is one. Throws if it still cannot be.
     private func storeWaitingEnding(threadID: String) async throws {
         guard let waiting = unstored[threadID] else { return }
+        let account = currentAccount()
         let stored = try await store.endTurn(id: waiting.turnID, outcome: waiting.outcome, message: waiting.message, trace: waiting.trace)
         // Another call can have stored it while this one waited; then there
         // is nothing left to do, whatever this call's own answer.
         guard unstored[threadID]?.turnID == waiting.turnID else { return }
         guard stored else { throw TurnError.endingNotStored }
         unstored[threadID] = nil
+        // Stored as its account's; not shown once another has signed in.
+        guard currentAccount() == account else { return }
         endings[threadID] = Ending(turnID: waiting.turnID, outcome: waiting.outcome, trace: waiting.trace, messages: [waiting.message], stored: true)
     }
 

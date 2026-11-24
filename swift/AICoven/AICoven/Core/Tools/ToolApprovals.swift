@@ -247,10 +247,6 @@ final class ToolApprovals: ObservableObject {
         show(waiting.removeFirst())
     }
 
-    /// Another account is signed in, or none: everything that was being
-    /// asked of the first leaves, unanswered and unseen, and the turns
-    /// that asked are told it was withdrawn. Whoever is signed in next
-    /// is shown nothing of it and cannot answer it.
     /// Who was last reported signed in.
     private var reportedAccount: String?
 
@@ -262,6 +258,10 @@ final class ToolApprovals: ObservableObject {
         accountChanged()
     }
 
+    /// Another account is signed in, or none: everything that was being
+    /// asked of the first leaves, unanswered and unseen, and the turns
+    /// that asked are told it was withdrawn. Whoever is signed in next
+    /// is shown nothing of it and cannot answer it.
     func accountChanged() {
         accountChanges += 1
         for approvalID in Array(asked.keys) {

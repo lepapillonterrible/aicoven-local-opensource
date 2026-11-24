@@ -291,6 +291,37 @@ final class TurnsKeepTheirAccountTests: XCTestCase {
         XCTAssertEqual(answer, .withdrawn, "Taken away when another account is reported")
     }
 
+    func testTheSameAccountReportedAgain_keepsAMemoryQuestionAsked() async {
+        let me = UserScope.currentUserID
+        let asked = expectation(description: "Asked")
+        let released = AsyncStream<Void>.makeStream()
+        var cancelled = false
+        let questions = MemoryProposalQuestions(
+            asking: { _, _ in
+                asked.fulfill()
+                for await _ in released.stream {}
+                cancelled = Task.isCancelled
+                return .withdrawn
+            },
+            reviewing: { _, _ in },
+            isWaiting: { _, _ in false },
+            turnEnding: { _ in },
+            signedIn: { me }
+        )
+        questions.accountReported(me)
+        let proposal = MemoryProposalRecord(
+            id: UUID().uuidString, userId: me, eventId: nil, covenId: nil, proposedContent: "Ships on Fridays", proposedTags: nil, scope: "user",
+            reason: nil, sourceMessageId: nil, status: "pending", proposedBy: "agent", reviewedBy: nil, createdAt: Date(), reviewedAt: nil,
+            title: nil, reviewFeedback: nil
+        )
+        questions.ask(proposal, inThread: "thread-1", as: me)
+        await fulfillment(of: [asked], timeout: 10)
+        questions.accountReported(me)
+        released.continuation.finish()
+        await questions.settled(proposal.id)
+        XCTAssertFalse(cancelled, "The question was not taken away for the same account")
+    }
+
     // MARK: - The engine
 
     func testWhenAnotherAccountSignsIn_aRunningTurnIsStopped_andNothingOfItIsStoredOrShown() async throws {

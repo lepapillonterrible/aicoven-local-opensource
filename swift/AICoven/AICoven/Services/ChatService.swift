@@ -1460,10 +1460,11 @@ actor ChatService {
             guard !threadsLastAnsweredByAnAgent.contains(threadId) else { return }
             // The model the turn is answered by, found exactly: a summary
             // is not routed to some other provider where it is not there.
-            if let roleId {
-                guard await (try? RoleService.shared.getRole(roleId: roleId)) != nil else { return }
-            }
-            let (prefProvider, prefModel, _) = await preferredProviderAndModel(roleId: roleId)
+            // The agent is read once, and the model taken from that reading:
+            // one that cannot be read is not answered for by Strix's model.
+            let role: Role? = if let roleId { try? await RoleService.shared.getRole(roleId: roleId) } else { nil }
+            if roleId != nil, role == nil { return }
+            let (prefProvider, prefModel, _) = await preferredProviderAndModel(roleId: roleId, role: role)
             guard let descriptor = modelRouter.findExact(providerID: prefProvider, modelID: prefModel),
                   let client = llmClients[descriptor.providerID] else {
                 return
@@ -1696,6 +1697,12 @@ actor ChatService {
     /// the app's own where the agent cannot be read.
     private func preferredProviderAndModel(roleId: String?) async -> (provider: String, model: String, settings: AgentTurnSettings) {
         let role: Role? = if let roleId { try? await RoleService.shared.getRole(roleId: roleId) } else { nil }
+        return await preferredProviderAndModel(roleId: roleId, role: role)
+    }
+
+    /// The same, for an agent already read (`role`, nil where `roleId` is
+    /// none or could not be read).
+    private func preferredProviderAndModel(roleId: String?, role: Role?) async -> (provider: String, model: String, settings: AgentTurnSettings) {
         // A turn for no agent is Strix's, and takes Strix's own settings;
         // one whose agent cannot be read takes the app's.
         let settings: AgentTurnSettings = if roleId == nil {
