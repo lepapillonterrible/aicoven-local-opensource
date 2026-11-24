@@ -396,7 +396,7 @@ final class LocalNotificationsTests: XCTestCase {
         XCTAssertNil(notifications.offer)
     }
 
-    func testAnAccountsChoicesGoWithTheAccount() {
+    func testAnAccountsChoicesGoWithTheAccount() async {
         let notifications = notifications(System())
         notifications.setOn(false, for: "ada")
         notifications.setShowsDetails(true, for: "ada")
@@ -409,6 +409,9 @@ final class LocalNotificationsTests: XCTestCase {
         XCTAssertFalse(notifications.showsDetails(for: "ada"))
         XCTAssertNil(defaults.object(forKey: UserScope.scopedKey("notifications_offer_declined_at", for: "ada")))
         XCTAssertTrue(notifications.showsDetails(for: "grace"), "Another account's stay")
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     // MARK: - What tells of turns and approvals

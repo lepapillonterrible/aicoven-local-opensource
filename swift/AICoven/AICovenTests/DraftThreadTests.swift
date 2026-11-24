@@ -79,7 +79,7 @@ final class DraftThreadTests: XCTestCase {
     }
 
     @MainActor
-    func testEachScopesNewThreadPageKeepsWhatItHoldsUnsent_whileTheWindowIsOpen() {
+    func testEachScopesNewThreadPageKeepsWhatItHoldsUnsent_whileTheWindowIsOpen() async {
         let drafts = DraftThreads()
         drafts.submission(for: .strix).messageText = "For Strix"
         drafts.submission(for: .coven("work")).messageText = "For work"
@@ -90,6 +90,9 @@ final class DraftThreadTests: XCTestCase {
         drafts.forget(.coven("work"))
         XCTAssertEqual(drafts.submission(for: .coven("work")).messageText, "")
         XCTAssertEqual(drafts.submission(for: .strix).messageText, "For Strix")
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     func testACovenIsGoneWhenItIsNoLongerAmongTheCovensRead_onScreenOrNot() {
@@ -108,7 +111,7 @@ final class DraftThreadTests: XCTestCase {
     // MARK: - Where the shell is meanwhile
 
     @MainActor
-    func testNewThreadOpensAPageInTheScopeOnScreen_whichBelongsToNoRow() {
+    func testNewThreadOpensAPageInTheScopeOnScreen_whichBelongsToNoRow() async {
         let navigator = ShellNavigator()
         navigator.requestNewThread()
         XCTAssertEqual(navigator.place, .draftThread(covenId: nil))
@@ -136,10 +139,13 @@ final class DraftThreadTests: XCTestCase {
         XCTAssertEqual(navigator.selected, .strix)
         XCTAssertNil(navigator.place(in: .coven("work")))
         XCTAssertNil(navigator.draftAgent(in: .coven("work")))
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     @MainActor
-    func testTheThreadThatIsMadeTakesThePagesPlace_inItsOwnScope_whereThePageStillIs() {
+    func testTheThreadThatIsMadeTakesThePagesPlace_inItsOwnScope_whereThePageStillIs() async {
         let navigator = ShellNavigator()
         navigator.select(.coven("coven_a"))
         navigator.requestNewThread(agentID: "scout")
@@ -167,10 +173,13 @@ final class DraftThreadTests: XCTestCase {
         navigator.handleCreatedThread(thread("strix_newer"))
         XCTAssertEqual(navigator.place?.id, "strix_newer")
         XCTAssertEqual(navigator.sidebarItem, .thread("strix_newer"))
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     @MainActor
-    func testAThreadAskedFromTheOverviewOpensOnlyIfThePersonStayed() {
+    func testAThreadAskedFromTheOverviewOpensOnlyIfThePersonStayed() async {
         let navigator = ShellNavigator()
         navigator.select(.coven("coven_a"))
         let first = navigator.askFromOverview()
@@ -199,10 +208,13 @@ final class DraftThreadTests: XCTestCase {
         navigator.showOverview()
         navigator.openThreadAskedFromOverview(thread("twice"), ask: once)
         XCTAssertNil(navigator.place)
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     @MainActor
-    func testAnEarlierAsksLateThreadNeitherOpensNorCancelsTheNewerAsk() {
+    func testAnEarlierAsksLateThreadNeitherOpensNorCancelsTheNewerAsk() async {
         let navigator = ShellNavigator()
         navigator.select(.coven("coven_a"))
         let askA = navigator.askFromOverview()
@@ -215,6 +227,9 @@ final class DraftThreadTests: XCTestCase {
 
         navigator.openThreadAskedFromOverview(thread("thread_b", covenID: "coven_a"), ask: askB)
         XCTAssertEqual(navigator.place?.id, "thread_b")
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     // MARK: - The sending

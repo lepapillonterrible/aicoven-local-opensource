@@ -258,22 +258,41 @@ actor SkillRepository {
     /// can be opened, by title, each with its text.
     func followed(as account: String) async throws -> [(title: String, text: String)] {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-        return try await AccountSeal.reading(as: account) {
-            let rows: [Row] = try await dbQueue.read { db in
+        // Read and opened as the account, with its own key in memory from
+        // before until after, as `AccountSeal.reading` does; written out
+        // here, with no closure around the reading, since every turn reads
+        // the skills (the closure's form crashed on macOS 15's runtime).
+        let epoch = await DataEncryptionService.shared.keyEpoch
+        try await AccountSeal.requireKey(of: account, since: epoch)
+        let rows: [Row]
+        do {
+            rows = try await dbQueue.read { db in
                 try Row.fetchAll(db, sql: "SELECT id, title_ciphertext, text_ciphertext FROM skills WHERE user_id = ? AND is_on = 1", arguments: [account])
             }
-            var followed: [(id: String, title: String, text: String)] = []
-            for row in rows {
-                guard let title = await self.opened(row["title_ciphertext"], purpose: Self.titlePurpose),
-                      let text = await self.opened(row["text_ciphertext"], purpose: Self.textPurpose) else { continue }
-                followed.append((row["id"], title, text))
-            }
-            return followed
-                .sorted { one, other in
-                    let order = one.title.localizedCaseInsensitiveCompare(other.title)
-                    return order == .orderedSame ? one.id < other.id : order == .orderedAscending
-                }
-                .map { ($0.title, $0.text) }
+        } catch {
+            try await AccountSeal.requireKey(of: account, since: epoch)
+            throw error
         }
+        var followed: [FollowedSkill] = []
+        for row in rows {
+            let id: String = row["id"]
+            let sealedTitle: Data = row["title_ciphertext"], sealedText: Data = row["text_ciphertext"]
+            guard let title = await opened(sealedTitle, purpose: Self.titlePurpose),
+                  let text = await opened(sealedText, purpose: Self.textPurpose) else { continue }
+            followed.append(FollowedSkill(id: id, title: title, text: text))
+        }
+        try await AccountSeal.requireKey(of: account, since: epoch)
+        followed.sort { one, other in
+            let order = one.title.localizedCaseInsensitiveCompare(other.title)
+            return order == .orderedSame ? one.id < other.id : order == .orderedAscending
+        }
+        return followed.map { (title: $0.title, text: $0.text) }
+    }
+
+    /// A skill an agent follows, as it is read.
+    private struct FollowedSkill {
+        let id: String
+        let title: String
+        let text: String
     }
 }

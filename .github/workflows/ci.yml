@@ -173,16 +173,23 @@ jobs:
         if: failure()
         run: |
           python3 - <<'PY'
-          import glob, json, os
+          import collections, glob, json, os
           files = sorted(glob.glob(os.path.expanduser("~/Library/Logs/DiagnosticReports/AICoven Dev-*.ips")), key=os.path.getmtime)
           print(len(files), "crash reports")
-          for path in files[-4:]:
+          kinds = collections.Counter()
+          for path in files:
               text = open(path).read()
               body = json.loads(text[text.index("\n") + 1:])
               images = body.get("usedImages", [])
-              crashed = body.get("faultingThread", 0)
-              print("=====", os.path.basename(path), body.get("exception", {}).get("type"))
-              for frame in body["threads"][crashed]["frames"][:40]:
-                  image = images[frame["imageIndex"]].get("name", "?") if frame.get("imageIndex") is not None and frame["imageIndex"] < len(images) else "?"
-                  print(" ", image, frame.get("symbol", "?"), frame.get("sourceFile", ""), frame.get("sourceLine", ""))
+              frames = body["threads"][body.get("faultingThread", 0)]["frames"]
+              def name(f):
+                  i = f.get("imageIndex")
+                  return images[i].get("name", "?") if i is not None and i < len(images) else "?"
+              app = next((f.get("symbol", "?") for f in frames if name(f) == "AICoven Dev.debug.dylib" and "BackDeploy" not in f.get("symbol", "")), "?")
+              test = next((f.get("symbol", "?") for f in frames if name(f) == "AICovenTests"), "-")
+              kinds[(body.get("exception", {}).get("type"), app)] += 1
+              print(os.path.basename(path), body.get("exception", {}).get("type"), "|", app, "|", test)
+          print("=== by kind")
+          for (kind, app), count in kinds.most_common():
+              print(count, kind, app)
           PY

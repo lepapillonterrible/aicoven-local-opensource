@@ -179,7 +179,7 @@ final class StrixAgentTests: XCTestCase {
     }
 
     @MainActor
-    func testStrixIsListedAsAnAgentIs() {
+    func testStrixIsListedAsAnAgentIs() async {
         let row = StrixAgentsView.row(
             for: LocalStrixSettings(systemPrompt: "You plan the week.\nBe brief.", model: "claude-sonnet-4-6", provider: "anthropic", providerAccountId: "acct")
         )
@@ -208,6 +208,9 @@ final class StrixAgentTests: XCTestCase {
         XCTAssertNil(StrixAgentsView.row(for: LocalStrixSettings(), among: connections).providerAccountId)
         // Steps stored as no number of steps are shown as the fewest there can be, so the form still saves.
         XCTAssertEqual(AgentDraft(strix: LocalStrixSettings(autonomousMaxSteps: 0), appSteps: 5).maxSteps, "1")
+        // Freed inside a task: a main-actor object released outside one
+        // aborts on macOS 15 (issue #61).
+        await Task.yield()
     }
 
     /// Who is signed in, for a service of the test's own. Sendable by hand: read and written under its lock.
