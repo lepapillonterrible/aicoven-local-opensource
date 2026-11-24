@@ -800,7 +800,9 @@ actor ChatService {
                 // Pre-execution failed (network error, MCP timeout, etc.).
                 // Log the error and fall through — the model will still
                 // attempt to answer without tool results.
-                AppErrorReporter.log(error: error, context: "ChatService.streamMessage.preExecute")
+                // The kind of failure only: a server's message can say
+                // what the tool was asked about.
+                AppErrorReporter.log(message: "A tool run before the model could not run (\(type(of: error)))", context: "ChatService.streamMessage.preExecute")
                 toolContextLog = "[Tool Error] Pre-execution failed: \(error.localizedDescription)"
                 remainingToolSteps = 0
             }
@@ -912,7 +914,8 @@ actor ChatService {
                         reason: "Native \(descriptor.providerID) tool call"
                     )
                     #if DEBUG
-                    AppErrorReporter.log(message: "Native tool call from \(descriptor.providerID): \(first.name)", context: "ChatService.streamMessage.nativeToolCall")
+                    // Not the tool's name: a model writes it, and it can be anything.
+                    AppErrorReporter.log(message: "Native tool call from \(descriptor.providerID)", context: "ChatService.streamMessage.nativeToolCall")
                     #endif
                 } else {
                     // Fall back to text parsing for local models or text-based calls
@@ -943,7 +946,7 @@ actor ChatService {
                         if isConsecutive, contextUnchanged {
                             #if DEBUG
                             AppErrorReporter.log(
-                                message: "Repeat loop detected: \(toolCall.tool) called \(maxConsecutiveSameCalls)x with unchanged context. Breaking.",
+                                message: "Repeat loop detected: a tool called \(maxConsecutiveSameCalls)x with unchanged context. Breaking.",
                                 context: "ChatService.streamMessage.repeatDetection"
                             )
                             #endif
@@ -957,7 +960,7 @@ actor ChatService {
                     continuationCount = 0
 
                     #if DEBUG
-                    AppErrorReporter.log(message: "Parsed chat tool call: \(toolCall.tool) (remaining before decrement=\(remainingToolSteps))", context: "ChatService.streamMessage.toolLoop")
+                    AppErrorReporter.log(message: "Parsed chat tool call (remaining before decrement=\(remainingToolSteps))", context: "ChatService.streamMessage.toolLoop")
                     #endif
                     // We only honor tool calls while there is remaining budget.
                     remainingToolSteps -= 1

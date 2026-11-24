@@ -273,7 +273,7 @@ This directory contains a mix of active and legacy services:
 - `ProviderAccountService.swift` – Manages provider configurations and API keys.
 - `StoreService.swift` – StoreKit 2 in-app purchase management.
 - `StrixSettingsService.swift` – Strix's own settings, kept on the device for each account (`LocalStrixSettings`: its instructions, what it runs on, and its temperature, longest answer and most steps), read as stored (`stored(of:)`) and saved as the agent form shows them (`save(_:as:)`). Every read and write is under the key of the account it is for: `loadPersonalStrix()`, which takes what Strix runs on from the first connection where none is stored, keeps and gives nothing if another account signs in while the connections are looked up.
-- `LLMClients.swift` – `LocalChatError`, what a turn says when a provider has no key or answers with nothing it can read. The `LLMClient` implementations are in `Core/LLM/Providers/`. Logs carry the kind of failure only: nothing a person, a model or a tool said is logged, in any build (`AppLogRedactor` also hides any key that reaches a log).
+- `LLMClients.swift` – `LocalChatError`, what a turn says when a provider has no key or answers with nothing it can read. The `LLMClient` implementations are in `Core/LLM/Providers/`. A turn's logs carry no reply, message, tool name or server message, in any build, and the account's email, id and file paths are not printed; `AppLogRedactor` hides the key shapes it knows (`sk_`/`sk-` and their kinds, `pk-`, `rk-`, `xai-`, `AIza…`, `github_pat_`, bearer tokens) if one reaches a log: it is a second line, not a promise that no other secret can.
 - `AnalyticsService.swift` – Privacy-preserving, opt-in-only analytics.
 
 **Legacy cloud services (being refactored):**

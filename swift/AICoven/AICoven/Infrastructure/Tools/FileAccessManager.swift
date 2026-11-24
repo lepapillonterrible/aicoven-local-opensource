@@ -127,7 +127,8 @@ final class FileAccessManager: ObservableObject {
 
             return url
         } catch {
-            print("⚠️ [FileAccessManager] Failed to create bookmark for \(url): \(error)")
+            // Not the folder's path: it names the person's files.
+            print("⚠️ [FileAccessManager] Failed to create bookmark (\(type(of: error)))")
             url.stopAccessingSecurityScopedResource()
             return nil
         }
@@ -165,7 +166,7 @@ final class FileAccessManager: ObservableObject {
             }
             return url
         } catch {
-            print("⚠️ [FileAccessManager] Failed to create non-scoped bookmark: \(error)")
+            print("⚠️ [FileAccessManager] Failed to create non-scoped bookmark (\(type(of: error)))")
             return nil
         }
     }
@@ -222,7 +223,7 @@ final class FileAccessManager: ObservableObject {
                     resolved.append(folder)
                 }
             } catch {
-                print("⚠️ [FileAccessManager] Failed to resolve bookmark: \(error)")
+                print("⚠️ [FileAccessManager] Failed to resolve bookmark (\(type(of: error)))")
                 // Skip invalid bookmarks — they'll be dropped on next persist
                 needsPersist = true
             }

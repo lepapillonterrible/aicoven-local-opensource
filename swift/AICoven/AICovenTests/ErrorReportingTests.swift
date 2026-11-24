@@ -157,6 +157,8 @@ final class ErrorReportingTests: XCTestCase {
             "sk-or-v1-" + String(repeating: "c", count: 24),
             "sk-" + String(repeating: "d", count: 32),
             "xai-" + String(repeating: "e", count: 24),
+            "pk-" + String(repeating: "g", count: 16),
+            "rk-" + String(repeating: "h", count: 16),
             "github_pat_" + String(repeating: "f", count: 24)
         ]
         for key in keys {
@@ -164,7 +166,9 @@ final class ErrorReportingTests: XCTestCase {
             XCTAssertFalse(redacted.contains(key), "A key starting \(key.prefix(7)) is hidden")
             XCTAssertTrue(redacted.hasPrefix("The provider refused <redacted>"))
         }
-        XCTAssertEqual(AppLogRedactor.redact("a task-list of five"), "a task-list of five", "Ordinary words with a hyphen stay")
+        for words in ["a task-list of five", "the risk-assessment-framework-quarterly review", "a disk-image-of-the-build-machine"] {
+            XCTAssertEqual(AppLogRedactor.redact(words), words, "Ordinary words with a hyphen stay")
+        }
     }
 
     func testAppErrorReporterPassesRedactedMessagesToReporter() {
