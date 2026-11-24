@@ -34,6 +34,28 @@ final class InlineMarksTests: XCTestCase {
         XCTAssertEqual(underlined("*one* **two** then <u>under</u>"), ["under"])
     }
 
+    /// Emphasis inside a mark is still emphasis: nothing of the mark is
+    /// parsed with it.
+    func testEmphasisInsideAMark_isStillEmphasis() {
+        for (markdown, words) in [
+            ("<u>_italic_</u> next", "italic"), ("<u>__bold__</u> next", "bold"), ("<u>**Note:**</u> next", "Note:"),
+            ("<u>**(x)**</u> next", "(x)"), ("~~*a*~~ next", "a"),
+        ] {
+            let text = MarkdownInlineText.attributedInline(markdown)
+            XCTAssertEqual(String(text.characters), "\(words) next", markdown)
+            XCTAssertNotNil(text.runs.first?.inlinePresentationIntent, markdown)
+            let marked = self.words(in: text) { $0.swiftUI.underlineStyle != nil || $0.swiftUI.strikethroughStyle != nil }
+            XCTAssertEqual(marked, [words], markdown)
+        }
+    }
+
+    /// An entity in code is shown as written, and a mark after it covers its
+    /// own words.
+    func testAMarkAfterAnEntityInCode_coversItsWords() {
+        XCTAssertEqual(underlined("`&amp;` then <u>under</u>"), ["under"])
+        XCTAssertEqual(underlined("[x](https://y.example) then <u>y</u>"), ["y"])
+    }
+
     func testAMarkAroundAnEntity_coversTheDecodedWords() {
         XCTAssertEqual(underlined("<u>AT&T &amp; Co</u> <script>bad()</script>"), ["AT&T & Co"])
     }

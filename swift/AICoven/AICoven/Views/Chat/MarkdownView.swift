@@ -487,10 +487,10 @@ struct MarkdownInlineText: View {
         )) ?? AttributedString(prepared.plainText)
         dropLinksThatDoNotOpen(in: &attributed)
 
-        // The marks are found where the parsed text has their markers, so
-        // they cover the words they were put around whatever Markdown took
-        // out before them (delimiters, a link's address, backticks).
-        for (mark, range) in takeMarks(from: &attributed) {
+        // The Markdown is parsed without the marks, as it is written; where
+        // each mark falls in what was parsed is found by lining the parsed
+        // text up with the source, which has the marks' markers in it.
+        for (mark, range) in marks(in: attributed, from: prepared.marked) {
             switch mark {
             case .underline:
                 attributed[range].underlineStyle = .single
@@ -518,8 +518,10 @@ struct MarkdownInlineText: View {
 
     /// An inline mark of the few HTML tags (and `~~`) the renderer draws.
     /// Each has a pair of markers, private-use code points that no reply
-    /// keeps (they are taken out of its text first), put around its words
-    /// before Markdown is parsed.
+    /// keeps (they are taken out of its text first), put in place of its
+    /// tags in the source that the parsed text is lined up with. They are
+    /// never parsed: a marker next to `_` or `**` would stop the emphasis
+    /// from closing.
     enum InlineMark: Int, CaseIterable {
         case underline, strikethrough, superscript, `subscript`, keyboard
 
@@ -544,38 +546,82 @@ struct MarkdownInlineText: View {
         }
     }
 
-    /// Takes the markers out of the parsed text and gives the ranges they
-    /// stood around. A marker without its pair marks nothing.
-    private static func takeMarks(from attributed: inout AttributedString) -> [(InlineMark, Range<AttributedString.Index>)] {
+    /// The ranges of `parsed` that the marks in `marked` stand around.
+    /// `parsed` is `marked`, without its markers, as Markdown drew it: the
+    /// syntax taken out (delimiters, backticks, escapes, a link's address)
+    /// and an entity made its character. So the two are walked together:
+    /// a character of the source that is not the next one parsed is
+    /// syntax, a link's address is passed over whole, an entity counts as
+    /// the one character it became, and a marker is where it is in the
+    /// parsed text so far. A marker without its pair marks nothing.
+    private static func marks(
+        in parsed: AttributedString,
+        from marked: String
+    ) -> [(InlineMark, Range<AttributedString.Index>)] {
+        let shown = Array(parsed.unicodeScalars)
+        let source = Array(marked.unicodeScalars)
         var opened: [InlineMark: [Int]] = [:]
         var found: [(InlineMark, Range<Int>)] = []
-        var markers: [Range<AttributedString.Index>] = []
-        var offset = 0
-        var index = attributed.unicodeScalars.startIndex
-        while index < attributed.unicodeScalars.endIndex {
-            let next = attributed.unicodeScalars.index(after: index)
-            if let (mark, opens) = InlineMark.of(attributed.unicodeScalars[index]) {
+        var at = 0
+        var index = 0
+        while index < source.count {
+            let scalar = source[index]
+            if let (mark, opens) = InlineMark.of(scalar) {
                 if opens {
-                    opened[mark, default: []].append(offset)
-                } else if let start = opened[mark]?.popLast() {
-                    found.append((mark, start ..< offset))
+                    opened[mark, default: []].append(at)
+                } else if let start = opened[mark]?.popLast(), start < at {
+                    found.append((mark, start ..< at))
                 }
-                markers.append(index ..< next)
+                index += 1
+            } else if scalar == "&", let length = entityLength(in: source, at: index) {
+                // As written where it was not decoded (in code), else the
+                // one character it became.
+                let written = source[index ..< index + length]
+                if at + length <= shown.count, shown[at ..< at + length].elementsEqual(written) {
+                    at += length
+                } else if at < shown.count {
+                    at += 1
+                }
+                index += length
+            } else if at < shown.count, shown[at] == scalar {
+                at += 1
+                index += 1
+            } else if scalar == "]", index + 1 < source.count, source[index + 1] == "(",
+                      let end = closingParenthesis(in: source, from: index + 1) {
+                index = end + 1
             } else {
-                offset += 1
+                index += 1
             }
-            index = next
         }
-        for marker in markers.reversed() {
-            attributed.unicodeScalars.removeSubrange(marker)
-        }
-        let scalars = attributed.unicodeScalars
+        let scalars = parsed.unicodeScalars
         return found.compactMap { mark, range in
-            guard range.lowerBound < range.upperBound,
-                  let lower = scalars.index(scalars.startIndex, offsetBy: range.lowerBound, limitedBy: scalars.endIndex),
+            guard let lower = scalars.index(scalars.startIndex, offsetBy: range.lowerBound, limitedBy: scalars.endIndex),
                   let upper = scalars.index(scalars.startIndex, offsetBy: range.upperBound, limitedBy: scalars.endIndex) else { return nil }
             return (mark, lower ..< upper)
         }
+    }
+
+    /// Where the parenthesis opened at `open` closes, counting the ones
+    /// inside it.
+    private static func closingParenthesis(in scalars: [Unicode.Scalar], from open: Int) -> Int? {
+        var depth = 0
+        for index in open ..< scalars.count {
+            if scalars[index] == "(" { depth += 1 }
+            if scalars[index] == ")" {
+                depth -= 1
+                if depth == 0 { return index }
+            }
+        }
+        return nil
+    }
+
+    /// The length of the HTML entity (`&amp;`, `&#39;`, `&#x41;`) at
+    /// `index`, if one starts there.
+    private static func entityLength(in scalars: [Unicode.Scalar], at index: Int) -> Int? {
+        guard let end = scalars[index...].prefix(34).firstIndex(of: ";") else { return nil }
+        var body = String.UnicodeScalarView()
+        body.append(contentsOf: scalars[(index + 1) ..< end])
+        return isHTMLEntity(Substring(String(body))) ? end - index + 1 : nil
     }
 
     private static func dropLinksThatDoNotOpen(in attributed: inout AttributedString) {
@@ -589,8 +635,12 @@ struct MarkdownInlineText: View {
     }
 
     private struct PreparedInline {
+        /// What is parsed: the source without its marks' tags.
         let markdown: String
+        /// The same as plain text, drawn if the Markdown cannot be parsed.
         let plainText: String
+        /// The plain text with the marks' markers where their tags were.
+        let marked: String
     }
 
     private static func prepareInlineMarkdown(_ source: String) -> PreparedInline {
@@ -602,11 +652,13 @@ struct MarkdownInlineText: View {
         let withPlaceholders = replaceInlineImageMarkdown(in: cleaned)
         var markdown = ""
         var plainText = ""
+        var marked = ""
 
         for segment in inlineCodeSegments(in: withPlaceholders) {
             if segment.isCode {
                 markdown.append(segment.text)
                 plainText.append(segment.text)
+                marked.append(segment.text)
                 continue
             }
 
@@ -616,12 +668,15 @@ struct MarkdownInlineText: View {
             markTag("sub", as: .subscript, in: &output)
             markTag("kbd", as: .keyboard, in: &output)
             markPairedMarkers("~~", as: .strikethrough, in: &output)
+            var plain = output
+            plain.unicodeScalars.removeAll(where: InlineMark.isMarker)
 
-            plainText.append(output)
-            markdown.append(autolinkRawURLs(in: escapeRawHTML(in: output)))
+            marked.append(output)
+            plainText.append(plain)
+            markdown.append(autolinkRawURLs(in: escapeRawHTML(in: plain)))
         }
 
-        return PreparedInline(markdown: markdown, plainText: plainText)
+        return PreparedInline(markdown: markdown, plainText: plainText, marked: marked)
     }
 
     private struct InlineSegment {
@@ -770,6 +825,7 @@ struct MarkdownInlineText: View {
     }
 
     /// Puts the mark's markers where a tag's opening and closing are.
+    /// The text marked is only lined up with the parsed text, never parsed.
     private static func markTag(_ tag: String, as mark: InlineMark, in text: inout String) {
         let open = "<\(tag)>"
         let close = "</\(tag)>"
@@ -841,7 +897,7 @@ struct MarkdownInlineText: View {
     }
 
     private static func autolinkRawURLs(in text: String) -> String {
-        let pattern = #"(?<!\]\()\bhttps?://[^\s<>\x{E000}-\x{E009}]+"#
+        let pattern = #"(?<!\]\()\bhttps?://[^\s<>]+"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
         let nsText = text as NSString
         let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length)).reversed()
