@@ -172,14 +172,13 @@ final class ToolApprovals: ObservableObject {
     /// approved and the task that asked has not been cancelled: a turn that
     /// is stopped does not go on to do what it was asking about, even if
     /// Approve was pressed as it stopped.
-    /// `owner`, where given, is the account the approval is asked for: if
-    /// another is signed in by the time it would be shown, it is withdrawn
-    /// unseen.
-    func ask(_ approval: ToolApproval, for owner: String? = nil) async -> ApprovalAnswer {
+    /// `owner` is the account the approval is asked for: if another is
+    /// signed in by the time it would be shown, it is withdrawn unseen.
+    func ask(_ approval: ToolApproval, for owner: String) async -> ApprovalAnswer {
         let account = accountChanges
         let answer = await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<ApprovalAnswer, Never>) in
-                guard !Task.isCancelled, owner.map({ $0 == UserScope.currentUserID }) ?? true else {
+                guard !Task.isCancelled, owner == UserScope.currentUserID else {
                     continuation.resume(returning: .withdrawn)
                     return
                 }
@@ -252,6 +251,17 @@ final class ToolApprovals: ObservableObject {
     /// asked of the first leaves, unanswered and unseen, and the turns
     /// that asked are told it was withdrawn. Whoever is signed in next
     /// is shown nothing of it and cannot answer it.
+    /// Who was last reported signed in.
+    private var reportedAccount: String?
+
+    /// Who is signed in, as the sign-in listener reports it (also the same
+    /// account again): only another account takes away what is asked.
+    func accountReported(_ account: String) {
+        defer { reportedAccount = account }
+        guard account != reportedAccount else { return }
+        accountChanged()
+    }
+
     func accountChanged() {
         accountChanges += 1
         for approvalID in Array(asked.keys) {

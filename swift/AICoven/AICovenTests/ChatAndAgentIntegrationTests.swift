@@ -217,6 +217,7 @@ final class ChatAndAgentIntegrationTests: XCTestCase {
 
         try await chatService.streamMessage(
             threadId: "test-thread-id",
+            as: UserScope.currentUserID,
             message: "What time is it and check the web?",
             roleId: nil,
             providerAccountId: nil,

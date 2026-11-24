@@ -57,15 +57,15 @@ final class ToolApprovalsTests: XCTestCase {
     func testWhenAnotherAccountSignsIn_everythingAskedLeavesUnanswered_andCannotBeAnswered() async {
         let approvals = makeApprovals()
         let first = approval(in: "thread-1"), second = approval(in: "thread-2", "Write this file?")
-        let asking = Task { await approvals.ask(first) }
+        let asking = Task { await approvals.ask(first, for: UserScope.currentUserID) }
         await asked(approvals, 1)
-        let askingToo = Task { await approvals.ask(second) }
+        let askingToo = Task { await approvals.ask(second, for: UserScope.currentUserID) }
         await asked(approvals, 2)
         // A third is held back while the person composes.
         approvals.composerFocusChanged(true)
         approvals.noteComposerChanged()
         let third = approval(in: "thread-3", "Create this branch?")
-        let askingHeld = Task { await approvals.ask(third) }
+        let askingHeld = Task { await approvals.ask(third, for: UserScope.currentUserID) }
         await held(approvals, 1)
         XCTAssertEqual(approvals.askingThreadIDs, ["thread-1", "thread-2", "thread-3"])
 
@@ -88,7 +88,7 @@ final class ToolApprovalsTests: XCTestCase {
     func testAnAnswerGivenJustBeforeAnotherAccountSignsIn_isNotTaken_norKept() async {
         let approvals = makeApprovals()
         let first = approval(in: "thread-1")
-        let asking = Task { await approvals.ask(first) }
+        let asking = Task { await approvals.ask(first, for: UserScope.currentUserID) }
         await asked(approvals, 1)
 
         // Approve is pressed, and the account changes before the turn that asked has heard of it.
@@ -111,7 +111,7 @@ final class ToolApprovalsTests: XCTestCase {
         XCTAssertTrue(approvals.isComposing)
 
         let first = approval()
-        let asking = Task { await approvals.ask(first) }
+        let asking = Task { await approvals.ask(first, for: UserScope.currentUserID) }
         await held(approvals, 1)
 
         XCTAssertNil(approvals.showing, "Nothing comes up under what is being typed")
@@ -147,9 +147,9 @@ final class ToolApprovalsTests: XCTestCase {
         sending.noteComposerChanged()
         let first = approval()
         let second = approval(in: "thread-2", "Write this file?")
-        let askingFirst = Task { await sending.ask(first) }
+        let askingFirst = Task { await sending.ask(first, for: UserScope.currentUserID) }
         await held(sending, 1)
-        let askingSecond = Task { await sending.ask(second) }
+        let askingSecond = Task { await sending.ask(second, for: UserScope.currentUserID) }
         await held(sending, 2)
 
         sending.noteSent()
@@ -167,7 +167,7 @@ final class ToolApprovalsTests: XCTestCase {
         leaving.composerFocusChanged(true)
         leaving.noteComposerChanged()
         let third = approval()
-        let askingThird = Task { await leaving.ask(third) }
+        let askingThird = Task { await leaving.ask(third, for: UserScope.currentUserID) }
         await held(leaving, 1)
         leaving.composerFocusChanged(false)
         XCTAssertEqual(leaving.showing?.approval, third)
@@ -180,7 +180,7 @@ final class ToolApprovalsTests: XCTestCase {
         approvals.keyboardVisibilityChanged(true)
         XCTAssertTrue(approvals.isComposing, "Whether or not anything was typed")
         let first = approval()
-        let asking = Task { await approvals.ask(first) }
+        let asking = Task { await approvals.ask(first, for: UserScope.currentUserID) }
         await held(approvals, 1)
         XCTAssertEqual(delays, [], "Nothing to look again for: the keyboard going down says so itself")
 
@@ -195,7 +195,7 @@ final class ToolApprovalsTests: XCTestCase {
         // next one asked is held again.
         approvals.keyboardVisibilityChanged(true)
         let second = approval(in: "thread-2")
-        let askingSecond = Task { await approvals.ask(second) }
+        let askingSecond = Task { await approvals.ask(second, for: UserScope.currentUserID) }
         await held(approvals, 1)
         approvals.noteSent()
         XCTAssertEqual(approvals.held, [])
@@ -209,7 +209,7 @@ final class ToolApprovalsTests: XCTestCase {
         approvals.composerFocusChanged(true)
         approvals.noteComposerChanged()
         let first = approval()
-        let asking = Task { await approvals.ask(first) }
+        let asking = Task { await approvals.ask(first, for: UserScope.currentUserID) }
         await held(approvals, 1)
 
         asking.cancel()
@@ -231,7 +231,7 @@ final class ToolApprovalsTests: XCTestCase {
         sending.composerFocusChanged(true)
         sending.noteComposerChanged()
         let first = approval()
-        let asking = Task { await sending.ask(first) }
+        let asking = Task { await sending.ask(first, for: UserScope.currentUserID) }
         await held(sending, 1)
         // The turn stops, and before the queue has been told, a message is
         // sent: nothing of the stopped turn comes up.
@@ -251,9 +251,9 @@ final class ToolApprovalsTests: XCTestCase {
         leaving.noteComposerChanged()
         let stoppedOne = approval()
         let other = approval(in: "thread-2", "Write this file?")
-        let askingStopped = Task { await leaving.ask(stoppedOne) }
+        let askingStopped = Task { await leaving.ask(stoppedOne, for: UserScope.currentUserID) }
         await held(leaving, 1)
-        let askingOther = Task { await leaving.ask(other) }
+        let askingOther = Task { await leaving.ask(other, for: UserScope.currentUserID) }
         await held(leaving, 2)
         askingStopped.cancel()
         leaving.composerFocusChanged(false)
@@ -269,11 +269,11 @@ final class ToolApprovalsTests: XCTestCase {
         let first = approval()
         let second = approval(in: "thread-2", "Write this file?")
         let third = approval(in: "thread-3", "Create this branch?")
-        let askingFirst = Task { await approvals.ask(first) }
+        let askingFirst = Task { await approvals.ask(first, for: UserScope.currentUserID) }
         await asked(approvals, 1)
-        let askingSecond = Task { await approvals.ask(second) }
+        let askingSecond = Task { await approvals.ask(second, for: UserScope.currentUserID) }
         await asked(approvals, 2)
-        let askingThird = Task { await approvals.ask(third) }
+        let askingThird = Task { await approvals.ask(third, for: UserScope.currentUserID) }
         await asked(approvals, 3)
 
         // The second's turn stops, and before the queue has been told, the
@@ -288,9 +288,9 @@ final class ToolApprovalsTests: XCTestCase {
         let stopping = makeApprovals()
         let shown = approval()
         let stoppedOne = approval(in: "thread-2")
-        let askingShown = Task { await stopping.ask(shown) }
+        let askingShown = Task { await stopping.ask(shown, for: UserScope.currentUserID) }
         await asked(stopping, 1)
-        let askingStopped = Task { await stopping.ask(stoppedOne) }
+        let askingStopped = Task { await stopping.ask(stoppedOne, for: UserScope.currentUserID) }
         await asked(stopping, 2)
         askingStopped.cancel()
         stopping.answer(shown.id, approve: false)
@@ -317,7 +317,7 @@ final class ToolApprovalsTests: XCTestCase {
         XCTAssertFalse(approvals.isComposing)
 
         let first = approval()
-        let asking = Task { await approvals.ask(first) }
+        let asking = Task { await approvals.ask(first, for: UserScope.currentUserID) }
         await asked(approvals, 1)
         XCTAssertEqual(approvals.showing?.approval, first)
         asking.cancel()
@@ -329,7 +329,7 @@ final class ToolApprovalsTests: XCTestCase {
     func testAnApproval_showsWaitsForItsAnswerAndSaysWhatWasChosen() async {
         let approvals = makeApprovals()
         let first = approval()
-        let asking = Task { await approvals.ask(first) }
+        let asking = Task { await approvals.ask(first, for: UserScope.currentUserID) }
         await asked(approvals, 1)
 
         XCTAssertEqual(approvals.showing, .init(approval: first, phase: .asking))
@@ -355,14 +355,14 @@ final class ToolApprovalsTests: XCTestCase {
             "Couldn't confirm your answer. Remember this about you?"
         )
 
-        let asking = Task { await approvals.ask(question) }
+        let asking = Task { await approvals.ask(question, for: UserScope.currentUserID) }
         await asked(approvals, 1)
         XCTAssertEqual(approvals.showing, .init(approval: question, phase: .asking), "It is asked in the one spot, like any approval")
         XCTAssertEqual(approvals.askingThreadIDs, [], "No turn of the thread waits on it")
 
         // A turn's approval asked meanwhile marks its thread, and still does once the question is answered.
         let ofATurn = approval(in: "thread-2")
-        let turn = Task { await approvals.ask(ofATurn) }
+        let turn = Task { await approvals.ask(ofATurn, for: UserScope.currentUserID) }
         await asked(approvals, 2)
         XCTAssertEqual(approvals.askingThreadIDs, ["thread-2"])
         approvals.answer(question.id, approve: true)
@@ -380,7 +380,7 @@ final class ToolApprovalsTests: XCTestCase {
     func testADeniedApproval_isRefused() async {
         let approvals = makeApprovals()
         let first = approval()
-        let asking = Task { await approvals.ask(first) }
+        let asking = Task { await approvals.ask(first, for: UserScope.currentUserID) }
         await asked(approvals, 1)
 
         approvals.answer(first.id, approve: false)
@@ -395,11 +395,11 @@ final class ToolApprovalsTests: XCTestCase {
         let first = approval(in: "thread-1", "First?")
         let second = approval(in: "thread-2", "Second?")
         let third = approval(in: "thread-3", "Third?")
-        let askingFirst = Task { await approvals.ask(first) }
+        let askingFirst = Task { await approvals.ask(first, for: UserScope.currentUserID) }
         await asked(approvals, 1)
-        let askingSecond = Task { await approvals.ask(second) }
+        let askingSecond = Task { await approvals.ask(second, for: UserScope.currentUserID) }
         await asked(approvals, 2)
-        let askingThird = Task { await approvals.ask(third) }
+        let askingThird = Task { await approvals.ask(third, for: UserScope.currentUserID) }
         await asked(approvals, 3)
 
         XCTAssertEqual(approvals.showing?.approval, first)
@@ -432,7 +432,7 @@ final class ToolApprovalsTests: XCTestCase {
     func testAnAnsweredApproval_takesNoSecondAnswer() async {
         let approvals = makeApprovals()
         let first = approval()
-        let asking = Task { await approvals.ask(first) }
+        let asking = Task { await approvals.ask(first, for: UserScope.currentUserID) }
         await asked(approvals, 1)
 
         approvals.answer(first.id, approve: false)
@@ -450,7 +450,7 @@ final class ToolApprovalsTests: XCTestCase {
         let first = ToolApproval(threadID: "thread-1", question: "Run this command?", details: "git push\nIn /tmp", toolName: "shell.execute")
         let second = ToolApproval(threadID: "thread-1", question: "Write this file?", details: "/tmp/notes.txt\nA new file", toolName: "file.write")
         let other = approval(in: "thread-2")
-        let asking = [first, second, other].map { approval in Task { await approvals.ask(approval) } }
+        let asking = [first, second, other].map { approval in Task { await approvals.ask(approval, for: UserScope.currentUserID) } }
         await asked(approvals, 3)
 
         approvals.answer(first.id, approve: true)
@@ -487,9 +487,9 @@ final class ToolApprovalsTests: XCTestCase {
         let approvals = makeApprovals()
         let first = approval(in: "thread-1")
         let second = approval(in: "thread-2")
-        let askingFirst = Task { await approvals.ask(first) }
+        let askingFirst = Task { await approvals.ask(first, for: UserScope.currentUserID) }
         await asked(approvals, 1)
-        let askingSecond = Task { await approvals.ask(second) }
+        let askingSecond = Task { await approvals.ask(second, for: UserScope.currentUserID) }
         await asked(approvals, 2)
 
         // The one waiting behind leaves without being shown.
@@ -515,7 +515,7 @@ final class ToolApprovalsTests: XCTestCase {
         let approvals = makeApprovals()
         let asking = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            return await approvals.ask(self.approval())
+            return await approvals.ask(self.approval(), for: UserScope.currentUserID)
         }
 
         let answer = await asking.value
@@ -528,7 +528,7 @@ final class ToolApprovalsTests: XCTestCase {
     func testApprovePressedAsTheTurnStops_doesNotLetTheToolRun() async {
         let approvals = makeApprovals()
         let first = approval()
-        let asking = Task { await approvals.ask(first) }
+        let asking = Task { await approvals.ask(first, for: UserScope.currentUserID) }
         await asked(approvals, 1)
 
         // Stop, then Approve before the stop has reached the approval.
@@ -550,7 +550,7 @@ final class ToolApprovalsTests: XCTestCase {
         let approvals = makeApprovals()
         let first = approval(in: "thread-1", "First?")
         let second = approval(in: "thread-2", "Second?")
-        let asking = [first, second].map { approval in Task { await approvals.ask(approval) } }
+        let asking = [first, second].map { approval in Task { await approvals.ask(approval, for: UserScope.currentUserID) } }
         await asked(approvals, 2)
 
         XCTAssertFalse(approvals.announceShowing(second.id), "Only the one on screen is announced")

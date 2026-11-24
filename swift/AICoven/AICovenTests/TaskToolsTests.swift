@@ -710,7 +710,7 @@ final class TaskToolsTests: XCTestCase {
             hermesAgent: { nil },
             openClawTurn: { _ in nil }
         )
-        try await chat.streamMessage(threadId: thread.id, message: "Track renewing the lease, then tick it off.", onStateChange: { _ in })
+        try await chat.streamMessage(threadId: thread.id, as: UserScope.currentUserID, message: "Track renewing the lease, then tick it off.", onStateChange: { _ in })
 
         let kept = try await TaskRepository.shared.tasks(inCoven: nil, as: account).tasks.filter { $0.threadID == thread.id }
         XCTAssertEqual(kept.map(\.title), [title], "With Strix's tasks, where the thread is, and in the thread it was asked for in")

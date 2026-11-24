@@ -73,7 +73,9 @@ class AuthService: ObservableObject {
                 // signing out, and when an account is deleted.
                 ThreadActivities.shared.accountChanged()
                 MemoryProposalQuestions.shared.accountChanged()
-                ToolApprovals.shared.accountChanged()
+                // What is asked of the account before leaves; the same
+                // account reported again keeps it.
+                ToolApprovals.shared.accountReported(UserScope.currentUserID)
                 // A turn still running for the account before is stopped there.
                 TurnEngine.shared.accountChanged()
                 LocalNotifications.shared.accountReported(firebaseUser?.uid)

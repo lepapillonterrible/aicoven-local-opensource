@@ -243,13 +243,13 @@ final class AttachmentContextTests: XCTestCase {
 
         defaults.set("openai", forKey: key)
         let far = ListeningModel()
-        try await chat(with: far, provider: "openai").streamMessage(threadId: threadID, message: "Sum this up", attachments: [report], onStateChange: { _ in })
+        try await chat(with: far, provider: "openai").streamMessage(threadId: threadID, as: UserScope.currentUserID, message: "Sum this up", attachments: [report], onStateChange: { _ in })
         let givenWhole = try XCTUnwrap(far.lastUserMessage)
         XCTAssertEqual(givenWhole, "Sum this up\n\n[Attachment: report.txt]\n```\n\(text)\n```", "All 10,000 characters of it, after the message")
 
         defaults.set("ollama", forKey: key)
         let near = ListeningModel()
-        try await chat(with: near, provider: "ollama").streamMessage(threadId: threadID, message: "Sum this up", attachments: [report], onStateChange: { _ in })
+        try await chat(with: near, provider: "ollama").streamMessage(threadId: threadID, as: UserScope.currentUserID, message: "Sum this up", attachments: [report], onStateChange: { _ in })
         let givenLess = try XCTUnwrap(near.lastUserMessage)
         XCTAssertEqual(
             givenLess,
@@ -260,7 +260,7 @@ final class AttachmentContextTests: XCTestCase {
         // A model on this device that a tool was run for is asked to answer
         // from what the tool returned, and is still given what was read.
         let asked = ListeningModel()
-        try await chat(with: asked, provider: "ollama").streamMessage(threadId: threadID, message: "What time is it now?", attachments: [report], onStateChange: { _ in })
+        try await chat(with: asked, provider: "ollama").streamMessage(threadId: threadID, as: UserScope.currentUserID, message: "What time is it now?", attachments: [report], onStateChange: { _ in })
         let afterATool = try XCTUnwrap(asked.lastUserMessage)
         XCTAssertTrue(afterATool.contains("A tool was executed on the user's behalf"), "The time was looked up for it")
         XCTAssertTrue(afterATool.contains("What time is it now?\n\n[Attachment: report.txt]\n```\n\(text.prefix(8000))\n...(truncated)...\n```"))

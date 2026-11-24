@@ -372,7 +372,7 @@ final class MemoryPlacesTests: XCTestCase {
             }
         }
 
-        try await chat(answering: answer).streamMessage(threadId: inCoven, message: "Remember when we ship.", onStateChange: { _ in })
+        try await chat(answering: answer).streamMessage(threadId: inCoven, as: UserScope.currentUserID, message: "Remember when we ship.", onStateChange: { _ in })
         let covens = try await proposed(in: coven)
         XCTAssertEqual(covens.map(\.proposedContent), ["Ships on Fridays \(mark)"], "Proposed for the coven its thread is in")
         XCTAssertEqual(covens.map(\.scope), ["coven"])
@@ -381,7 +381,7 @@ final class MemoryPlacesTests: XCTestCase {
         var own = try await proposed(in: nil)
         XCTAssertEqual(own.count, 0, "Not proposed as the person's own")
 
-        try await chat(answering: answer).streamMessage(threadId: personal, message: "Remember when we ship.", onStateChange: { _ in })
+        try await chat(answering: answer).streamMessage(threadId: personal, as: UserScope.currentUserID, message: "Remember when we ship.", onStateChange: { _ in })
         own = try await proposed(in: nil)
         XCTAssertEqual(own.map(\.proposedContent), ["Ships on Fridays \(mark)"], "What was for one conversation is not proposed")
         XCTAssertEqual(own.map(\.scope), ["user"])
@@ -401,8 +401,8 @@ final class MemoryPlacesTests: XCTestCase {
         let builder = ContextBuilder(limits: .init(maxRecentMessages: 4, maxRecentMemories: 4))
         let told = try await builder.buildContext(threadID: orphan, userMessage: "What do you know of \(mark)?", maxContextTokens: 8000, toolConfig: .noTools)
         XCTAssertFalse(told.contains { $0.content.contains("Ships on Fridays") }, "Nor is it told any other place's memory")
-        try await chat(answering: answer).streamMessage(threadId: orphan, message: "Remember when we ship.", onStateChange: { _ in })
-        try? await chat(answering: answer).streamMessage(threadId: "no-such-thread-\(UUID().uuidString)", message: "Remember when we ship.", onStateChange: { _ in })
+        try await chat(answering: answer).streamMessage(threadId: orphan, as: UserScope.currentUserID, message: "Remember when we ship.", onStateChange: { _ in })
+        try? await chat(answering: answer).streamMessage(threadId: "no-such-thread-\(UUID().uuidString)", as: UserScope.currentUserID, message: "Remember when we ship.", onStateChange: { _ in })
         own = try await proposed(in: nil)
         XCTAssertEqual(own.count, 1, "Only what the personal thread proposed")
         let ofTheGoneCoven = try await proposed(in: gone)

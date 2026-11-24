@@ -89,7 +89,8 @@ final class ToolIntentTests: XCTestCase {
             openClawTurn: { _ in nil }
         )
         try await chat.streamMessage(
-            threadId: thread.id, message: message, offersToolsWhateverItSays: offersToolsWhateverItSays, onStateChange: { _ in }
+            threadId: thread.id,
+            as: UserScope.currentUserID, message: message, offersToolsWhateverItSays: offersToolsWhateverItSays, onStateChange: { _ in }
         )
         return model
     }

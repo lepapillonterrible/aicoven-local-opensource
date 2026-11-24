@@ -449,7 +449,7 @@ actor ChatService {
     ///   - attachments: File attachments with local URLs (optional). File contents will be read and injected into the context.
     func streamMessage(
         threadId: String,
-        as account: String? = nil,
+        as account: String,
         message: String,
         roleId: String? = nil,
         providerAccountId: String? = nil,
@@ -464,13 +464,8 @@ actor ChatService {
         // The account the turn is begun as: its requests are that account's.
         // The engine notes it as the person sends, before anything waits;
         // if another account has signed in since, nothing is done.
-        let turnAccount: String
-        if let account {
-            turnAccount = account
-            try await requireStill(account)
-        } else {
-            turnAccount = await signedIn()
-        }
+        let turnAccount = account
+        try await requireStill(turnAccount)
         // Ensure we see any provider keys and live model lists that may have
         // been added or changed after ChatService was first initialized.
         await ensureEnvironment()
@@ -1418,7 +1413,8 @@ actor ChatService {
             provider: descriptor.providerID,
             model: descriptor.modelID,
             usage: finalUsage,
-            threadId: threadId
+            threadId: threadId,
+            for: turnAccount
         )
 
         // Track message received. We don't currently measure precise
@@ -1437,8 +1433,10 @@ actor ChatService {
     /// a turn of `account`'s in it was answered for `roleId` (an agent of
     /// the thread's coven, or Strix for none). The thread is summarised by
     /// the model that turn is answered by, so its conversation goes to no
-    /// provider its agent does not use, and only as that account: nothing
-    /// is read, sent or kept once another has signed in.
+    /// provider its agent does not use, and only as that account: none of
+    /// the thread is read, sent or kept once another has signed in. A
+    /// thread whose agent cannot be read is not summarised: its turn's
+    /// model is not known, and Strix's is not taken in its place.
     func updateThreadSummary(threadId: String, roleId: String?, as account: String) async {
         guard !threadsLastAnsweredByAnAgent.contains(threadId) else { return }
         summariesAsked[threadId, default: 0] += 1
@@ -1462,6 +1460,9 @@ actor ChatService {
             guard !threadsLastAnsweredByAnAgent.contains(threadId) else { return }
             // The model the turn is answered by, found exactly: a summary
             // is not routed to some other provider where it is not there.
+            if let roleId {
+                guard await (try? RoleService.shared.getRole(roleId: roleId)) != nil else { return }
+            }
             let (prefProvider, prefModel, _) = await preferredProviderAndModel(roleId: roleId)
             guard let descriptor = modelRouter.findExact(providerID: prefProvider, modelID: prefModel),
                   let client = llmClients[descriptor.providerID] else {
@@ -1646,7 +1647,10 @@ actor ChatService {
     /// Picks up a run an agent was making for a turn when this app was
     /// closed on it, and follows it to its end as `streamMessage` would
     /// have.
-    func resumeAgentRun(_ run: AgentRun, threadId: String, onStateChange: @escaping @Sendable (TurnState) -> Void) async throws {
+    func resumeAgentRun(_ run: AgentRun, threadId: String, as account: String, onStateChange: @escaping @Sendable (TurnState) -> Void) async throws {
+        // Followed only as the account whose run it is, through its own
+        // connection.
+        try await requireStill(account)
         if run.provider == AgentRun.openClaw {
             guard let turn = openClawTurn(threadId), turn.address.absoluteString == run.origin else { throw OpenClawTurn.CannotPickUp() }
             threadsLastAnsweredByAnAgent.insert(threadId)
