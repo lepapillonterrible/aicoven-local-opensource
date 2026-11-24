@@ -40,6 +40,24 @@ final class UntrustedInputTests: XCTestCase {
         XCTAssertTrue(network.contains(neighbours), "and its network's")
         XCTAssertFalse(network.contains(elsewhere))
         XCTAssertFalse(PublicWebAddress.LocalNetwork(interfaces: []).contains(elsewhere))
+
+        // An IPv4 address on this device's network is so however it is written.
+        let campus = PublicWebAddress.LocalNetwork(interfaces: [([198, 51, 7, 20], [255, 255, 255, 0])])
+        for written in ["198.51.7.99", "::ffff:198.51.7.99", "64:ff9b::198.51.7.99", "2002:c633:0763::1"] {
+            XCTAssertTrue(try campus.contains(XCTUnwrap(PublicWebAddress.IPAddress(written))), written)
+        }
+        // The interfaces read on this device include at least its loopback.
+        let here = try XCTUnwrap(PublicWebAddress.LocalNetwork.current())
+        XCTAssertTrue(try here.contains(XCTUnwrap(PublicWebAddress.IPAddress("127.0.0.1"))))
+    }
+
+    func testTheGloballyReachablePartsOf2001_23_arePublic_andTheRestIsNot() throws {
+        for public_ in ["2001:3::1", "2001:4:112::1", "2001:20::1", "2001:30::1", "2001:1::1", "2001:1::2", "2001:4860::8888"] {
+            XCTAssertTrue(try XCTUnwrap(PublicWebAddress.IPAddress(public_)).isPublic, public_)
+        }
+        for other in ["2001:2::1", "2001:1::3", "2001:10::1", "2001:db8::1", "2001:0:4136::1"] {
+            XCTAssertFalse(try XCTUnwrap(PublicWebAddress.IPAddress(other)).isPublic, other)
+        }
     }
 
     func testAPageOnThisDevice_isNotFetched() async throws {

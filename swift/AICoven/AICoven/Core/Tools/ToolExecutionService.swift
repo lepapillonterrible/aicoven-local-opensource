@@ -1959,7 +1959,10 @@ actor ToolExecutionService {
         }
         do {
             let after = try await LinearToolService.update(issue: issueID, changes: input, key: key, session: appSession)
-            let block = "[Linear Issue Changed: \(after["identifier"] as? String ?? issue["identifier"] as? String ?? start.issue)]\n" + changes.map { "- \($0)" }.joined(separator: "\n") + ((after["url"] as? String ?? issue["url"] as? String).map { "\n\($0)" } ?? "")
+            // The changes name what people wrote (a title, a status, a
+            // name): told as data, as the issue itself is.
+            let block = "[Linear Issue Changed: \(after["identifier"] as? String ?? issue["identifier"] as? String ?? start.issue)]\n"
+                + LinearToolService.dataNote + "\n" + changes.map { "- \($0)" }.joined(separator: "\n") + ((after["url"] as? String ?? issue["url"] as? String).map { "\n\($0)" } ?? "")
             return .success(tool: toolCall.name, result: ["issue": AnyJSONValue(after["identifier"] as? String ?? issue["identifier"] as? String ?? start.issue), "changes": AnyJSONValue(changes.count)], contextBlock: block)
         } catch {
             return await linearResult(ofChange: error, tool: toolCall.name, key: key, accountID: start.account.id)

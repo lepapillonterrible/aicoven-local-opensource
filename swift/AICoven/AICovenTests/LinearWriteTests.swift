@@ -228,7 +228,7 @@ final class LinearWriteTests: XCTestCase {
             "- Due: (none) → 2026-12-01",
             "- Description: replaced",
         ].joined(separator: "\n")
-        XCTAssertEqual(changed.contextBlock, "[Linear Issue Changed: ENG-12]\n\(lines)\nhttps://linear.app/acme/issue/ENG-12")
+        XCTAssertEqual(changed.contextBlock, "[Linear Issue Changed: ENG-12]\n\(LinearToolService.dataNote)\n\(lines)\nhttps://linear.app/acme/issue/ENG-12")
         let approvals = await world.seen.approvals
         XCTAssertEqual(approvals.map(\.question), ["Change this Linear issue?"])
         XCTAssertEqual(approvals.first?.details, "ENG-12: Header overlaps the logo\n\(lines)\n\nNew description:\nAt 320pt.")
@@ -435,7 +435,7 @@ final class LinearWriteTests: XCTestCase {
         defer { untold.forget() }
         result = await untold.call("linear.updateIssue", ["issue": AnyJSONValue("ENG-12"), "title": AnyJSONValue("New")])
         XCTAssertEqual(result.status, "ok")
-        XCTAssertEqual(result.contextBlock, "[Linear Issue Changed: ENG-12]\n- Title: Header overlaps the logo → New\nhttps://linear.app/acme/issue/ENG-12")
+        XCTAssertEqual(result.contextBlock, "[Linear Issue Changed: ENG-12]\n\(LinearToolService.dataNote)\n- Title: Header overlaps the logo → New\nhttps://linear.app/acme/issue/ENG-12")
 
         // A request that never left (no network) changed nothing, and may be made again.
         let offline = try await world(failing: ["issueUpdate": .notConnectedToInternet])

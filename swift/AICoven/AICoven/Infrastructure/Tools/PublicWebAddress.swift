@@ -34,7 +34,8 @@ nonisolated enum PublicWebAddress {
         let addresses = written.map { [$0] } ?? addresses(of: host)
         // A public address can still be this device's own, or one on the
         // network it is on (an IPv6 network gives every device one).
-        let local = LocalNetwork.current()
+        // Where the interfaces cannot be read, nothing is taken for public.
+        guard let local = LocalNetwork.current() else { return false }
         return !addresses.isEmpty && addresses.allSatisfy { $0.isPublic && !local.contains($0) }
     }
 
@@ -44,26 +45,36 @@ nonisolated enum PublicWebAddress {
         /// (address, netmask) of each interface, as bytes.
         let interfaces: [(address: [UInt8], mask: [UInt8])]
 
+        /// Whether `address` is one of these, or on one of their networks:
+        /// an IPv4 address written as IPv6 (mapped, NAT64, 6to4) is its IPv4
+        /// address too.
         func contains(_ address: IPAddress) -> Bool {
-            let bytes = address.bytes
-            return interfaces.contains { interface in
-                guard interface.address.count == bytes.count, interface.mask.count == bytes.count else { return false }
-                return zip(zip(interface.address, interface.mask), bytes).allSatisfy { pair, byte in pair.0 & pair.1 == byte & pair.1 }
+            var forms = [address.bytes]
+            if let v4 = address.embeddedV4 { forms.append(IPAddress.v4(v4).bytes) }
+            return forms.contains { bytes in
+                interfaces.contains { interface in
+                    guard interface.address.count == bytes.count, interface.mask.count == bytes.count else { return false }
+                    return zip(zip(interface.address, interface.mask), bytes).allSatisfy { pair, byte in pair.0 & pair.1 == byte & pair.1 }
+                }
             }
         }
 
-        static func current() -> LocalNetwork {
+        /// Nil where the interfaces cannot be read.
+        static func current() -> LocalNetwork? {
             var first: UnsafeMutablePointer<ifaddrs>?
-            guard getifaddrs(&first) == 0, let list = first else { return LocalNetwork(interfaces: []) }
+            guard getifaddrs(&first) == 0, let list = first else { return nil }
             defer { freeifaddrs(list) }
             var found: [(address: [UInt8], mask: [UInt8])] = []
             var next: UnsafeMutablePointer<ifaddrs>? = list
             while let entry = next {
-                // An interface with no mask (some tunnels) says nothing of
-                // a network: it would take in every address.
-                if let address = entry.pointee.ifa_addr, let mask = entry.pointee.ifa_netmask,
-                   let one = bytes(of: address), let other = bytes(of: mask), one.count == other.count, other.contains(where: { $0 != 0 }) {
-                    found.append((one, other))
+                // An interface with no usable mask (some tunnels) says
+                // nothing of a network, but its own address is still this
+                // device's: it is kept as that one address.
+                if let address = entry.pointee.ifa_addr, let one = bytes(of: address) {
+                    let mask = entry.pointee.ifa_netmask.flatMap(bytes(of:)).flatMap { mask in
+                        mask.count == one.count && mask.contains { $0 != 0 } ? mask : nil
+                    }
+                    found.append((one, mask ?? Array(repeating: 0xFF, count: one.count)))
                 }
                 next = entry.pointee.ifa_next
             }
@@ -134,6 +145,19 @@ nonisolated enum PublicWebAddress {
             self = .v4(UInt32(bigEndian: v4.s_addr))
         }
 
+        /// The IPv4 address an IPv6 one carries, where it is one written as
+        /// IPv6 (mapped ::ffff:, NAT64 64:ff9b::, 6to4 2002::).
+        var embeddedV4: UInt32? {
+            guard case let .v6(bytes) = self, bytes.count == 16 else { return nil }
+            func v4(_ slice: ArraySlice<UInt8>) -> UInt32 {
+                slice.reduce(0) { $0 << 8 | UInt32($1) }
+            }
+            if bytes[0 ..< 10].allSatisfy({ $0 == 0 }), bytes[10] == 0xFF, bytes[11] == 0xFF { return v4(bytes[12 ..< 16]) }
+            if bytes[0 ..< 12] == [0x00, 0x64, 0xFF, 0x9B, 0, 0, 0, 0, 0, 0, 0, 0] { return v4(bytes[12 ..< 16]) }
+            if bytes[0] == 0x20, bytes[1] == 0x02 { return v4(bytes[2 ..< 6]) }
+            return nil
+        }
+
         /// Its bytes, in network order.
         var bytes: [UInt8] {
             switch self {
@@ -152,6 +176,19 @@ nonisolated enum PublicWebAddress {
             case let .v6(bytes):
                 Self.isPublicV6(bytes)
             }
+        }
+
+        /// The parts of 2001::/23 that IANA's special-purpose registry
+        /// marks as globally reachable: 2001:1::1 and 2001:1::2 (PCP and
+        /// TURN anycast), 2001:3::/32 (AMT), 2001:4:112::/48 (AS112-v6),
+        /// 2001:20::/28 (ORCHIDv2) and 2001:30::/28 (drone remote ID).
+        private static func isGloballyReachableIETF(_ bytes: [UInt8]) -> Bool {
+            let word = { (index: Int) in UInt16(bytes[index * 2]) << 8 | UInt16(bytes[index * 2 + 1]) }
+            if word(1) == 0x0001, (2 ... 6).allSatisfy({ word($0) == 0 }), word(7) == 1 || word(7) == 2 { return true }
+            if word(1) == 0x0003 { return true }
+            if word(1) == 0x0004, word(2) == 0x0112 { return true }
+            if word(1) & 0xFFF0 == 0x0020 || word(1) & 0xFFF0 == 0x0030 { return true }
+            return false
         }
 
         private static func isPublicV4(_ value: UInt32) -> Bool {
@@ -195,10 +232,11 @@ nonisolated enum PublicWebAddress {
             if bytes[0] == 0xFE, bytes[1] & 0xC0 == 0x80 { return false } // link-local fe80::/10
             if bytes[0] == 0xFE, bytes[1] & 0xC0 == 0xC0 { return false } // site-local fec0::/10
             if bytes[0] == 0xFF { return false } // multicast
-            // IETF protocol assignments 2001::/23 (benchmarking, ORCHID,
-            // documentation 2001:db8::/32 among them) and documentation
-            // 3fff::/20 are no one's public address.
-            if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] & 0xFE == 0x00 { return false }
+            // IETF protocol assignments 2001::/23 are no one's public
+            // address (benchmarking 2001:2::/48 among them), but for those
+            // IANA marks as globally reachable; documentation 2001:db8::/32
+            // and 3fff::/20 neither.
+            if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] & 0xFE == 0x00 { return isGloballyReachableIETF(bytes) }
             if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x0D, bytes[3] == 0xB8 { return false }
             if bytes[0] == 0x3F, bytes[1] == 0xFF, bytes[2] & 0xF0 == 0x00 { return false }
             // 6to4 2002::/16 carries an IPv4 address: it is that address.
