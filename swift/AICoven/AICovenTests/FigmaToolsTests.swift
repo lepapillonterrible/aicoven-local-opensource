@@ -282,7 +282,7 @@ final class FigmaToolsTests: XCTestCase {
         defer { world.forget() }
 
         let open = await world.call("figma.readComments", ["file": AnyJSONValue("AbCdEfGhIjKl")])
-        XCTAssertEqual(open.contextBlock, "[Figma Comments: AbCdEfGhIjKl]\n- [3] Ada, 2026-11-03T09:00:00Z: Off centre")
+        XCTAssertEqual(open.contextBlock, "[Figma Comments: AbCdEfGhIjKl]\n\(FigmaToolService.commentsNote)\n```\n- [3] Ada, 2026-11-03T09:00:00Z: Off centre\n```")
         let all = await world.call("figma.readComments", ["file": AnyJSONValue("AbCdEfGhIjKl"), "include_resolved": AnyJSONValue("yes")])
         XCTAssertEqual(all.result?["count"]?.value as? Int, 2)
         XCTAssertTrue(ToolExecutionService.isYes(.bool(true)))

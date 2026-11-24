@@ -338,14 +338,27 @@ actor ToolService {
             )
         }
 
+        // Only the public web: not this device, nor the network it is on
+        // (a page a model read can ask for one), as its name resolves now.
+        guard await PublicWebAddress.resolvesPublicly(url) else {
+            throw NSError(
+                domain: "ToolService",
+                code: -33,
+                userInfo: [NSLocalizedDescriptionKey: "Only addresses on the public web can be read. Addresses on this device or its local network are not."]
+            )
+        }
+
         // Create request with a reasonable user agent
         var request = URLRequest(url: url)
         request.setValue("AICoven/1.0 (Local AI Assistant)", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 30
+        request.httpShouldHandleCookies = false
 
-        // Download the full body in one efficient call
+        // A session that keeps nothing (no cookies, no cache), following a
+        // redirect only to another public address, and reading no more
+        // than 10 MB.
         let maxDownloadSize = 10 * 1024 * 1024 // 10 MB
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (bytes, response) = try await UnkeptFetch.session.bytes(for: request, delegate: PublicRedirectsOnly())
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw NSError(
@@ -363,8 +376,13 @@ actor ToolService {
             )
         }
 
-        // Truncate if the response exceeds size limit
-        let usableData = data.count > maxDownloadSize ? data.prefix(maxDownloadSize) : data
+        // The body only of a page that was given, and no more than its limit.
+        var usableData = Data()
+        if response.expectedContentLength > 0 { usableData.reserveCapacity(Int(min(response.expectedContentLength, Int64(maxDownloadSize)))) }
+        for try await byte in bytes {
+            usableData.append(byte)
+            if usableData.count >= maxDownloadSize { break }
+        }
 
         // Decode content as text
         guard let html = String(data: usableData, encoding: .utf8) ?? String(data: usableData, encoding: .isoLatin1) else {
@@ -509,5 +527,22 @@ actor ToolService {
         }
 
         return result
+    }
+}
+
+/// Follows a redirect only to an address on the public web, as its name
+/// resolves when the redirect comes.
+private final class PublicRedirectsOnly: NSObject, URLSessionTaskDelegate {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        guard let url = request.url else { return completionHandler(nil) }
+        Task {
+            await completionHandler(PublicWebAddress.resolvesPublicly(url) ? request : nil)
+        }
     }
 }
