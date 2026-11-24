@@ -156,29 +156,34 @@ final class LinearTests: XCTestCase {
         [Linear Issue: ENG-12] Header overlaps the logo
         URL: https://linear.app/acme/issue/ENG-12
         State: In Progress · Assignee: Ada · Team: Engineering · Priority: High · Due: 2026-12-01
+        \(LinearToolService.dataNote)
 
         Description:
+        ```
         At 320pt the header
         covers the logo.
+        ```
 
         Comments (the latest 2):
+        ```
         - Ada, 2026-11-19T10:00:00Z: On it. Today.
         - Someone, 2026-11-19T11:00:00Z: Thanks
+        ```
         """)
-        XCTAssertEqual(LinearToolService.told(issue: ["identifier": "ENG-1"]), "[Linear Issue: ENG-1] (untitled)\nState: (none) · Assignee: (no one)\n\nDescription:\n(none)")
+        XCTAssertEqual(LinearToolService.told(issue: ["identifier": "ENG-1"]), "[Linear Issue: ENG-1] (untitled)\nState: (none) · Assignee: (no one)\n\(LinearToolService.dataNote)\n\nDescription:\n(none)")
         XCTAssertEqual([0, 1, 2, 3, 4, 9].map(LinearToolService.priorityName), ["None", "Urgent", "High", "Medium", "Low", "None"])
 
         // A long description is cut where a file's text is.
         let longIssue = LinearToolService.told(issue: ["identifier": "ENG-1", "description": String(repeating: "d", count: GoogleToolArguments.longestText + 5)])
-        XCTAssertTrue(longIssue.hasSuffix(String(repeating: "d", count: 10) + AttachmentContext.cutMark))
+        XCTAssertTrue(longIssue.hasSuffix(String(repeating: "d", count: 10) + AttachmentContext.cutMark + "\n```"))
 
         // A long comment is told to its limit, the mark that it was cut included.
         let long = LinearToolService.told(issue: ["identifier": "ENG-1", "comments": ["nodes": [["body": String(repeating: "a", count: 2001), "createdAt": "t"]]]])
-        let line = try XCTUnwrap(long.split(separator: "\n").last)
+        let line = try XCTUnwrap(long.split(separator: "\n").dropLast().last)
         XCTAssertEqual(line.dropFirst("- Someone, t: ".count).count, LinearToolService.mostOfAComment)
         XCTAssertTrue(line.hasSuffix("a…"))
         let whole = LinearToolService.told(issue: ["identifier": "ENG-1", "comments": ["nodes": [["body": String(repeating: "a", count: 2000), "createdAt": "t"]]]])
-        XCTAssertFalse(whole.hasSuffix("…"))
+        XCTAssertFalse(whole.hasSuffix("…\n```"))
     }
 
     // MARK: - Connecting, and the tool
@@ -321,7 +326,7 @@ final class LinearTests: XCTestCase {
         let result = await world.call("linear.getIssue", ["issue": AnyJSONValue("https://linear.app/acme/issue/eng-12/header")])
 
         XCTAssertEqual(result.status, "ok")
-        XCTAssertEqual(result.contextBlock, "[Linear Issue: ENG-12] Header overlaps the logo\nURL: https://linear.app/acme/issue/ENG-12\nState: Todo · Assignee: (no one) · Priority: None\n\nDescription:\n(none)")
+        XCTAssertEqual(result.contextBlock, "[Linear Issue: ENG-12] Header overlaps the logo\nURL: https://linear.app/acme/issue/ENG-12\nState: Todo · Assignee: (no one) · Priority: None\n\(LinearToolService.dataNote)\n\nDescription:\n(none)")
         let request = try XCTUnwrap(world.asked.requests.first)
         XCTAssertEqual(request.authorization, "lin_api_TEST")
         XCTAssertEqual(request.body["variables"] as? NSDictionary, ["id": "ENG-12"] as NSDictionary)

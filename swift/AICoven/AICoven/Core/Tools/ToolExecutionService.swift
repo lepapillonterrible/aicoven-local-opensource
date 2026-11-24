@@ -552,7 +552,11 @@ actor ToolExecutionService {
                 let comments = try await FigmaToolService.comments(key: file, token: token, session: appSession)
                 let told = FigmaToolService.told(comments: comments, includingResolved: Self.isYes(toolCall.args["include_resolved"]))
                 let block = "[Figma Comments: \(file)]\n"
-                    + (told.lines.isEmpty ? "(No comments)" : told.lines.joined(separator: "\n"))
+                    + (
+                        told.lines.isEmpty
+                            ? "(No comments)"
+                            : FigmaToolService.commentsNote + "\n" + AssetTools.fenced(told.lines.joined(separator: "\n"))
+                    )
                     + (told.more ? "\n(Older comments are not shown.)" : "")
                 return .success(tool: toolCall.name, result: ["file": AnyJSONValue(file), "count": AnyJSONValue(told.lines.count)], contextBlock: block)
             }
