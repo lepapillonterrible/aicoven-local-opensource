@@ -1205,15 +1205,15 @@ extension ProviderAccountService {
             var pageToken: String? = nil
             repeat {
                 var components = URLComponents(string: "https://generativelanguage.googleapis.com/v1beta/models")!
-                var queryItems = [URLQueryItem(name: "key", value: apiKey)]
                 if let token = pageToken {
-                    queryItems.append(URLQueryItem(name: "pageToken", value: token))
+                    components.queryItems = [URLQueryItem(name: "pageToken", value: token)]
                 }
-                components.queryItems = queryItems
                 let url = components.url!
                 var request = URLRequest(url: url)
                 request.httpMethod = "GET"
                 request.setValue("application/json", forHTTPHeaderField: "Accept")
+                // The key in a header, never in the address.
+                request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
                 let (data, response) = try await URLSession.shared.data(for: request)
                 if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
                     throw Self.sanitizedHTTPError(provider: "Gemini", statusCode: http.statusCode)

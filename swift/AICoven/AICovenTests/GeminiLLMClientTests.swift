@@ -7,9 +7,7 @@ final class GeminiLLMClientTests: XCTestCase {
     private func makeClient(
         withResponseBody body: Data,
         statusCode: Int = 200,
-        expectedPathSuffix: String,
-        expectedQueryItemName: String = "key",
-        expectedQueryItemValue: String = "TEST_KEY"
+        expectedPathSuffix: String
     ) -> GeminiLLMClient {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
@@ -19,12 +17,10 @@ final class GeminiLLMClientTests: XCTestCase {
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
 
-            if let url = request.url, let components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
-                let items = components.queryItems ?? []
-                XCTAssertTrue(items.contains(where: { $0.name == expectedQueryItemName && $0.value == expectedQueryItemValue }))
-            } else {
-                XCTFail("Expected URL with query items for Gemini request")
-            }
+            // The key goes in its header, and nowhere in the address.
+            XCTAssertEqual(request.value(forHTTPHeaderField: "x-goog-api-key"), "TEST_KEY")
+            XCTAssertFalse(request.url?.absoluteString.contains("TEST_KEY") ?? true)
+            XCTAssertNil(request.url?.query)
 
             let response = HTTPURLResponse(url: request.url!, statusCode: statusCode, httpVersion: nil, headerFields: nil)!
             return (response, body)
@@ -73,6 +69,28 @@ final class GeminiLLMClientTests: XCTestCase {
         XCTAssertEqual(response.providerID, "google")
         XCTAssertEqual(response.modelID, "models/gemini-pro")
         XCTAssertNil(response.usage)
+    }
+
+    /// A model stored without the API's "models/" prefix (typed in an
+    /// agent's Model ID, or named in code) is asked for under it: the API
+    /// answers 404 to a bare id.
+    func testABareModelIDIsAskedForAsTheModelsResource() async throws {
+        let json = #"{"candidates":[{"content":{"parts":[{"text":"Hi"}]}}]}"#.data(using: .utf8)!
+        let client = makeClient(withResponseBody: json, expectedPathSuffix: "/v1/models/gemini-2.5-flash:generateContent")
+        let response = try await client.completeChat(
+            messages: [LLMMessage(role: .user, content: "Hi")], model: "gemini-2.5-flash",
+            options: ChatOptions(temperature: 0.5, maxTokens: nil, stream: false)
+        )
+        XCTAssertEqual(response.message.content, "Hi")
+    }
+
+    func testAModelsResourceName_isTakenAsItIsAndNothingElseReachesThePath() {
+        XCTAssertEqual(GeminiLLMClient.resourceName(of: "models/gemini-2.5-flash"), "models/gemini-2.5-flash")
+        XCTAssertEqual(GeminiLLMClient.resourceName(of: "gemini-flash-latest"), "models/gemini-flash-latest")
+        XCTAssertEqual(GeminiLLMClient.resourceName(of: "gemini_3.5-flash"), "models/gemini_3.5-flash")
+        for notAModel in ["", "models/", "..", "../files", "gemini/../x", "gemini?key=x", "gemini:generateContent", "gemini 2", "models/models/x", "gémini"] {
+            XCTAssertNil(GeminiLLMClient.resourceName(of: notAModel), notAModel)
+        }
     }
 
     func testEmbed_throwsUnsupportedError() async throws {

@@ -2,8 +2,10 @@ import Foundation
 
 /// Google Gemini implementation of LLMClient.
 ///
-/// Uses the public Generative Language API with API key passed as a
-/// query parameter. Supports native function calling when tools are provided.
+/// Uses the public Generative Language API, with the API key in the
+/// `x-goog-api-key` header (never in the address, which is logged and
+/// cached more readily than a header). Supports native function calling
+/// when tools are provided.
 /// Marked @unchecked Sendable because all stored properties are immutable
 /// after init and URLSession is thread-safe.
 final class GeminiLLMClient: LLMClient, @unchecked Sendable {
@@ -118,14 +120,19 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
         }
 
         // ── Build request ──────────────────────────────────────────────────
-        let path = "\(model):generateContent"
-        var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "key", value: apiKey)]
-        let url = components.url!
+        guard let resource = Self.resourceName(of: model) else {
+            throw NSError(
+                domain: "GeminiLLMClient",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "That is not a Gemini model's name. Choose the model again in the agent's settings."]
+            )
+        }
+        let url = baseURL.appendingPathComponent("\(resource):generateContent")
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
 
         let contents = messages.map { msg in
             ReqContent(
@@ -286,6 +293,18 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
             usage: usage,
             toolCalls: toolCalls.isEmpty ? nil : toolCalls
         )
+    }
+
+    /// A model's resource name as the API takes it, "models/<id>": a model
+    /// picked from the list is stored with the prefix, one typed or named
+    /// in code may be stored without it, and the API answers 404 to a
+    /// bare id. Nil for what does not read as a model's id (letters,
+    /// digits, `-`, `.` and `_`), so that nothing else reaches the path.
+    nonisolated static func resourceName(of model: String) -> String? {
+        let id = model.hasPrefix("models/") ? String(model.dropFirst("models/".count)) : model
+        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._")
+        guard id.count <= 200, id.allSatisfy(allowed.contains), id.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
+        return "models/\(id)"
     }
 
     func embed(texts: [String], model: String) async throws -> [[Float]] {
