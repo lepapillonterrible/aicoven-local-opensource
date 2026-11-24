@@ -606,27 +606,19 @@ struct TasksView: View {
             }
             if !parts.today.isEmpty {
                 heading(TaskPinPeriod.today.title)
-                ForEach(parts.today) { task in
-                    row(task).taskListRow(vertical: 0)
-                }
+                rows(parts.today, in: .today)
             }
             if !parts.week.isEmpty {
                 heading(TaskPinPeriod.week.title)
-                ForEach(parts.week) { task in
-                    row(task).taskListRow(vertical: 0)
-                }
+                rows(parts.week, in: .week)
             }
             if !parts.needsYou.isEmpty {
                 heading("Needs you")
-                ForEach(parts.needsYou) { task in
-                    row(task).taskListRow(vertical: 0)
-                }
+                rows(parts.needsYou, in: .needsYou)
             }
             if !parts.agentsOnIt.isEmpty {
                 heading("Agents are on it")
-                ForEach(parts.agentsOnIt) { task in
-                    row(task).taskListRow(vertical: 0)
-                }
+                rows(parts.agentsOnIt, in: .agentsOnIt)
             }
             // A place's own page has the New task line under Open, also
             // with no open task; On me, which adds none, has Open only
@@ -639,15 +631,11 @@ struct TasksView: View {
             } else if !parts.open.isEmpty {
                 heading("Open")
             }
-            ForEach(parts.open) { task in
-                row(task).taskListRow(vertical: 0)
-            }
+            rows(parts.open, in: .open)
             if model.finishedCount > 0 {
                 doneHeading.taskListRow(vertical: 0)
                 if showsDone {
-                    ForEach(parts.finished) { task in
-                        row(task).taskListRow(vertical: 0)
-                    }
+                    rows(parts.finished, in: .finished)
                     if model.finishedCount > model.finished.count {
                         Text("Older finished tasks are not listed.")
                             .font(.aicovenBodySmall)
@@ -775,6 +763,17 @@ struct TasksView: View {
             onTalk: { talkItThrough(task) },
             lead: lead(for: task)
         )
+    }
+
+    /// The rows of one part of the list. A row's id is the task's in
+    /// that part: a lazy stack keeps a row by its id, and a task that
+    /// moved to another part under the same id kept the row it had there,
+    /// which its old part no longer drew anew (handed to an agent, it
+    /// still said "Led by …" under "Agents are on it").
+    private func rows(_ tasks: [TaskItem], in part: ListPart) -> some View {
+        ForEach(tasks.map { PartRow(part: part, task: $0) }) { partRow in
+            row(partRow.task).taskListRow(vertical: 0)
+        }
     }
 
     private func row(_ task: TaskItem) -> some View {
@@ -999,6 +998,20 @@ struct TaskReviewRow: View {
         #if os(macOS)
             .controlSize(.small)
         #endif
+    }
+}
+
+/// The parts of the List whose rows are tasks.
+private enum ListPart: String {
+    case today, week, needsYou, agentsOnIt, open, finished
+}
+
+/// A task's row in one part of the List, known by both.
+private struct PartRow: Identifiable {
+    let part: ListPart
+    let task: TaskItem
+    var id: String {
+        "\(part.rawValue)-\(task.id)"
     }
 }
 
