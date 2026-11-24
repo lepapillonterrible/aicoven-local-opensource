@@ -1551,7 +1551,7 @@ actor ChatService {
             let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("anthropic_model")) ?? fallback
             return ("anthropic", model)
         case "google", "gemini":
-            let fallback = modelRouter.fallbackModel(for: "google") ?? "gemini-1.5-pro"
+            let fallback = modelRouter.fallbackModel(for: "google") ?? "gemini-flash-latest"
             let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("gemini_model")) ?? fallback
             return ("google", model)
         case "mlx":

@@ -25,17 +25,21 @@ struct GeminiListResponse: Decodable {
     let models: [Model]
 }
 
-let urlString = "https://generativelanguage.googleapis.com/v1beta/models?key=\(apiKey)"
+let urlString = "https://generativelanguage.googleapis.com/v1beta/models"
 guard let url = URL(string: urlString) else {
     print("Invalid URL")
     exit(1)
 }
 
-print("Fetching models from \(urlString.replacingOccurrences(of: apiKey, with: "HIDDEN_KEY"))...")
+/// The key in its header, never in the address.
+var request = URLRequest(url: url)
+request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+
+print("Fetching models from \(urlString)...")
 
 let semaphore = DispatchSemaphore(value: 0)
 
-let task = URLSession.shared.dataTask(with: url) { data, _, error in
+let task = URLSession.shared.dataTask(with: request) { data, _, error in
     defer { semaphore.signal() }
 
     if let error {
