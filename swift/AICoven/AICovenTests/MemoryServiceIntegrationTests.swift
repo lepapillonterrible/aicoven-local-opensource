@@ -128,7 +128,8 @@ final class MemoryServiceIntegrationTests: XCTestCase {
         XCTAssertEqual(updated.id, record.id)
         XCTAssertEqual(updated.status, "approved")
         XCTAssertEqual(updated.proposedContent, proposedContent)
-        XCTAssertEqual(updated.proposedTags ?? [], proposedTags)
+        // Kept in the clear as the page the entry goes on, not the words given.
+        XCTAssertEqual(updated.proposedTags ?? [], ["page:facts"])
         XCTAssertEqual(updated.reviewedBy, "local-user")
         XCTAssertNotNil(updated.reviewedAt)
 
@@ -136,7 +137,7 @@ final class MemoryServiceIntegrationTests: XCTestCase {
         // content/tags in the proposal's coven.
         let chunks = try await MemoryRepository.shared.loadMemories(in: .coven(coven), limit: 10)
         XCTAssertEqual(chunks.map(\.text), [proposedContent], "Expected a memory matching the approved proposal")
-        XCTAssertEqual(chunks.first?.tags, proposedTags)
+        XCTAssertEqual(chunks.first?.tags, ["page:facts"], "On the page its tags put it on")
     }
 
     func testAProposalIsKeptWhereItWasMade_whateverItsScopeSays() async throws {

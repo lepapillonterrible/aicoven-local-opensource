@@ -56,6 +56,12 @@ final class DatabaseManager {
     WHERE status = 'pending' AND proposed_by = 'system' AND title = 'Thread Summary'
     """
 
+    /// The tags stored with a proposal, as a JSON list of words; none for
+    /// what does not read as one.
+    nonisolated static func tags(in stored: String) -> [String] {
+        (try? JSONDecoder().decode([String].self, from: Data(stored.utf8))) ?? []
+    }
+
     /// Call this early in app startup (e.g., in AICovenApp) to open the DB and run migrations.
     func configureIfNeeded() {
         guard dbQueue == nil else { return }
@@ -63,6 +69,12 @@ final class DatabaseManager {
         do {
             var configuration = Configuration()
             configuration.foreignKeysEnabled = true
+            // What is deleted or replaced is overwritten in the file, not
+            // left readable in its free pages: text that was sealed or
+            // taken away does not stay behind in the clear.
+            configuration.prepareDatabase { db in
+                try db.execute(sql: "PRAGMA secure_delete = ON")
+            }
             let queue = try DatabaseQueue(path: databaseURL.path, configuration: configuration)
             var migrator = DatabaseMigrator()
 
@@ -841,7 +853,44 @@ final class DatabaseManager {
                 try db.execute(sql: Self.summaryProposalsThatWait)
             }
 
+            // v25: what is kept in the clear says no more than it must.
+            // A proposal's text is sealed; of the rest, its tags (a word a
+            // model chose) are kept as the page the entry would go on, one
+            // of four, and its title, reason and review notes, which this
+            // app does not write, are taken away from older rows. And a
+            // coven keeps its id and its account, whatever writes: rows of
+            // every kind are bound to it (assets, coven context, memory,
+            // agents, tasks). One with no account yet, from before
+            // accounts were kept, can still be given its account.
+            migrator.registerMigration("v25_less_in_the_clear") { db in
+                let rows = try Row.fetchAll(db, sql: "SELECT id, proposed_tags FROM memory_proposals WHERE proposed_tags IS NOT NULL")
+                for row in rows {
+                    let id: String = row["id"]
+                    let stored: String = row["proposed_tags"]
+                    try db.execute(
+                        sql: "UPDATE memory_proposals SET proposed_tags = ? WHERE id = ?",
+                        arguments: [MemoryProposalRepository.storedTags(Self.tags(in: stored)), id]
+                    )
+                }
+                try db.execute(sql: "UPDATE memory_proposals SET title = NULL, reason = NULL, review_feedback = NULL")
+                try db.execute(sql: """
+                CREATE TRIGGER covens_keep_their_id_and_account
+                BEFORE UPDATE OF id, user_id ON covens
+                WHEN NEW.id IS NOT OLD.id OR (OLD.user_id IS NOT NULL AND NEW.user_id IS NOT OLD.user_id)
+                BEGIN
+                    SELECT RAISE(ABORT, 'a coven keeps its id and its account');
+                END;
+                """)
+            }
+
+            let compacted = try queue.read { db in try migrator.appliedIdentifiers(db) }.contains("v25_less_in_the_clear")
             try migrator.migrate(queue)
+            // Once, as v25 is applied: what was in the clear before (and
+            // before secure delete was on) is not left in the file's free
+            // pages either.
+            if !compacted {
+                try queue.vacuum()
+            }
             dbQueue = queue
         } catch {
             AppErrorReporter.log(error: error, context: "DatabaseManager.configureIfNeeded")

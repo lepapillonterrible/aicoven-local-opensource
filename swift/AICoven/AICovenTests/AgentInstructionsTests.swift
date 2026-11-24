@@ -177,13 +177,20 @@ final class AgentInstructionsTests: XCTestCase {
 
         // Nor is another account's agent read for a turn: its instructions are not told.
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        // A coven keeps its account, so the agent is moved into one of
+        // another account's.
+        let theirs = "theirs-\(UUID().uuidString)"
         try await queue.write { db in
-            try db.execute(sql: "UPDATE covens SET user_id = 'someone-else' WHERE id = ?", arguments: [coven.id])
-            try db.execute(sql: "UPDATE roles SET user_id = 'someone-else' WHERE id = ?", arguments: [scout.id])
+            try db.execute(
+                sql: "INSERT INTO covens (id, user_id, name, created_at, updated_at) VALUES (?, 'someone-else', 'Theirs', ?, ?)",
+                arguments: [theirs, Date(), Date()]
+            )
+            try db.execute(sql: "UPDATE roles SET user_id = 'someone-else', coven_id = ? WHERE id = ?", arguments: [theirs, scout.id])
         }
         addTeardownBlock {
             try? await queue.write { db in
-                try db.execute(sql: "DELETE FROM covens WHERE id = ?", arguments: [coven.id])
+                try db.execute(sql: "DELETE FROM roles WHERE id = ?", arguments: [scout.id])
+                try db.execute(sql: "DELETE FROM covens WHERE id IN (?, ?)", arguments: [coven.id, theirs])
             }
         }
         try await chat(with: model).streamMessage(threadId: personal, as: UserScope.currentUserID, message: "Hello", roleId: scout.id, onStateChange: { _ in })

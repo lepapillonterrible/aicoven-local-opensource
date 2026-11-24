@@ -518,6 +518,15 @@ actor MemoryProposalRepository {
 
     private static let purpose = "memory_proposal"
 
+    /// What is kept in the clear of a proposal's tags: only the page the
+    /// entry would go on (`page:<name>`, one of four), whatever words a
+    /// model chose, which can say something of what it is about. Approved,
+    /// the memory goes on the same page. Nil for no tags.
+    nonisolated static func storedTags(_ tags: [String]) -> String? {
+        guard !tags.isEmpty else { return nil }
+        return "[\"\(MemoryPage.of(tags: tags).tag)\"]"
+    }
+
     /// A stored proposal with its text opened. One whose text the key in
     /// memory cannot open is given as unreadable, with no text.
     private func opened(_ record: MemoryProposalRecord) async throws -> MemoryProposalRecord {
@@ -646,13 +655,7 @@ actor MemoryProposalRepository {
         let sealed = try await AccountSeal.seal(proposedContent, purpose: Self.purpose, for: owner)
 
         let now = Date()
-        let tagsString: String?
-        if let proposedTags, !proposedTags.isEmpty {
-            let data = try JSONEncoder().encode(proposedTags)
-            tagsString = String(data: data, encoding: .utf8)
-        } else {
-            tagsString = nil
-        }
+        let tagsString = Self.storedTags(proposedTags ?? [])
 
         let record = MemoryProposalRecord(
             id: id,

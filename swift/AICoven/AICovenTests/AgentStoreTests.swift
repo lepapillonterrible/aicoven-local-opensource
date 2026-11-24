@@ -177,13 +177,20 @@ final class AgentStoreTests: XCTestCase {
         // An agent that is another account's is not found.
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
         let coven = covenID
+        // A coven keeps its account, so the agent is moved into one of
+        // another account's.
+        let theirs = "theirs-\(UUID().uuidString)"
         try await queue.write { db in
-            try db.execute(sql: "UPDATE covens SET user_id = 'someone-else' WHERE id = ?", arguments: [coven])
-            try db.execute(sql: "UPDATE roles SET user_id = 'someone-else' WHERE id = ?", arguments: [made.id])
+            try db.execute(
+                sql: "INSERT INTO covens (id, user_id, name, created_at, updated_at) VALUES (?, 'someone-else', 'Theirs', ?, ?)",
+                arguments: [theirs, Date(), Date()]
+            )
+            try db.execute(sql: "UPDATE roles SET user_id = 'someone-else', coven_id = ? WHERE id = ?", arguments: [theirs, made.id])
         }
         addTeardownBlock {
             try? await queue.write { db in
-                try db.execute(sql: "DELETE FROM covens WHERE id = ?", arguments: [coven])
+                try db.execute(sql: "DELETE FROM roles WHERE id = ?", arguments: [made.id])
+                try db.execute(sql: "DELETE FROM covens WHERE id IN (?, ?)", arguments: [coven, theirs])
             }
         }
         do {
@@ -195,7 +202,7 @@ final class AgentStoreTests: XCTestCase {
         }
         XCTAssertEqual(stored, "Scout")
         do {
-            _ = try await RoleService.shared.createAgent(inCoven: coven, edited, as: account)
+            _ = try await RoleService.shared.createAgent(inCoven: theirs, edited, as: account)
             XCTFail("An agent is made only in a coven of the account's")
         } catch CovenRepositoryError.covenNotFound {}
     }
