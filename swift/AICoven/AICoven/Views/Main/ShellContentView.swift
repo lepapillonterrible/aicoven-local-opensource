@@ -89,6 +89,7 @@ struct ShellContentView: View {
                 if covenID == nil || coven?.id == covenID {
                     MemoryPagesView(scope: ShellScope(covenID: covenID), covenName: coven?.name ?? "Strix")
                         .id(covenID)
+                        .barTitle("Memory")
                         // Once for each opening of a scope's memory.
                         .onAppear {
                             if ShellRootView.reportsUsage { AnalyticsService.shared.trackMemoryListOpened(covenId: covenID) }
@@ -102,6 +103,7 @@ struct ShellContentView: View {
                 if covenID == nil || coven?.id == covenID {
                     AssetLibraryView(covenID: covenID, navigator: navigator)
                         .id(covenID)
+                        .barTitle("Assets")
                 } else {
                     overview
                 }
@@ -300,5 +302,19 @@ private extension View {
         } else {
             self
         }
+    }
+}
+
+private extension View {
+    /// The place's name in the bar off the Mac, as the cloud app's page
+    /// gives it: the iPad's split layout has no other, and the phone's
+    /// stack gives the same. The Mac's window title names the place.
+    func barTitle(_ title: String) -> some View {
+        #if os(iOS)
+        navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+        #else
+        self
+        #endif
     }
 }
