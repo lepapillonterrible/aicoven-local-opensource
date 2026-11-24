@@ -2381,6 +2381,9 @@ actor ToolExecutionService {
     /// else. Why is logged.
     static func askInItsThread(_ approval: ToolApproval) async -> ApprovalAnswer {
         var approval = approval
+        // Whose it is, noted before anything is looked up: if another
+        // account signs in meanwhile, it is not asked of that one.
+        let account = await MainActor.run { UserScope.currentUserID }
         do {
             let thread = try await ThreadService.shared.getThread(threadId: approval.threadID)
             approval.threadTitle = thread.title ?? approval.threadTitle
@@ -2395,7 +2398,7 @@ actor ToolExecutionService {
             AppErrorReporter.log(error: error, context: "ToolExecutionService.askInItsThread")
             return .notAsked
         }
-        return await ToolApprovals.shared.ask(approval)
+        return await ToolApprovals.shared.ask(approval, for: account)
     }
 
     // MARK: - Configuration Methods

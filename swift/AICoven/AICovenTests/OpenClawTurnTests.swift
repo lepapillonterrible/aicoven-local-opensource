@@ -684,7 +684,7 @@ final class OpenClawTurnTests: XCTestCase {
 
         // What follows a turn is made by the app's own models, and is not
         // made for a turn that went to OpenClaw.
-        await chat.updateThreadSummary(threadId: threadID)
+        await chat.updateThreadSummary(threadId: threadID, roleId: nil, as: UserScope.currentUserID)
         XCTAssertEqual(model.calls, 0)
         await DataEncryptionService.shared.lock()
     }
@@ -828,7 +828,7 @@ final class OpenClawTurnTests: XCTestCase {
             openClawTurn: { _ in made }
         )
 
-        await chat.updateThreadSummary(threadId: threadID)
+        await chat.updateThreadSummary(threadId: threadID, roleId: nil, as: UserScope.currentUserID)
 
         XCTAssertEqual(model.models, ["claw-model"], "The summary is asked of the model chosen for OpenClaw, by its name")
         await DataEncryptionService.shared.lock()

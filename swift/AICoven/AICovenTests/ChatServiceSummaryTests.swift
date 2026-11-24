@@ -119,7 +119,7 @@ final class ChatServiceSummaryTests: XCTestCase {
         )
         await chatService.addLocalMessage(userMessage)
 
-        await chatService.updateThreadSummary(threadId: threadID)
+        await chatService.updateThreadSummary(threadId: threadID, roleId: nil, as: UserScope.currentUserID)
 
         let summary = mockThreadStore.updatedSummaries[threadID]
         XCTAssertEqual(summary, "This is a summary from mock client.")
@@ -187,9 +187,9 @@ final class ChatServiceSummaryTests: XCTestCase {
             id: UUID().uuidString, threadId: "late", role: "user", content: "Hello", metadata: nil, tokenUsage: nil,
             createdAt: Date(), isEncrypted: false, keyFingerprint: nil
         ))
-        let first = Task { await chatService.updateThreadSummary(threadId: "late") }
+        let first = Task { await chatService.updateThreadSummary(threadId: "late", roleId: nil, as: UserScope.currentUserID) }
         await client.firstArrived()
-        await chatService.updateThreadSummary(threadId: "late")
+        await chatService.updateThreadSummary(threadId: "late", roleId: nil, as: UserScope.currentUserID)
         XCTAssertEqual(store.updatedSummaries["late"], "Summary 2")
         client.letGo()
         await first.value
@@ -224,7 +224,7 @@ final class ChatServiceSummaryTests: XCTestCase {
             id: UUID().uuidString, threadId: "thread-no-proposal", role: "user", content: "Hello", metadata: nil, tokenUsage: nil,
             createdAt: Date(), isEncrypted: false, keyFingerprint: nil
         ))
-        await chatService.updateThreadSummary(threadId: "thread-no-proposal")
+        await chatService.updateThreadSummary(threadId: "thread-no-proposal", roleId: nil, as: UserScope.currentUserID)
         XCTAssertEqual(store.updatedSummaries["thread-no-proposal"], "This is a summary from mock client.")
         let after = try await waiting()
         XCTAssertEqual(after, before, "No proposal is made of it")
@@ -276,7 +276,7 @@ final class ChatServiceSummaryTests: XCTestCase {
         )
         await chatService.addLocalMessage(userMessage)
 
-        await chatService.updateThreadSummary(threadId: threadID)
+        await chatService.updateThreadSummary(threadId: threadID, roleId: nil, as: UserScope.currentUserID)
 
         // With no available models or clients, updateThreadSummary should exit
         // early and never call into the thread store.

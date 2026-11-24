@@ -172,11 +172,14 @@ final class ToolApprovals: ObservableObject {
     /// approved and the task that asked has not been cancelled: a turn that
     /// is stopped does not go on to do what it was asking about, even if
     /// Approve was pressed as it stopped.
-    func ask(_ approval: ToolApproval) async -> ApprovalAnswer {
+    /// `owner`, where given, is the account the approval is asked for: if
+    /// another is signed in by the time it would be shown, it is withdrawn
+    /// unseen.
+    func ask(_ approval: ToolApproval, for owner: String? = nil) async -> ApprovalAnswer {
         let account = accountChanges
         let answer = await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<ApprovalAnswer, Never>) in
-                guard !Task.isCancelled else {
+                guard !Task.isCancelled, owner.map({ $0 == UserScope.currentUserID }) ?? true else {
                     continuation.resume(returning: .withdrawn)
                     return
                 }

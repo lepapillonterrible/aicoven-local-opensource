@@ -74,6 +74,8 @@ class AuthService: ObservableObject {
                 ThreadActivities.shared.accountChanged()
                 MemoryProposalQuestions.shared.accountChanged()
                 ToolApprovals.shared.accountChanged()
+                // A turn still running for the account before is stopped there.
+                TurnEngine.shared.accountChanged()
                 LocalNotifications.shared.accountReported(firebaseUser?.uid)
                 // The pictures drawn of the account's assets are held in
                 // memory only, and not for whoever is signed in next.
@@ -207,6 +209,8 @@ class AuthService: ObservableObject {
         AssetThumbnails.shared.forgetAll()
         MemoryProposalQuestions.shared.accountChanged()
         ToolApprovals.shared.accountChanged()
+        // A turn still running for the account before is stopped there.
+        TurnEngine.shared.accountChanged()
         LocalNotifications.shared.accountReported(nil)
         currentUser = nil
         isAuthenticated = false
@@ -365,6 +369,8 @@ class AuthService: ObservableObject {
         AssetThumbnails.shared.forgetAll()
         MemoryProposalQuestions.shared.accountChanged()
         ToolApprovals.shared.accountChanged()
+        // A turn still running for the account before is stopped there.
+        TurnEngine.shared.accountChanged()
         LocalNotifications.shared.accountReported(nil)
 
         print("✅ Account deleted successfully")

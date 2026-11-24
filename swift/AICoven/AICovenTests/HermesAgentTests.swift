@@ -647,7 +647,7 @@ final class HermesAgentTests: XCTestCase {
         // by the time it ends.
         try await ThreadRepository.shared.appendChatMessage(TurnProgress.message(in: threadID, role: "user", content: "Hello"))
         defaults.set("openai", forKey: keys[0])
-        await chat.updateThreadSummary(threadId: threadID)
+        await chat.updateThreadSummary(threadId: threadID, roleId: nil, as: UserScope.currentUserID)
         XCTAssertEqual(model.calls, 0)
         await DataEncryptionService.shared.lock()
     }
