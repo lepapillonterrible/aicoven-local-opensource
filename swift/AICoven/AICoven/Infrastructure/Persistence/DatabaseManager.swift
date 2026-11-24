@@ -49,6 +49,13 @@ final class DatabaseManager {
       AND (SELECT COUNT(*) FROM covens WHERE covens.user_id = memory_chunks.user_id) = 1
     """
 
+    /// Takes away the thread summaries the app once offered as memories
+    /// about the person and that still wait for an answer (v24).
+    nonisolated static let summaryProposalsThatWait = """
+    DELETE FROM memory_proposals
+    WHERE status = 'pending' AND proposed_by = 'system' AND title = 'Thread Summary'
+    """
+
     /// Call this early in app startup (e.g., in AICovenApp) to open the DB and run migrations.
     func configureIfNeeded() {
         guard dbQueue == nil else { return }
@@ -822,6 +829,16 @@ final class DatabaseManager {
                     SELECT RAISE(ABORT, 'an asset relation is not changed');
                 END;
                 """)
+            }
+
+            // A thread's summary was once offered as a memory about the
+            // person after every summarised turn ("Thread Summary", proposed
+            // by the app itself): it is kept with its thread instead. The
+            // ones still waiting are taken away, so that Activity does not
+            // ask about each; none the person answered, or that anyone else
+            // proposed, is touched.
+            migrator.registerMigration("v24_no_summary_proposals") { db in
+                try db.execute(sql: Self.summaryProposalsThatWait)
             }
 
             try migrator.migrate(queue)

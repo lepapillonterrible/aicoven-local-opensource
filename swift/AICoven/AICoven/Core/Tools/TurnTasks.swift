@@ -13,6 +13,9 @@ final nonisolated class TurnTasks: @unchecked Sendable {
     private let lock = NSLock()
     private var makings = 0
     private var changes = 0
+    /// What this turn has added, by title whatever its case: the task's
+    /// id and how it was told.
+    private var added: [String: String] = [:]
 
     /// Takes one of the turn's makings; false if it has none left.
     func takeAMaking() -> Bool {
@@ -26,6 +29,17 @@ final nonisolated class TurnTasks: @unchecked Sendable {
     /// A making that made nothing is given back.
     func giveBackAMaking() {
         lock.withLock { makings -= 1 }
+    }
+
+    /// How a task this turn added under this title was told; nil where it
+    /// added none.
+    func added(titled title: String) -> String? {
+        lock.withLock { added[title.lowercased()] }
+    }
+
+    /// Notes a task this turn added, and how it was told.
+    func noteAdded(titled title: String, as told: String) {
+        lock.withLock { added[title.lowercased()] = told }
     }
 
     /// Takes one of the turn's changes; false if it has none left.

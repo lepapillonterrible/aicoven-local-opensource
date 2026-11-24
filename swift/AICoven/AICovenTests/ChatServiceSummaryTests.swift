@@ -1,3 +1,4 @@
+import GRDB
 import XCTest
 @testable import AICoven
 
@@ -122,6 +123,56 @@ final class ChatServiceSummaryTests: XCTestCase {
 
         let summary = mockThreadStore.updatedSummaries[threadID]
         XCTAssertEqual(summary, "This is a summary from mock client.")
+    }
+
+    /// A thread's summary is kept with the thread and offered to no memory:
+    /// it was once proposed as one about the person after every turn.
+    func testASummaryIsOfferedToNoMemory_andTheOnesThatWaitedAreTakenAway() async throws {
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        DatabaseManager.shared.configureIfNeeded()
+        let account = UserScope.currentUserID
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        func waiting() async throws -> Int {
+            try await queue.read { db in
+                try Int.fetchOne(
+                    db, sql: "SELECT COUNT(*) FROM memory_proposals WHERE user_id = ? AND status = 'pending' AND title = 'Thread Summary'",
+                    arguments: [account]
+                ) ?? 0
+            }
+        }
+        let before = try await waiting()
+
+        let model = ModelDescriptor(providerID: "test-provider", modelID: "test-model", maxContextTokens: 4096, supportsTools: false, supportsEmbeddings: false, costClass: .cheap)
+        let store = MockThreadStore()
+        let chatService = ChatService(
+            contextBuilder: ContextBuilder(), modelRouter: HeuristicModelRouter(availableModels: [model]),
+            llmClients: ["test-provider": MockLLMClient()], threadStore: store, toolService: MockChatToolService(), shouldAutoRefreshEnvironment: false
+        )
+        await chatService.addLocalMessage(ChatMessage(
+            id: UUID().uuidString, threadId: "thread-no-proposal", role: "user", content: "Hello", metadata: nil, tokenUsage: nil,
+            createdAt: Date(), isEncrypted: false, keyFingerprint: nil
+        ))
+        await chatService.updateThreadSummary(threadId: "thread-no-proposal")
+        XCTAssertEqual(store.updatedSummaries["thread-no-proposal"], "This is a summary from mock client.")
+        let after = try await waiting()
+        XCTAssertEqual(after, before, "No proposal is made of it")
+
+        // What the migration takes away: only the app's own summary proposals that still wait.
+        try await queue.write { db in
+            for (id, by, title, status) in [
+                ("s-waiting", "system", "Thread Summary", "pending"), ("s-answered", "system", "Thread Summary", "approved"),
+                ("s-agent", "agent", "Thread Summary", "pending"), ("s-other", "system", "Something else", "pending"),
+            ] {
+                try db.execute(
+                    sql: "INSERT INTO memory_proposals (id, proposed_content, status, proposed_by, title, created_at, user_id) VALUES (?, '', ?, ?, ?, ?, ?)",
+                    arguments: [id, status, by, title, Date(), account]
+                )
+            }
+            try db.execute(sql: DatabaseManager.summaryProposalsThatWait)
+            let left = try String.fetchAll(db, sql: "SELECT id FROM memory_proposals WHERE id LIKE 's-%' ORDER BY id")
+            XCTAssertEqual(left, ["s-agent", "s-answered", "s-other"])
+            try db.execute(sql: "DELETE FROM memory_proposals WHERE id LIKE 's-%'")
+        }
     }
 
     func testUpdateThreadSummaryDoesNothingWhenNoModelAvailable() async {

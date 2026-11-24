@@ -121,6 +121,17 @@ final class TaskToolsTests: XCTestCase {
         XCTAssertEqual(read("Add task review launch copy tomorrow"), [.add(title: "review launch copy", dueHint: "tomorrow")])
         XCTAssertEqual(read("create a new task for the board pack"), [.add(title: "board pack", dueHint: nil)])
         XCTAssertEqual(read("Remind me to call the bank this week."), [.add(title: "call the bank", dueHint: "this week")])
+        // The word that brings the day in is not the title's.
+        XCTAssertEqual(read("Add a task to book the flights to Lisbon, due tomorrow."), [.add(title: "book the flights to Lisbon", dueHint: "tomorrow")])
+        XCTAssertEqual(read("add task book flights to Lisbon due tomorrow"), [.add(title: "book flights to Lisbon", dueHint: "tomorrow")])
+        XCTAssertEqual(read("remind me to send the deck by next week"), [.add(title: "send the deck", dueHint: "next week")])
+        XCTAssertEqual(read("add task pay the due tomorrow"), [.add(title: "pay the", dueHint: "tomorrow")], "Only a last word that brings the day in goes")
+        XCTAssertEqual(read("add task file what is due"), [.add(title: "file what is due", dueHint: nil)], "With no day, it is the title's")
+        XCTAssertEqual(
+            read("add task book flights, due tomorrow, and mark Auth QA done"),
+            [.add(title: "book flights", dueHint: "tomorrow"), .complete(title: "Auth QA")],
+            "A comma before the day joins it to its part; the others still split"
+        )
         XCTAssertEqual(
             read("remember to tomorrow"), [.add(title: "tomorrow", dueHint: "tomorrow")],
             "Words that are only a day are the title all the same, and the day, as on the server"
@@ -517,6 +528,20 @@ final class TaskToolsTests: XCTestCase {
         )
         XCTAssertEqual(result.status, "ok")
         XCTAssertEqual(stand.changed.map(\.id), ["qa"])
+    }
+
+    func testTheSameTaskAskedForAgainInOneTurn_isNotAddedTwice() async {
+        let stand = stand()
+        let turn = TurnTasks()
+        _ = await command("add task book flights to Lisbon due tomorrow", turn: turn, stand)
+        let again = await command("Add task Book flights to Lisbon tomorrow", turn: turn, stand)
+        XCTAssertEqual(stand.created.map(\.title), ["book flights to Lisbon"], "Whatever its case")
+        XCTAssertTrue(again.contextBlock?.contains("- Already added in this turn, not added again: book flights to Lisbon (task_id: made-1; due: 2027-01-14)") == true)
+        XCTAssertEqual(again.result?["changed"]?.value as? Int, 1)
+
+        // Another turn adds it, as the person asked again.
+        _ = await command("add task book flights to Lisbon", turn: TurnTasks(), stand)
+        XCTAssertEqual(stand.created.count, 2)
     }
 
     func testATurnAddsOnlySoManyTasks_andChangesThemOnlySoOften() async {

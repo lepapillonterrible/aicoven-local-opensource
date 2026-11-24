@@ -438,6 +438,13 @@ struct PersonalChatView: View {
     }
 
     private var enhancedMessages: [EnhancedChatMessage] {
+        Self.shown(messages, agentName: thread.agentName)
+    }
+
+    /// The thread's messages as the bubbles show them: each with an id of
+    /// its own, its agent's name (the thread's where it names none), and
+    /// everything else it carries, its assets' cards included.
+    static func shown(_ messages: [ChatMessage], agentName: String?) -> [EnhancedChatMessage] {
         var idCounts = [String: Int]()
         return messages.map { msg in
             let count = idCounts[msg.id, default: 0]
@@ -446,7 +453,7 @@ struct PersonalChatView: View {
             let uniqueId = count == 0 ? msg.id : "\(msg.id)-dup\(count)"
 
             let base = MessageAdapter.toEnhanced(from: msg, response: nil)
-            let resolvedAgentRole = base.agentRole ?? thread.agentName
+            let resolvedAgentRole = base.agentRole ?? agentName
 
             // All messages use uniqueId for consistent deduplication
             return EnhancedChatMessage(
@@ -464,6 +471,8 @@ struct PersonalChatView: View {
                 attachments: base.attachments,
                 images: base.images,
                 generatedFiles: base.generatedFiles,
+                // The assets the reply's turn made: its cards.
+                assetIDs: base.assetIDs,
                 createdAt: base.createdAt
             )
         }
