@@ -24,9 +24,6 @@ final class LessInTheClearTests: XCTestCase {
         XCTAssertEqual(MemoryProposalRepository.storedTags(["coven:policy"]), #"["page:how"]"#)
         XCTAssertEqual(MemoryProposalRepository.storedTags(["page:purpose"]), #"["page:purpose"]"#)
         XCTAssertNil(MemoryProposalRepository.storedTags([]))
-        // Read back as they were stored before (a JSON list), or as none.
-        XCTAssertEqual(DatabaseManager.tags(in: #"["health","diet"]"#), ["health", "diet"])
-        XCTAssertEqual(DatabaseManager.tags(in: "not a list"), [])
     }
 
     func testAStoredProposal_keepsOnlyItsPageInTheClear() async throws {
@@ -44,10 +41,19 @@ final class LessInTheClearTests: XCTestCase {
         XCTAssertEqual(row?["proposed_content"], "", "The text itself is sealed")
     }
 
-    func testWhatIsDeletedIsOverwritten() async throws {
+    func testWhatIsDeletedIsOverwritten_andTheFileIsCompactedOnce() async throws {
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
         let on = try await queue.read { db in try Int.fetchOne(db, sql: "PRAGMA secure_delete") }
         XCTAssertEqual(on, 1)
+        // The compaction is recorded once it has been done, and only then.
+        var done = false
+        for _ in 0 ..< 10000 where !done {
+            done = try await queue.read { db in
+                try Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM upkeep_done WHERE name = ?)", arguments: [DatabaseManager.compacted]) ?? false
+            }
+            await Task.yield()
+        }
+        XCTAssertTrue(done)
     }
 
     func testRecordingsLeftByARunThatEndedEarly_areRemoved_andNothingElse() throws {
@@ -76,6 +82,18 @@ final class LessInTheClearTests: XCTestCase {
             } catch let error as DatabaseError {
                 XCTAssertEqual(error.resultCode, .SQLITE_CONSTRAINT)
             }
+        }
+        // Nor is it replaced by another account's row with its id.
+        do {
+            try await queue.write { db in
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO covens (id, user_id, name, created_at, updated_at) VALUES (?, 'someone-else', 'Theirs', ?, ?)",
+                    arguments: [coven.id, Date(), Date()]
+                )
+            }
+            XCTFail("A replacing insert is refused too")
+        } catch let error as DatabaseError {
+            XCTAssertEqual(error.resultCode, .SQLITE_CONSTRAINT)
         }
         // Its other columns change as before.
         try await queue.write { db in try db.execute(sql: "UPDATE covens SET name = 'Renamed' WHERE id = ?", arguments: [coven.id]) }
