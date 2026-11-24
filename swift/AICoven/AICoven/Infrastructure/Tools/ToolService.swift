@@ -359,11 +359,6 @@ actor ToolService {
         // than 10 MB.
         let maxDownloadSize = 10 * 1024 * 1024 // 10 MB
         let (bytes, response) = try await UnkeptFetch.session.bytes(for: request, delegate: PublicRedirectsOnly())
-        var data = Data()
-        for try await byte in bytes {
-            data.append(byte)
-            if data.count >= maxDownloadSize { break }
-        }
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw NSError(
@@ -381,7 +376,13 @@ actor ToolService {
             )
         }
 
-        let usableData = data
+        // The body only of a page that was given, and no more than its limit.
+        var usableData = Data()
+        if response.expectedContentLength > 0 { usableData.reserveCapacity(Int(min(response.expectedContentLength, Int64(maxDownloadSize)))) }
+        for try await byte in bytes {
+            usableData.append(byte)
+            if usableData.count >= maxDownloadSize { break }
+        }
 
         // Decode content as text
         guard let html = String(data: usableData, encoding: .utf8) ?? String(data: usableData, encoding: .isoLatin1) else {

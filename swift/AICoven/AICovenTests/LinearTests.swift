@@ -153,10 +153,11 @@ final class LinearTests: XCTestCase {
         """#.utf8)) as? [String: Any])
 
         XCTAssertEqual(LinearToolService.told(issue: issue), """
-        [Linear Issue: ENG-12] Header overlaps the logo
+        [Linear Issue: ENG-12]
+        \(LinearToolService.dataNote)
+        Title: Header overlaps the logo
         URL: https://linear.app/acme/issue/ENG-12
         State: In Progress · Assignee: Ada · Team: Engineering · Priority: High · Due: 2026-12-01
-        \(LinearToolService.dataNote)
 
         Description:
         ```
@@ -170,7 +171,7 @@ final class LinearTests: XCTestCase {
         - Someone, 2026-11-19T11:00:00Z: Thanks
         ```
         """)
-        XCTAssertEqual(LinearToolService.told(issue: ["identifier": "ENG-1"]), "[Linear Issue: ENG-1] (untitled)\nState: (none) · Assignee: (no one)\n\(LinearToolService.dataNote)\n\nDescription:\n(none)")
+        XCTAssertEqual(LinearToolService.told(issue: ["identifier": "ENG-1"]), "[Linear Issue: ENG-1]\n\(LinearToolService.dataNote)\nTitle: (untitled)\nState: (none) · Assignee: (no one)\n\nDescription:\n(none)")
         XCTAssertEqual([0, 1, 2, 3, 4, 9].map(LinearToolService.priorityName), ["None", "Urgent", "High", "Medium", "Low", "None"])
 
         // A long description is cut where a file's text is.
@@ -326,7 +327,7 @@ final class LinearTests: XCTestCase {
         let result = await world.call("linear.getIssue", ["issue": AnyJSONValue("https://linear.app/acme/issue/eng-12/header")])
 
         XCTAssertEqual(result.status, "ok")
-        XCTAssertEqual(result.contextBlock, "[Linear Issue: ENG-12] Header overlaps the logo\nURL: https://linear.app/acme/issue/ENG-12\nState: Todo · Assignee: (no one) · Priority: None\n\(LinearToolService.dataNote)\n\nDescription:\n(none)")
+        XCTAssertEqual(result.contextBlock, "[Linear Issue: ENG-12]\n\(LinearToolService.dataNote)\nTitle: Header overlaps the logo\nURL: https://linear.app/acme/issue/ENG-12\nState: Todo · Assignee: (no one) · Priority: None\n\nDescription:\n(none)")
         let request = try XCTUnwrap(world.asked.requests.first)
         XCTAssertEqual(request.authorization, "lin_api_TEST")
         XCTAssertEqual(request.body["variables"] as? NSDictionary, ["id": "ENG-12"] as NSDictionary)

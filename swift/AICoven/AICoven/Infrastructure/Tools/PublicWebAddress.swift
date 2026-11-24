@@ -30,9 +30,56 @@ nonisolated enum PublicWebAddress {
     @concurrent
     static func resolvesPublicly(_ url: URL) async -> Bool {
         guard reads(url), let host = url.host(percentEncoded: false) else { return false }
-        if IPAddress(host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))) != nil { return true }
-        let addresses = addresses(of: host)
-        return !addresses.isEmpty && addresses.allSatisfy(\.isPublic)
+        let written = IPAddress(host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")))
+        let addresses = written.map { [$0] } ?? addresses(of: host)
+        // A public address can still be this device's own, or one on the
+        // network it is on (an IPv6 network gives every device one).
+        let local = LocalNetwork.current()
+        return !addresses.isEmpty && addresses.allSatisfy { $0.isPublic && !local.contains($0) }
+    }
+
+    /// This device's own addresses and the networks they are on, as its
+    /// interfaces say now.
+    struct LocalNetwork {
+        /// (address, netmask) of each interface, as bytes.
+        let interfaces: [(address: [UInt8], mask: [UInt8])]
+
+        func contains(_ address: IPAddress) -> Bool {
+            let bytes = address.bytes
+            return interfaces.contains { interface in
+                guard interface.address.count == bytes.count, interface.mask.count == bytes.count else { return false }
+                return zip(zip(interface.address, interface.mask), bytes).allSatisfy { pair, byte in pair.0 & pair.1 == byte & pair.1 }
+            }
+        }
+
+        static func current() -> LocalNetwork {
+            var first: UnsafeMutablePointer<ifaddrs>?
+            guard getifaddrs(&first) == 0, let list = first else { return LocalNetwork(interfaces: []) }
+            defer { freeifaddrs(list) }
+            var found: [(address: [UInt8], mask: [UInt8])] = []
+            var next: UnsafeMutablePointer<ifaddrs>? = list
+            while let entry = next {
+                // An interface with no mask (some tunnels) says nothing of
+                // a network: it would take in every address.
+                if let address = entry.pointee.ifa_addr, let mask = entry.pointee.ifa_netmask,
+                   let one = bytes(of: address), let other = bytes(of: mask), one.count == other.count, other.contains(where: { $0 != 0 }) {
+                    found.append((one, other))
+                }
+                next = entry.pointee.ifa_next
+            }
+            return LocalNetwork(interfaces: found)
+        }
+
+        private static func bytes(of address: UnsafeMutablePointer<sockaddr>) -> [UInt8]? {
+            switch Int32(address.pointee.sa_family) {
+            case AF_INET:
+                address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { withUnsafeBytes(of: $0.pointee.sin_addr) { Array($0) } }
+            case AF_INET6:
+                address.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { withUnsafeBytes(of: $0.pointee.sin6_addr) { Array($0) } }
+            default:
+                nil
+            }
+        }
     }
 
     /// The addresses `host` resolves to on this device.
@@ -87,6 +134,16 @@ nonisolated enum PublicWebAddress {
             self = .v4(UInt32(bigEndian: v4.s_addr))
         }
 
+        /// Its bytes, in network order.
+        var bytes: [UInt8] {
+            switch self {
+            case let .v4(value):
+                withUnsafeBytes(of: value.bigEndian) { Array($0) }
+            case let .v6(bytes):
+                bytes
+            }
+        }
+
         /// Whether it is an address of the public internet.
         var isPublic: Bool {
             switch self {
@@ -138,7 +195,16 @@ nonisolated enum PublicWebAddress {
             if bytes[0] == 0xFE, bytes[1] & 0xC0 == 0x80 { return false } // link-local fe80::/10
             if bytes[0] == 0xFE, bytes[1] & 0xC0 == 0xC0 { return false } // site-local fec0::/10
             if bytes[0] == 0xFF { return false } // multicast
-            if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x0D, bytes[3] == 0xB8 { return false } // documentation
+            // IETF protocol assignments 2001::/23 (benchmarking, ORCHID,
+            // documentation 2001:db8::/32 among them) and documentation
+            // 3fff::/20 are no one's public address.
+            if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] & 0xFE == 0x00 { return false }
+            if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x0D, bytes[3] == 0xB8 { return false }
+            if bytes[0] == 0x3F, bytes[1] == 0xFF, bytes[2] & 0xF0 == 0x00 { return false }
+            // 6to4 2002::/16 carries an IPv4 address: it is that address.
+            if bytes[0] == 0x20, bytes[1] == 0x02 {
+                return isPublicV4(bytes[2 ..< 6].reduce(0) { $0 << 8 | UInt32($1) })
+            }
             // Only global unicast (2000::/3) is the public internet.
             return bytes[0] & 0xE0 == 0x20
         }
