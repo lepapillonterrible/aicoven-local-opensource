@@ -119,7 +119,7 @@ class StoreService: ObservableObject {
     /// Requires authentication - clears entitlements if no user is signed in.
     func reloadForCurrentUser() async {
         let userID = UserScope.currentUserID
-        print("💳 StoreService.reloadForCurrentUser: userID=\(userID)")
+        print("💳 StoreService.reloadForCurrentUser")
 
         await MainActor.run {
             // Clear cached purchases (they were for a different user)

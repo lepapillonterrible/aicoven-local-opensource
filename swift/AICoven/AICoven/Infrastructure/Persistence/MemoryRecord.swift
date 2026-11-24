@@ -336,7 +336,7 @@ actor MemoryRepository {
             text = String(decoding: opened, as: UTF8.self)
         } catch let error as CryptoKitError {
             // The kind of failure only.
-            AppErrorReporter.log(message: "A memory could not be opened (\(error))", context: "MemoryRepository.chunk")
+            AppErrorReporter.log(message: "A memory could not be opened (\(type(of: error)))", context: "MemoryRepository.chunk")
             isUnreadable = true
         }
 
@@ -527,7 +527,7 @@ actor MemoryProposalRepository {
             record.proposedContent = try await String(decoding: DataEncryptionService.shared.decrypt(sealed, purpose: Self.purpose), as: UTF8.self)
         } catch let error as CryptoKitError {
             // The kind of failure only.
-            AppErrorReporter.log(message: "A memory proposal could not be opened (\(error))", context: "MemoryProposalRepository.opened")
+            AppErrorReporter.log(message: "A memory proposal could not be opened (\(type(of: error)))", context: "MemoryProposalRepository.opened")
             record.proposedContent = ""
             record.isUnreadable = true
         }

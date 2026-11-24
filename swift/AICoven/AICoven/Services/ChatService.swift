@@ -725,7 +725,7 @@ actor ChatService {
                     enabledTools: toolConfig.enabledTools
                 ) {
                     #if DEBUG
-                    AppErrorReporter.log(message: "Pre-executing native tool for local model: \(forcedNative.tool)", context: "ChatService.streamMessage.preExecute")
+                    AppErrorReporter.log(message: "Pre-executing a native tool for a local model", context: "ChatService.streamMessage.preExecute")
                     #endif
                     let toolID = UUID().uuidString
                     state.phase = .tooling
@@ -757,7 +757,7 @@ actor ChatService {
                     mcpServers: toolConfig.mcpServers
                 ) {
                     #if DEBUG
-                    AppErrorReporter.log(message: "Pre-executing MCP tool for local model: \(forcedMCP.tool)", context: "ChatService.streamMessage.preExecute")
+                    AppErrorReporter.log(message: "Pre-executing an MCP tool for a local model", context: "ChatService.streamMessage.preExecute")
                     #endif
                     let toolID = UUID().uuidString
                     state.phase = .tooling
@@ -966,7 +966,7 @@ actor ChatService {
                     remainingToolSteps -= 1
 
                     // Track tool usage
-                    AnalyticsService.shared.trackToolUsed(toolName: toolCall.tool, threadId: threadId)
+                    AnalyticsService.shared.trackToolUsed(toolName: Self.analyticsToolKind(toolCall.tool), threadId: threadId)
 
                     let toolID = UUID().uuidString
                     state.phase = .tooling
@@ -1097,7 +1097,7 @@ actor ChatService {
                         ) {
                             remainingToolSteps -= 1
                             #if DEBUG
-                            AppErrorReporter.log(message: "Forcing MCP tool call: \(forcedCall.tool)", context: "ChatService.streamMessage.toolRefusal")
+                            AppErrorReporter.log(message: "Forcing an MCP tool call", context: "ChatService.streamMessage.toolRefusal")
                             #endif
 
                             // Track tool usage
@@ -1988,7 +1988,7 @@ struct ChatToolInvocation: Codable {
 
         #if DEBUG
         AppErrorReporter.log(
-            message: "Remapped hallucinated tool '\(tool)' → '\(actualTool)'",
+            message: "Remapped a hallucinated tool name to a known one",
             context: "ChatToolInvocation.remapped"
         )
         #endif
@@ -2211,6 +2211,13 @@ extension ChatService {
     }
 
     /// Human-readable name for a tool identifier, used in user-facing summaries.
+    /// What analytics are told of a tool: its kind among the app's own, or
+    /// "Other" (an MCP server's or a model's name can say anything).
+    nonisolated static func analyticsToolKind(_ tool: String) -> String {
+        let kind = friendlyToolName(tool)
+        return kind == tool ? "Other" : kind
+    }
+
     nonisolated static func friendlyToolName(_ tool: String) -> String {
         switch tool.lowercased() {
         case "web_search": "Web Search"
@@ -2453,7 +2460,7 @@ extension ChatService {
 
         #if DEBUG
         AppErrorReporter.log(
-            message: "forceMCPToolCall matched '\(tool.name)' (score=\(bestScore))",
+            message: "forceMCPToolCall matched a tool (score=\(bestScore))",
             context: "ChatService.forceMCPToolCall"
         )
         #endif
@@ -2607,7 +2614,7 @@ extension ChatService {
 
         #if DEBUG
         AppErrorReporter.log(
-            message: "Semantic fallback matched '\(topTool.name)' (score=\(score))",
+            message: "Semantic fallback matched a tool (score=\(score))",
             context: "ChatService.forceNativeToolCallWithSemantic"
         )
         #endif

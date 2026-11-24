@@ -171,6 +171,13 @@ final class ErrorReportingTests: XCTestCase {
         }
     }
 
+    func testAnalyticsAreToldAToolsKind_notANameAModelOrAServerWrote() {
+        XCTAssertEqual(ChatService.analyticsToolKind("github.readFile"), "GitHub")
+        XCTAssertEqual(ChatService.analyticsToolKind("web_search"), "Web Search")
+        XCTAssertEqual(ChatService.analyticsToolKind("The_persons_private_message"), "Other")
+        XCTAssertEqual(ChatService.analyticsToolKind("acme_payroll.lookup_employee"), "Other")
+    }
+
     func testAppErrorReporterPassesRedactedMessagesToReporter() {
         let reporter = CapturingErrorReporter()
         AppErrorReporter.use(reporter)
