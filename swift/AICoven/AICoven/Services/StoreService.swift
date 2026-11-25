@@ -53,30 +53,42 @@ class StoreService: ObservableObject {
         UserScope.firebaseUserID != nil
     }
 
+    /// The account whose purchases are in memory: until another's are read
+    /// as it signs in, the one before's unlock nothing for it.
+    private var purchasesOf: String?
+
+    /// Whether the purchases in memory are the signed-in account's.
+    private var holdsTheAccountsPurchases: Bool {
+        isAuthenticated && purchasesOf == UserScope.currentUserID
+    }
+
     var hasCreator: Bool {
-        // Require authentication - no entitlements for unauthenticated users
-        guard isAuthenticated else { return false }
+        // Require authentication - no entitlements for unauthenticated users,
+        // nor another account's
+        guard holdsTheAccountsPurchases else { return false }
         return purchasedProductIDs.contains(Self.creatorID) ||
             purchasedProductIDs.contains(Self.everythingID)
     }
 
     var hasToolsPack: Bool {
-        // Require authentication - no entitlements for unauthenticated users
-        guard isAuthenticated else { return false }
+        // Require authentication - no entitlements for unauthenticated users,
+        // nor another account's
+        guard holdsTheAccountsPurchases else { return false }
         return purchasedProductIDs.contains(Self.toolsPackID) ||
             purchasedProductIDs.contains(Self.everythingID)
     }
 
     var hasEverything: Bool {
-        // Require authentication - no entitlements for unauthenticated users
-        guard isAuthenticated else { return false }
+        // Require authentication - no entitlements for unauthenticated users,
+        // nor another account's
+        guard holdsTheAccountsPurchases else { return false }
         return purchasedProductIDs.contains(Self.everythingID)
     }
 
     /// Check whether a specific feature is unlocked.
     /// Returns false if user is not authenticated.
     func hasEntitlement(_ feature: PurchasableFeature) -> Bool {
-        guard isAuthenticated else { return false }
+        guard holdsTheAccountsPurchases else { return false }
         switch feature {
         case .covens, .multipleAgents, .modelCustomization:
             return hasCreator
@@ -178,8 +190,11 @@ class StoreService: ObservableObject {
         print("💳 StoreService.reloadForCurrentUser")
 
         await MainActor.run {
-            // Clear cached purchases (they were for a different user)
+            // Clear cached purchases (they were for a different user), and
+            // what was said of a purchase.
             purchasedProductIDs = []
+            purchaseError = nil
+            purchasesOf = userID
 
             // Only load purchases if user is authenticated
             guard isAuthenticated else {
@@ -236,8 +251,8 @@ class StoreService: ObservableObject {
     }
 
     /// Listen for StoreKit transaction updates (purchases made on another
-    /// device, a purchase approved later, refunds). Each is finished, and
-    /// what the signed-in account owns is read again from the Apple ID's
+    /// device, a purchase approved later, refunds). Each verified one is
+    /// finished, and what the signed-in account owns is read again from the Apple ID's
     /// entitlements: a refund takes the upgrade away at once, and a
     /// purchase made by another account on the same Apple ID gives this one
     /// nothing.
@@ -263,7 +278,7 @@ class StoreService: ObservableObject {
 
         do {
             let storeProducts = try await Product.products(for: Self.allProductIDs)
-            // Sort: Creator → Tools Pack → Everything
+            // Sort: Starter Pack → Connected Apps → Everything
             products = storeProducts.sorted { a, b in
                 let order: [String: Int] = [
                     Self.creatorID: 0,
@@ -273,7 +288,7 @@ class StoreService: ObservableObject {
                 return (order[a.id] ?? 99) < (order[b.id] ?? 99)
             }
         } catch {
-            AppErrorReporter.log(error: error, context: "StoreService.loadProducts")
+            AppErrorReporter.log(message: "The products could not be loaded (\(type(of: error)))", context: "StoreService.loadProducts")
         }
     }
 
@@ -307,12 +322,11 @@ class StoreService: ObservableObject {
                     // Kept only as the account's own, by the same rule as a
                     // restore: the App Store can hand back a purchase made
                     // earlier by another account on the same Apple ID.
-                    let mine = Self.owned(of: [Self.entitlement(of: transaction)], by: account)
-                    if UserScope.currentUserID == account, !mine.isEmpty {
-                        refreshGeneration += 1
-                        purchasedProductIDs.formUnion(mine)
-                        persistPurchases()
+                    if Self.owned(of: [Self.entitlement(of: transaction)], by: account).isEmpty {
+                        said("This Apple ID bought it with another AICoven account, so it is that account's.")
                     }
+                    // What the account owns is read again, the new
+                    // purchase with it.
                     await refreshEntitlements()
                 } else {
                     said("Purchase could not be verified.")
@@ -338,9 +352,8 @@ class StoreService: ObservableObject {
         Entitlement(productID: transaction.productID, accountToken: transaction.appAccountToken, isRevoked: transaction.revocationDate != nil)
     }
 
-    /// Counts the readings of the entitlements and the purchases kept, so
-    /// that a reading overtaken by a later one, or by a purchase, is not
-    /// written over what came after it.
+    /// Counts the readings of the entitlements, so that a reading
+    /// overtaken by a later one is not written over what came after it.
     private var refreshGeneration = 0
 
     // MARK: - Restore purchases
@@ -377,6 +390,7 @@ class StoreService: ObservableObject {
         // Only the latest reading is kept: one overtaken by another, or by
         // a purchase, while it read is not written over what came after.
         guard isAuthenticated, UserScope.currentUserID == account, generation == refreshGeneration else { return }
+        purchasesOf = account
         let owned = Self.owned(of: entitlements, by: account)
         if owned != purchasedProductIDs {
             purchasedProductIDs = owned
