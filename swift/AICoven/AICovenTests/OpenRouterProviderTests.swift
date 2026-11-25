@@ -219,6 +219,9 @@ final class OpenRouterProviderTests: XCTestCase {
     }
 
     func testStrixModelChoice_isSavedWhereAnOpenRouterTurnReadsIt() async throws {
+        // Strix's settings are saved with the account's key in memory.
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        addTeardownBlock { await DataEncryptionService.shared.lock() }
         UserDefaults.standard.set("gpt-4o", forKey: UserScope.scopedKey("openai_model"))
 
         _ = try await StrixSettingsService.shared.updatePersonalStrix(

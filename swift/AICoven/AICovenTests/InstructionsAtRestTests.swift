@@ -66,6 +66,59 @@ final class InstructionsAtRestTests: XCTestCase {
         XCTAssertNil(emptied?["system_prompt_ciphertext"] as Data?, "Emptied instructions are none")
     }
 
+    func testWithoutTheKey_nothingSealedIsWrittenOver_andWhatCannotBeOpenedIsKeptBySavingNone() async throws {
+        let account = UserScope.currentUserID
+        let agent = { (instructions: String) in
+            AgentSaving(
+                name: "Scout", iconSymbol: "magnifyingglass", iconTint: nil, description: "", instructions: instructions,
+                provider: "anthropic", model: "claude-x", providerAccountId: nil, temperature: nil, maxTokens: nil, mostSteps: nil
+            )
+        }
+        let scout = try await RoleService.shared.createAgent(inCoven: coven(), agent(secret), as: account)
+        let made = try await row(of: scout.id)
+        let sealed: Data = try XCTUnwrap(made?["system_prompt_ciphertext"])
+
+        // Instructions that cannot be opened (another key sealed them) read as
+        // none, and a save that gives none leaves them as they are.
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        try await queue.write { db in
+            try db.execute(sql: "UPDATE roles SET system_prompt_ciphertext = ? WHERE id = ?", arguments: [Data("not this key's".utf8), scout.id])
+        }
+        let unreadable = try await RoleService.shared.getRole(roleId: scout.id)
+        XCTAssertNil(unreadable.systemPrompt)
+        _ = try await RoleService.shared.saveAgent(scout.id, agent(""), as: account)
+        let kept: Data? = try await row(of: scout.id)?["system_prompt_ciphertext"]
+        XCTAssertEqual(kept, Data("not this key's".utf8), "Not written over with none")
+        try await queue.write { db in
+            try db.execute(sql: "UPDATE roles SET system_prompt_ciphertext = ? WHERE id = ?", arguments: [sealed, scout.id])
+        }
+
+        // With the data locked, a save is refused, also one that gives none.
+        await DataEncryptionService.shared.lock()
+        do {
+            _ = try await RoleService.shared.saveAgent(scout.id, agent(""), as: account)
+            XCTFail("Nothing is saved without the key")
+        } catch RepositoryError.dataLocked {}
+        let still: Data? = try await row(of: scout.id)?["system_prompt_ciphertext"]
+        XCTAssertEqual(still, sealed)
+    }
+
+    func testInstructionsStoredAsTextBefore_areNotGivenWithoutTheKey() async throws {
+        let account = UserScope.currentUserID
+        let covenID = try await coven()
+        let id = UUID().uuidString
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        try await queue.write { [secret] db in
+            try db.execute(
+                sql: "INSERT INTO roles (id, coven_id, name, system_prompt, user_id, created_at, updated_at) VALUES (?, ?, 'Old', ?, ?, ?, ?)",
+                arguments: [id, covenID, secret, account, Date(), Date()]
+            )
+        }
+        await DataEncryptionService.shared.lock()
+        let agents = try await RoleService.shared.loadRoles(covenId: covenID)
+        XCTAssertNil(agents.first { $0.id == id }?.systemPrompt, "Read only as it would be once sealed")
+    }
+
     func testInstructionsStoredAsTextBefore_areSealedWhenTheirAccountReadsThem() async throws {
         let account = UserScope.currentUserID
         let covenID = try await coven()

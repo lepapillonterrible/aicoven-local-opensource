@@ -264,7 +264,8 @@ final class StrixAgentTests: XCTestCase {
         signedIn.now = ada
         let calm = StrixSettingsService(signedIn: { signedIn.now }, firstConnection: { (provider: "anthropic", defaultModel: "claude-sonnet-4-6") })
         let loaded = try await calm.loadPersonalStrix()
-        XCTAssertEqual([loaded.systemPrompt, loaded.provider, loaded.model], ["Ada's own instructions.", "anthropic", "claude-sonnet-4-6"])
+        XCTAssertEqual([loaded.provider, loaded.model], ["anthropic", "claude-sonnet-4-6"])
+        XCTAssertNil(loaded.systemPrompt, "Instructions kept as text before are given only with Ada's own key in memory")
         XCTAssertEqual(StrixSettingsService.stored(of: ada)?.provider, "anthropic")
         XCTAssertEqual(defaults.string(forKey: UserScope.scopedKey("anthropic_model", for: ada)), "claude-sonnet-4-6")
         XCTAssertNil(StrixSettingsService.stored(of: grace))
@@ -278,7 +279,7 @@ final class StrixAgentTests: XCTestCase {
             return (provider: "anthropic", defaultModel: "claude-sonnet-4-6")
         })
         let afterwards = try await slow.loadPersonalStrix()
-        XCTAssertEqual([afterwards.systemPrompt, afterwards.provider, afterwards.model], ["Written meanwhile.", "anthropic", "claude-sonnet-4-6"])
+        XCTAssertEqual([afterwards.provider, afterwards.model], ["anthropic", "claude-sonnet-4-6"])
         XCTAssertEqual(StrixSettingsService.stored(of: ada)?.systemPrompt, "Written meanwhile.")
 
         // A model is looked up only for a provider that names one, and only from a connection of that provider.

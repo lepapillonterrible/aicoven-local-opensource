@@ -124,24 +124,25 @@ actor StrixSettingsService {
                 try await String(decoding: DataEncryptionService.shared.decrypt(sealed, purpose: Self.instructionsPurpose), as: UTF8.self)
             }
         }
-        guard let text = settings.systemPrompt, !text.isEmpty else { return settings.systemPrompt }
-        if let sealed = try? await AccountSeal.seal(text, purpose: Self.instructionsPurpose, for: account) {
-            // Read again after the wait: kept only if they are still the
-            // same instructions, as text.
-            var current = loadLocalSettings(of: account)
-            if current.systemPromptSealed == nil, current.systemPrompt == text {
-                current.systemPrompt = nil
-                current.systemPromptSealed = sealed
-                saveLocalSettings(current, for: account)
-            }
+        guard let text = settings.systemPrompt, !text.isEmpty else { return nil }
+        // Text stored before is given only as it would be once sealed:
+        // with the account's own key in memory.
+        guard let sealed = try? await AccountSeal.seal(text, purpose: Self.instructionsPurpose, for: account) else { return nil }
+        // Read again after the wait: kept only if they are still the same
+        // instructions, as text.
+        var current = loadLocalSettings(of: account)
+        if current.systemPromptSealed == nil, current.systemPrompt == text {
+            current.systemPrompt = nil
+            current.systemPromptSealed = sealed
+            saveLocalSettings(current, for: account)
         }
         return text
     }
 
-    /// The instructions `account` wrote for Strix, exactly as they are
-    /// stored (an empty text is returned as it is); nil where none are
-    /// stored or the settings cannot be read. Only read: nothing is
-    /// converted, defaulted or saved by asking.
+    /// The instructions `account` wrote for Strix, opened with its key;
+    /// nil where none are stored, the settings cannot be read, or the key
+    /// is not in memory. Nothing is defaulted; instructions stored as text
+    /// before are sealed by asking.
     func instructions(of account: String) async -> String? {
         guard let stored = Self.stored(of: account) else { return nil }
         return await opened(stored, of: account)
@@ -166,11 +167,25 @@ actor StrixSettingsService {
         // Instructions that say nothing are none; others are sealed with
         // the account's own key before anything is read or written.
         let instructions = strix.instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : strix.instructions
+        // The key is required with or without instructions to seal, so that
+        // nothing sealed is written over while it cannot be read; sealed
+        // instructions that cannot be opened now were shown as none, and a
+        // save that gives none leaves them as they are.
+        try await AccountSeal.requireKey(of: account, since: DataEncryptionService.shared.keyEpoch)
         let sealed: Data? = if let instructions { try await AccountSeal.seal(instructions, purpose: Self.instructionsPurpose, for: account) } else { nil }
+        let keepsUnreadable: Bool = if instructions == nil, let stored = Self.stored(of: account)?.systemPromptSealed {
+            await (try? AccountSeal.reading(as: account) {
+                try await DataEncryptionService.shared.decrypt(stored, purpose: Self.instructionsPurpose)
+            }) == nil
+        } else {
+            false
+        }
         guard await signedIn() == account else { throw RepositoryError.accountChanged }
         var settings = loadLocalSettings(of: account)
-        settings.systemPrompt = nil
-        settings.systemPromptSealed = sealed
+        if !keepsUnreadable {
+            settings.systemPrompt = nil
+            settings.systemPromptSealed = sealed
+        }
         if !strix.provider.isEmpty {
             settings.provider = strix.provider
             settings.model = strix.model.isEmpty ? nil : strix.model
@@ -201,6 +216,7 @@ actor StrixSettingsService {
         plannerMaxSeconds: Double?
     ) async throws -> LocalStrixSettings {
         let account = await signedIn()
+        try await AccountSeal.requireKey(of: account, since: DataEncryptionService.shared.keyEpoch)
         let sealed: Data? = if let systemPrompt { try await AccountSeal.seal(systemPrompt, purpose: Self.instructionsPurpose, for: account) } else { nil }
         guard await signedIn() == account else { throw RepositoryError.accountChanged }
         var settings = loadLocalSettings(of: account)

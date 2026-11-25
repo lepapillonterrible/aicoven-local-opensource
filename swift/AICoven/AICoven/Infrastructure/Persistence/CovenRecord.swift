@@ -422,6 +422,7 @@ actor CovenRepository {
         guard IconRules.isSymbolName(symbol) else { throw CovenRepositoryError.notASymbol }
         let uid = await MainActor.run { UserScope.currentUserID }
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        await sealPlainInstructions(ofRole: id, as: uid, in: dbQueue)
         try await dbQueue.write { db in
             guard var record = try RoleRecord.fetchOne(db, key: id), record.userId == uid else {
                 throw CovenRepositoryError.roleNotFound
@@ -522,6 +523,8 @@ actor CovenRepository {
         for record in records {
             await roles.append(mapRecordToRole(opened(record, as: uid)))
         }
+        // Not given once another account has signed in meanwhile.
+        guard await MainActor.run(body: { UserScope.currentUserID }) == uid else { throw RepositoryError.accountChanged }
         return roles
     }
 
@@ -669,6 +672,7 @@ actor CovenRepository {
         let uid = await MainActor.run { UserScope.currentUserID }
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
         let sealedInstructions: Data? = if let systemPrompt { try await AccountSeal.seal(systemPrompt, purpose: Self.instructionsPurpose, for: uid) } else { nil }
+        if systemPrompt == nil { await sealPlainInstructions(ofRole: roleId, as: uid, in: dbQueue) }
 
         try await dbQueue.write { db in
             guard var record = try RoleRecord.fetchOne(db, key: roleId), record.userId == uid else {
@@ -730,9 +734,15 @@ actor CovenRepository {
         guard IconRules.isSymbolName(agent.iconSymbol) else { throw CovenRepositoryError.notASymbol }
         guard await MainActor.run(body: { UserScope.currentUserID }) == account else { throw RepositoryError.accountChanged }
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-        // Sealed with the account's own key, before the write.
+        // Sealed with the account's own key, before the write; and with
+        // none to seal the key is still required, so that nothing sealed
+        // is written over while it cannot be read. Instructions that are
+        // there and cannot be opened now were shown as none: a save that
+        // gives none leaves them as they are.
+        try await AccountSeal.requireKey(of: account, since: DataEncryptionService.shared.keyEpoch)
         let sealedInstructions = agent.instructions.isEmpty
             ? nil : try await AccountSeal.seal(agent.instructions, purpose: Self.instructionsPurpose, for: account)
+        let keepsUnreadable = agent.instructions.isEmpty ? await hasUnreadableInstructions(roleId, as: account, in: dbQueue) : false
         // Asked again once the database is in hand, just before the write.
         guard await MainActor.run(body: { UserScope.currentUserID }) == account else { throw RepositoryError.accountChanged }
 
@@ -743,8 +753,10 @@ actor CovenRepository {
             guard var settings = Self.storedSettings(ofRole: record) else { throw CovenRepositoryError.roleSettingsUnreadable }
             record.name = agent.name
             record.description = agent.description.isEmpty ? nil : agent.description
-            record.systemPrompt = agent.instructions.isEmpty ? nil : agent.instructions
-            record.systemPromptCiphertext = sealedInstructions
+            if !keepsUnreadable {
+                record.systemPrompt = agent.instructions.isEmpty ? nil : agent.instructions
+                record.systemPromptCiphertext = sealedInstructions
+            }
             record.provider = agent.provider
             record.model = agent.model
             record.providerAccountId = agent.providerAccountId
@@ -809,13 +821,41 @@ actor CovenRepository {
 
     /// The record with its instructions opened with `account`'s key; where
     /// they cannot be opened (the data locked, another key), none.
+    /// Instructions stored as text before are given only as they would be
+    /// once sealed: with the account's own key in memory.
     private func opened(_ record: RoleRecord, as account: String) async -> RoleRecord {
-        guard let sealed = record.systemPromptCiphertext else { return record }
         var record = record
-        record.systemPrompt = try? await AccountSeal.reading(as: account) {
-            try await String(decoding: DataEncryptionService.shared.decrypt(sealed, purpose: Self.instructionsPurpose), as: UTF8.self)
+        if let sealed = record.systemPromptCiphertext {
+            record.systemPrompt = try? await AccountSeal.reading(as: account) {
+                try await String(decoding: DataEncryptionService.shared.decrypt(sealed, purpose: Self.instructionsPurpose), as: UTF8.self)
+            }
+        } else if let text = record.systemPrompt {
+            record.systemPrompt = try? await AccountSeal.reading(as: account) { text }
         }
         return record
+    }
+
+    /// Whether an agent's sealed instructions are there and cannot be
+    /// opened with `account`'s key now: a save that gives none then
+    /// leaves them as they are, since none were shown to be changed.
+    private func hasUnreadableInstructions(_ roleId: String, as account: String, in dbQueue: DatabaseQueue) async -> Bool {
+        let sealed: Data? = try? await dbQueue.read { db in
+            try Data.fetchOne(db, sql: "SELECT system_prompt_ciphertext FROM roles WHERE id = ? AND user_id = ?", arguments: [roleId, account])
+        }
+        guard let sealed else { return false }
+        let opened = try? await AccountSeal.reading(as: account) {
+            try await DataEncryptionService.shared.decrypt(sealed, purpose: Self.instructionsPurpose)
+        }
+        return opened == nil
+    }
+
+    /// Seals an agent's instructions stored as text before, ahead of a
+    /// write that would otherwise write them back as they are.
+    private func sealPlainInstructions(ofRole roleId: String, as account: String, in dbQueue: DatabaseQueue) async {
+        let record: RoleRecord? = try? await dbQueue.read { db in
+            try RoleRecord.filter(RoleRecord.Columns.id == roleId).filter(RoleRecord.Columns.userId == account).fetchOne(db)
+        }
+        if let record { await sealPlainInstructions(of: [record], as: account, in: dbQueue) }
     }
 
     /// Agents stored before instructions were sealed are sealed, and the
