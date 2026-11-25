@@ -141,12 +141,8 @@ enum MessageAdapter {
             return response?.thoughts
         }()
 
-        // Attachments (IDs live in metadata.file_attachment_ids)
-        let attachments: [FileAttachmentDetail]? = {
-            guard let ids = meta["file_attachment_ids"]?.value as? [String], !ids.isEmpty else { return nil }
-            // We only have IDs at this point; fill minimal info so UI can render
-            return ids.map { FileAttachmentDetail(id: $0, name: $0, mimeType: nil, sizeBytes: nil, width: nil, height: nil, url: nil) }
-        }()
+        // Attachments, as the message kept them.
+        let attachments = FileAttachmentDetail.attachments(in: meta)
 
         // Generated files (from backend metadata.generated_files)
         let generatedFiles: [GeneratedFile]? = {
@@ -180,6 +176,7 @@ enum MessageAdapter {
             attachments: attachments,
             images: nil,
             generatedFiles: generatedFiles,
+            assetIDs: Asset.ids(in: meta),
             createdAt: chatMessage.createdAt
         )
     }

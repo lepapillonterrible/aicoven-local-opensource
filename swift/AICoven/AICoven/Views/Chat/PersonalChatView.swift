@@ -1,0 +1,782 @@
+import SwiftUI
+
+/// Personal chat view using the same enhanced streaming tooling as coven chats
+struct PersonalChatView: View {
+    let thread: Thread
+    /// Opens an asset made in the thread, from its card.
+    var onOpenAsset: ((Asset) -> Void)?
+
+    @State private var messages: [ChatMessage] = []
+    @State private var messageText = ""
+    /// The files chosen to go with the message being written.
+    @State private var attachments: [FileAttachmentDetail] = []
+    /// The thread's draft is being read into the composer: what the
+    /// composer holds meanwhile is not yet the thread's to keep.
+    @State private var isRestoringDraft = false
+    /// Text this view put in the field itself (a draft read in, the field
+    /// cleared on sending, unsent text given back), until the field's
+    /// change for it has been seen: it was not typed.
+    @State private var textPutInTheField: String?
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var errorMessage: String?
+    /// The engine runs the replies; this view shows the one in its thread.
+    @ObservedObject private var turns = TurnEngine.shared
+    /// What turns, in this thread or another, are waiting to be allowed.
+    @ObservedObject private var approvals = ToolApprovals.shared
+    /// The voice message being recorded or put into words here.
+    @StateObject private var voice = VoiceMessages()
+    /// The composer is on screen: what is heard is sent only while it is.
+    @State private var isComposerOnScreen = true
+    /// The thread this view's state belongs to. The view is reused when the
+    /// thread changes, so work that waited checks it before touching state.
+    @State private var shownThreadID: String?
+    /// The number of the last of the engine's additions to the thread
+    /// that this view has taken in: later ones are shown as they come.
+    @State private var additionsShown = 0
+    /// The work traces of this thread's finished turns, by the id of the
+    /// message each ended with: the receipt under a reply opens its trace.
+    @State private var traces: [String: WorkTrace] = [:]
+    /// The work trace Details is showing.
+    @State private var shownTrace: WorkTraceTarget?
+
+    /// The reply on its way in this thread, if there is one.
+    private var runningTurn: TurnEngine.Activity? {
+        turns.running[thread.id]
+    }
+
+    // Pagination state for message history
+    @State private var isInitialLoading: Bool = false
+    @State private var didLoadInitialMessages: Bool = false
+    @State private var isLoadingMore: Bool = false
+    @State private var hasMoreMessages: Bool = true
+    @State private var oldestMessageId: String? = nil
+    @State private var isPrependingMessages: Bool = false
+    @State private var pendingScrollAnchorId: String? = nil
+    private let pageSize: Int = 20
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Offers notifications once a reply has finished while the
+            // person was away; nothing otherwise.
+            NotificationAskLine()
+                .padding(.horizontal, Spacing.lg)
+                .padding(.top, Spacing.sm)
+
+            // Messages area
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: Spacing.md) {
+                        // Load-more sentinel at the top. This appears above the
+                        // oldest loaded message and triggers when the user
+                        // scrolls to the top of the currently loaded history.
+                        if hasMoreMessages {
+                            Button {
+                                guard !isLoadingMore else { return }
+                                Task {
+                                    await loadMoreMessagesIfNeeded()
+                                }
+                            } label: {
+                                HStack {
+                                    Spacer()
+                                    if isLoadingMore {
+                                        // Show a spinner only while we are actually
+                                        // fetching the next page of history.
+                                        ProgressView()
+                                            .controlSize(.small)
+                                    } else {
+                                        Text("Tap to load more messages")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                }
+                                .padding(.vertical, Spacing.sm)
+                            }
+                            .buttonStyle(.plain)
+                            .id("load-more-sentinel-\(oldestMessageId ?? "none")")
+                        }
+
+                        // stable element UUID to allow SwiftUI caching of older history.
+                        ForEach(Array(enhancedMessages.enumerated()), id: \.element.id) { _, em in
+                            // What the turn asked on the way to this reply,
+                            // and the answer it was given.
+                            approvalLines(traces[em.id]?.approvals ?? [])
+                            RichMessageBubble(
+                                message: em,
+                                onApproveToolCall: { _ in },
+                                onRejectToolCall: { _ in },
+                                onOpenAsset: onOpenAsset
+                            )
+                            .id(em.id)
+                            // What it took: opens the steps behind the reply.
+                            if let trace = traces[em.id], let receipt = trace.receipt {
+                                Button(receipt) {
+                                    shownTrace = .finished(messageID: em.id, trace: trace)
+                                }
+                                .buttonStyle(.textLink)
+                                .font(.aicovenBodySmall)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityHint("Shows the steps behind this answer")
+                            }
+                        }
+
+                        // The reply on its way: one line saying what it
+                        // is doing, with Details and Stop.
+                        if let runningTurn {
+                            approvalLines(approvals.answered[thread.id] ?? [])
+                            VStack(alignment: .leading, spacing: Spacing.xs) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "sparkles")
+                                    // Show "Strix" for the default personal assistant
+                                    Text(thread.agentName ?? "Strix")
+                                }
+                                .font(.caption)
+                                .foregroundStyle(Color.aicovenTeal)
+
+                                TurnStatusLineView(
+                                    turn: runningTurn,
+                                    needsOK: approvals.askingThreadIDs.contains(thread.id),
+                                    onDetails: { shownTrace = .running(threadID: thread.id, turnID: runningTurn.turnID) },
+                                    onStop: { turns.stop(threadID: thread.id) }
+                                )
+                            }
+                            .frame(maxWidth: 800, alignment: .leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .id("thinking-indicator")
+                        }
+
+                        // What was sent while that reply runs, waiting
+                        // for it, in the order it will go.
+                        ForEach(waitingMessages) { waiting in
+                            WaitingMessageBubble(
+                                message: waiting,
+                                isNext: waiting.id == waitingMessages.first?.id,
+                                isBeingSent: turns.starting[thread.id] == waiting.id,
+                                agentName: thread.agentName ?? "Strix",
+                                onEdit: { turns.editWaiting(waiting.id, threadID: thread.id) },
+                                onRemove: { turns.removeWaiting(waiting.id, threadID: thread.id) }
+                            )
+                            .id(waiting.id)
+                        }
+                    }
+                    .padding(.horizontal, Spacing.lg)
+                    .padding(.top, Spacing.lg)
+                    .padding(.bottom, Spacing.xxl)
+                }
+                #if os(iOS)
+                .scrollDismissesKeyboard(.interactively)
+                .onTapGesture {
+                    UIApplication.shared.sendAction(
+                        #selector(UIResponder.resignFirstResponder),
+                        to: nil, from: nil, for: nil
+                    )
+                }
+                #endif
+                .onChange(of: messages.count) { _, _ in
+                    // When we're prepending older messages, keep the previously
+                    // visible first message pinned in place instead of jumping
+                    // to the newest message.
+                    if isPrependingMessages, let anchorId = pendingScrollAnchorId {
+                        withAnimation {
+                            proxy.scrollTo(anchorId, anchor: .top)
+                        }
+                        isPrependingMessages = false
+                        pendingScrollAnchorId = nil
+                        return
+                    }
+
+                    // Otherwise, scroll to the last message when new messages arrive.
+                    if let lastMessage = enhancedMessages.last {
+                        withAnimation {
+                            proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                        }
+                    }
+                }
+                .onChange(of: runningTurn?.turnID) { _, started in
+                    if started != nil {
+                        withAnimation {
+                            proxy.scrollTo("thinking-indicator", anchor: .bottom)
+                        }
+                    }
+                }
+                // A turn ended here, or a waiting message was sent: each
+                // goes at the end of the thread at once, in the order the
+                // engine added them, however many there were since this
+                // view last looked.
+                .onChange(of: turns.additions[thread.id]?.last?.sequence) { _, _ in
+                    showAdditions()
+                }
+                // Only when one starts waiting, not when one is removed.
+                .onChange(of: waitingMessages.count) { before, now in
+                    guard now > before, let added = waitingMessages.last?.id else { return }
+                    withAnimation {
+                        proxy.scrollTo(added, anchor: .bottom)
+                    }
+                }
+                .onAppear {
+                    if let lastMessage = enhancedMessages.last {
+                        proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                    }
+                }
+            }
+            // Approvals come here, from this thread or any other: laid over
+            // the thread so it never moves, at the right just above the
+            // composer, across the width on the iPhone.
+            .overlay(alignment: .bottomTrailing) {
+                ApprovalSpot(approvals: approvals)
+                    .frame(maxWidth: ApprovalBlock.spansTheWidth ? .infinity : 262)
+                    .padding(.horizontal, ApprovalBlock.spansTheWidth ? Spacing.md : 18)
+                    .padding(.bottom, Spacing.xs)
+            }
+
+            GradientDivider()
+
+            // The field stays open while a turn runs; what is sent then
+            // waits for the turn, and comes back here if it is not sent.
+            MessageComposer(
+                messageText: $messageText,
+                attachments: $attachments,
+                onSend: { attachments in await sendMessage(attachments: attachments) },
+                onStop: { turns.stop(threadID: thread.id) },
+                isAgentRunning: runningTurn != nil,
+                isStopping: runningTurn?.isStopping == true,
+                threadId: thread.id,
+                autoFocus: true,
+                recipientName: thread.agentName ?? "Strix",
+                notice: Self.notice(notSent: turns.notSent[thread.id], voice: voice.failure(for: thread.id)),
+                // Once this thread's own draft is in the field: what was
+                // handed back before then comes with it.
+                hasReturnedDraft: turns.returned[thread.id] != nil && !isRestoringDraft && shownThreadID == thread.id,
+                takeReturnedDraft: { turns.takeReturned(threadID: thread.id) },
+                // An approval does not come up under what is being typed.
+                onFocusChange: { approvals.composerFocusChanged($0) },
+                onSent: { approvals.noteSent() },
+                putInTheField: { putInTheField($0) },
+                onVoiceRecordStart: {
+                    voice.start(for: VoiceMessages.Destination(threadID: thread.id, roleID: thread.agentId, agentName: thread.agentName))
+                },
+                onVoiceRecordStop: { voice.stop() },
+                onVoiceRecordCancel: { voice.cancel() },
+                isRecordingVoice: voice.isRecording,
+                isVoiceBusy: voice.isBusy
+            )
+            .padding(Spacing.md)
+            // What a voice message was heard to say is sent as a message.
+            .onChange(of: voice.heard) { _, heard in
+                guard heard != nil, let words = voice.takeHeard() else { return }
+                // Where they go is decided when they are sent, not here:
+                // the thread can leave the screen in between.
+                Task { await sendVoiceMessage(words) }
+            }
+            // A recording is for the thread it was started in, while that
+            // thread is on screen and the app is in front.
+            .onDisappear {
+                isComposerOnScreen = false
+                voice.cancel()
+                voice.setShown(false)
+            }
+            .onAppear {
+                isComposerOnScreen = true
+                voice.setShown(true)
+                // Words that arrived just as this left the screen were
+                // not taken then: they are now, and sent or kept.
+                if let words = voice.takeHeard() {
+                    Task { await sendVoiceMessage(words) }
+                }
+                // What was heard while this was off screen comes back.
+                if shownThreadID == thread.id, let unsent = TurnEngine.shared.takeUnsent(for: thread.id) {
+                    giveBack(unsent.text, because: unsent.reason)
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .background { voice.cancel() }
+            }
+        }
+        #if os(iOS)
+        .background(NebulaBackground())
+        #endif
+        .sheet(item: $shownTrace) { target in
+            WorkTraceSheet(target: target)
+        }
+        // When the thread shown changes, what was held of the one before
+        // is let go and the new thread's messages are read.
+        .task(id: thread.id) {
+            // A recording begun in the thread that was shown is called off.
+            voice.cancel()
+            shownThreadID = thread.id
+            // The composer shows this thread's own draft; the one it held
+            // was kept as it was typed, and is saved now.
+            isRestoringDraft = true
+            putInTheField("")
+            attachments = []
+            Task { await ComposerDrafts.shared.saveNow() }
+            // Counted for this thread from here, before anything waits:
+            // what the engine added before is among the messages read
+            // below, and what it adds from now on is shown as it comes.
+            additionsShown = turns.additions[thread.id]?.last?.sequence ?? 0
+            messages = []
+            traces = [:]
+            shownTrace = nil
+            isInitialLoading = false
+            didLoadInitialMessages = false
+            isLoadingMore = false
+            hasMoreMessages = true
+            oldestMessageId = nil
+            isPrependingMessages = false
+            pendingScrollAnchorId = nil
+
+            await restoreDraft()
+            await TurnEngine.shared.settleInterruptedTurns(threadID: thread.id)
+            await loadStoredThread()
+            // The view can have moved to another thread while this one was
+            // read: its unsent text stays kept for when it is opened again.
+            guard shownThreadID == thread.id else { return }
+            if let unsent = TurnEngine.shared.takeUnsent(for: thread.id) {
+                giveBack(unsent.text, because: unsent.reason)
+            }
+        }
+        // What the composer holds is the thread's draft, kept as it changes.
+        .onChange(of: messageText) { _, text in
+            keepDraft()
+            // Typed, unless this view put it there itself.
+            let put = textPutInTheField
+            textPutInTheField = nil
+            if text != put { approvals.noteComposerChanged() }
+        }
+        #if os(iOS)
+        // With the on-screen keyboard up, the person is composing.
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            approvals.keyboardVisibilityChanged(true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            approvals.keyboardVisibilityChanged(false)
+        }
+        #endif
+        .onChange(of: attachments) { _, _ in keepDraft() }
+        // Leaving the foreground, or the thread: saved now, not a moment
+        // later.
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active {
+                Task { await ComposerDrafts.shared.saveNow() }
+            } else {
+                // Back in front with this thread still open: what was
+                // notified of it meanwhile is seen.
+                LocalNotifications.shared.threadShown(thread.id)
+            }
+        }
+        // On screen, the thread is read as replies arrive; what its
+        // composer holds is an unsent message once it has left.
+        .onAppear {
+            ThreadActivities.shared.show(thread.id)
+            // What was notified of this thread is seen.
+            LocalNotifications.shared.threadShown(thread.id)
+        }
+        .onChange(of: thread.id) { was, now in
+            ThreadActivities.shared.hide(was)
+            ThreadActivities.shared.show(now)
+            LocalNotifications.shared.threadShown(now)
+        }
+        .onDisappear {
+            ThreadActivities.shared.hide(thread.id)
+            Task { await ComposerDrafts.shared.saveNow() }
+            // Nobody is composing in a composer that is gone: nothing it
+            // was told keeps an approval back.
+            approvals.composerFocusChanged(false)
+            approvals.keyboardVisibilityChanged(false)
+        }
+        // Files sent from this thread leave what this composer holds, also
+        // when it was opened after the message was sent and before it was
+        // accepted.
+        .onReceive(ComposerDrafts.shared.attachmentsRemoved) { removed in
+            guard removed.threadID == thread.id else { return }
+            attachments.removeAll { removed.ids.contains($0.id) }
+        }
+    }
+
+    /// Reads the thread's draft into the composer: what its waiting
+    /// messages handed back while it was off screen, then what was kept of
+    /// what was typed there, then what was typed while that was read.
+    private func restoreDraft() async {
+        let threadID = thread.id
+        let kept = await ComposerDrafts.shared.draft(for: threadID)
+        // The view can be showing another thread by now, or this one
+        // again after another, with its own draft on the way: the task
+        // that asked for this one was then cancelled.
+        guard !Task.isCancelled, shownThreadID == threadID else { return }
+        let handedBack = turns.takeReturned(threadID: threadID) ?? ComposerDraft()
+        if !handedBack.isEmpty {
+            // The field holds more than was left in it: said, as it is
+            // when a waiting message comes back while the thread is shown.
+            AccessibilityNotification.Announcement("Your message is back in the message field").post()
+        }
+        let draft = handedBack.followed(by: kept).followed(by: ComposerDraft(text: messageText, attachments: attachments))
+        putInTheField(draft.text)
+        attachments = draft.attachments
+        isRestoringDraft = false
+        ComposerDrafts.shared.set(draft, for: threadID)
+    }
+
+    /// Sets the field's text from here, not from the keyboard: the change
+    /// is not taken for typing.
+    private func putInTheField(_ text: String) {
+        // With nothing changed there is no change to see, and nothing to
+        // mark.
+        guard text != messageText else { return }
+        textPutInTheField = text
+        messageText = text
+    }
+
+    /// Keeps what the composer holds as the draft of the thread shown.
+    private func keepDraft() {
+        guard !isRestoringDraft, shownThreadID == thread.id else { return }
+        ComposerDrafts.shared.set(ComposerDraft(text: messageText, attachments: attachments), for: thread.id)
+    }
+
+    /// What was sent while this thread's turn runs, in the order it will go.
+    private var waitingMessages: [TurnEngine.WaitingMessage] {
+        turns.waiting[thread.id] ?? []
+    }
+
+    private var enhancedMessages: [EnhancedChatMessage] {
+        Self.shown(messages, agentName: thread.agentName)
+    }
+
+    /// The thread's messages as the bubbles show them: each with an id of
+    /// its own, its agent's name (the thread's where it names none), and
+    /// everything else it carries, its assets' cards included.
+    static func shown(_ messages: [ChatMessage], agentName: String?) -> [EnhancedChatMessage] {
+        var idCounts = [String: Int]()
+        return messages.map { msg in
+            let count = idCounts[msg.id, default: 0]
+            idCounts[msg.id] = count + 1
+            // Generate unique ID for all messages to handle backend duplicates
+            let uniqueId = count == 0 ? msg.id : "\(msg.id)-dup\(count)"
+
+            let base = MessageAdapter.toEnhanced(from: msg, response: nil)
+            let resolvedAgentRole = base.agentRole ?? agentName
+
+            // All messages use uniqueId for consistent deduplication
+            return EnhancedChatMessage(
+                id: uniqueId,
+                threadId: base.threadId,
+                role: base.role,
+                content: base.content,
+                agentRole: resolvedAgentRole,
+                model: base.model,
+                provider: base.provider,
+                tokens: base.tokens,
+                cost: base.cost,
+                thoughts: base.thoughts,
+                toolCalls: base.toolCalls,
+                attachments: base.attachments,
+                images: base.images,
+                generatedFiles: base.generatedFiles,
+                // The assets the reply's turn made: its cards.
+                assetIDs: base.assetIDs,
+                createdAt: base.createdAt
+            )
+        }
+    }
+
+    /// Load the most recent page of messages for this personal thread.
+    private func loadInitialMessages() async {
+        guard !isInitialLoading else { return }
+        isInitialLoading = true
+        let threadID = thread.id
+        let account = UserScope.currentUserID
+        var page: [ChatMessage]?
+        do {
+            page = try await ChatService.shared.loadMessages(
+                threadId: threadID,
+                limit: pageSize,
+                before: nil
+            )
+        } catch {
+            AppErrorReporter.log(error: error, context: "PersonalContentView.loadInitialMessages")
+        }
+        // The view can be showing another thread by now, whose own load is
+        // under way: this one, read or failed, touches nothing of it.
+        guard shownThreadID == threadID else { return }
+        isInitialLoading = false
+        // Nor is anything of an earlier account's shown.
+        guard UserScope.currentUserID == account else { return }
+        if let page {
+            messages = page
+            oldestMessageId = page.first?.id
+            hasMoreMessages = page.count == pageSize
+        } else {
+            hasMoreMessages = false
+        }
+        didLoadInitialMessages = true
+    }
+
+    /// Load the next (older) page of messages when the user scrolls to the top
+    /// of the currently loaded history.
+    private func loadMoreMessagesIfNeeded() async {
+        AppErrorReporter.log(message: "loadMoreMessagesIfNeeded called. isInitialLoading=\(isInitialLoading) isLoadingMore=\(isLoadingMore) hasMoreMessages=\(hasMoreMessages) oldestMessageId=\(oldestMessageId ?? "nil") messagesCount=\(messages.count)", context: "PersonalContentView.loadMoreMessagesIfNeeded")
+        guard !isInitialLoading,
+              !isLoadingMore,
+              hasMoreMessages,
+              let oldestId = oldestMessageId,
+              !messages.isEmpty
+        else {
+            AppErrorReporter.log(message: "loadMoreMessagesIfNeeded guard blocked older page load", context: "PersonalContentView.loadMoreMessagesIfNeeded")
+            return
+        }
+
+        isLoadingMore = true
+
+        let threadID = thread.id
+        let account = UserScope.currentUserID
+        var page: [ChatMessage]?
+        do {
+            page = try await ChatService.shared.loadMessages(
+                threadId: threadID,
+                limit: pageSize,
+                before: oldestId
+            )
+        } catch {
+            AppErrorReporter.log(error: error, context: "PersonalContentView.loadMoreMessagesIfNeeded")
+        }
+        // As for the first page: a load for a thread the view has left
+        // touches nothing, and nothing of an earlier account's is shown.
+        guard shownThreadID == threadID else { return }
+        isLoadingMore = false
+        guard UserScope.currentUserID == account, let older = page else { return }
+        guard !older.isEmpty else {
+            hasMoreMessages = false
+            return
+        }
+        // Remember the first currently visible message so we can keep the
+        // scroll position stable after we prepend older messages.
+        if let anchorId = enhancedMessages.first?.id {
+            isPrependingMessages = true
+            pendingScrollAnchorId = anchorId
+        }
+        messages.insert(contentsOf: older, at: 0)
+        oldestMessageId = messages.first?.id
+        hasMoreMessages = older.count == pageSize
+    }
+
+    /// Send a message with optional file attachments to the LLM.
+    /// Attachments are read from the app's own store and their contents are injected into the context.
+    /// True once the turn has started; false if nothing was sent, with the
+    /// text back in the composer or kept for its thread.
+    @MainActor
+    private func sendMessage(attachments: [FileAttachmentDetail]) async -> Bool {
+        await send(messageText, attachments: attachments, isFromTheField: true)
+    }
+
+    /// What the composer shows above its box: why waiting messages were
+    /// not sent, and why a voice message was not.
+    static func notice(notSent: String?, voice: String?) -> String? {
+        let notices = [notSent, voice].compactMap(\.self).filter { !$0.isEmpty }
+        return notices.isEmpty ? nil : notices.joined(separator: "\n")
+    }
+
+    /// Sends what a voice message was heard to say, as a message of its
+    /// own, to the thread it was recorded in: the field keeps what it
+    /// holds. If that thread is no longer the one shown, nothing is sent
+    /// unseen; the words are kept for when it is opened.
+    @MainActor
+    private func sendVoiceMessage(_ heard: VoiceMessages.Heard) async {
+        // Only as the account that said them; another's is signed in now.
+        guard UserScope.currentUserID == heard.account else { return }
+        guard Self.sendsVoiceMessage(for: heard.destination.threadID, shown: shownThreadID, thread: thread.id, isOnScreen: isComposerOnScreen) else {
+            TurnEngine.shared.keepUnsent(heard.text, for: heard.destination.threadID, because: VoiceMessages.leftTheThread)
+            return
+        }
+        _ = await send(heard.text, attachments: [], isFromTheField: false)
+    }
+
+    /// Whether words heard for a thread are sent now: only into the thread
+    /// they were said in, while it is the one shown and on screen.
+    static func sendsVoiceMessage(for heardIn: String, shown: String?, thread: String, isOnScreen: Bool) -> Bool {
+        isOnScreen && shown == heardIn && thread == heardIn
+    }
+
+    /// Sends `text` to this thread, or has it wait for the turn that
+    /// runs. `isFromTheField`: it is what the field holds, which is then
+    /// cleared.
+    @MainActor
+    private func send(_ text: String, attachments: [FileAttachmentDetail], isFromTheField: Bool) async -> Bool {
+        let raw = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return false }
+
+        // Split the outgoing content into the visible user question and any
+        // tool-generated context blocks (web search results, attachment analysis).
+        // Only the human-authored question is stored, so the transcript stays
+        // clean; tool context is treated as ephemeral system context.
+        let parts = splitUserAndToolContext(from: raw)
+        // While a turn runs the message waits for it, shown as waiting.
+        let waiting = TurnEngine.WaitingMessage(
+            // As the field held it, to give back as it was.
+            text: text,
+            userText: parts.userText,
+            context: parts.fullText,
+            roleID: thread.agentId,
+            agentName: thread.agentName,
+            attachments: attachments
+        )
+        if turns.enqueue(waiting, threadID: thread.id) {
+            if isFromTheField { putInTheField("") }
+            ComposerDrafts.shared.removeAttachments(attachments, from: thread.id)
+            // The bubble does not take focus: said, so it is known to wait.
+            let isNext = turns.waiting[thread.id]?.first?.id == waiting.id
+            AccessibilityNotification.Announcement(
+                WaitingMessageBubble.note(isNext: isNext, agentName: thread.agentName ?? "Strix")
+            ).post()
+            return true
+        }
+        let userMessage = TurnProgress.userMessage(in: thread.id, text: parts.userText, attachments: attachments)
+        // Shown at once, before anything waits: this view can be showing
+        // another thread by the time the message is stored.
+        if isFromTheField { putInTheField("") }
+        messages.append(userMessage)
+        do {
+            try await TurnEngine.shared.start(
+                with: userMessage,
+                context: parts.fullText,
+                roleID: thread.agentId,
+                agentName: thread.agentName,
+                attachments: attachments.isEmpty ? nil : attachments
+            )
+        } catch {
+            AppErrorReporter.log(error: error, context: "PersonalContentView.sendMessage")
+            // Nothing was sent or stored. If this thread is still the one
+            // shown, the message comes out of it, the text goes back to the
+            // composer, and the thread says why, for now only on screen. If
+            // it is not, the text is kept for when the thread is opened.
+            guard shownThreadID == userMessage.threadId else {
+                TurnEngine.shared.keepUnsent(raw, for: userMessage.threadId, because: error.localizedDescription)
+                return false
+            }
+            messages.removeAll { $0.id == userMessage.id }
+            giveBack(raw, because: error.localizedDescription)
+            return false
+        }
+        // Sent: its files leave the thread's draft, also if the thread has
+        // left the screen and its composer cannot take them out.
+        ComposerDrafts.shared.removeAttachments(attachments, from: userMessage.threadId)
+        return true
+    }
+
+    /// Puts the text of a send that failed back in the composer, after
+    /// anything typed since, and says in the thread why it was not sent.
+    private func giveBack(_ text: String, because reason: String) {
+        putInTheField(messageText.isEmpty ? text : messageText + "\n" + text)
+        messages.append(TurnProgress.message(
+            in: thread.id,
+            role: "assistant",
+            content: "I couldn't send your message: \(reason)"
+        ))
+    }
+
+    /// One line for each approval a turn asked for, in the reading column.
+    private func approvalLines(_ approvals: [WorkTrace.Approval]) -> some View {
+        ForEach(approvals) { approval in
+            ApprovalRecordLine(approval: approval)
+                .frame(maxWidth: 800, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Reads the thread from where it is stored, then shows what the engine
+    /// added meanwhile. What it had added before the read began is among
+    /// the messages read.
+    private func loadStoredThread() async {
+        let threadID = thread.id
+        // The view can be showing another thread by now, or by the time
+        // the read ends: what it has taken in is that thread's to count.
+        guard shownThreadID == threadID else { return }
+        let before = turns.additions[threadID]?.last?.sequence ?? 0
+        additionsShown = before
+        await loadInitialMessages()
+        await loadTraces()
+        guard shownThreadID == threadID else { return }
+        // From before the read again: what was added during it can have
+        // been shown and then replaced by what was read.
+        additionsShown = before
+        showAdditions()
+        showLastEnding()
+    }
+
+    /// Shows what the engine has added to this thread and this view has
+    /// not taken in yet: replies, and waiting messages it sent, in the
+    /// order it added them. If some are no longer kept (more were added
+    /// than the engine keeps since this view last looked), the thread is
+    /// read again from where it is stored.
+    private func showAdditions() {
+        // Only while this thread is the one shown: on the way to another
+        // thread, that thread's messages are loaded afresh.
+        guard shownThreadID == thread.id else { return }
+        let pending = (turns.additions[thread.id] ?? []).filter { $0.sequence > additionsShown }
+        guard let first = pending.first, let last = pending.last else { return }
+        guard first.sequence == additionsShown + 1 else {
+            Task { await loadStoredThread() }
+            return
+        }
+        for addition in pending {
+            if !messages.contains(where: { $0.id == addition.message.id }) {
+                messages.append(addition.message)
+            }
+            if let trace = addition.trace {
+                traces[addition.message.id] = trace
+            }
+        }
+        additionsShown = last.sequence
+    }
+
+    /// Shows how the last turn in this thread ended, if it is not shown
+    /// yet. A stored ending is also among the loaded messages; one that
+    /// could not be stored is only here.
+    private func showLastEnding() {
+        guard let ending = turns.endings[thread.id] else { return }
+        let shown = Set(messages.map(\.id))
+        messages.append(contentsOf: ending.messages.filter { !shown.contains($0.id) })
+        if let reply = ending.messages.first {
+            traces[reply.id] = ending.trace
+        }
+    }
+
+    /// Loads the work traces of this thread's finished turns.
+    private func loadTraces() async {
+        let threadID = thread.id
+        let account = UserScope.currentUserID
+        do {
+            let loaded = try await ThreadRepository.shared.loadWorkTraces(threadID: threadID)
+            // The view can be showing another thread by now, or another
+            // account's.
+            guard shownThreadID == threadID, UserScope.currentUserID == account else { return }
+            // A turn that ended while these were read has its trace here
+            // already, and may not be among them.
+            traces.merge(loaded) { shown, _ in shown }
+        } catch {
+            AppErrorReporter.log(error: error, context: "PersonalContentView.loadTraces")
+        }
+    }
+
+    /// Split the outgoing composer text into a user-visible question and
+    /// optional tool-generated context blocks (web search results, attachment
+    /// analysis, etc.). The fullText field preserves the original text for
+    /// passing into the LLM/context builder.
+    private func splitUserAndToolContext(from text: String) -> (userText: String, fullText: String) {
+        // Look for our known tool section markers. If none are present, treat
+        // the entire message as user-authored text.
+        let markers = ["[Web search results]", "[Attachment analysis]"]
+        guard let range = markers
+            .compactMap({ text.range(of: $0) })
+            .sorted(by: { $0.lowerBound < $1.lowerBound })
+            .first
+        else {
+            return (userText: text, fullText: text)
+        }
+        let userPart = String(text[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        // If the user section is somehow empty, still fall back to the full
+        // text so we don't lose their input.
+        if userPart.isEmpty {
+            return (userText: text, fullText: text)
+        }
+        return (userText: userPart, fullText: text)
+    }
+}

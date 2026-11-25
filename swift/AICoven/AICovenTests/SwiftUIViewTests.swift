@@ -10,9 +10,4 @@ final class SwiftUIViewTests: XCTestCase {
         // Accessing the type erasure ensures the view compiles in tests.
         _ = AnyView(view)
     }
-
-    func testMainTabViewInitializes() {
-        let view = MainTabView()
-        _ = AnyView(view)
-    }
 }

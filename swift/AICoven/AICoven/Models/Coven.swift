@@ -66,11 +66,79 @@ struct CovenSettings: Codable, Hashable {
     let defaultMemoryPolicy: [String: String]?
     let budgetCaps: [String: Double]?
     let autoRouteEnabled: Bool?
+    /// Which connections the coven's agents may use. Nil until the coven
+    /// has made a choice: until then everything connected is used.
+    let connections: CovenConnections?
+    /// The coven's icon: an SF Symbol's name and the key of one of the
+    /// twelve tints (`IconTint`). Nil for a coven made before covens had
+    /// icons, which shows a house on sand.
+    let iconSymbol: String?
+    let iconTint: String?
 
     enum CodingKeys: String, CodingKey {
         case defaultMemoryPolicy = "default_memory_policy"
         case budgetCaps = "budget_caps"
         case autoRouteEnabled = "auto_route_enabled"
+        case connections
+        case iconSymbol = "icon_symbol"
+        case iconTint = "icon_tint"
+    }
+
+    init(
+        defaultMemoryPolicy: [String: String]? = nil,
+        budgetCaps: [String: Double]? = nil,
+        autoRouteEnabled: Bool? = nil,
+        connections: CovenConnections? = nil,
+        iconSymbol: String? = nil,
+        iconTint: String? = nil
+    ) {
+        self.defaultMemoryPolicy = defaultMemoryPolicy
+        self.budgetCaps = budgetCaps
+        self.autoRouteEnabled = autoRouteEnabled
+        self.connections = connections
+        self.iconSymbol = iconSymbol
+        self.iconTint = iconTint
+    }
+
+    /// As stored. A choice of connections that cannot be read does not
+    /// hide the other settings: it reads here as none, and is refused
+    /// where it matters (`CovenRepository.connections(ofCoven:for:)`, which
+    /// reads what is stored and grants nothing of what it cannot read).
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        defaultMemoryPolicy = try container.decodeIfPresent([String: String].self, forKey: .defaultMemoryPolicy)
+        budgetCaps = try container.decodeIfPresent([String: Double].self, forKey: .budgetCaps)
+        autoRouteEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoRouteEnabled)
+        connections = try? container.decodeIfPresent(CovenConnections.self, forKey: .connections)
+        // An icon that cannot be read is none: the coven shows the default.
+        iconSymbol = (try? container.decodeIfPresent(String.self, forKey: .iconSymbol)) ?? nil
+        iconTint = (try? container.decodeIfPresent(String.self, forKey: .iconTint)) ?? nil
+    }
+}
+
+extension Coven {
+    /// The coven's symbol, where it has one that can be an SF Symbol's
+    /// name (see `IconRules.isSymbolName`).
+    var iconSymbol: String? {
+        settings?.iconSymbol.flatMap { IconRules.isSymbolName($0) ? $0 : nil }
+    }
+
+    /// The tint the coven wears; nil when none is stored or the key is
+    /// one this app does not know.
+    var iconTintValue: IconTint? {
+        settings?.iconTint.flatMap(IconTint.init(rawValue:))
+    }
+}
+
+/// What an icon's stored symbol may be.
+nonisolated enum IconRules {
+    /// Whether text can be an SF Symbol's name: 1 to 64 of the lower-case
+    /// letters, digits and dots such names are written in.
+    static func isSymbolName(_ name: String) -> Bool {
+        guard (1 ... 64).contains(name.utf8.count) else { return false }
+        return name.utf8.allSatisfy { byte in
+            (UInt8(ascii: "a") ... UInt8(ascii: "z")).contains(byte) || (UInt8(ascii: "0") ... UInt8(ascii: "9")).contains(byte) || byte == UInt8(ascii: ".")
+        }
     }
 }
 
@@ -119,8 +187,14 @@ struct RoleSettings: Codable, Hashable {
     /// Soft wall-clock budget in seconds for `plan_and_execute` flows
     /// (maps to settings.planner_max_seconds).
     let plannerMaxSeconds: Double?
+    /// The agent's face: an SF Symbol's name and the key of one of the
+    /// twelve tints (`IconTint`).
+    let iconSymbol: String?
+    let iconTint: String?
 
     enum CodingKeys: String, CodingKey {
+        case iconSymbol = "icon_symbol"
+        case iconTint = "icon_tint"
         case toolConfig = "tool_config"
         case allowedTools = "allowed_tools"
         case collaboratorRoleIds = "collaborator_role_ids"
@@ -140,6 +214,9 @@ struct RoleSettings: Codable, Hashable {
         autonomousMaxSteps = try container.decodeIfPresent(Int.self, forKey: .autonomousMaxSteps)
         plannerMaxTasks = try container.decodeIfPresent(Int.self, forKey: .plannerMaxTasks)
         plannerMaxSeconds = try container.decodeIfPresent(Double.self, forKey: .plannerMaxSeconds)
+        // A face that cannot be read is none: the agent shows the default.
+        iconSymbol = (try? container.decodeIfPresent(String.self, forKey: .iconSymbol)) ?? nil
+        iconTint = (try? container.decodeIfPresent(String.self, forKey: .iconTint)) ?? nil
     }
 
     /// Explicit initializer for creating instances
@@ -150,8 +227,12 @@ struct RoleSettings: Codable, Hashable {
         autonomousMode: Bool? = nil,
         autonomousMaxSteps: Int? = nil,
         plannerMaxTasks: Int? = nil,
-        plannerMaxSeconds: Double? = nil
+        plannerMaxSeconds: Double? = nil,
+        iconSymbol: String? = nil,
+        iconTint: String? = nil
     ) {
+        self.iconSymbol = iconSymbol
+        self.iconTint = iconTint
         self.toolConfig = toolConfig
         self.allowedTools = allowedTools
         self.collaboratorRoleIds = collaboratorRoleIds
@@ -159,6 +240,22 @@ struct RoleSettings: Codable, Hashable {
         self.autonomousMaxSteps = autonomousMaxSteps
         self.plannerMaxTasks = plannerMaxTasks
         self.plannerMaxSeconds = plannerMaxSeconds
+    }
+}
+
+extension Role {
+    /// The agent's symbol: the one stored, or, for an agent made when
+    /// agents had an emoji, the symbol that emoji was replaced by; nil
+    /// where there is neither (the face then shows `cpu`).
+    var iconSymbol: String? {
+        if let stored = settings?.iconSymbol, IconRules.isSymbolName(stored) { return stored }
+        return AgentFace.symbol(forEmoji: emoji)
+    }
+
+    /// The tint this agent wears; nil when none is stored or the key is
+    /// one this app does not know.
+    var iconTintValue: IconTint? {
+        settings?.iconTint.flatMap(IconTint.init(rawValue:))
     }
 }
 
@@ -215,6 +312,11 @@ struct ProviderInitializationStatus: Codable {
         let name: String?
         let provider: String?
         let contextLength: Int?
+        /// Whether the provider's own list says the model takes pictures.
+        /// Only OpenRouter's is read for it (false where an entry does not
+        /// say); nil for every other provider's. Set where a list is
+        /// read, not decoded from one.
+        var takesImages: Bool?
 
         enum CodingKeys: String, CodingKey {
             case id

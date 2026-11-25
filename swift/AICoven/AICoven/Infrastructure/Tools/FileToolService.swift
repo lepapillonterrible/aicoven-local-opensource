@@ -172,12 +172,16 @@ actor FileToolService {
     ///   - content: Text content to write.
     ///   - workingDir: Optional working directory for relative paths.
     ///   - createDirectories: Whether to create parent directories if they don't exist.
+    ///   - approve: Asks the person, once the write is known to be allowed:
+    ///     the file's full path, and whether a file is there to be replaced.
+    ///     Nothing is written or created unless it returns true.
     /// - Returns: ToolResult indicating success or error.
     func writeFile(
         path: String,
         content: String,
         workingDir: String? = nil,
-        createDirectories: Bool = true
+        createDirectories: Bool = true,
+        approve: @Sendable (_ resolvedPath: String, _ replaces: Bool) async -> ApprovalAnswer
     ) async -> ToolExecutionResult {
         let resolvedPath = resolvePath(path, workingDir: workingDir)
 
@@ -208,6 +212,11 @@ actor FileToolService {
         let fileManager = FileManager.default
         let url = URL(fileURLWithPath: resolvedPath)
 
+        let replaces = fileManager.fileExists(atPath: resolvedPath)
+        if let refusal = await ToolExecutionResult.refusal(approve(resolvedPath, replaces), tool: "file.write") {
+            return refusal
+        }
+
         // Create parent directories if needed
         if createDirectories {
             let parentDir = url.deletingLastPathComponent()
@@ -222,9 +231,18 @@ actor FileToolService {
             }
         }
 
-        // Write the file
+        // Write the file. What was approved as a new file replaces nothing:
+        // a file can have appeared at the path while the person was asked.
         do {
-            try data.write(to: url)
+            do {
+                try data.write(to: url, options: replaces ? [] : .withoutOverwriting)
+            } catch let error as CocoaError where error.code == .fileWriteFileExists {
+                return await .error(
+                    tool: "file.write",
+                    message: "A file appeared at \(resolvedPath) after the person approved writing a new one there. Nothing was written. Asking again will ask them about replacing it.",
+                    errorType: "file_appeared"
+                )
+            }
             return await .success(
                 tool: "file.write",
                 result: [
@@ -524,7 +542,7 @@ actor FileToolService {
 
             return await .error(
                 tool: tool,
-                message: "Access to '\(resolvedPath)' has not been granted. Please add this folder in Settings > File Access, or grant access when prompted.",
+                message: "Access to '\(resolvedPath)' has not been granted. Please add this folder in Settings > This Mac, or grant access when prompted.",
                 errorType: "folder_not_authorized",
                 isRetryable: true
             )

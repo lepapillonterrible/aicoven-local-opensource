@@ -98,11 +98,55 @@ enum ToolIntentDecision {
     /// Ambiguous — fall through to the LLM with tool instructions.
     case ambiguous
 
+    /// Whether `text` holds `name` as a whole name: not as the start or
+    /// the end of a longer one ("file.reading" does not name `file.read`,
+    /// nor "asset.get.all", "file.read-extra" or "other-file.read"; "use
+    /// asset.get." does).
+    static func names(_ name: String, in text: String) -> Bool {
+        func isOfAName(_ character: Character?) -> Bool {
+            character.map { $0.isLetter || $0.isNumber || $0 == "_" } ?? false
+        }
+        /// A dot or a hyphen joins a name to more of it.
+        func joins(_ character: Character?) -> Bool {
+            character == "." || character == "-"
+        }
+        var from = text.startIndex
+        while let found = text.range(of: name, range: from ..< text.endIndex) {
+            let before = found.lowerBound > text.startIndex ? text[text.index(before: found.lowerBound)] : nil
+            let after = found.upperBound < text.endIndex ? text[found.upperBound] : nil
+            let afterThat = after == nil ? nil : (text.index(after: found.upperBound) < text.endIndex ? text[text.index(after: found.upperBound)] : nil)
+            // A dot or a hyphen goes on with a name only where a name's character follows it.
+            let goesOn = isOfAName(after) || (joins(after) && isOfAName(afterThat))
+            if !isOfAName(before), !joins(before), !goesOn { return true }
+            from = found.upperBound
+        }
+        return false
+    }
+
+    /// Words that name what the place's own tools keep: its tasks and its assets.
+    static let placeCues = ["task", "to-do", "todo", "remind me", "remember to", "asset"]
+
     /// Heuristic fast-path: classify a user message without an LLM call.
     /// Returns `.noTools` for obviously conversational requests and
     /// `.useTools` for obvious tool requests; `.ambiguous` otherwise.
     static func heuristic(for message: String) -> ToolIntentDecision {
         let lower = message.lowercased()
+
+        // A message that names a tool by its name asks for tools, whatever
+        // else it says: an asset's hand-off tells the agent to read it
+        // with `asset.get`, and what the person adds to it ("draft the
+        // plan") must not take the tool away.
+        if PromptTemplates.toolDefinitions.contains(where: { names($0.name.lowercased(), in: lower) }) {
+            return .useTools(suggested: [])
+        }
+
+        // What is asked of the place's own tools is no conversation,
+        // whatever else it says: "add a task to draft the brief", "remind
+        // me to summarize the notes", "save this draft as an asset" each
+        // hold a word that would otherwise keep the turn from every tool.
+        if placeCues.contains(where: { lower.contains($0) }) {
+            return .useTools(suggested: [])
+        }
 
         // Obvious no-tool patterns (conversational, opinion, summarization).
         // NOTE: broad phrases like "what is" were intentionally narrowed
@@ -179,35 +223,29 @@ actor ChatService {
     /// from ProviderAccountService on each call. Tests can disable this to
     /// keep injected mock clients and routers.
     private let shouldAutoRefreshEnvironment: Bool
+    /// The Hermes agent connected, if one is; injected for tests.
+    private let hermesAgent: @Sendable () -> HermesAgentClient?
+    /// A turn through the OpenClaw Gateway connected, if one is; injected
+    /// for tests.
+    private let openClawTurn: @Sendable (_ threadID: String) -> OpenClawTurn?
+    /// Which connections the thread's coven lets its agents use; injected
+    /// for tests.
+    private let covenConnections: @Sendable (_ threadID: String) async -> CovenConnections?
+    /// Who is signed in, asked each time it matters; injected for tests.
+    private let signedIn: @Sendable () async -> String
+    /// The threads whose latest turn was an agent's run (Hermes, or
+    /// OpenClaw through its Gateway). What follows a turn (the thread's
+    /// summary, and the memory proposed from it) is made by one of the
+    /// app's own models, and is not made for these: the turn went to the
+    /// agent, and whichever provider is chosen by the time it ends was not
+    /// given it.
+    private var threadsLastAnsweredByAnAgent: Set<String> = []
+    /// Counts each thread's summaries asked for: only the latest asked is
+    /// kept, so one that comes back late does not overwrite a newer one.
+    private var summariesAsked: [String: Int] = [:]
 
-    /// In-memory local message store keyed by thread ID. This gives us basic
-    /// per-thread history for contextual chat without any backend.
-    private var messageStore: [String: [ChatMessage]] = [:]
     /// Maximum number of prior turns to include when building LLM context.
     private let maxContextMessages = 20
-
-    /// Whether we've attempted to hydrate the in-memory store from disk.
-    private var hasLoadedFromDisk = false
-
-    /// User-scoped on-disk cache location for message history.
-    private var messageStoreURL: URL {
-        let fm = FileManager.default
-        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fm.urls(for: .documentDirectory, in: .userDomainMask).first!
-        let dir = base.appendingPathComponent("AICovenOpen", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        // Use user-scoped filename so each user gets their own message history
-        let filename = UserScope.scopedFilename("messages", extension: "json")
-        return dir.appendingPathComponent(filename, isDirectory: false)
-    }
-
-    /// Reload message store for the current user. Call after user switch.
-    func reloadForCurrentUser() {
-        // Clear in-memory cache
-        messageStore = [:]
-        hasLoadedFromDisk = false
-        // Next call to loadMessages will reload from user-scoped file
-    }
 
     init(
         contextBuilder: ContextBuilder,
@@ -215,7 +253,13 @@ actor ChatService {
         llmClients: [String: LLMClient],
         threadStore: ThreadStore,
         toolService: ChatToolService,
-        shouldAutoRefreshEnvironment: Bool = true
+        shouldAutoRefreshEnvironment: Bool = true,
+        hermesAgent: @escaping @Sendable () -> HermesAgentClient? = ProviderAccountService.hermesAgent,
+        openClawTurn: @escaping @Sendable (_ threadID: String) -> OpenClawTurn? = { threadID in
+            ProviderAccountService.openClawGateway().map { OpenClawTurn(address: $0.address, token: $0.token, threadID: threadID) }
+        },
+        covenConnections: @escaping @Sendable (_ threadID: String) async -> CovenConnections? = { await CovenService.shared.connections(forThread: $0) },
+        signedIn: @escaping @Sendable () async -> String = { await UserScope.currentUserID }
     ) {
         self.contextBuilder = contextBuilder
         self.modelRouter = modelRouter
@@ -223,6 +267,92 @@ actor ChatService {
         self.threadStore = threadStore
         self.toolService = toolService
         self.shouldAutoRefreshEnvironment = shouldAutoRefreshEnvironment
+        self.hermesAgent = hermesAgent
+        self.openClawTurn = openClawTurn
+        self.covenConnections = covenConnections
+        self.signedIn = signedIn
+    }
+
+    /// Whether a turn answered through `provider` is offered the asset
+    /// tools and the task tools (those of the place its thread is in): a
+    /// model's turn is, but not one that goes to the person's own
+    /// OpenClaw (with a Gateway it is an agent's run; without one it is
+    /// still their own server, which is offered none).
+    nonisolated static func usesAssets(provider: String) -> Bool {
+        provider.lowercased() != "openclaw"
+    }
+
+    /// Whether a turn answered through `provider` is offered the tools of
+    /// its thread's place (the asset tools, the task tools): a cloud
+    /// model's turn is; one handed to Hermes or to OpenClaw, or answered
+    /// by a model on this device or this network, is not.
+    nonisolated static func givesPlaceTools(provider: String, isLocal: Bool) -> Bool {
+        provider.lowercased() != AgentRun.hermes && usesAssets(provider: provider) && !isLocal
+    }
+
+    /// Whether a turn for an agent (Strix for nil) would be offered the
+    /// tools of its thread's place, as the agent and the connections are
+    /// set up now: asked before an asset is sent to an agent, which reads
+    /// it with those tools. Decided as a turn decides it: after the same
+    /// refresh of what is connected, by the model that would in fact
+    /// answer (the agent's own where it is there, else the one the turn
+    /// would fall back to), and not for a turn that would be handed to
+    /// Hermes or an OpenClaw Gateway, or that no model can answer.
+    ///
+    /// Asked for several agents at once (nil for Strix), with one refresh
+    /// for all of them, as `account`: an agent's settings and the
+    /// connections are the signed-in account's, so nothing is answered
+    /// (nil) once another account is signed in, before or after the wait.
+    /// For an agent no model can answer for just now the answer is nil:
+    /// nothing is connected, or what is connected could not be read (the
+    /// device is offline, a provider did not list its models), and that
+    /// says nothing of where the agent runs.
+    func offersPlaceTools(toAgents roleIDs: [String?], as account: String) async -> [Bool?]? {
+        guard await signedIn() == account else { return nil }
+        await ensureEnvironment()
+        var offered: [Bool?] = []
+        for roleID in roleIDs {
+            guard await signedIn() == account else { return nil }
+            let preferred = await preferredProviderAndModel(roleId: roleID)
+            if preferred.provider == AgentRun.hermes, hermesAgent() != nil {
+                offered.append(false)
+            } else if preferred.provider == AgentRun.openClaw, openClawTurn("") != nil {
+                offered.append(false)
+            } else if let answering = answeringModel(provider: preferred.provider, model: preferred.model) {
+                let provider = answering.descriptor.providerID
+                offered.append(Self.givesPlaceTools(provider: provider, isLocal: isLocalDeployment(providerID: provider)))
+            } else {
+                offered.append(nil)
+            }
+        }
+        guard await signedIn() == account else { return nil }
+        return offered
+    }
+
+    /// The model that answers a turn whose agent prefers `provider` and
+    /// `model`: that one where its connection and the model are there,
+    /// else the one the router gives; nil where none can answer.
+    private func answeringModel(provider: String, model: String) -> (descriptor: ModelDescriptor, client: LLMClient)? {
+        if let client = llmClients[provider], let match = modelRouter.findExact(providerID: provider, modelID: model) {
+            return (match, client)
+        }
+        // Fall back to heuristic routing.
+        let routing = RoutingContext(task: .chat, requireLocalOnly: false, requireLongContext: false, preferHighQuality: true)
+        guard let descriptor = modelRouter.route(for: routing), let client = llmClients[descriptor.providerID] else { return nil }
+        return (descriptor, client)
+    }
+
+    /// What a turn that was cut off this way says in its thread.
+    static let accountChangedMessage = "Another account signed in before this reply was finished, so it was stopped."
+
+    /// Throws unless the account a turn began as is still the one signed
+    /// in. What a turn has gathered (its thread, its memories, what its
+    /// tools read) is that account's, and what is gathered for its next
+    /// request is gathered as whoever is signed in by then: asked just
+    /// before each request, so that nothing of either account is sent to a
+    /// provider through the other's connection.
+    private func requireStill(_ account: String) async throws {
+        guard await signedIn() == account else { throw RepositoryError.accountChanged }
     }
 
     /// Ensure that we have an up-to-date LLM environment based on the latest
@@ -239,75 +369,36 @@ actor ChatService {
         do {
             // Build dynamic model descriptors from live ListModels responses for
             // all configured provider accounts.
-            let allDescriptors = try await ProviderAccountService.shared.loadAllModelDescriptors()
+            let catalog = try await ProviderAccountService.shared.loadModelCatalog()
             // Only keep descriptors for providers we actually have clients for.
             let allowed = Set(llmClients.keys)
-            let models = allDescriptors.filter { allowed.contains($0.providerID) }
-            modelRouter = HeuristicModelRouter(availableModels: models)
+            let models = catalog.routed.filter { allowed.contains($0.providerID) }
+            modelRouter = HeuristicModelRouter(availableModels: models, imageModels: catalog.imageModels)
         } catch {
             AppErrorReporter.log(error: error, context: "ChatService.ensureEnvironment.loadModelDescriptors")
             modelRouter = HeuristicModelRouter(availableModels: [])
         }
     }
 
-    // MARK: - Local message store (memory + disk)
+    // MARK: - Messages (in the thread store)
 
-    /// Append a message to the local in-memory history for its thread and
-    /// persist the updated store to disk.
-    func addLocalMessage(_ message: ChatMessage) {
-        var messages = messageStore[message.threadId] ?? []
-        messages.append(message)
-        messageStore[message.threadId] = messages
-        saveMessageStoreToDisk()
-    }
-
-    /// Ensure the in-memory message store is hydrated from disk at most once.
-    private func ensureLoadedFromDisk() {
-        guard !hasLoadedFromDisk else { return }
-        hasLoadedFromDisk = true
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: messageStoreURL.path) else { return }
+    /// Adds a message to the end of its thread's stored history.
+    func addLocalMessage(_ message: ChatMessage) async {
         do {
-            let data = try Data(contentsOf: messageStoreURL)
-            let decoded = try JSONDecoder().decode([String: [ChatMessage]].self, from: data)
-            messageStore = decoded
+            try await threadStore.appendChatMessage(message)
         } catch {
-            AppErrorReporter.log(error: error, context: "ChatService.ensureLoadedFromDisk")
+            AppErrorReporter.log(error: error, context: "ChatService.addLocalMessage")
         }
     }
 
-    /// Persist the current in-memory message store to disk.
-    private func saveMessageStoreToDisk() {
-        do {
-            let data = try JSONEncoder().encode(messageStore)
-            try data.write(to: messageStoreURL, options: .atomic)
-        } catch {
-            AppErrorReporter.log(error: error, context: "ChatService.saveMessageStoreToDisk")
-        }
-    }
-
-    /// Load messages for a thread
+    /// Load messages for a thread, oldest first.
     /// - Parameters:
     ///   - threadId: The thread ID
     ///   - limit: Maximum number of messages to load
     ///   - before: Load messages before this message ID
     /// - Returns: List of messages
     func loadMessages(threadId: String, limit: Int = 1000, before: String? = nil) async throws -> [ChatMessage] {
-        ensureLoadedFromDisk()
-        let all = messageStore[threadId] ?? []
-        guard !all.isEmpty else { return [] }
-
-        // Messages are stored in ascending order (oldest first). We support
-        // simple pagination using the optional `before` message ID.
-        if let beforeId = before, let idx = all.firstIndex(where: { $0.id == beforeId }) {
-            let end = idx
-            let start = max(0, end - limit)
-            return Array(all[start ..< end])
-        } else {
-            let end = all.count
-            let start = max(0, end - limit)
-            return Array(all[start ..< end])
-        }
+        try await threadStore.loadChatMessages(threadID: threadId, limit: limit, before: before)
     }
 
     /// Send a message and get AI response (non-streaming)
@@ -358,15 +449,23 @@ actor ChatService {
     ///   - attachments: File attachments with local URLs (optional). File contents will be read and injected into the context.
     func streamMessage(
         threadId: String,
+        as account: String,
         message: String,
         roleId: String? = nil,
         providerAccountId: String? = nil,
         attachments: [FileAttachmentDetail]? = nil,
+        offersToolsWhateverItSays: Bool = false,
+        onAgentRun: (@Sendable (AgentRun) async -> Void)? = nil,
         onStateChange: @escaping (TurnState) -> Void
     ) async throws {
         var state = TurnState(threadId: threadId)
         state.phase = .starting
         onStateChange(state)
+        // The account the turn is begun as: its requests are that account's.
+        // The engine notes it as the person sends, before anything waits;
+        // if another account has signed in since, nothing is done.
+        let turnAccount = account
+        try await requireStill(turnAccount)
         // Ensure we see any provider keys and live model lists that may have
         // been added or changed after ChatService was first initialized.
         await ensureEnvironment()
@@ -374,54 +473,58 @@ actor ChatService {
         // Resolve provider + model: prefer role-specific settings when a
         // roleId is provided (coven agent threads), otherwise fall back to
         // the user's global preference from UserDefaults.
-        let prefProvider: String
-        let prefModel: String
+        let (prefProvider, prefModel, agentSettings) = await preferredProviderAndModel(roleId: roleId)
 
-        if let roleId,
-           let role = try? await RoleService.shared.getRole(roleId: roleId),
-           let roleProvider = role.provider, !roleProvider.isEmpty,
-           let roleModel = role.model, !roleModel.isEmpty {
-            prefProvider = roleProvider.lowercased()
-            prefModel = roleModel
-            #if DEBUG
-            AppErrorReporter.log(message: "Role '\(role.name)' resolved provider=\(prefProvider) model=\(prefModel)", context: "ChatService.streamMessage.roleResolution")
-            #endif
-        } else {
-            let (globalProvider, globalModel) = resolveProviderAndModel()
-            prefProvider = globalProvider
-            prefModel = globalModel
-            #if DEBUG
-            AppErrorReporter.log(message: "No role override (roleId=\(roleId ?? "nil")); using global provider=\(prefProvider) model=\(prefModel)", context: "ChatService.streamMessage.roleResolution")
-            #endif
-        }
+        // Who answers, with its instructions: read once for the turn.
+        let agent = await answeringAgent(roleId: roleId)
 
-        let descriptor: ModelDescriptor
-        let client: LLMClient
-
-        if let prefClient = llmClients[prefProvider],
-           let match = modelRouter.findExact(providerID: prefProvider, modelID: prefModel) {
-            descriptor = match
-            client = prefClient
-        } else {
-            // Fall back to heuristic routing.
-            let routingContext = RoutingContext(
-                task: .chat,
-                requireLocalOnly: false,
-                requireLongContext: false,
-                preferHighQuality: true
+        // Hermes is an agent, not a model: it runs the turn itself, with its
+        // own tools and memory, and this app follows the run. It is told
+        // first what a model's turn is told of who answers and of where
+        // the thread is (`ContextBuilder.preface`).
+        if prefProvider == "hermes", let hermes = hermesAgent() {
+            threadsLastAnsweredByAnAgent.insert(threadId)
+            let earlier = try await loadMessages(threadId: threadId, limit: Self.hermesHistoryLimit)
+            let said = await message + AttachmentContext.block(for: attachments ?? [])
+            let toldFirst = try await contextBuilder.preface(threadID: threadId, question: message, agent: agent)
+            // What was gathered for the run is the turn's account's: the
+            // run is not started once another has signed in.
+            try await requireStill(turnAccount)
+            try await HermesTurn(client: hermes, threadID: threadId).run(
+                input: said,
+                history: Self.hermesHistory(from: earlier, toldFirst: toldFirst),
+                started: { await onAgentRun?(AgentRun(provider: AgentRun.hermes, runID: $0)) },
+                report: onStateChange
             )
-            guard let fallbackDescriptor = modelRouter.route(for: routingContext),
-                  let fallbackClient = llmClients[fallbackDescriptor.providerID] else {
-                let msg = "No configured providers/models available for chat. Add provider keys in Settings."
-                state.phase = .finalizing
-                state.status = .failed
-                state.answer = msg
-                state.bumpVersion()
-                onStateChange(state)
-                return
-            }
-            descriptor = fallbackDescriptor
-            client = fallbackClient
+            return
+        }
+        // So is OpenClaw, where its connection names its Gateway: without
+        // one it is a server that speaks the OpenAI chat API, below.
+        if prefProvider == "openclaw", let turn = openClawTurn(threadId) {
+            threadsLastAnsweredByAnAgent.insert(threadId)
+            let earlier = try await loadMessages(threadId: threadId, limit: Self.hermesHistoryLimit)
+            let said = await message + AttachmentContext.block(for: attachments ?? [])
+            let toldFirst = try await contextBuilder.preface(threadID: threadId, question: message, agent: agent)
+            try await requireStill(turnAccount)
+            try await turn.run(
+                message: OpenClawTurn.message(
+                    said, after: Self.hermesHistory(from: earlier).map { ($0.role, $0.content) }, toldFirst: toldFirst
+                ),
+                started: { await onAgentRun?(AgentRun(provider: AgentRun.openClaw, runID: $0, origin: turn.address.absoluteString)) },
+                report: onStateChange
+            )
+            return
+        }
+        threadsLastAnsweredByAnAgent.remove(threadId)
+
+        guard let (descriptor, client) = answeringModel(provider: prefProvider, model: prefModel) else {
+            let msg = "No configured providers/models available for chat. Add provider keys in Settings."
+            state.phase = .finalizing
+            state.status = .failed
+            state.answer = msg
+            state.bumpVersion()
+            onStateChange(state)
+            return
         }
 
         // Give the UI an immediate hint that we're contacting the provider.
@@ -434,7 +537,10 @@ actor ChatService {
         // This prevents unnecessary tool loops for conversational requests
         // and avoids injecting tool protocol instructions that cause the
         // model to regurgitate its own rules.
-        let intent = ToolIntentDecision.heuristic(for: message)
+        // A turn the app itself words for the person (a task handed to an
+        // agent, an asset sent to one) is offered its tools whatever those
+        // words hold: a task's title is not a request to be read for intent.
+        let intent = offersToolsWhateverItSays ? .useTools(suggested: []) : ToolIntentDecision.heuristic(for: message)
         let toolsAllowed: Bool
         switch intent {
         case let .noTools(reason):
@@ -451,11 +557,14 @@ actor ChatService {
 
         // Simple tool loop: allow the model a configurable number of tool
         // invocations before we require a natural-language answer. The
-        // `chat_max_tool_steps` budget controls how many *tool calls* are
-        // allowed; the user always gets a final answer attempt even if the
-        // budget is exhausted.
-        let maxToolSteps = toolsAllowed ? max(0, Self.currentMaxToolSteps()) : 0
+        // budget controls how many *tool calls* are allowed (the agent's own
+        // where it sets one, else the app's `chat_max_tool_steps`); the user
+        // always gets a final answer attempt even if the budget is exhausted.
+        let maxToolSteps = toolsAllowed ? Self.mostToolSteps(of: agentSettings) : 0
         var remainingToolSteps = maxToolSteps
+        // The longest an answer may be is the agent's, sent only where
+        // `usesMaxTokens` says.
+        let answerLimit = AgentTurnSettings.usesMaxTokens(provider: descriptor.providerID) ? agentSettings.maxTokens : nil
         #if DEBUG
         AppErrorReporter.log(message: "streamMessage starting: provider=\(descriptor.providerID) model=\(descriptor.modelID) maxToolSteps=\(maxToolSteps) toolsAllowed=\(toolsAllowed)", context: "ChatService.streamMessage")
         #endif
@@ -465,13 +574,34 @@ actor ChatService {
         var streamedAnswer = false
 
         // Local models (MLX, Ollama) get a shorter, more assertive prompt.
-        // OpenClaw and Hermes are treated as local when pointing at a
-        // localhost / private-network endpoint.
+        // OpenClaw and OpenAI-compatible servers are treated as local
+        // when pointing at a localhost / private-network endpoint.
         let isLocalModel = isLocalDeployment(providerID: descriptor.providerID)
+        // Of the person's connections, a turn is offered what its
+        // thread's coven lets its agents use.
+        let connections = await covenConnections(threadId)
         let toolConfig: ContextBuilder.ToolConfig = isLocalModel
-            ? await .mlxTools()
-            : await .connected()
-        await ToolExecutionService.shared.setWhitelist(for: "chat", tools: toolConfig.enabledTools)
+            ? await .mlxTools(connections: connections)
+            : await .connected(
+                deliversFiles: true, seesPictures: descriptor.takesImages,
+                usesAssets: Self.givesPlaceTools(provider: descriptor.providerID, isLocal: isLocalModel),
+                connections: connections
+            )
+        // The tools this turn was offered are the ones it may call: they
+        // go with each of its calls (`executeChatToolCall(allowed:)`).
+        // Nothing is kept for chat turns as a kind: two turns running at
+        // once, in threads of different covens, are offered different tools.
+        // The pictures this turn's tools make for its model, where the
+        // model can be sent pictures: they go with its later requests.
+        let turnPictures: TurnPictures? = descriptor.takesImages ? TurnPictures() : nil
+        // What this turn makes and changes of assets: for the agent it is
+        // for, and only so much. Only a turn that is offered the asset
+        // tools has one: without it they read and make nothing, whatever
+        // tools another turn running now is allowed.
+        let turnAssets: TurnAssets? = toolConfig.enabledTools.isDisjoint(with: AssetTools.all) ? nil : TurnAssets(agentID: roleId)
+        // The same for tasks: only a turn that is offered the task tools
+        // reads the place's tasks, adds to them and changes them.
+        let turnTasks: TurnTasks? = toolConfig.enabledTools.isDisjoint(with: TaskTools.all) ? nil : TurnTasks()
 
         // ── Context-aware repeat detection (ported from backend) ──────────
         // Tracks tool-call signatures across loop iterations so we can
@@ -496,69 +626,23 @@ actor ChatService {
         let maxToolRefusalRetries = 1
 
         // ── Tool result compression threshold ────────────────────────────
-        // Once toolContextLog exceeds this length (chars), older results
-        // are truncated to prevent context overflow. Use a lower limit on
-        // iPhone to reduce peak memory alongside the MLX model.
+        // What the tools tell is kept whole, result by result, in the room
+        // the turn has for it; the oldest are left out first (`ToolResults`).
         let isMobileDevice = Self.isMobileDevice
-        let toolContextCompressThreshold = isMobileDevice ? 2000 : 3000
 
         // Track initial message sent
         AnalyticsService.shared.trackMessageSent(threadId: threadId, hasAttachments: !(attachments?.isEmpty ?? true), attachmentCount: attachments?.count ?? 0)
 
-        // ── Build attachment context block ────────────────────────────────
-        // Read file contents from local attachments and build a context block
-        // so the agent can see the attached files.
-        var attachmentContextBlock = ""
-        if let attachments, !attachments.isEmpty {
-            var attachmentLines: [String] = []
-            for attachment in attachments {
-                let name = attachment.name
-                let mime = attachment.mimeType ?? "unknown"
-
-                // Try to read file contents from the local URL
-                if let url = attachment.url {
-                    do {
-                        if mime.hasPrefix("image/") {
-                            // For images, describe them (actual image content would need vision API)
-                            let sizeDesc = attachment.sizeBytes.map { "\(ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file))" } ?? "unknown size"
-                            let dims = (attachment.width != nil && attachment.height != nil) ? "\(attachment.width!)×\(attachment.height!)" : ""
-                            attachmentLines.append("[Image: \(name)] (\(mime), \(sizeDesc)\(dims.isEmpty ? "" : ", \(dims)"))")
-                            attachmentLines.append("Note: This is an image attachment. Describe what you see or ask the user about it if needed.")
-                        } else {
-                            // For text-based files, read the content
-                            let data = try Data(contentsOf: url)
-                            if let text = String(data: data, encoding: .utf8) {
-                                // Truncate very large files to avoid context overflow
-                                let maxChars = 8000
-                                let truncated = text.count > maxChars
-                                let content = truncated ? String(text.prefix(maxChars)) + "\n... [truncated, \(text.count - maxChars) more characters]" : text
-                                attachmentLines.append("[File: \(name)] (\(mime))")
-                                attachmentLines.append("```")
-                                attachmentLines.append(content)
-                                attachmentLines.append("```")
-                            } else {
-                                // Binary file that's not an image - just note its presence
-                                let sizeDesc = attachment.sizeBytes.map { "\(ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file))" } ?? "unknown size"
-                                attachmentLines.append("[Binary file: \(name)] (\(mime), \(sizeDesc)) - Contents cannot be displayed as text.")
-                            }
-                        }
-                    } catch {
-                        AppErrorReporter.log(error: error, context: "ChatService.streamMessage.readAttachment")
-                        attachmentLines.append("[File: \(name)] (\(mime)) - Unable to read file contents: \(error.localizedDescription)")
-                    }
-                } else {
-                    // No URL available, just describe the attachment
-                    let sizeDesc = attachment.sizeBytes.map { "\(ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file))" } ?? "unknown size"
-                    attachmentLines.append("[File: \(name)] (\(mime), \(sizeDesc)) - No local file URL available.")
-                }
-            }
-            if !attachmentLines.isEmpty {
-                attachmentContextBlock = "\n\n[User attached files]\n" + attachmentLines.joined(separator: "\n")
-            }
-        }
-
-        // Append attachment context to the message so the LLM can see the files
-        let messageWithAttachments = attachmentContextBlock.isEmpty ? message : message + attachmentContextBlock
+        // What the model is given of the files attached to the message: the
+        // text read from each, after the message, and, if it can see
+        // pictures, the pictures. A model on this device or this network is
+        // given less of each text, as it has less room.
+        let attached = await AttachmentContext.read(
+            for: attachments ?? [],
+            longestText: isLocalModel ? Self.longestAttachmentTextForLocalModels : AttachmentContext.longestText,
+            showsPictures: descriptor.takesImages
+        )
+        let messageWithAttachments = message + attached.text
 
         // ── Pre-execute tools for local models ────────────────────────────
         // Small local models (MLX/Ollama) cannot reliably produce JSON tool
@@ -602,7 +686,9 @@ actor ChatService {
                         onStateChange(state)
 
                         AnalyticsService.shared.trackToolUsed(toolName: invocation.tool, threadId: threadId)
-                        let (_, contextBlock) = try await executeChatToolCall(invocation)
+                        let (_, contextBlock, files) = try await executeChatToolCall(invocation, threadID: threadId, allowed: toolConfig.enabledTools, pictures: turnPictures, assets: turnAssets, tasks: turnTasks)
+                        state.generatedFiles += files
+                        state.madeAssets = turnAssets?.made ?? []
 
                         state.toolsInProgress[toolID]?.status = "completed"
                         state.toolsInProgress[toolID]?.result = contextBlock
@@ -639,7 +725,7 @@ actor ChatService {
                     enabledTools: toolConfig.enabledTools
                 ) {
                     #if DEBUG
-                    AppErrorReporter.log(message: "Pre-executing native tool for local model: \(forcedNative.tool)", context: "ChatService.streamMessage.preExecute")
+                    AppErrorReporter.log(message: "Pre-executing a native tool for a local model", context: "ChatService.streamMessage.preExecute")
                     #endif
                     let toolID = UUID().uuidString
                     state.phase = .tooling
@@ -648,7 +734,9 @@ actor ChatService {
                     onStateChange(state)
 
                     AnalyticsService.shared.trackToolUsed(toolName: forcedNative.tool, threadId: threadId)
-                    let (_, contextBlock) = try await executeChatToolCall(forcedNative)
+                    let (_, contextBlock, files) = try await executeChatToolCall(forcedNative, threadID: threadId, allowed: toolConfig.enabledTools, pictures: turnPictures, assets: turnAssets, tasks: turnTasks)
+                    state.generatedFiles += files
+                    state.madeAssets = turnAssets?.made ?? []
 
                     state.toolsInProgress[toolID]?.status = "completed"
                     state.toolsInProgress[toolID]?.result = contextBlock
@@ -669,7 +757,7 @@ actor ChatService {
                     mcpServers: toolConfig.mcpServers
                 ) {
                     #if DEBUG
-                    AppErrorReporter.log(message: "Pre-executing MCP tool for local model: \(forcedMCP.tool)", context: "ChatService.streamMessage.preExecute")
+                    AppErrorReporter.log(message: "Pre-executing an MCP tool for a local model", context: "ChatService.streamMessage.preExecute")
                     #endif
                     let toolID = UUID().uuidString
                     state.phase = .tooling
@@ -678,7 +766,9 @@ actor ChatService {
                     onStateChange(state)
 
                     AnalyticsService.shared.trackToolUsed(toolName: forcedMCP.tool, threadId: threadId)
-                    let (_, contextBlock) = try await executeChatToolCall(forcedMCP)
+                    let (_, contextBlock, files) = try await executeChatToolCall(forcedMCP, threadID: threadId, allowed: toolConfig.enabledTools, pictures: turnPictures, assets: turnAssets, tasks: turnTasks)
+                    state.generatedFiles += files
+                    state.madeAssets = turnAssets?.made ?? []
 
                     state.toolsInProgress[toolID]?.status = "completed"
                     state.toolsInProgress[toolID]?.result = contextBlock
@@ -710,7 +800,9 @@ actor ChatService {
                 // Pre-execution failed (network error, MCP timeout, etc.).
                 // Log the error and fall through — the model will still
                 // attempt to answer without tool results.
-                AppErrorReporter.log(error: error, context: "ChatService.streamMessage.preExecute")
+                // The kind of failure only: a server's message can say
+                // what the tool was asked about.
+                AppErrorReporter.log(message: "A tool run before the model could not run (\(type(of: error)))", context: "ChatService.streamMessage.preExecute")
                 toolContextLog = "[Tool Error] Pre-execution failed: \(error.localizedDescription)"
                 remainingToolSteps = 0
             }
@@ -728,15 +820,22 @@ actor ChatService {
             that you do NOT have access to. You have no connected tool that can retrieve this data. \
             Do NOT make up or fabricate any content. Instead, tell the user honestly that you cannot \
             access their personal data and suggest they connect an appropriate tool (e.g. an MCP \
-            server for email or calendar) in Settings → Connected Apps.
+            server for email or calendar) in Settings → \(SettingsPane.connectedApps.listedTitle).
             """
             remainingToolSteps = 0
         }
+
+        // The results so far, each whole: what was gathered before the
+        // loop is the first of them.
+        var toolResults: [String] = toolContextLog.isEmpty ? [] : [toolContextLog]
+        let toolResultRoom = ToolResults.room(isLocalModel: isLocalModel, isMobileDevice: isMobileDevice)
 
         // First phase: while we still have tool budget, let the model decide
         // whether to call a tool. Each successful tool invocation consumes one
         // step from the budget; a direct natural-language reply ends the loop.
         while remainingToolSteps > 0, finalText == nil {
+            // A stopped turn takes no further step.
+            try Task.checkCancellation()
             stepNumber += 1
             // Build the effective user message. Only append tool protocol
             // instructions when tools are allowed — the system prompt from
@@ -750,6 +849,10 @@ actor ChatService {
                 // instruction so the model knows to incorporate them.
                 composedUserMessage += "\n\nYou have tool results below. Use them to answer the user's question. If you need more information, call another tool. Otherwise, provide your final answer in natural language.\n\n" + toolContextLog
             }
+            // What the tools' pictures are is said every time they are
+            // sent, apart from the tool results (of which the older may
+            // have been left out by now).
+            composedUserMessage = Self.withToolPictures(composedUserMessage, turnPictures)
 
             // Build LLM context using the shared ContextBuilder, which will pull
             // in runtime info, policies, memories, and recent turns for this
@@ -759,8 +862,11 @@ actor ChatService {
             let contextMessages = try await contextBuilder.buildContext(
                 threadID: threadId,
                 userMessage: composedUserMessage,
+                images: attached.pictures + (turnPictures?.images ?? []),
                 maxContextTokens: promptBudget,
-                toolConfig: toolConfig
+                toolConfig: toolConfig,
+                agent: agent,
+                as: turnAccount
             )
 
             do {
@@ -775,20 +881,18 @@ actor ChatService {
                         userMessage: message
                     )
                 let options = ChatOptions(
-                    temperature: 0.7,
-                    maxTokens: nil,
+                    temperature: agentSettings.temperature,
+                    maxTokens: answerLimit,
                     stream: false,
                     tools: nativeTools
                 )
+                try await requireStill(turnAccount)
                 let response = try await client.completeChat(
                     messages: contextMessages,
                     model: descriptor.modelID,
                     options: options
                 )
                 let rawText = response.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                #if DEBUG
-                AppErrorReporter.log(message: "provider response (tool phase, truncated): \(rawText.prefix(200))", context: "ChatService.streamMessage.toolLoop")
-                #endif
                 let usage = response.usage.map { core in
                     TokenUsage(
                         promptTokens: core.promptTokens,
@@ -810,7 +914,8 @@ actor ChatService {
                         reason: "Native \(descriptor.providerID) tool call"
                     )
                     #if DEBUG
-                    AppErrorReporter.log(message: "Native tool call from \(descriptor.providerID): \(first.name)", context: "ChatService.streamMessage.nativeToolCall")
+                    // Not the tool's name: a model writes it, and it can be anything.
+                    AppErrorReporter.log(message: "Native tool call from \(descriptor.providerID)", context: "ChatService.streamMessage.nativeToolCall")
                     #endif
                 } else {
                     // Fall back to text parsing for local models or text-based calls
@@ -820,9 +925,7 @@ actor ChatService {
                 if let toolCall = toolCall?.remapped() {
                     // ── Context-aware repeat detection ────────────────────
                     // Build a stable signature from the tool name + normalized args.
-                    let rawInput = extractToolInputString(from: toolCall.input) ?? ""
-                    let normalizedInputForSignature = Self.normalizeForDedupe(rawInput)
-                    let signature = "\(toolCall.tool.lowercased())|\(normalizedInputForSignature)"
+                    let signature = Self.repeatSignature(tool: toolCall.tool, input: toolCall.input)
 
                     // Hash the current accumulated context so we can tell
                     // whether anything changed between repeated calls.
@@ -843,7 +946,7 @@ actor ChatService {
                         if isConsecutive, contextUnchanged {
                             #if DEBUG
                             AppErrorReporter.log(
-                                message: "Repeat loop detected: \(toolCall.tool) called \(maxConsecutiveSameCalls)x with unchanged context. Breaking.",
+                                message: "Repeat loop detected: a tool called \(maxConsecutiveSameCalls)x with unchanged context. Breaking.",
                                 context: "ChatService.streamMessage.repeatDetection"
                             )
                             #endif
@@ -857,13 +960,13 @@ actor ChatService {
                     continuationCount = 0
 
                     #if DEBUG
-                    AppErrorReporter.log(message: "Parsed chat tool call: \(toolCall.tool) (remaining before decrement=\(remainingToolSteps))", context: "ChatService.streamMessage.toolLoop")
+                    AppErrorReporter.log(message: "Parsed chat tool call (remaining before decrement=\(remainingToolSteps))", context: "ChatService.streamMessage.toolLoop")
                     #endif
                     // We only honor tool calls while there is remaining budget.
                     remainingToolSteps -= 1
 
                     // Track tool usage
-                    AnalyticsService.shared.trackToolUsed(toolName: toolCall.tool, threadId: threadId)
+                    AnalyticsService.shared.trackToolUsed(toolName: Self.analyticsToolKind(toolCall.tool), threadId: threadId)
 
                     let toolID = UUID().uuidString
                     state.phase = .tooling
@@ -871,7 +974,9 @@ actor ChatService {
                     state.bumpVersion()
                     onStateChange(state)
 
-                    let (summary, contextBlock) = try await executeChatToolCall(toolCall)
+                    let (summary, contextBlock, files) = try await executeChatToolCall(toolCall, threadID: threadId, allowed: toolConfig.enabledTools, pictures: turnPictures, assets: turnAssets, tasks: turnTasks)
+                    state.generatedFiles += files
+                    state.madeAssets = turnAssets?.made ?? []
 
                     state.toolsInProgress[toolID]?.status = "completed"
                     state.toolsInProgress[toolID]?.result = contextBlock
@@ -882,19 +987,10 @@ actor ChatService {
                     state.bumpVersion()
                     onStateChange(state)
                     if let block = contextBlock {
-                        if toolContextLog.isEmpty {
-                            toolContextLog = block
-                        } else {
-                            toolContextLog += "\n\n" + block
-                        }
-                    }
-
-                    // ── Tool result compression ──────────────────────────
-                    // Prevent context overflow when many tool steps run.
-                    if toolContextLog.count > toolContextCompressThreshold {
-                        let keep = toolContextCompressThreshold / 2
-                        let suffix = String(toolContextLog.suffix(keep))
-                        toolContextLog = "... (older tool results truncated)\n\n" + suffix
+                        // Each result whole; the oldest left out first
+                        // when there are more than the turn has room for.
+                        toolResults.append(block)
+                        toolContextLog = ToolResults.text(of: toolResults, room: toolResultRoom)
                     }
                     // Loop again with updated tool context.
                     continue
@@ -929,7 +1025,9 @@ actor ChatService {
                         state.bumpVersion()
                         onStateChange(state)
 
-                        let (summary, contextBlock) = try await executeChatToolCall(forcedCall)
+                        let (summary, contextBlock, files) = try await executeChatToolCall(forcedCall, threadID: threadId, allowed: toolConfig.enabledTools, pictures: turnPictures, assets: turnAssets, tasks: turnTasks)
+                        state.generatedFiles += files
+                        state.madeAssets = turnAssets?.made ?? []
 
                         state.toolsInProgress[toolID]?.status = "completed"
                         state.toolsInProgress[toolID]?.result = contextBlock
@@ -940,11 +1038,8 @@ actor ChatService {
                         state.bumpVersion()
                         onStateChange(state)
                         if let block = contextBlock {
-                            if toolContextLog.isEmpty {
-                                toolContextLog = block
-                            } else {
-                                toolContextLog += "\n\n" + block
-                            }
+                            toolResults.append(block)
+                            toolContextLog = ToolResults.text(of: toolResults, room: toolResultRoom)
                         }
                         // Loop again with updated tool context.
                         continue
@@ -970,9 +1065,11 @@ actor ChatService {
                         AppErrorReporter.log(message: "Premature stop detected (\(continuationCount)/\(maxContinuationPrompts)); injecting continuation prompt.", context: "ChatService.streamMessage.continuation")
                         #endif
                         // Append the model's partial response and a nudge
-                        if !toolContextLog.isEmpty { toolContextLog += "\n\n" }
-                        toolContextLog += "[Assistant partial response]\n" + rawText
-                        toolContextLog += "\n\n[System] You indicated there is more work to do but didn't call any tools. Please continue with the next step. Use the appropriate tool to proceed."
+                        toolResults.append(
+                            "[Assistant partial response]\n" + rawText
+                                + "\n\n[System] You indicated there is more work to do but didn't call any tools. Please continue with the next step. Use the appropriate tool to proceed."
+                        )
+                        toolContextLog = ToolResults.text(of: toolResults, room: toolResultRoom)
                         continue
                     }
 
@@ -1000,7 +1097,7 @@ actor ChatService {
                         ) {
                             remainingToolSteps -= 1
                             #if DEBUG
-                            AppErrorReporter.log(message: "Forcing MCP tool call: \(forcedCall.tool)", context: "ChatService.streamMessage.toolRefusal")
+                            AppErrorReporter.log(message: "Forcing an MCP tool call", context: "ChatService.streamMessage.toolRefusal")
                             #endif
 
                             // Track tool usage
@@ -1012,7 +1109,9 @@ actor ChatService {
                             state.bumpVersion()
                             onStateChange(state)
 
-                            let (summary, contextBlock) = try await executeChatToolCall(forcedCall)
+                            let (summary, contextBlock, files) = try await executeChatToolCall(forcedCall, threadID: threadId, allowed: toolConfig.enabledTools, pictures: turnPictures, assets: turnAssets, tasks: turnTasks)
+                            state.generatedFiles += files
+                            state.madeAssets = turnAssets?.made ?? []
 
                             state.toolsInProgress[toolID]?.status = "completed"
                             state.toolsInProgress[toolID]?.result = contextBlock
@@ -1024,7 +1123,8 @@ actor ChatService {
                             onStateChange(state)
                             if let block = contextBlock {
                                 // Replace context with fresh MCP results.
-                                toolContextLog = block
+                                toolResults = [block]
+                                toolContextLog = ToolResults.text(of: toolResults, room: toolResultRoom)
                             }
                             // Loop again — the model now has real tool
                             // results and should produce a useful answer.
@@ -1032,7 +1132,8 @@ actor ChatService {
                         } else {
                             // No MCP tool matched — inject a correction
                             // prompt as a last-resort fallback.
-                            toolContextLog = "[System CORRECTION] You have tools. Look at AVAILABLE TOOLS in your instructions and use them. Respond with ONLY a JSON tool call."
+                            toolResults = ["[System CORRECTION] You have tools. Look at AVAILABLE TOOLS in your instructions and use them. Respond with ONLY a JSON tool call."]
+                            toolContextLog = ToolResults.text(of: toolResults, room: toolResultRoom)
                             continue
                         }
                     }
@@ -1050,6 +1151,11 @@ actor ChatService {
                 if let localError = error as? LocalChatError {
                     msg = localError.localizedDescription
                     errorCode = localError.analyticsCode
+                } else if case RepositoryError.accountChanged = error {
+                    // The turn was another account's by the time it would
+                    // have asked again: nothing more of it was sent.
+                    msg = Self.accountChangedMessage
+                    errorCode = "account_changed"
                 } else {
                     msg = error.localizedDescription
                     errorCode = "unknown_error"
@@ -1057,11 +1163,16 @@ actor ChatService {
 
                 // Track error with a low-cardinality code; avoid logging full
                 // user-visible error text into analytics.
-                AnalyticsService.shared.trackMessageError(threadId: threadId, errorType: errorCode)
+                // A stopped turn is not a provider error.
+                if !Task.isCancelled {
+                    AnalyticsService.shared.trackMessageError(threadId: threadId, errorType: errorCode)
+                }
 
                 state.phase = .finalizing
                 state.status = .failed
-                state.answer = "Error: \(msg)"
+                // Said as it is where the turn was cut off for its
+                // account; any other failure is marked as an error.
+                state.answer = msg == Self.accountChangedMessage ? msg : "Error: \(msg)"
                 state.bumpVersion()
                 onStateChange(state)
                 return
@@ -1107,7 +1218,7 @@ actor ChatService {
 
                 \(cappedToolResults)
 
-                The user's original question was: \(message)
+                The user's original question was: \(messageWithAttachments)
 
                 Using ONLY the data above, provide a helpful answer. The data has already been retrieved — do NOT say you cannot access external systems. Summarize and present the results clearly.
                 """
@@ -1119,6 +1230,7 @@ actor ChatService {
                     composedUserMessage += "\n\n" + toolContextLog
                 }
             }
+            composedUserMessage = Self.withToolPictures(composedUserMessage, turnPictures)
 
             // For local models with tool results, drop tool docs from the
             // system prompt — the model just needs to summarize data, and
@@ -1130,19 +1242,28 @@ actor ChatService {
             let contextMessages = try await contextBuilder.buildContext(
                 threadID: threadId,
                 userMessage: composedUserMessage,
+                images: attached.pictures + (turnPictures?.images ?? []),
                 maxContextTokens: promptBudget,
-                toolConfig: finalToolConfig
+                toolConfig: finalToolConfig,
+                agent: agent,
+                as: turnAccount
             )
 
+            // A stopped turn does not ask for its answer.
+            try Task.checkCancellation()
             do {
+                // Whoever began the turn is still signed in, or nothing
+                // more is sent: said like any other failure of the answer.
+                try await requireStill(turnAccount)
                 // If the client supports streaming, use token-by-token delivery
                 // for the final answer so the user sees text appear in real time.
                 if let streamingClient = client as? StreamingLLMClient {
-                    let options = ChatOptions(temperature: 0.7, maxTokens: nil, stream: true)
+                    let options = ChatOptions(temperature: agentSettings.temperature, maxTokens: answerLimit, stream: true)
                     state.phase = .answering
                     state.bumpVersion()
                     onStateChange(state)
                     var accumulated = ""
+                    var answerFinished = false
                     let stream = streamingClient.streamChat(
                         messages: contextMessages,
                         model: descriptor.modelID,
@@ -1162,21 +1283,27 @@ actor ChatService {
                                 totalTokens: usage.totalTokens
                             )
                         }
+                        if delta.isFinished {
+                            answerFinished = true
+                        }
+                    }
+                    // A cancelled stream can end without an error; what
+                    // arrived by then is the whole answer only if its last
+                    // part did.
+                    if !answerFinished {
+                        try Task.checkCancellation()
                     }
                     // Mark streaming final answer so we skip the post-loop emission.
                     finalText = accumulated
                     streamedAnswer = true
                 } else {
-                    let options = ChatOptions(temperature: 0.7, maxTokens: nil, stream: false)
+                    let options = ChatOptions(temperature: agentSettings.temperature, maxTokens: answerLimit, stream: false)
                     let response = try await client.completeChat(
                         messages: contextMessages,
                         model: descriptor.modelID,
                         options: options
                     )
                     let rawText = response.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                    #if DEBUG
-                    AppErrorReporter.log(message: "provider response (final phase, truncated): \(rawText.prefix(200))", context: "ChatService.streamMessage.finalPhase")
-                    #endif
                     let usage = response.usage.map { core in
                         TokenUsage(
                             promptTokens: core.promptTokens,
@@ -1193,6 +1320,11 @@ actor ChatService {
                 if let localError = error as? LocalChatError {
                     msg = localError.localizedDescription
                     errorCode = localError.analyticsCode
+                } else if case RepositoryError.accountChanged = error {
+                    // The turn was another account's by the time it would
+                    // have asked again: nothing more of it was sent.
+                    msg = Self.accountChangedMessage
+                    errorCode = "account_changed"
                 } else {
                     msg = error.localizedDescription
                     errorCode = "unknown_error"
@@ -1200,11 +1332,16 @@ actor ChatService {
 
                 // Track error with a low-cardinality code; avoid logging full
                 // user-visible error text into analytics.
-                AnalyticsService.shared.trackMessageError(threadId: threadId, errorType: errorCode)
+                // A stopped turn is not a provider error.
+                if !Task.isCancelled {
+                    AnalyticsService.shared.trackMessageError(threadId: threadId, errorType: errorCode)
+                }
 
                 state.phase = .finalizing
                 state.status = .failed
-                state.answer = "Error: \(msg)"
+                // Said as it is where the turn was cut off for its
+                // account; any other failure is marked as an error.
+                state.answer = msg == Self.accountChangedMessage ? msg : "Error: \(msg)"
                 state.bumpVersion()
                 onStateChange(state)
                 return
@@ -1223,21 +1360,29 @@ actor ChatService {
         let parseResult = ToolCallParser.parse(dedupedAnswer)
         let answer = parseResult.strippedText.isEmpty ? rawAnswer : parseResult.strippedText
 
-        // Process any memory proposals from the LLM
-        if !parseResult.memoryProposals.isEmpty {
-            for proposal in parseResult.memoryProposals {
-                // Auto-save memory proposals (scope can be "user" or "thread")
-                let effectiveScope = proposal.scope == "thread" ? "thread" : "user"
+        // What the model asked to keep for every conversation is proposed
+        // to the person, who is asked beside the thread: where the thread
+        // is, in its coven or as the person's own. Nothing is proposed
+        // where the thread cannot be placed. What it asked to keep for
+        // this conversation alone is not: no turn has ever read such a
+        // memory, and no page shows one. Whose it is is read once: the
+        // thread is placed, and the proposal stored, as the same account.
+        let proposed = parseResult.memoryProposals.filter { $0.scope != "thread" }
+        let asked = await UserScope.currentUserID
+        if !proposed.isEmpty, let scope = await contextBuilder.scope(ofThread: threadId, for: asked) {
+            for proposal in proposed {
                 do {
-                    _ = try await MemoryService.shared.createMemory(
-                        covenId: nil,
-                        scope: effectiveScope,
-                        title: nil,
-                        content: proposal.content,
-                        tags: proposal.category.map { [$0] },
-                        isPinned: false
+                    let stored = try await MemoryProposalRepository.shared.insertProposal(
+                        eventId: nil,
+                        covenId: scope.covenID,
+                        proposedContent: proposal.content,
+                        proposedTags: proposal.category.map { [$0] },
+                        scope: scope.covenID == nil ? "user" : "coven",
+                        sourceMessageId: nil,
+                        proposedBy: "agent",
+                        as: asked
                     )
-                    AppErrorReporter.log(message: "Saved memory proposal: scope=\(effectiveScope) content=\(proposal.content.prefix(50))...", context: "ChatService.streamMessage.memoryWrite")
+                    await MemoryProposalQuestions.shared.ask(stored, inThread: threadId, as: asked)
                 } catch {
                     AppErrorReporter.log(error: error, context: "ChatService.streamMessage.memoryWrite")
                 }
@@ -1245,6 +1390,10 @@ actor ChatService {
         }
 
         AppErrorReporter.log(message: "streamMessage completed with answer length=\(answer.count) provider=\(descriptor.providerID) model=\(descriptor.modelID) usedTools=\(maxToolSteps - remainingToolSteps)", context: "ChatService.streamMessage")
+        // An answer that came back after another account signed in is not
+        // given as the turn's, and its usage is not recorded as the next
+        // account's.
+        try await requireStill(turnAccount)
         state.phase = .finalizing
         if !streamedAnswer {
             state.answer = answer
@@ -1259,7 +1408,8 @@ actor ChatService {
             provider: descriptor.providerID,
             model: descriptor.modelID,
             usage: finalUsage,
-            threadId: threadId
+            threadId: threadId,
+            for: turnAccount
         )
 
         // Track message received. We don't currently measure precise
@@ -1274,10 +1424,20 @@ actor ChatService {
         )
     }
 
-    /// Recompute and persist a compact summary for the given thread using the
-    /// configured LLM providers. This runs independently of any one chat turn
-    /// and is safe to call opportunistically after new messages are added.
-    func updateThreadSummary(threadId: String) async {
+    /// Recompute and persist a compact summary for the given thread, after
+    /// a turn of `account`'s in it was answered for `roleId` (an agent of
+    /// the thread's coven, or Strix for none). The thread is summarised by
+    /// the model that turn is answered by, so its conversation goes to no
+    /// provider its agent does not use, and only as that account: none of
+    /// the thread is read, sent or kept once another has signed in. A
+    /// thread whose agent cannot be read is not summarised: its turn's
+    /// model is not known, and Strix's is not taken in its place.
+    func updateThreadSummary(threadId: String, roleId: String?, as account: String) async {
+        guard !threadsLastAnsweredByAnAgent.contains(threadId) else { return }
+        summariesAsked[threadId, default: 0] += 1
+        let asked = summariesAsked[threadId]
+        let summarizedFor = account
+        guard await signedIn() == summarizedFor else { return }
         // On iOS, skip background summaries when only local models are
         // available. Loading a second MLX model (~1.5 GB) for an optional
         // summary will push past the jetsam memory limit and crash the app.
@@ -1289,9 +1449,25 @@ actor ChatService {
         // Ensure environment is ready before routing summarization calls.
         await ensureEnvironment()
         do {
+            // Checked again after each wait, up to the sending and the
+            // keeping: an agent's turn can have started in the thread since,
+            // or another account signed in.
+            guard !threadsLastAnsweredByAnAgent.contains(threadId) else { return }
+            // The model the turn is answered by, found exactly: a summary
+            // is not routed to some other provider where it is not there.
+            // The agent is read once, and the model taken from that reading:
+            // one that cannot be read is not answered for by Strix's model.
+            let role: Role? = if let roleId { try? await RoleService.shared.getRole(roleId: roleId) } else { nil }
+            if roleId != nil, role == nil { return }
+            let (prefProvider, prefModel, _) = await preferredProviderAndModel(roleId: roleId, role: role)
+            guard let descriptor = modelRouter.findExact(providerID: prefProvider, modelID: prefModel),
+                  let client = llmClients[descriptor.providerID] else {
+                return
+            }
+            try await requireStill(summarizedFor)
             // Use the same history seen by the chat UI.
             let history = try await loadMessages(threadId: threadId, limit: maxContextMessages)
-            guard !history.isEmpty else { return }
+            guard !history.isEmpty, !threadsLastAnsweredByAnAgent.contains(threadId) else { return }
 
             var messages: [LLMMessage] = []
             messages.append(
@@ -1311,12 +1487,6 @@ actor ChatService {
                 content: "Please provide the concise 3-6 bullet point summary of our conversation now."
             ))
 
-            let (prefProvider, prefModel) = resolveProviderAndModel()
-            guard let descriptor = modelRouter.findExact(providerID: prefProvider, modelID: prefModel),
-                  let client = llmClients[descriptor.providerID] else {
-                return
-            }
-
             // On iOS, don't use local models for background summaries even
             // if a cloud provider is available — the chat might still be
             // using the local model and concurrent loads are fatal.
@@ -1327,27 +1497,21 @@ actor ChatService {
             #endif
 
             let options = ChatOptions(temperature: 0.2, maxTokens: nil, stream: false)
+            try await requireStill(summarizedFor)
             let response = try await client.completeChat(
                 messages: messages,
                 model: descriptor.modelID,
                 options: options
             )
             let summary = response.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !summary.isEmpty else { return }
+            guard !summary.isEmpty, !threadsLastAnsweredByAnAgent.contains(threadId) else { return }
 
+            // Kept with the thread, as the cloud app keeps it, and offered
+            // to no memory: a thread's summary is not something to remember
+            // about the person (and a coven's thread is not theirs to keep
+            // in their own pages).
+            guard await signedIn() == summarizedFor, summariesAsked[threadId] == asked else { return }
             try await threadStore.updateSummary(forThreadID: threadId, summary: summary)
-
-            _ = try? await MemoryProposalRepository.shared.insertProposal(
-                eventId: nil,
-                covenId: nil,
-                proposedContent: "Thread Summary:\n" + summary,
-                proposedTags: ["summary"],
-                scope: "user",
-                reason: "Automatic summary representing the key facts of a recent thread.",
-                sourceMessageId: nil,
-                proposedBy: "system",
-                title: "Thread Summary"
-            )
         } catch {
             // Thread summaries are an optional optimization. In the local-only
             // client we treat *all* failures as non-fatal and skip logging to
@@ -1369,7 +1533,21 @@ actor ChatService {
     ///  - llm_provider: "openai" | "anthropic" | "google"
     ///  - openai_model / anthropic_model / gemini_model
     private func resolveProviderAndModel() -> (String, String) {
+        // A choice of Hermes made when Hermes meant its models is moved
+        // first: read as it was, it would be taken for the Hermes agent.
+        ProviderAccountService.convertHermesModelConnectionsIfNeeded()
         let savedProvider = UserDefaults.standard.string(forKey: UserScope.scopedKey("llm_provider"))?.lowercased()
+        // Hermes has no model client to be found among the clients: it is
+        // chosen when it is connected.
+        if savedProvider == "hermes", hermesAgent() != nil {
+            return ("hermes", "")
+        }
+        // Nor does OpenClaw need one where its connection names its
+        // Gateway: its turns are run there. With a client too, its model
+        // is chosen below as before, for what is asked of a model.
+        if savedProvider == "openclaw", !llmClients.keys.contains("openclaw"), openClawTurn("") != nil {
+            return ("openclaw", "")
+        }
 
         // If the saved provider isn't actually configured (e.g. no API key),
         // or if no provider was ever saved, fall back intelligently to what's available.
@@ -1389,7 +1567,7 @@ actor ChatService {
             let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("anthropic_model")) ?? fallback
             return ("anthropic", model)
         case "google", "gemini":
-            let fallback = modelRouter.fallbackModel(for: "google") ?? "gemini-1.5-pro"
+            let fallback = modelRouter.fallbackModel(for: "google") ?? "gemini-flash-latest"
             let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("gemini_model")) ?? fallback
             return ("google", model)
         case "mlx":
@@ -1404,10 +1582,6 @@ actor ChatService {
             let fallback = modelRouter.fallbackModel(for: "openclaw") ?? "openai/gpt-3.5-turbo"
             let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("openclaw_model")) ?? fallback
             return ("openclaw", model)
-        case "hermes":
-            let fallback = modelRouter.fallbackModel(for: "hermes") ?? HermesLLMClient.defaultModelAlias
-            let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("hermes_model")) ?? fallback
-            return ("hermes", model)
         default:
             let fallback = modelRouter.fallbackModel(for: provider) ?? "gpt-4o"
             let model = UserDefaults.standard.string(forKey: UserScope.scopedKey("\(provider)_model")) ?? fallback
@@ -1424,40 +1598,175 @@ actor ChatService {
         }
     }
 
-    /// Fetch the current Strix system prompt, if any, from local settings.
-    /// Errors are treated as "no system prompt" so chat continues gracefully.
-    private func currentSystemPrompt() async -> String? {
-        do {
-            let role = try await StrixSettingsService.shared.loadPersonalStrix()
-            return role.systemPrompt
-        } catch {
-            AppErrorReporter.log(error: error, context: "ChatService.currentSystemPrompt.loadPersonalStrix")
-            return nil
+    /// Who answers a turn, for what the model is told first: the coven's
+    /// agent the turn is for, with the instructions the person wrote for
+    /// it, or with no agent Strix with its own. It is read as the account
+    /// signed in when it is asked for (both reads are given that account,
+    /// and read nothing of another's), and is that account's: nil if
+    /// another is signed in by the time it has been read, and nil for an
+    /// agent that cannot be read (it is gone, or is not that account's).
+    /// The turn is then told nothing of who answers.
+    func answeringAgent(roleId: String?) async -> ContextBuilder.Agent? {
+        let account = await UserScope.currentUserID
+        let agent: ContextBuilder.Agent
+        if let roleId {
+            do {
+                let role = try await RoleService.shared.getRole(roleId: roleId, for: account)
+                agent = ContextBuilder.Agent(name: role.name, instructions: role.systemPrompt, account: account)
+            } catch {
+                // The kind of failure only.
+                AppErrorReporter.log(message: "A turn's agent could not be read (\(type(of: error)))", context: "ChatService.answeringAgent")
+                return nil
+            }
+        } else {
+            agent = await ContextBuilder.Agent(name: "Strix", instructions: StrixSettingsService.shared.instructions(of: account), account: account)
         }
+        // What was read is the account's that asked: not another's that
+        // signed in while it was read.
+        guard await UserScope.currentUserID == account else { return nil }
+        return agent
     }
 
     // MARK: - Deployment helpers
 
+    /// Whether a run an agent was making for a turn can be picked up again:
+    /// it is that agent's, and the agent is still connected.
+    func canResume(_ run: AgentRun) -> Bool {
+        switch run.provider {
+        case AgentRun.hermes: hermesAgent() != nil
+        // At the Gateway it was started through: another would not know it.
+        case AgentRun.openClaw: openClawTurn("").map { $0.address.absoluteString == run.origin } ?? false
+        default: false
+        }
+    }
+
+    /// Picks up a run an agent was making for a turn when this app was
+    /// closed on it, and follows it to its end as `streamMessage` would
+    /// have.
+    func resumeAgentRun(_ run: AgentRun, threadId: String, as account: String, onStateChange: @escaping @Sendable (TurnState) -> Void) async throws {
+        // Followed only as the account whose run it is, through its own
+        // connection.
+        try await requireStill(account)
+        if run.provider == AgentRun.openClaw {
+            guard let turn = openClawTurn(threadId), turn.address.absoluteString == run.origin else { throw OpenClawTurn.CannotPickUp() }
+            threadsLastAnsweredByAnAgent.insert(threadId)
+            return try await turn.resume(runID: run.runID, report: onStateChange)
+        }
+        guard run.provider == AgentRun.hermes, let agent = hermesAgent() else { throw HermesAgentError.cannotPickUp }
+        threadsLastAnsweredByAnAgent.insert(threadId)
+        try await HermesTurn(client: agent, threadID: threadId).resume(runID: run.runID, report: onStateChange)
+    }
+
+    /// How much of the thread an agent's run is given (a Hermes run, or an
+    /// OpenClaw run through its Gateway): the agent keeps its own memory
+    /// of the session as well.
+    static let hermesHistoryLimit = 40
+
+    /// The most characters of one attachment's text a model running on
+    /// this device or this network is given.
+    static let longestAttachmentTextForLocalModels = 8000
+
+    /// What was said before the message an agent's run answers (a Hermes
+    /// run, or an OpenClaw run through its Gateway). The message
+    /// itself is stored before the turn starts, so it is the last one
+    /// loaded, and is left out: the run is given it as its input.
+    static func hermesHistory(from stored: [ChatMessage], toldFirst: String? = nil) -> [HermesAgentClient.Message] {
+        var earlier = stored
+        if earlier.last?.role == "user" {
+            earlier.removeLast()
+        }
+        // What the agent is told before the conversation comes first, as
+        // the system's.
+        let lead = toldFirst.flatMap { $0.isEmpty ? nil : [HermesAgentClient.Message(role: "system", content: $0)] } ?? []
+        return lead + earlier
+            .filter { ["user", "assistant"].contains($0.role) && !$0.content.isEmpty }
+            .map { HermesAgentClient.Message(role: $0.role, content: $0.content) }
+    }
+
+    /// The provider and model a turn is for: the role's own where it has
+    /// them (an agent of a coven; one on Hermes or on OpenClaw through its
+    /// Gateway has a provider and no model), else the person's choice in
+    /// Settings.
+    /// With them, what the turn takes from the settings of whoever
+    /// answers: the agent's, Strix's for a turn that is for no agent, and
+    /// the app's own where the agent cannot be read.
+    private func preferredProviderAndModel(roleId: String?) async -> (provider: String, model: String, settings: AgentTurnSettings) {
+        let role: Role? = if let roleId { try? await RoleService.shared.getRole(roleId: roleId) } else { nil }
+        return await preferredProviderAndModel(roleId: roleId, role: role)
+    }
+
+    /// The same, for an agent already read (`role`, nil where `roleId` is
+    /// none or could not be read).
+    private func preferredProviderAndModel(roleId: String?, role: Role?) async -> (provider: String, model: String, settings: AgentTurnSettings) {
+        // A turn for no agent is Strix's, and takes Strix's own settings;
+        // one whose agent cannot be read takes the app's.
+        let settings: AgentTurnSettings = if roleId == nil {
+            await AgentTurnSettings(ofStrix: StrixSettingsService.stored(of: UserScope.currentUserID))
+        } else {
+            role.map(AgentTurnSettings.init(of:)) ?? .standard
+        }
+        // An agent runs on its own provider and model. One on Hermes, or
+        // on OpenClaw through its Gateway, names no model: the agent there
+        // runs the turn itself. Where that agent is not connected, the
+        // turn is answered as one for no agent's model is: by the
+        // person's choice in Settings.
+        if let role,
+           let roleProvider = role.provider?.lowercased(), !roleProvider.isEmpty {
+            // On this device a turn is answered by the model that is
+            // active there, whichever was stored with the agent (as for
+            // Strix): no other is loaded to answer.
+            let onDevice = roleProvider == "mlx" ? UserDefaults.standard.string(forKey: "MLXModelManager.activeModelID") : nil
+            let roleModel = onDevice ?? role.model ?? ""
+            let runsItself = switch roleProvider {
+            case "hermes": hermesAgent() != nil
+            case "openclaw": openClawTurn("") != nil
+            default: false
+            }
+            if !roleModel.isEmpty || runsItself {
+                #if DEBUG
+                AppErrorReporter.log(message: "Role resolved provider=\(roleProvider) model=\(roleModel)", context: "ChatService.streamMessage.roleResolution")
+                #endif
+                return (roleProvider, roleModel, settings)
+            }
+        }
+        let (globalProvider, globalModel) = resolveProviderAndModel()
+        #if DEBUG
+        AppErrorReporter.log(message: "No role override (roleId=\(roleId ?? "nil")); using global provider=\(globalProvider) model=\(globalModel)", context: "ChatService.streamMessage.roleResolution")
+        #endif
+        return (globalProvider, globalModel, settings)
+    }
+
+    /// How a voice message for a turn of this role is put into words: the
+    /// key of the turn's provider is asked first, and where its model runs
+    /// on this device or this network only the device is asked, so that
+    /// what is said to a local model goes to no provider. Read as a turn
+    /// reads it, after the same look at what is connected now: a model
+    /// chosen a moment ago is the one that counts.
+    func voiceRoute(roleID: String?) async -> VoiceMessages.Route {
+        await ensureEnvironment()
+        let provider = await preferredProviderAndModel(roleId: roleID).provider
+        return Self.voiceRoute(provider: provider, isLocal: isLocalDeployment(providerID: provider))
+    }
+
+    nonisolated static func voiceRoute(provider: String, isLocal: Bool) -> VoiceMessages.Route {
+        VoiceMessages.Route(preferring: TranscriptionSource(providerID: provider), onDeviceOnly: isLocal)
+    }
+
     /// Returns `true` when the given provider is running locally \u2014 either
     /// because it\u2019s inherently local (MLX, Ollama) or because the user has
     /// configured a localhost/private-network base URL for a hybrid provider
-    /// (OpenClaw, Hermes). This is used throughout ChatService to decide
+    /// (OpenClaw, an OpenAI-compatible server). This is used throughout ChatService to decide
     /// prompt length, tool pre-execution strategy, and background summary
     /// eligibility.
     private func isLocalDeployment(providerID: String) -> Bool {
         switch providerID {
         case "mlx", "ollama":
             return true
-        case "openclaw":
+        case "openclaw", "openai_compatible":
             if let client = llmClients[providerID] as? OpenClawLLMClient {
                 return client.isLocalEndpoint
             }
-            return true // Default assumption: OpenClaw is typically local
-        case "hermes":
-            if let client = llmClients[providerID] as? HermesLLMClient {
-                return client.isLocalEndpoint
-            }
-            return false // Default assumption: Hermes defaults to Together AI cloud
+            return true // Default assumption: these servers are typically local
         default:
             return false
         }
@@ -1677,7 +1986,7 @@ struct ChatToolInvocation: Codable {
 
         #if DEBUG
         AppErrorReporter.log(
-            message: "Remapped hallucinated tool '\(tool)' → '\(actualTool)'",
+            message: "Remapped a hallucinated tool name to a known one",
             context: "ChatToolInvocation.remapped"
         )
         #endif
@@ -1743,21 +2052,41 @@ extension ChatService {
     /// Legacy static instruction for backward compatibility.
     static let chatToolInstruction: String = generateChatToolInstruction(enabledTools: PromptTemplates.allTools)
 
+    /// The most tool steps of a turn: its agent's own where it sets one,
+    /// else the app's.
+    static func mostToolSteps(of agent: AgentTurnSettings) -> Int {
+        agent.mostSteps ?? currentMaxToolSteps()
+    }
+
     /// Resolve the maximum number of tool steps to allow in a single chat
     /// turn. This is configurable via UserDefaults under the key
     /// "chat_max_tool_steps"; values <= 0 fall back to a sane default.
     static func currentMaxToolSteps() -> Int {
         let stored = UserDefaults.standard.integer(forKey: UserScope.scopedKey("chat_max_tool_steps"))
-        // Default to 5 tool steps for chat (conservative to prevent thrash);
-        // users can raise this in Strix / agent role settings. Hard cap at 15.
+        // Default to 5 tool steps for chat (conservative to prevent thrash),
+        // 15 at most. It is what a turn takes where whoever answers sets
+        // no limit of its own: Strix's and an agent's "Most steps" are
+        // not held to this cap (`mostToolSteps`).
         if stored <= 0 { return 5 }
         return min(stored, 15)
+    }
+
+    /// A message with what the turn's tool pictures are said after it,
+    /// where there are any: they are sent with it.
+    nonisolated static func withToolPictures(_ message: String, _ pictures: TurnPictures?) -> String {
+        guard let caption = pictures?.caption else { return message }
+        return message + "\n\n" + caption
     }
 
     /// Execute a chat tool call using ToolExecutionService and return a short summary
     /// plus an optional context block that can be fed back into the context sandwich.
     /// This enhanced version routes through the central ToolExecutionService for all tools.
-    nonisolated func executeChatToolCall(_ call: ChatToolInvocation) async throws -> (summary: String, contextBlock: String?) {
+    nonisolated func executeChatToolCall(
+        _ call: ChatToolInvocation, threadID: String?, allowed: Set<String>? = nil, pictures: TurnPictures? = nil, assets: TurnAssets? = nil,
+        tasks: TurnTasks? = nil
+    ) async throws -> (summary: String, contextBlock: String?, files: [FileAttachmentDetail]) {
+        // A stopped turn starts no tool.
+        try Task.checkCancellation()
         // Convert ChatToolInvocation to ParsedToolCall for ToolExecutionService
         var args: [String: AnyJSONValue] = [:]
         if let input = call.input {
@@ -1785,53 +2114,54 @@ extension ChatService {
         let result = await ToolExecutionService.shared.execute(
             toolCall: parsedCall,
             agentType: "chat", // Chat context uses "chat" agent type
-            threadID: nil
+            // What the turn was offered, which is what it may call.
+            allowed: allowed,
+            threadID: threadID,
+            // Where the turn's model sees pictures, those a tool makes for it.
+            pictures: pictures,
+            // What the turn makes of assets, and for which agent.
+            assets: assets,
+            // What the turn makes and changes of tasks.
+            tasks: tasks
         )
 
         // Convert ToolExecutionResult to summary/contextBlock format.
         // Summaries are user-facing so use friendly descriptions.
         if result.status == "ok" {
             let summary = Self.friendlyToolSummary(for: call.tool)
-            return (summary, result.contextBlock)
+            // What the tool made for the person goes with the turn's reply.
+            return (summary, result.contextBlock, ToolExecutionService.generatedFiles(in: result))
         } else if result.status == "denied" {
-            let message = result.error ?? "Permission denied"
             let summary = "⚠️ \(Self.friendlyToolName(call.tool)): permission denied"
-            return (summary, "[Tool Permission Denied: \(result.tool)]\n\(message)")
+            return (summary, result.toldToAModel, [])
         } else {
             // Error or validation error
-            let message = result.error ?? "Unknown error"
             let summary = "⚠️ \(Self.friendlyToolName(call.tool)): error"
-            return (summary, "[Tool Error: \(result.tool)]\n\(message)")
+            return (summary, result.toldToAModel, [])
         }
     }
 
-    /// Execute a parsed tool call directly (used by enhanced streamMessage).
-    /// Returns a ToolExecutionResult for more detailed handling.
-    nonisolated func executeParsedToolCall(_ call: ParsedToolCall, threadID: String?) async -> ToolExecutionResult {
-        await ToolExecutionService.shared.execute(
-            toolCall: call,
-            agentType: "chat",
-            threadID: threadID
-        )
-    }
-
-    /// Normalize a tool `input` field (which may be a string or an object) into
-    /// a best-effort string representation for tools like `web_search`.
-    nonisolated func extractToolInputString(from value: AnyJSONValue?) -> String? {
-        guard let value else { return nil }
-        let raw = value.value
-        if let s = raw as? String {
-            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
+    /// What tells one call of a tool from another when repeats are looked
+    /// for. A call of nothing but a query (or of text) is the tool and its
+    /// query loosely read, as it has been: two wordings of one search,
+    /// apart only in case or spacing, are one call. Any other is the tool
+    /// and all of its arguments exactly as given, in a fixed order, so
+    /// that the second page of something, or another file, is not the
+    /// first again.
+    nonisolated static func repeatSignature(tool: String, input: AnyJSONValue?) -> String {
+        let name = tool.lowercased()
+        guard let input else { return "\(name)|" }
+        if let text = input.value as? String {
+            return "\(name)|\(normalizeForDedupe(text))"
         }
-        if let dict = raw as? [String: AnyJSONValue] {
-            // Common patterns: { "query": "..." } or { "q": "..." }
-            if let q = dict["query"]?.value as? String ?? dict["q"]?.value as? String {
-                let trimmed = q.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : trimmed
-            }
+        guard let arguments = input.value as? [String: AnyJSONValue] else { return "\(name)|" }
+        if arguments.count == 1, let query = arguments["query"]?.value as? String ?? arguments["q"]?.value as? String {
+            return "\(name)|\(normalizeForDedupe(query))"
         }
-        return nil
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let exact = (try? encoder.encode(arguments)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        return "\(name)|\(exact)"
     }
 
     /// Heuristic: if the user asked about weather and the model replied that it
@@ -1879,6 +2209,13 @@ extension ChatService {
     }
 
     /// Human-readable name for a tool identifier, used in user-facing summaries.
+    /// What analytics are told of a tool: its kind among the app's own, or
+    /// "Other" (an MCP server's or a model's name can say anything).
+    nonisolated static func analyticsToolKind(_ tool: String) -> String {
+        let kind = friendlyToolName(tool)
+        return kind == tool ? "Other" : kind
+    }
+
     nonisolated static func friendlyToolName(_ tool: String) -> String {
         switch tool.lowercased() {
         case "web_search": "Web Search"
@@ -1888,9 +2225,16 @@ extension ChatService {
         case "file.write": "File Write"
         case "file.list": "File List"
         case "shell.execute": "Shell Command"
+        case "image.generate": "Image Generation"
+        case _ where tool.hasPrefix("asset."): "Assets"
+        case _ where TaskTools.all.contains(tool): "Tasks"
         case _ where tool.hasPrefix("github."): "GitHub"
         case _ where tool.hasPrefix("google_drive"): "Google Drive"
+        case _ where tool.hasPrefix("google_docs"): "Google Docs"
         case _ where tool.hasPrefix("google_sheets"): "Google Sheets"
+        case _ where tool.hasPrefix("google_slides"): "Google Slides"
+        case _ where tool.hasPrefix("figma."): "Figma"
+        case _ where tool.hasPrefix("linear."): "Linear"
         default: tool
         }
     }
@@ -1905,9 +2249,16 @@ extension ChatService {
         case "file.write": "✍️ Writing file…"
         case "file.list": "📂 Listing files…"
         case "shell.execute": "💻 Running command…"
+        case "image.generate": "🎨 Making an image…"
+        case _ where tool.hasPrefix("asset."): "🗂️ Working with assets…"
+        case _ where TaskTools.all.contains(tool): "✅ Working with tasks…"
         case _ where tool.hasPrefix("github."): "🐙 Working with GitHub…"
         case _ where tool.hasPrefix("google_drive"): "📁 Accessing Google Drive…"
+        case _ where tool.hasPrefix("google_docs"): "📝 Working with Docs…"
         case _ where tool.hasPrefix("google_sheets"): "📊 Working with Sheets…"
+        case _ where tool.hasPrefix("google_slides"): "🖼️ Working with Slides…"
+        case _ where tool.hasPrefix("figma."): "🎨 Working with Figma…"
+        case _ where tool.hasPrefix("linear."): "📋 Working with Linear…"
         default: "⚙️ Using \(tool)…"
         }
     }
@@ -2107,7 +2458,7 @@ extension ChatService {
 
         #if DEBUG
         AppErrorReporter.log(
-            message: "forceMCPToolCall matched '\(tool.name)' (score=\(bestScore)) for: \(userMessage.prefix(80))",
+            message: "forceMCPToolCall matched a tool (score=\(bestScore))",
             context: "ChatService.forceMCPToolCall"
         )
         #endif
@@ -2261,7 +2612,7 @@ extension ChatService {
 
         #if DEBUG
         AppErrorReporter.log(
-            message: "Semantic fallback matched '\(topTool.name)' (score=\(score)) for: \(userMessage.prefix(80))",
+            message: "Semantic fallback matched a tool (score=\(score))",
             context: "ChatService.forceNativeToolCallWithSemantic"
         )
         #endif

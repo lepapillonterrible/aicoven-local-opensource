@@ -35,12 +35,17 @@ struct AICovenApp: App {
         _authService = ObservedObject(wrappedValue: AuthService.shared)
 
         // Local-only version: no remote auth beyond what Firebase Auth provides if used.
-        Self.configureAppearance()
+        StoneChrome.configure()
         // Initialize local SQLite database and run migrations.
         DatabaseManager.shared.configureIfNeeded()
+        // A recording a crash left behind is not kept.
+        VoiceCaptureService.removeLeftRecordings()
 
         // Register accessibility fonts at process boot
         FontRegistration.register()
+        // A notification that is tapped hands its thread to the app.
+        NotificationTaps.shared.start()
+        TaskReminders.shared.start()
     }
 
     var body: some Scene {
@@ -83,49 +88,71 @@ struct AICovenApp: App {
                     }
                 }
             }
+            // An `aicoven://` link, from wherever it was opened. The same
+            // window takes it: without this the Mac opens another for
+            // each link.
+            .onOpenURL { AppState.shared.handleDeepLink($0) }
+            .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
+            .tint(PlatformCapabilities.current.followsSystemAccentColor ? nil : Color("AccentColor"))
             .onChange(of: authService.isAuthenticated) { _, authenticated in
                 // When user signs out, reset encryption so next user gets a fresh unlock.
                 if !authenticated {
                     isEncryptionUnlocked = false
                 }
             }
-            // Expose the active theme + typography to every view. We re-
-            // apply `.id()` on a composite of both: without it, `Text` views
-            // that read static `Color.aicoven*` and `Font.aicoven*` computed
-            // vars get the OLD value captured at render time and never
-            // refresh on a switch (because most views don't observe
-            // `ThemeManager` / `TypographyManager`).
+            .onChange(of: authService.currentUser?.id) { previous, current in
+                // A direct switch from one account to another never signs
+                // out, so the first account's unlock would otherwise stand
+                // for the second.
+                if let previous, let current, previous != current {
+                    isEncryptionUnlocked = false
+                    AssetThumbnails.shared.forgetAll()
+                    Task { await DataEncryptionService.shared.lock() }
+                }
+            }
+            // Expose the appearance and typography choices to every view.
             .environmentObject(themeManager)
             .environmentObject(typographyManager)
-            .environment(\.aicovenTheme, themeManager.theme)
-            .preferredColorScheme(themeManager.theme.preferredColorScheme)
-            .animation(.easeOut(duration: 0.25), value: themeManager.theme.variant)
-            // Composite identity: theme variant, typography variant,
-            // (for `.custom`) the chosen font family, and the global text
-            // size scale. The latter components are what force a tree
-            // rebuild when the user picks a new family or size from
-            // Settings without changing variant — without them the
-            // captured `Font.aicoven*` values stick to the previous
-            // configuration until something else triggers a redraw.
-            .id("\(themeManager.theme.variant.rawValue)|\(typographyManager.variant.rawValue)|\(typographyManager.customFontFamily ?? "")|\(typographyManager.sizeScale.rawValue)")
+            .preferredColorScheme(themeManager.appearance.colorScheme)
+            // `Font.aicoven*` values are read when a view renders, and most
+            // views do not observe `TypographyManager`, so a new voice,
+            // family or size rebuilds the tree through this identity.
+            .id("\(typographyManager.variant.rawValue)|\(typographyManager.customFontFamily ?? "")|\(typographyManager.sizeScale.rawValue)")
         }
         #if os(macOS)
         .defaultSize(width: 820, height: 620)
-        .commands {
-            // macOS-specific menu commands can be re-added later if needed.
-        }
         #endif
-    }
+        .commands {
+            ShellCommands()
+        }
 
-    /// Configure global app appearance
-    private static func configureAppearance() {
-        #if os(iOS)
-        UINavigationBar.appearance().largeTitleTextAttributes = [
-            .foregroundColor: UIColor.label
-        ]
-        UINavigationBar.appearance().titleTextAttributes = [
-            .foregroundColor: UIColor.label
-        ]
+        #if os(macOS)
+        // The standard Settings window on ⌘,.
+        Settings {
+            Group {
+                if authService.isAuthenticated, isEncryptionUnlocked {
+                    // Re-keyed on the account, so a pane loaded for one
+                    // account is rebuilt, not shown, for the next.
+                    SettingsWorkspaceView()
+                        .id(authService.currentUser?.id)
+                } else {
+                    ContentUnavailableView(
+                        "Sign in to change settings",
+                        systemImage: "gearshape",
+                        description: Text("Settings open once you're signed in and your local data is unlocked.")
+                    )
+                }
+            }
+            .frame(minWidth: 900, idealWidth: 960, minHeight: 520, idealHeight: 620)
+            .background(Color.aicovenDark)
+            .environmentObject(authService)
+            .environmentObject(AppState.shared)
+            .environmentObject(StoreService.shared)
+            .environmentObject(themeManager)
+            .environmentObject(typographyManager)
+            .preferredColorScheme(themeManager.appearance.colorScheme)
+            .id("\(typographyManager.variant.rawValue)|\(typographyManager.customFontFamily ?? "")|\(typographyManager.sizeScale.rawValue)")
+        }
         #endif
     }
 

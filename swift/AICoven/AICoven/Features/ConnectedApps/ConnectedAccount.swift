@@ -51,12 +51,16 @@ struct ConnectedAccount: Identifiable, Codable, Equatable {
 enum ConnectedAppProvider: String, Codable, CaseIterable {
     case github
     case googleDrive = "google_drive"
+    case figma
+    case linear
 
     /// Human-readable display name
     var displayName: String {
         switch self {
         case .github: "GitHub"
         case .googleDrive: "Google Drive"
+        case .figma: "Figma"
+        case .linear: "Linear"
         }
     }
 
@@ -65,7 +69,24 @@ enum ConnectedAppProvider: String, Codable, CaseIterable {
         switch self {
         case .github: "link.circle.fill"
         case .googleDrive: "folder.fill"
+        case .figma: "paintbrush.pointed.fill"
+        case .linear: "checklist"
         }
+    }
+
+    /// Whether the app is connected with a token the person makes in the
+    /// app itself and pastes here, not by signing in. (Signing in with
+    /// Figma or Linear needs a secret a server holds; this app has no
+    /// server.)
+    var connectsWithToken: Bool {
+        self == .figma || self == .linear
+    }
+
+    /// Of `accounts`, this app's connection whose token was refused and
+    /// which waits for a new one; nil for an app that signs in.
+    func accountWaitingForAToken(in accounts: [ConnectedAccount]) -> ConnectedAccount? {
+        guard connectsWithToken else { return nil }
+        return accounts.first { $0.provider == self && $0.status == .error }
     }
 
     /// Default OAuth scopes to request
@@ -79,6 +100,9 @@ enum ConnectedAppProvider: String, Codable, CaseIterable {
                 "https://www.googleapis.com/auth/documents",
                 "https://www.googleapis.com/auth/spreadsheets"
             ]
+        case .figma, .linear:
+            // A token's reach is set where it is made.
+            []
         }
     }
 }

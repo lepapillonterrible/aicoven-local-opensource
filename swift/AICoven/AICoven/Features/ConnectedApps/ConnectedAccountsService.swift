@@ -10,39 +10,136 @@ actor ConnectedAccountsService {
     /// Keychain key prefix for OAuth tokens (will be user-scoped)
     private let keychainPrefix = "connected_account_token_"
 
-    /// UserDefaults key for accounts list (will be user-scoped)
-    private func getAccountsKey() async -> String {
-        await UserScope.scopedKey("connected_accounts")
-    }
-
     /// Keychain key prefix for MCP tokens (will be user-scoped)
     private let mcpKeychainPrefix = "mcp_server_token_"
+    /// Keychain key prefix for MCP servers' whole addresses (user-scoped).
+    private let mcpAddressPrefix = "mcp_server_address_"
 
-    /// UserDefaults key for MCP servers list (will be user-scoped)
-    private func getMCPServersKey() async -> String {
-        await UserScope.scopedKey("mcp_servers")
+    /// The signed-in account: connections are kept apart by account.
+    private let currentUser: @Sendable () async -> String
+
+    /// Where the lists of accounts and MCP servers are kept.
+    private let defaults: UserDefaults
+
+    /// Where tokens are kept: the Keychain, or a test's stand-in.
+    nonisolated struct TokenStore {
+        var save: @Sendable (_ key: String, _ value: String, _ service: String) throws -> Void
+        var load: @Sendable (_ key: String, _ service: String) -> String?
+        var delete: @Sendable (_ key: String, _ service: String) -> Void
+
+        static let keychain = TokenStore(
+            save: { try KeychainHelper.save(key: $0, value: $1, in: $2) },
+            load: { KeychainHelper.load(key: $0, in: $1) },
+            delete: { KeychainHelper.delete(key: $0, in: $1) }
+        )
     }
+
+    private let tokens: TokenStore
+
+    /// Who a pasted token belongs to: the app's id of the person, and
+    /// what the connection is shown as.
+    struct TokenIdentity: Equatable {
+        let id: String
+        let label: String
+    }
+
+    /// Asks an app who a token belongs to; a test answers in its place.
+    /// Throws `TokenRefusal.refused` where the app does not take the token.
+    private let tokenIdentity: @Sendable (_ provider: ConnectedAppProvider, _ token: String) async throws -> TokenIdentity
+
+    /// Asks the app itself.
+    static let askTheApp = askTheApp(through: .shared)
+
+    /// Asks the app itself, through `session` (a test's answers in the
+    /// app's place).
+    static func askTheApp(through session: URLSession) -> @Sendable (ConnectedAppProvider, String) async throws -> TokenIdentity {
+        { provider, token in try await identity(ofTokenOf: provider, token, session: session) }
+    }
+
+    private static func identity(ofTokenOf provider: ConnectedAppProvider, _ token: String, session: URLSession) async throws -> TokenIdentity {
+        switch provider {
+        case .figma:
+            do {
+                let who = try await FigmaToolService.identity(token: token, session: session)
+                return TokenIdentity(id: who.id, label: who.label)
+            } catch FigmaError.tokenRefused {
+                throw TokenRefusal.refused
+            }
+        case .linear:
+            do {
+                let who = try await LinearToolService.identity(key: token, session: session)
+                return TokenIdentity(id: who.id, label: who.label)
+            } catch LinearError.keyRefused {
+                throw TokenRefusal.refused
+            }
+        case .github, .googleDrive:
+            // These sign in; they take no pasted token.
+            throw TokenRefusal.notAToken
+        }
+    }
+
+    /// The account whose connections are in memory, or nil before any are.
+    private var loadedFor: String?
 
     /// In-memory cache of accounts (nil means not yet loaded)
     private var accountsCache: [ConnectedAccount]?
 
     /// In-memory cache of MCP servers (nil means not yet loaded)
     private var mcpServersCache: [MCPServerAccount]?
+    /// The whole address each server has in the Keychain, as last read or
+    /// written there, by server id.
+    private var keptAddresses: [String: String] = [:]
+    /// Servers whose whole address is in the Keychain but could not be
+    /// read from it (the Keychain locked, say), as they are stored: not
+    /// given to anything, never written over, and read again later.
+    private var addressesNotRead: [String: MCPServerAccount] = [:]
 
-    /// Flag to ensure we only load once
-    private var hasLoadedAccounts = false
-
-    private init() {
-        // Note: We cannot call actor-isolated methods from init.
-        // Loading is done lazily on first access.
+    init(
+        currentUser: @escaping @Sendable () async -> String = { await MainActor.run { UserScope.currentUserID } },
+        defaults: UserDefaults = .standard,
+        tokens: TokenStore = .keychain,
+        tokenIdentity: @escaping @Sendable (_ provider: ConnectedAppProvider, _ token: String) async throws -> TokenIdentity = ConnectedAccountsService.askTheApp
+    ) {
+        self.currentUser = currentUser
+        self.defaults = defaults
+        self.tokens = tokens
+        self.tokenIdentity = tokenIdentity
     }
 
-    /// Ensure accounts are loaded from storage (called by public methods)
-    private func ensureAccountsLoaded() async {
-        guard !hasLoadedAccounts else { return }
-        hasLoadedAccounts = true
-        await loadAccountsFromStorage()
-        await loadMCPServersFromStorage()
+    /// Makes what is in memory the signed-in account's, and says whose it
+    /// is (called first by every public method). After another account
+    /// signs in, the one before's connections are put down and this one's
+    /// read: they are never shown or used as another account's.
+    ///
+    /// A method that changes something waits for nothing after this: the
+    /// lists and tokens it reads and writes are all this one account's,
+    /// under names spelled from it, whoever signs in meanwhile. The two
+    /// that must wait (`refreshAccessToken` and `connect(_:token:)`, each
+    /// for its provider) ask again afterwards and keep nothing if the account
+    /// is another by then.
+    @discardableResult
+    private func ensureAccountsLoaded() async -> String {
+        let user = await currentUser()
+        // Nothing waits from here on: what is in memory is one account's whole.
+        if loadedFor != user {
+            loadedFor = user
+            loadAccountsFromStorage()
+            loadMCPServersFromStorage()
+        } else if !addressesNotRead.isEmpty {
+            readAddressesAgain()
+        }
+        return user
+    }
+
+    /// The key a list is kept under: the account's in memory.
+    private func storageKey(_ base: String) -> String? {
+        loadedFor.map { UserScope.scopedKey(base, for: $0) }
+    }
+
+    /// The Keychain names of an account's token, as they have always been
+    /// spelled: the key and the service both carry the account.
+    private func tokenName(_ base: String, of owner: String) -> (key: String, service: String) {
+        (UserScope.scopedKeychainService(base, for: owner), KeychainHelper.service(for: owner))
     }
 
     // MARK: - Account Management
@@ -71,12 +168,22 @@ actor ConnectedAccountsService {
         return accountsCache?.first { $0.provider == provider && $0.status == .connected }
     }
 
-    /// Create a new connected account after successful OAuth flow
+    /// The account signed in now. A sign-in with an app, which has to wait
+    /// for the person and the app, takes note of it as it begins.
+    func signedInAccount() async -> String {
+        await ensureAccountsLoaded()
+    }
+
+    /// Create a new connected account after successful OAuth flow.
+    /// `startedBy` is the account that began the sign-in, where it was
+    /// waited for: one that ends when another account is signed in is
+    /// kept for nobody (`ConnectedAccountError.accountChanged`).
     func createAccount(
         provider: ConnectedAppProvider,
         displayName: String,
         tokenBundle: OAuthTokenBundle,
-        metadata: [String: String] = [:]
+        metadata: [String: String] = [:],
+        startedBy: String? = nil
     ) async throws -> ConnectedAccount {
         let id = UUID().uuidString
         let now = Date()
@@ -93,16 +200,17 @@ actor ConnectedAccountsService {
             lastRefreshAt: now
         )
 
-        // Store token in Keychain
-        try await storeTokenBundle(tokenBundle, forAccountId: id)
+        // The token and the account are kept for the account signed in
+        // now, with nothing waited for between them.
+        let owner = await ensureAccountsLoaded()
+        if let startedBy, startedBy != owner { throw ConnectedAccountError.accountChanged }
+        try storeTokenBundle(tokenBundle, forAccountId: id, of: owner)
 
-        // Add to cache and persist
-        await ensureAccountsLoaded()
         if accountsCache == nil {
             accountsCache = []
         }
         accountsCache?.append(account)
-        await saveAccountsToStorage()
+        saveAccountsToStorage()
 
         return account
     }
@@ -114,32 +222,150 @@ actor ConnectedAccountsService {
             var updated = account
             updated.updatedAt = Date()
             accountsCache?[index] = updated
-            await saveAccountsToStorage()
+            saveAccountsToStorage()
         }
     }
 
     /// Delete a connected account and its tokens
     func deleteAccount(id: String) async throws {
-        // Remove token from Keychain
-        await deleteTokenBundle(forAccountId: id)
-
-        // Remove from cache
-        await ensureAccountsLoaded()
+        let owner = await ensureAccountsLoaded()
+        if let provider = accountsCache?.first(where: { $0.id == id })?.provider { tokenChanges[provider, default: 0] += 1 }
+        deleteTokenBundle(forAccountId: id, of: owner)
         accountsCache?.removeAll { $0.id == id }
-        await saveAccountsToStorage()
+        saveAccountsToStorage()
     }
 
     /// Disconnect an account (mark as disconnected, optionally keep for reconnect)
     func disconnectAccount(id: String) async {
-        await ensureAccountsLoaded()
+        let owner = await ensureAccountsLoaded()
         if let index = accountsCache?.firstIndex(where: { $0.id == id }) {
+            if let provider = accountsCache?[index].provider { tokenChanges[provider, default: 0] += 1 }
             accountsCache?[index].status = .disconnected
             accountsCache?[index].updatedAt = Date()
-            await saveAccountsToStorage()
+            saveAccountsToStorage()
 
             // Also delete the tokens
-            await deleteTokenBundle(forAccountId: id)
+            deleteTokenBundle(forAccountId: id, of: owner)
         }
+    }
+
+    // MARK: - Apps connected with a token
+
+    /// Why a pasted token was not taken.
+    enum TokenRefusal: Error, Equatable {
+        /// It says nothing, or is longer than a token is.
+        case notAToken
+        /// The app did not accept it.
+        case refused
+        /// It is of another account of the app than the one whose token
+        /// is being replaced.
+        case otherAccount
+        /// The connection being given a new token is no longer there, or
+        /// something else was done to it, or another account signed in to
+        /// this app, while the token was checked.
+        case changed
+    }
+
+    /// The most characters a pasted token may have.
+    static let longestToken = 512
+
+    /// The metadata key that holds the app's id of the person.
+    static func userKey(for provider: ConnectedAppProvider) -> String {
+        "\(provider.rawValue)_user_id"
+    }
+
+    /// Counts, for each app, what is done to its connection (a token
+    /// given, the connection disconnected or deleted). A token whose check
+    /// was overtaken by any of these is not kept.
+    private var tokenChanges: [ConnectedAppProvider: Int] = [:]
+
+    /// Connects an app with a token the person pasted (a Figma personal
+    /// access token, a Linear personal API key), or gives the connection
+    /// `replacing` a new one. The token is checked with the app first
+    /// (who it belongs to); nothing is kept of a token it does not
+    /// accept. A new token for a connection must be of the same account
+    /// of the app. The token is kept in the Keychain and is never
+    /// returned.
+    func connect(_ provider: ConnectedAppProvider, token given: String, replacing accountID: String? = nil) async throws -> ConnectedAccount {
+        let token = given.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard provider.connectsWithToken, !token.isEmpty, token.count <= Self.longestToken else { throw TokenRefusal.notAToken }
+
+        let owner = await ensureAccountsLoaded()
+        tokenChanges[provider, default: 0] += 1
+        let attempt = tokenChanges[provider]
+        let who = try await tokenIdentity(provider, token)
+        // The app was waited for. What follows is for the account that
+        // asked, with nothing more waited for; and only if the person has
+        // not called it off (the sheet was closed), given another token,
+        // or disconnected the app meanwhile.
+        let sameOwner = await ensureAccountsLoaded() == owner
+        // Nothing waits from here to the end.
+        try Task.checkCancellation()
+        guard sameOwner, attempt == tokenChanges[provider] else { throw TokenRefusal.changed }
+
+        // The kind of token is the header it is sent in.
+        let bundle = OAuthTokenBundle(accessToken: token, refreshToken: nil, tokenType: provider == .figma ? "X-Figma-Token" : "Authorization", expiresAt: nil, scopes: [])
+        let now = Date()
+
+        if let accountID {
+            // A connection that was disconnected is not brought back by
+            // a token given before that.
+            guard let index = accountsCache?.firstIndex(where: { $0.id == accountID && $0.provider == provider }), var account = accountsCache?[index],
+                  account.status == .connected || account.status == .error else {
+                throw TokenRefusal.changed
+            }
+            guard account.metadata[Self.userKey(for: provider)] == who.id else { throw TokenRefusal.otherAccount }
+            try storeTokenBundle(bundle, forAccountId: accountID, of: owner)
+            account.displayName = who.label
+            account.status = .connected
+            account.updatedAt = now
+            account.lastRefreshAt = now
+            accountsCache?[index] = account
+            saveAccountsToStorage()
+            return account
+        }
+
+        let account = ConnectedAccount(
+            id: UUID().uuidString,
+            provider: provider,
+            displayName: who.label,
+            status: .connected,
+            scopes: [],
+            metadata: [Self.userKey(for: provider): who.id, "source": "pasted_token"],
+            createdAt: now,
+            updatedAt: now,
+            lastRefreshAt: now
+        )
+        try storeTokenBundle(bundle, forAccountId: account.id, of: owner)
+        // One connection of the app is used: an earlier one is put down,
+        // with its token.
+        for earlier in accountsCache ?? [] where earlier.provider == provider {
+            deleteTokenBundle(forAccountId: earlier.id, of: owner)
+        }
+        accountsCache?.removeAll { $0.provider == provider }
+        accountsCache = (accountsCache ?? []) + [account]
+        saveAccountsToStorage()
+        return account
+    }
+
+    /// Marks a connection made with a pasted token as one whose token the
+    /// app has refused: it is not used again until the person gives it a
+    /// new token. Only if `token` is still the one it keeps: a refusal of
+    /// a token that has since been replaced says nothing of the new one.
+    func markTokenRefused(accountID: String, token: String) async {
+        let owner = await ensureAccountsLoaded()
+        guard let index = accountsCache?.firstIndex(where: { $0.id == accountID && $0.provider.connectsWithToken && $0.status == .connected }),
+              (try? tokenBundle(forAccountId: accountID, of: owner))?.accessToken == token else { return }
+        accountsCache?[index].status = .error
+        accountsCache?[index].updatedAt = Date()
+        saveAccountsToStorage()
+    }
+
+    /// An app's connection whose token it has refused, which waits for a
+    /// new one; nil if there is none.
+    func accountWaitingForAToken(for provider: ConnectedAppProvider) async -> ConnectedAccount? {
+        await ensureAccountsLoaded()
+        return provider.accountWaitingForAToken(in: accountsCache ?? [])
     }
 
     // MARK: - MCP Server Management
@@ -178,104 +404,116 @@ actor ConnectedAccountsService {
             updatedAt: now
         )
 
+        // The token and the server are kept for the account signed in now,
+        // with nothing waited for between them.
+        let owner = await ensureAccountsLoaded()
         if authType != .none, let token {
-            try await storeMCPToken(token, forServerId: id)
+            try storeMCPToken(token, forServerId: id, of: owner)
         }
 
-        await ensureAccountsLoaded()
         if mcpServersCache == nil {
             mcpServersCache = []
         }
         mcpServersCache?.append(server)
-        await saveMCPServersToStorage()
+        saveMCPServersToStorage()
 
         return server
     }
 
     /// Update an existing MCP server
     func updateMCPServer(_ server: MCPServerAccount, token: String? = nil) async throws {
-        await ensureAccountsLoaded()
+        let owner = await ensureAccountsLoaded()
         if let index = mcpServersCache?.firstIndex(where: { $0.id == server.id }) {
             var updated = server
             updated.updatedAt = Date()
             mcpServersCache?[index] = updated
 
             if let token {
-                try await storeMCPToken(token, forServerId: server.id)
+                try storeMCPToken(token, forServerId: server.id, of: owner)
             }
 
-            await saveMCPServersToStorage()
+            saveMCPServersToStorage()
         }
+    }
+
+    /// Keeps a server's freshly listed tools on the server as it is stored
+    /// now, in one step: what is checked is what is written. With
+    /// `unlessListedSince`, nothing is kept if its tools have been listed
+    /// already (a listing that started earlier does not replace a later
+    /// one's). False if the server is gone or was left as it is.
+    @discardableResult
+    func cacheMCPTools(_ tools: [MCPToolDefinition], forServerId id: String, unlessListedSince: Bool = false) async -> Bool {
+        await ensureAccountsLoaded()
+        // Nothing waits between here and the write.
+        guard let index = mcpServersCache?.firstIndex(where: { $0.id == id }), var server = mcpServersCache?[index] else { return false }
+        if unlessListedSince, server.toolsCachedAt != nil { return false }
+        let now = Date()
+        server.cachedTools = tools
+        server.toolsCachedAt = now
+        server.status = .connected
+        server.updatedAt = now
+        mcpServersCache?[index] = server
+        saveMCPServersToStorage()
+        return true
     }
 
     /// Delete an MCP server
     func deleteMCPServer(id: String) async throws {
-        await deleteMCPToken(forServerId: id)
-
-        await ensureAccountsLoaded()
+        let owner = await ensureAccountsLoaded()
+        deleteMCPToken(forServerId: id, of: owner)
+        let address = tokenName(mcpAddressPrefix + id, of: owner)
+        tokens.delete(address.key, address.service)
+        keptAddresses[id] = nil
+        addressesNotRead[id] = nil
         mcpServersCache?.removeAll { $0.id == id }
-        await saveMCPServersToStorage()
+        saveMCPServersToStorage()
     }
 
     /// Get the authentication token for an MCP server
     func getMCPToken(forServerId id: String) async throws -> String? {
+        let owner = await ensureAccountsLoaded()
         // If the server doesn't exist, we can't get its token
-        guard let server = await getMCPServer(id: id), server.authType != .none else {
+        guard let server = mcpServersCache?.first(where: { $0.id == id }), server.authType != .none else {
             return nil
         }
 
-        let key = await UserScope.scopedKeychainService(mcpKeychainPrefix + id)
-
-        guard let tokenString = await MainActor.run(body: { KeychainHelper.load(key: key) }) else {
+        let name = tokenName(mcpKeychainPrefix + id, of: owner)
+        guard let tokenString = tokens.load(name.key, name.service) else {
             throw ConnectedAccountError.mcpTokenNotFound(serverId: id)
         }
 
         return tokenString
     }
 
-    /// Store the authentication token for an MCP server
-    private func storeMCPToken(_ token: String, forServerId id: String) async throws {
-        let key = await UserScope.scopedKeychainService(mcpKeychainPrefix + id)
+    /// Store the authentication token for an MCP server of `owner`.
+    private func storeMCPToken(_ token: String, forServerId id: String, of owner: String) throws {
+        let name = tokenName(mcpKeychainPrefix + id, of: owner)
         do {
-            try KeychainHelper.save(key: key, value: token)
+            try tokens.save(name.key, token, name.service)
         } catch {
             throw ConnectedAccountError.mcpTokenStorageFailed(underlying: error)
         }
     }
 
-    /// Delete the authentication token for an MCP server
-    private func deleteMCPToken(forServerId id: String) async {
-        let key = await UserScope.scopedKeychainService(mcpKeychainPrefix + id)
-        KeychainHelper.delete(key: key)
+    /// Delete the authentication token for an MCP server of `owner`.
+    private func deleteMCPToken(forServerId id: String, of owner: String) {
+        let name = tokenName(mcpKeychainPrefix + id, of: owner)
+        tokens.delete(name.key, name.service)
     }
 
     // MARK: - Token Management
 
     /// Get the OAuth token bundle for an account
     func getTokenBundle(forAccountId id: String) async throws -> OAuthTokenBundle {
-        // User-scoped keychain key
-        let key = await UserScope.scopedKeychainService(keychainPrefix + id)
+        let owner = await ensureAccountsLoaded()
+        return try tokenBundle(forAccountId: id, of: owner)
+    }
 
-        // Use KeychainHelper to read the token data
-        guard let jsonString = await MainActor.run(body: { KeychainHelper.load(key: key) }), // KeychainHelper might require MainActor? No, KeychainHelper is usually thread safe or nonisolated.
-              // Wait, KeychainHelper load is static. Is it isolated?
-              // Usually Keychain wrappers are nonisolated or thread-safe.
-              // Assuming non-isolated for now, but UserScope.scopedKeychainService is MainActor.
-              // If KeychainHelper is MainActor, we need await MainActor.run.
-              // Let's assume KeychainHelper is NOT MainActor (it handles C API).
-              // But if it is, I'd see errors.
-              // The error in UserScope was about UserScope, not KeychainHelper.
-              // So:
-              let data = jsonString.data(using: .utf8) else {
+    private func tokenBundle(forAccountId id: String, of owner: String) throws -> OAuthTokenBundle {
+        let name = tokenName(keychainPrefix + id, of: owner)
+        guard let jsonString = tokens.load(name.key, name.service), let data = jsonString.data(using: .utf8) else {
             throw ConnectedAccountError.tokenNotFound(accountId: id)
         }
-
-        // Actually, just in case KeychainHelper is MainActor (some libs do this), I'll check if I need to await it.
-        // But for now:
-        // let jsonString = KeychainHelper.load(key: key)
-        // -> logic:
-
-        // Re-reading code: KeychainHelper wasn't flagged in my analysis, only UserScope.
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -287,34 +525,29 @@ actor ConnectedAccountsService {
         }
     }
 
-    /// Store an OAuth token bundle for an account
-    func storeTokenBundle(_ bundle: OAuthTokenBundle, forAccountId id: String) async throws {
-        // User-scoped keychain key
-        let key = await UserScope.scopedKeychainService(keychainPrefix + id)
-
+    /// Store an OAuth token bundle for an account of `owner`.
+    private func storeTokenBundle(_ bundle: OAuthTokenBundle, forAccountId id: String, of owner: String) throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
 
         let data = try encoder.encode(bundle)
 
-        // Convert to string and store via KeychainHelper
         guard let jsonString = String(data: data, encoding: .utf8) else {
             throw ConnectedAccountError.tokenStorageFailed(underlying: NSError(domain: "ConnectedAccounts", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to encode token data"]))
         }
 
+        let name = tokenName(keychainPrefix + id, of: owner)
         do {
-            // Check if KeychainHelper needs await. If strictly nonisolated, fine.
-            try KeychainHelper.save(key: key, value: jsonString)
+            try tokens.save(name.key, jsonString, name.service)
         } catch {
             throw ConnectedAccountError.tokenStorageFailed(underlying: error)
         }
     }
 
-    /// Delete token bundle from Keychain
-    private func deleteTokenBundle(forAccountId id: String) async {
-        // User-scoped keychain key
-        let key = await UserScope.scopedKeychainService(keychainPrefix + id)
-        KeychainHelper.delete(key: key)
+    /// Delete the token bundle of an account of `owner`.
+    private func deleteTokenBundle(forAccountId id: String, of owner: String) {
+        let name = tokenName(keychainPrefix + id, of: owner)
+        tokens.delete(name.key, name.service)
     }
 
     /// Get the access token for API calls, refreshing if necessary
@@ -338,6 +571,13 @@ actor ConnectedAccountsService {
         forAccount account: ConnectedAccount,
         currentBundle: OAuthTokenBundle
     ) async throws -> OAuthTokenBundle {
+        // A token the person pasted is not refreshed: it works until the
+        // expiry set where it was made, and is then replaced by them. Its
+        // connection is left as it is.
+        if account.provider.connectsWithToken {
+            throw ConnectedAccountError.refreshNotSupported(provider: account.provider)
+        }
+        let owner = await ensureAccountsLoaded()
         guard let refreshToken = currentBundle.refreshToken else {
             // Mark account as needing re-auth
             var updated = account
@@ -360,16 +600,27 @@ actor ConnectedAccountsService {
                 refreshToken: refreshToken,
                 currentScopes: currentBundle.scopes
             )
+
+        case .figma, .linear:
+            // Not reached: a pasted token is turned away above.
+            throw ConnectedAccountError.refreshNotSupported(provider: account.provider)
         }
 
-        // Store the new token bundle
-        try await storeTokenBundle(newBundle, forAccountId: account.id)
+        // The provider was waited for. The new token is kept only if the
+        // account it was asked for is still the one signed in and still has
+        // this connection, and then with nothing more waited for.
+        guard await ensureAccountsLoaded() == owner, let index = accountsCache?.firstIndex(where: { $0.id == account.id }) else {
+            throw ConnectedAccountError.accountNotFound(accountId: account.id)
+        }
+        try storeTokenBundle(newBundle, forAccountId: account.id, of: owner)
 
         // Update account metadata
         var updated = account
         updated.lastRefreshAt = Date()
         updated.status = .connected
-        await updateAccount(updated)
+        updated.updatedAt = Date()
+        accountsCache?[index] = updated
+        saveAccountsToStorage()
 
         return newBundle
     }
@@ -429,10 +680,8 @@ actor ConnectedAccountsService {
     // MARK: - Persistence
 
     /// Load accounts from UserDefaults
-    private func loadAccountsFromStorage() async {
-        let key = await getAccountsKey()
-        // UserDefaults might be MainActor? No, UserDefaults is thread safe.
-        guard let data = UserDefaults.standard.data(forKey: key) else {
+    private func loadAccountsFromStorage() {
+        guard let key = storageKey("connected_accounts"), let data = defaults.data(forKey: key) else {
             accountsCache = []
             return
         }
@@ -449,24 +698,26 @@ actor ConnectedAccountsService {
     }
 
     /// Save accounts to UserDefaults
-    private func saveAccountsToStorage() async {
+    private func saveAccountsToStorage() {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
 
-        let key = await getAccountsKey()
+        guard let key = storageKey("connected_accounts") else { return }
 
         do {
             let data = try encoder.encode(accountsCache)
-            UserDefaults.standard.set(data, forKey: key)
+            defaults.set(data, forKey: key)
         } catch {
             AppErrorReporter.log(error: error, context: "ConnectedAccountsService.saveAccountsToStorage")
         }
     }
 
     /// Load MCP servers from UserDefaults
-    private func loadMCPServersFromStorage() async {
-        let key = await getMCPServersKey()
-        guard let data = UserDefaults.standard.data(forKey: key) else {
+    private func loadMCPServersFromStorage() {
+        // What was held for the account before is none of this one's.
+        keptAddresses = [:]
+        addressesNotRead = [:]
+        guard let key = storageKey("mcp_servers"), let data = defaults.data(forKey: key) else {
             mcpServersCache = []
             return
         }
@@ -475,23 +726,112 @@ actor ConnectedAccountsService {
         decoder.dateDecodingStrategy = .iso8601
 
         do {
-            mcpServersCache = try decoder.decode([MCPServerAccount].self, from: data)
+            let stored = try decoder.decode([MCPServerAccount].self, from: data)
+            // Each whole address is read back from the Keychain; one kept
+            // in the preferences before is moved there now. One that cannot
+            // be read is held apart as it is stored, and read again later;
+            // meanwhile it is listed with no address and as failing, so
+            // that what refers to it (a coven's choice) still sees it, and
+            // nothing can use it.
+            var keptInThePreferences = false
+            var servers: [MCPServerAccount] = []
+            for server in stored {
+                if server.addressInKeychain == true {
+                    guard let address = keptAddress(of: server.id) else {
+                        addressesNotRead[server.id] = server
+                        servers.append(Self.unusable(server))
+                        continue
+                    }
+                    var server = server
+                    server.serverUrl = address
+                    server.addressInKeychain = nil
+                    keptAddresses[server.id] = address
+                    servers.append(server)
+                } else {
+                    keptInThePreferences = true
+                    servers.append(server)
+                }
+            }
+            mcpServersCache = servers
+            if keptInThePreferences { saveMCPServersToStorage() }
         } catch {
             AppErrorReporter.log(error: error, context: "ConnectedAccountsService.loadMCPServersFromStorage")
             mcpServersCache = []
         }
     }
 
+    /// A server whose address cannot be read now, as it is listed meanwhile.
+    private static func unusable(_ stored: MCPServerAccount) -> MCPServerAccount {
+        var server = stored
+        server.serverUrl = ""
+        server.status = .error
+        server.addressInKeychain = nil
+        return server
+    }
+
+    /// A server's whole address as the Keychain has it, for the account in
+    /// memory; nil where it cannot be read.
+    private func keptAddress(of id: String) -> String? {
+        guard let owner = loadedFor else { return nil }
+        let name = tokenName(mcpAddressPrefix + id, of: owner)
+        return tokens.load(name.key, name.service)
+    }
+
+    /// Tries again to read the addresses that could not be read: a server
+    /// whose address is read now is given again.
+    private func readAddressesAgain() {
+        for (id, stored) in addressesNotRead {
+            guard let address = keptAddress(of: id) else { continue }
+            var server = stored
+            server.serverUrl = address
+            server.addressInKeychain = nil
+            keptAddresses[id] = address
+            addressesNotRead[id] = nil
+            mcpServersCache = (mcpServersCache ?? []).filter { $0.id != id } + [server]
+        }
+    }
+
     /// Save MCP servers to UserDefaults
-    private func saveMCPServersToStorage() async {
+    private func saveMCPServersToStorage() {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
 
-        let key = await getMCPServersKey()
+        guard let key = storageKey("mcp_servers"), let owner = loadedFor else { return }
+
+        // The whole address goes to the Keychain, beside the server's
+        // token (only where it changed); the preferences keep only what
+        // Settings shows. Where the Keychain refuses, a server whose
+        // address it holds already keeps that one, and only one never
+        // moved there is kept whole, so that it is not lost.
+        let kept = (mcpServersCache ?? []).filter { addressesNotRead[$0.id] == nil }.map { server -> MCPServerAccount in
+            var shown = server
+            shown.serverUrl = server.shownAddress
+            shown.addressInKeychain = true
+            if keptAddresses[server.id] == server.serverUrl { return shown }
+            let name = tokenName(mcpAddressPrefix + server.id, of: owner)
+            do {
+                try tokens.save(name.key, server.serverUrl, name.service)
+                keptAddresses[server.id] = server.serverUrl
+                return shown
+            } catch {
+                AppErrorReporter.log(message: "An MCP server's address could not be kept in the Keychain (\(type(of: error)))", context: "ConnectedAccountsService.saveMCPServersToStorage")
+                // The Keychain can have taken the old address out before
+                // refusing the new one: it is put back, and kept as the
+                // server's (the change did not stick). Where it cannot be,
+                // the new address is kept whole rather than lost.
+                if let old = keptAddresses[server.id], (try? tokens.save(name.key, old, name.service)) != nil {
+                    var kept = shown
+                    kept.serverUrl = MCPServerAccount.shown(old)
+                    return kept
+                }
+                keptAddresses[server.id] = nil
+                return server
+            }
+        } + Array(addressesNotRead.values)
 
         do {
-            let data = try encoder.encode(mcpServersCache)
-            UserDefaults.standard.set(data, forKey: key)
+            let data = try encoder.encode(kept)
+            defaults.set(data, forKey: key)
         } catch {
             AppErrorReporter.log(error: error, context: "ConnectedAccountsService.saveMCPServersToStorage")
         }
@@ -511,6 +851,9 @@ enum ConnectedAccountError: LocalizedError {
     case tokenRefreshFailed(provider: ConnectedAppProvider)
     case missingConfiguration(key: String)
     case oauthFailed(message: String)
+    /// Another account signed in while a sign-in with an app was waited
+    /// for. Nothing was kept of it.
+    case accountChanged
     case mcpTokenNotFound(serverId: String)
     case mcpTokenStorageFailed(underlying: Error)
 
@@ -534,6 +877,8 @@ enum ConnectedAccountError: LocalizedError {
             "Missing OAuth configuration: \(key)"
         case let .oauthFailed(message):
             "OAuth authentication failed: \(message)"
+        case .accountChanged:
+            "Another account signed in before the app was connected."
         case let .mcpTokenNotFound(id):
             "MCP authentication token not found for server: \(id)"
         case let .mcpTokenStorageFailed(error):

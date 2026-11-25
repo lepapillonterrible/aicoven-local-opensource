@@ -41,6 +41,13 @@ struct TurnState: Codable, Equatable, Identifiable {
     var status: TurnStatus
     var version: Int
     var phase: TurnPhase
+    /// The files the turn's tools made for the person (a generated image),
+    /// kept in the attachment store: they go with the reply. Not coded:
+    /// they are told from one report to the next, not stored with a state.
+    var generatedFiles: [FileAttachmentDetail] = []
+    /// The assets the turn's agent made, by id, in the order it made them:
+    /// each is shown with the reply, as a card. Not coded, as the files.
+    var madeAssets: [String] = []
 
     enum CodingKeys: String, CodingKey {
         case id = "turn_id"
@@ -65,7 +72,8 @@ struct TurnState: Codable, Equatable, Identifiable {
         tasks: [AgentTask] = [],
         status: TurnStatus = .running,
         version: Int = 0,
-        phase: TurnPhase = .starting
+        phase: TurnPhase = .starting,
+        generatedFiles: [FileAttachmentDetail] = []
     ) {
         self.id = id
         self.threadId = threadId
@@ -77,6 +85,7 @@ struct TurnState: Codable, Equatable, Identifiable {
         self.status = status
         self.version = version
         self.phase = phase
+        self.generatedFiles = generatedFiles
     }
 
     mutating func bumpVersion() {

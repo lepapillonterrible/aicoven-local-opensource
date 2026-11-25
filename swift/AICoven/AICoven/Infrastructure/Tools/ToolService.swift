@@ -22,8 +22,6 @@ extension ToolService: ChatToolService {}
 /// level services (agents, chat):
 /// - Timezone-aware current time
 /// - Web search (stubbed for now)
-/// - Image generation
-/// - File generation with download links
 /// - Image analysis (vision)
 /// - File analysis (summaries / QA)
 ///
@@ -51,114 +49,12 @@ actor ToolService {
     // be safely called without hopping onto the ToolService actor.
     // Implementation moved up to satisfy ChatToolService; kept here for docs.
 
-    // MARK: - Image generation
-
-    struct GeneratedImage {
-        let id: String
-        let url: URL
-    }
-
-    /// Provider-agnostic entry point for image generation. For now this
-    /// delegates to the OpenAI client when available and otherwise throws.
-    func generateImage(prompt: String) async throws -> GeneratedImage {
-        // Prefer OpenAI if available; other providers can be wired in later.
-        guard let caps = environment.capabilities.first(where: { $0.providerID == "openai" }),
-              let client = environment.clients["openai"]
-        else {
-            throw NSError(
-                domain: "ToolService",
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Image generation is not available – no suitable provider configured."]
-            )
-        }
-
-        // We do not yet have a dedicated image endpoint on LLMClient, so for
-        // now we ask the chat model for an HTML <img> tag with a data URL and
-        // decode it locally. This is intentionally simple and can be replaced
-        // with a first-class images API later.
-        let systemPrompt = "You are an image generator helper. When asked to generate an image, you must respond with a single data URL in an <img src=\"...\"> tag, no other text."
-        let messages = [
-            LLMMessage(role: .system, content: systemPrompt),
-            LLMMessage(role: .user, content: "Generate an image for: \(prompt)")
-        ]
-        let options = ChatOptions(temperature: 0.8, maxTokens: nil, stream: false)
-        let response = try await client.completeChat(
-            messages: messages,
-            model: caps.chatModel ?? "gpt-4o",
-            options: options
-        )
-        let html = response.message.content
-
-        // Very small heuristic to pull out a data URL if present.
-        guard let range = html.range(of: "data:image"),
-              let endQuote = html[range.lowerBound...].firstIndex(of: "\"") ?? html[range.lowerBound...].firstIndex(of: "'")
-        else {
-            throw NSError(
-                domain: "ToolService",
-                code: -2,
-                userInfo: [NSLocalizedDescriptionKey: "Image generation did not return a data URL."]
-            )
-        }
-        let urlString = String(html[range.lowerBound ..< endQuote])
-        guard let dataURL = URL(string: urlString) else {
-            throw NSError(
-                domain: "ToolService",
-                code: -3,
-                userInfo: [NSLocalizedDescriptionKey: "Invalid image data URL returned by model."]
-            )
-        }
-
-        // Persist the image to disk so the UI can display/download it.
-        let fileManager = FileManager.default
-        let baseDir = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
-        let imagesDir = baseDir.appendingPathComponent("GeneratedImages", isDirectory: true)
-        do {
-            try fileManager.createDirectory(at: imagesDir, withIntermediateDirectories: true)
-        } catch {
-            AppErrorReporter.log(error: error, context: "ToolService.generateImage.createDirectory")
-        }
-
-        let id = UUID().uuidString
-        let fileURL = imagesDir.appendingPathComponent("\(id).png")
-
-        if let data = Data(base64Encoded: dataURL.lastPathComponent) {
-            try data.write(to: fileURL)
-        }
-
-        return GeneratedImage(id: id, url: fileURL)
-    }
-
-    // MARK: - File generation
-
-    struct GeneratedFile {
-        let id: String
-        let url: URL
-        let mimeType: String
-    }
-
-    /// Stores arbitrary text content as a file on disk and returns a download
-    /// URL. This does not require any external API.
-    func generateFile(name: String, mimeType: String, contents: Data) throws -> GeneratedFile {
-        let fileManager = FileManager.default
-        let baseDir = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
-        let filesDir = baseDir.appendingPathComponent("GeneratedFiles", isDirectory: true)
-        try fileManager.createDirectory(at: filesDir, withIntermediateDirectories: true)
-
-        let id = UUID().uuidString
-        let fileURL = filesDir.appendingPathComponent(name.isEmpty ? id : name)
-        try contents.write(to: fileURL)
-
-        return GeneratedFile(id: id, url: fileURL, mimeType: mimeType)
-    }
-
     // MARK: - Image / file analysis stubs
 
     // These analysis helpers are intentionally lightweight – they assume that
     // some other part of the app manages attachments and can provide raw
-    // bytes for a given attachment identifier. Hooking them into the existing
-    // UploadService/attachments pipeline will be done at a higher layer.
+    // bytes for a given attachment identifier. Hooking them into the
+    // attachments store will be done at a higher layer.
 
     struct AnalysisResult {
         let textSummary: String
@@ -442,14 +338,27 @@ actor ToolService {
             )
         }
 
+        // Only the public web: not this device, nor the network it is on
+        // (a page a model read can ask for one), as its name resolves now.
+        guard await PublicWebAddress.resolvesPublicly(url) else {
+            throw NSError(
+                domain: "ToolService",
+                code: -33,
+                userInfo: [NSLocalizedDescriptionKey: "Only addresses on the public web can be read. Addresses on this device or its local network are not."]
+            )
+        }
+
         // Create request with a reasonable user agent
         var request = URLRequest(url: url)
         request.setValue("AICoven/1.0 (Local AI Assistant)", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 30
+        request.httpShouldHandleCookies = false
 
-        // Download the full body in one efficient call
+        // A session that keeps nothing (no cookies, no cache), following a
+        // redirect only to another public address, and reading no more
+        // than 10 MB.
         let maxDownloadSize = 10 * 1024 * 1024 // 10 MB
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (bytes, response) = try await UnkeptFetch.session.bytes(for: request, delegate: PublicRedirectsOnly())
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw NSError(
@@ -467,8 +376,13 @@ actor ToolService {
             )
         }
 
-        // Truncate if the response exceeds size limit
-        let usableData = data.count > maxDownloadSize ? data.prefix(maxDownloadSize) : data
+        // The body only of a page that was given, and no more than its limit.
+        var usableData = Data()
+        if response.expectedContentLength > 0 { usableData.reserveCapacity(Int(min(response.expectedContentLength, Int64(maxDownloadSize)))) }
+        for try await byte in bytes {
+            usableData.append(byte)
+            if usableData.count >= maxDownloadSize { break }
+        }
 
         // Decode content as text
         guard let html = String(data: usableData, encoding: .utf8) ?? String(data: usableData, encoding: .isoLatin1) else {
@@ -613,5 +527,22 @@ actor ToolService {
         }
 
         return result
+    }
+}
+
+/// Follows a redirect only to an address on the public web, as its name
+/// resolves when the redirect comes.
+private final class PublicRedirectsOnly: NSObject, URLSessionTaskDelegate {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        guard let url = request.url else { return completionHandler(nil) }
+        Task {
+            await completionHandler(PublicWebAddress.resolvesPublicly(url) ? request : nil)
+        }
     }
 }

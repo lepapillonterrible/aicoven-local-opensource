@@ -237,28 +237,6 @@ struct EnhancedProfileView: View {
                                 .frame(maxWidth: 420)
                         }
 
-                        GlassCard {
-                            VStack(spacing: Spacing.sm) {
-                                Text("You can still customize your experience from Settings and Provider Keys.")
-                                    .font(.aicovenBodySmall)
-                                    .foregroundColor(.aicovenTextSecondary)
-                                    .multilineTextAlignment(.center)
-
-                                HStack(spacing: Spacing.md) {
-                                    NavigationLink(destination: EnhancedSettingsView()) {
-                                        Label("Settings", systemImage: "gearshape")
-                                    }
-                                    .buttonStyle(.bordered)
-
-                                    NavigationLink(destination: ProviderKeysView()) {
-                                        Label("Provider Keys", systemImage: "key.fill")
-                                    }
-                                    .buttonStyle(.bordered)
-                                }
-                            }
-                            .padding(Spacing.md)
-                        }
-                        .padding(.horizontal, Spacing.lg)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding(.top, Spacing.xl)

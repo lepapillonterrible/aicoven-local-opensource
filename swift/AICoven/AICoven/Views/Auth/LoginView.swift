@@ -205,58 +205,6 @@ struct LoginView: View {
     }
 }
 
-// MARK: - Auth Mode Button Component
-
-/// Custom tab-like button for auth mode selection
-struct AuthModeButton: View {
-    let title: String
-    let isSelected: Bool
-    let position: Position
-    let action: () -> Void
-
-    enum Position {
-        case left, right
-    }
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.aicovenBodyMedium)
-                .foregroundColor(isSelected ? .white : .aicovenTextSecondary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, Spacing.sm)
-                .background(
-                    ZStack {
-                        if isSelected {
-                            LinearGradient(
-                                colors: [Color.aicovenTeal.opacity(0.3), Color.aicovenPurple.opacity(0.3)],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        } else {
-                            Color.aicovenGlass
-                        }
-                    }
-                )
-                .overlay(
-                    Rectangle()
-                        .fill(isSelected ? Color.aicovenTeal : Color.clear)
-                        .frame(height: 2)
-                        .frame(maxHeight: .infinity, alignment: .bottom)
-                )
-        }
-        .buttonStyle(.plain)
-        .clipShape(
-            UnevenRoundedRectangle(
-                topLeadingRadius: position == .left ? BorderRadius.md : 0,
-                bottomLeadingRadius: position == .left ? BorderRadius.md : 0,
-                bottomTrailingRadius: position == .right ? BorderRadius.md : 0,
-                topTrailingRadius: position == .right ? BorderRadius.md : 0
-            )
-        )
-    }
-}
-
 // MARK: - Signup Tutorial Layout
 
 private extension LoginView {

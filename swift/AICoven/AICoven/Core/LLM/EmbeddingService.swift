@@ -16,35 +16,14 @@ final class EmbeddingService {
     private let modelRouter: ModelRouter
     private let llmClients: [String: LLMClient]
 
-    init(memoryRepository: MemoryRepository = .shared) {
+    init(
+        memoryRepository: MemoryRepository = .shared,
+        environment: (models: [ModelDescriptor], clients: [String: LLMClient])? = nil
+    ) {
         self.memoryRepository = memoryRepository
-        let env = LLMConfiguration.makeEnvironment()
+        let env = environment ?? LLMConfiguration.makeEnvironment()
         modelRouter = HeuristicModelRouter(availableModels: env.models)
         llmClients = env.clients
-    }
-
-    /// Indexes a new memory chunk:
-    /// - Picks an embedding-capable model via the router.
-    /// - Computes an embedding for the given text.
-    /// - Stores the memory+embedding via MemoryRepository.
-    func indexMemory(
-        scope: String,
-        text: String,
-        tags: [String],
-        pii: Bool,
-        createdBy: String?,
-        source: String?
-    ) async throws -> LocalMemoryChunk {
-        let embedding = try await embedText(text)
-        return try await memoryRepository.storeMemory(
-            scope: scope,
-            text: text,
-            tags: tags,
-            pii: pii,
-            createdBy: createdBy,
-            source: source,
-            embedding: embedding
-        )
     }
 
     /// Computes an embedding for ad-hoc queries (e.g., search prompts).
@@ -76,24 +55,37 @@ final class EmbeddingService {
     ///
     /// If no provider is configured for embeddings and no lexical overlap is
     /// found, falls back to recency-based retrieval.
+    ///
+    /// The candidates are the newest `candidateLimit` memories of each of
+    /// `places`, newest first; one whose text could not be opened is none.
+    /// They are `account`'s where the caller has read whose they are (the
+    /// account signed in now otherwise), and are not read if another is
+    /// signed in by then.
+    ///
+    /// With `onDeviceOnly` the query is not sent to a provider to be
+    /// embedded: memories are matched by their words alone.
     func searchRelevantMemories(
         query: String,
-        scope: String? = nil,
+        in places: [MemoryPlace],
+        of account: String? = nil,
         topK: Int = 16,
         candidateLimit: Int = 200,
         includePII: Bool = false,
-        similarityThreshold: Float = 0.15
+        similarityThreshold: Float = 0.15,
+        onDeviceOnly: Bool = false
     ) async throws -> [LocalMemoryChunk] {
         let lowercasedQuery = query.lowercased()
         let queryTokens = tokenize(lowercasedQuery)
 
-        let queryEmbedding = try await embedText(query)
-        let allCandidates = try await memoryRepository.loadMemories(scope: scope, limit: candidateLimit)
-        let candidates: [LocalMemoryChunk] = if includePII {
-            allCandidates
-        } else {
-            allCandidates.filter { !$0.pii }
+        let queryEmbedding = onDeviceOnly ? nil : try await embedText(query)
+        var allCandidates: [LocalMemoryChunk] = []
+        let account = account ?? UserScope.currentUserID
+        for place in places {
+            allCandidates += try await memoryRepository.loadMemories(in: place, limit: candidateLimit, offset: 0, as: account)
         }
+        let candidates = allCandidates
+            .filter { !$0.isUnreadable && (includePII || !$0.pii) }
+            .sorted { $0.createdAt > $1.createdAt }
 
         // Blend semantic similarity (if available) with a cheap lexical score
         // based on word overlap. This approximates the "hybrid" retrieval

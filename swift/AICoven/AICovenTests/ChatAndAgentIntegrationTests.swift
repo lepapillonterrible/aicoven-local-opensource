@@ -93,6 +93,55 @@ final class ChatAndAgentIntegrationTests: XCTestCase {
         XCTAssertFalse(threads.isEmpty, "Expected at least one thread to be created for the agent run")
     }
 
+    /// A model that asks for a tool that will not go through, and keeps
+    /// what it is told next. Sendable by hand, under `lock`.
+    private final class FailingToolClient: LLMClient, @unchecked Sendable {
+        private let lock = NSLock()
+        private var requests: [[LLMMessage]] = []
+
+        var toldAfterTheCall: String {
+            lock.withLock { requests.dropFirst().first?.map(\.content).joined(separator: "\n") ?? "" }
+        }
+
+        func completeChat(messages: [LLMMessage], model: String, options: ChatOptions) async throws -> LLMChatResponse {
+            let count = lock.withLock {
+                requests.append(messages)
+                return requests.count
+            }
+            let content = count == 1 ? #"{"tool": "web_search", "input": {}, "reason": "no query given"}"# : "Done."
+            return LLMChatResponse(message: LLMMessage(role: .assistant, content: content), providerID: "test-provider", modelID: model, usage: nil)
+        }
+
+        func embed(texts: [String], model: String) async throws -> [[Float]] {
+            Array(repeating: [0, 0, 0], count: texts.count)
+        }
+    }
+
+    /// An agent run tells its model when a tool did not go through, and
+    /// why: a model that is not told would take it as done, or ask again
+    /// for a change that may have been made.
+    func testAgentRunner_tellsItsModelWhenAToolDidNotGoThrough() async {
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        DatabaseManager.shared.configureIfNeeded()
+
+        let client = FailingToolClient()
+        let model = ModelDescriptor(providerID: "test-provider", modelID: "test-model", maxContextTokens: 4096, supportsTools: true, supportsEmbeddings: false, costClass: .cheap)
+        let contextBuilder = ContextBuilder(threadRepository: .shared, memoryRepository: .shared, embeddingService: .shared, toolService: .shared, limits: .init(maxRecentMessages: 4, maxRecentMemories: 4))
+        let runner = AgentRunner(
+            agentRunRepository: .shared,
+            threadRepository: .shared,
+            contextBuilder: contextBuilder,
+            modelRouter: HeuristicModelRouter(availableModels: [model]),
+            llmClients: ["test-provider": client],
+            toolExecutionService: .shared
+        )
+
+        await runner.run(profile: AgentProfile(type: "test-agent-failing-tool", displayName: "Test Agent", description: ""), threadID: nil, maxSteps: 2, userMessage: "Search the web.")
+
+        let told = client.toldAfterTheCall
+        XCTAssertTrue(told.contains("[Tool Error: web_search]") || told.contains("[Tool Permission Denied: web_search]"), "The model was told: \(told)")
+    }
+
     /// Mock tool service for ChatService integration tests.
     private actor MockChatToolService: ChatToolService {
         func webSearch(query: String, maxResults: Int) async throws -> [ToolService.WebSearchResult] {
@@ -168,6 +217,7 @@ final class ChatAndAgentIntegrationTests: XCTestCase {
 
         try await chatService.streamMessage(
             threadId: "test-thread-id",
+            as: UserScope.currentUserID,
             message: "What time is it and check the web?",
             roleId: nil,
             providerAccountId: nil,

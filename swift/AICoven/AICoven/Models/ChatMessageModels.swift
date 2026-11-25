@@ -11,6 +11,60 @@ struct FileAttachmentDetail: Codable, Identifiable, Hashable {
     let url: URL?
 }
 
+extension FileAttachmentDetail {
+    /// What a message keeps of an attachment: enough to show it in the
+    /// thread. Its bytes are in the attachment store, under its id.
+    nonisolated var messageMetadata: AnyJSONValue {
+        var fields: [String: AnyJSONValue] = ["id": .string(id), "name": .string(name)]
+        if let mimeType { fields["mime_type"] = .string(mimeType) }
+        if let sizeBytes { fields["size_bytes"] = .int(sizeBytes) }
+        if let width { fields["width"] = .int(width) }
+        if let height { fields["height"] = .int(height) }
+        return .dictionary(fields)
+    }
+
+    /// An attachment as a message kept it, or nil for anything else.
+    nonisolated init?(messageMetadata: AnyJSONValue) {
+        guard case let .dictionary(fields) = messageMetadata,
+              case let .string(id)? = fields["id"], !id.isEmpty,
+              case let .string(name)? = fields["name"] else { return nil }
+        func string(_ key: String) -> String? {
+            if case let .string(value)? = fields[key] { return value }
+            return nil
+        }
+        func int(_ key: String) -> Int? {
+            if case let .int(value)? = fields[key] { return value }
+            return nil
+        }
+        self.init(id: id, name: name, mimeType: string("mime_type"), sizeBytes: int("size_bytes"), width: int("width"), height: int("height"), url: nil)
+    }
+
+    /// The metadata a message is stored with for its attachments, or nil
+    /// with none: their ids, and what shows each in the thread.
+    nonisolated static func messageMetadata(for attachments: [FileAttachmentDetail]) -> [String: AnyJSONValue]? {
+        guard !attachments.isEmpty else { return nil }
+        return [
+            "file_attachment_ids": .array(attachments.map { .string($0.id) }),
+            "file_attachments": .array(attachments.map(\.messageMetadata)),
+        ]
+    }
+
+    /// The attachments a stored message has, from its metadata: as it kept
+    /// them, or, for one that kept only ids, named by their ids.
+    nonisolated static func attachments(in metadata: [String: AnyJSONValue]) -> [FileAttachmentDetail]? {
+        if case let .array(kept)? = metadata["file_attachments"] {
+            let attachments = kept.compactMap(FileAttachmentDetail.init(messageMetadata:))
+            if !attachments.isEmpty { return attachments }
+        }
+        guard case let .array(ids)? = metadata["file_attachment_ids"] else { return nil }
+        let named: [FileAttachmentDetail] = ids.compactMap { id in
+            guard case let .string(id) = id, !id.isEmpty else { return nil }
+            return FileAttachmentDetail(id: id, name: id, mimeType: nil, sizeBytes: nil, width: nil, height: nil, url: nil)
+        }
+        return named.isEmpty ? nil : named
+    }
+}
+
 /// Output of a tool call (optionally includes generated files)
 struct ToolResult: Codable, Hashable {
     let output: String?
@@ -64,6 +118,8 @@ struct EnhancedChatMessage: Identifiable, Hashable {
     let attachments: [FileAttachmentDetail]?
     let images: [ParsedImage]?
     let generatedFiles: [GeneratedFile]?
+    /// The assets made in the reply's turn, by id: each is shown as a card.
+    var assetIDs: [String] = []
 
     let createdAt: Date?
 }

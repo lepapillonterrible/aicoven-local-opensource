@@ -66,8 +66,24 @@ class AuthService: ObservableObject {
         authStateHandle = Auth.auth().addStateDidChangeListener { [weak self] _, firebaseUser in
             Task { @MainActor in
                 self?.isLoading = true
+                // Who is signed in now, for a link that is waiting.
+                AppState.shared.accountReported(firebaseUser?.uid)
+                // Whoever is signed in now, nothing the rows said of the
+                // account before stays said: on signing in, switching,
+                // signing out, and when an account is deleted.
+                ThreadActivities.shared.accountChanged()
+                MemoryProposalQuestions.shared.accountReported(UserScope.currentUserID)
+                // What is asked of the account before leaves; the same
+                // account reported again keeps it.
+                ToolApprovals.shared.accountReported(UserScope.currentUserID)
+                // A turn still running for the account before is stopped there.
+                TurnEngine.shared.accountChanged()
+                LocalNotifications.shared.accountReported(firebaseUser?.uid)
+                // The pictures drawn of the account's assets are held in
+                // memory only, and not for whoever is signed in next.
+                AssetThumbnails.shared.forgetAll()
                 if let firebaseUser {
-                    print("✅ Firebase user signed in: \(firebaseUser.email ?? "unknown")")
+                    print("✅ Firebase user signed in")
                     // Clear any previous user's data first
                     AppState.shared.clearUserData()
                     // Build user profile from Firebase user data (no backend needed)
@@ -76,6 +92,9 @@ class AuthService: ObservableObject {
                     // Reload all services for the newly signed-in user to ensure
                     // user-scoped data isolation (prevents seeing other users' data)
                     await ThreadService.shared.reloadForCurrentUser()
+                    // Read again now that the threads are this account's.
+                    ThreadActivities.shared.accountChanged()
+                    MemoryProposalQuestions.shared.accountReported(UserScope.currentUserID)
 
                     // One-time cleanup: clear stale test purchases that were cached
                     // during automated testing. This runs once per user.
@@ -88,7 +107,6 @@ class AuthService: ObservableObject {
                     }
 
                     await StoreService.shared.reloadForCurrentUser()
-                    await ChatService.shared.reloadForCurrentUser()
                 } else {
                     print("❌ No Firebase user - signed out")
                     self?.currentUser = nil
@@ -112,7 +130,7 @@ class AuthService: ObservableObject {
         do {
             return try await Auth.auth().currentUser?.getIDToken()
         } catch {
-            print("Error getting ID token: \(error)")
+            print("Error getting ID token (\(type(of: error)))")
             return nil
         }
     }
@@ -126,16 +144,16 @@ class AuthService: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "Firebase not configured"]
             )
         }
-        print("🔐 Attempting sign in for: \(email)")
+        print("🔐 Attempting sign in")
         isLoading = true
         defer { isLoading = false }
 
         do {
             let result = try await Auth.auth().signIn(withEmail: email, password: password)
-            print("✅ Firebase sign in successful: \(result.user.uid)")
+            print("✅ Firebase sign in successful")
             // User profile will be built by auth state listener
         } catch {
-            print("❌ Firebase sign in failed: \(error.localizedDescription)")
+            print("❌ Firebase sign in failed (\(type(of: error)))")
             self.error = error
             throw error
         }
@@ -187,6 +205,15 @@ class AuthService: ObservableObject {
         if isFirebaseAvailable {
             try Auth.auth().signOut()
         }
+        // At once, before this returns: nothing the rows said of the
+        // account stays said.
+        ThreadActivities.shared.accountChanged()
+        AssetThumbnails.shared.forgetAll()
+        MemoryProposalQuestions.shared.accountChanged()
+        ToolApprovals.shared.accountChanged()
+        // A turn still running for the account before is stopped there.
+        TurnEngine.shared.accountChanged()
+        LocalNotifications.shared.accountReported(nil)
         currentUser = nil
         isAuthenticated = false
     }
@@ -319,19 +346,34 @@ class AuthService: ObservableObject {
 
         // Delete all user data from local SQLite database
         await deleteLocalUserData(userId: userId)
+        // And the files attached to the account's messages.
+        await AttachmentStore.shared.deleteAllFiles(for: userId)
 
         // Clear user-specific UserDefaults
         UserDefaults.standard.removeObject(forKey: AuthService.onboardingKey(for: userId))
+        CovenOrderStore().remove(for: userId)
+        LastUsedAgentStore().remove(for: userId)
+        ScopeVisitStore().remove(for: userId)
+        LocalNotifications.shared.forget(userId)
 
         // Delete the Firebase Auth user
         do {
             try await firebaseUser.delete()
             print("✅ Firebase user deleted")
         } catch {
-            print("❌ Failed to delete Firebase user: \(error)")
+            print("❌ Failed to delete Firebase user (\(type(of: error)))")
             // Re-throw the error since the user expects account to be fully deleted
             throw error
         }
+
+        // Its threads are gone: so is what their rows said.
+        ThreadActivities.shared.accountChanged()
+        AssetThumbnails.shared.forgetAll()
+        MemoryProposalQuestions.shared.accountChanged()
+        ToolApprovals.shared.accountChanged()
+        // A turn still running for the account before is stopped there.
+        TurnEngine.shared.accountChanged()
+        LocalNotifications.shared.accountReported(nil)
 
         print("✅ Account deleted successfully")
 
@@ -345,7 +387,7 @@ class AuthService: ObservableObject {
     /// Deletes all local data for a specific user from the SQLite database.
     /// - Parameter userId: The Firebase UID of the user whose data should be deleted
     private func deleteLocalUserData(userId: String) async {
-        print("🗑️ Deleting local data for user: \(userId)")
+        print("🗑️ Deleting local data for the account")
 
         guard let dbQueue = await DatabaseManager.shared.dbQueue else {
             print("⚠️ Database not available, skipping local data deletion")
@@ -366,9 +408,33 @@ class AuthService: ObservableObject {
                     arguments: [userId]
                 )
 
+                // What every agent of the user's covens, and of Strix, is told
+                try db.execute(
+                    sql: "DELETE FROM coven_context WHERE user_id = ?",
+                    arguments: [userId]
+                )
+
                 // Delete user's memory proposals
                 try db.execute(
                     sql: "DELETE FROM memory_proposals WHERE user_id = ?",
+                    arguments: [userId]
+                )
+
+                // Delete user's skills
+                try db.execute(
+                    sql: "DELETE FROM skills WHERE user_id = ?",
+                    arguments: [userId]
+                )
+
+                // Delete user's assets (their files go with them)
+                try db.execute(
+                    sql: "DELETE FROM assets WHERE user_id = ?",
+                    arguments: [userId]
+                )
+
+                // Delete user's tasks
+                try db.execute(
+                    sql: "DELETE FROM tasks WHERE user_id = ?",
                     arguments: [userId]
                 )
 
@@ -399,7 +465,7 @@ class AuthService: ObservableObject {
                 print("✅ Local user data deleted from SQLite")
             }
         } catch {
-            print("❌ Failed to delete local user data: \(error)")
+            print("❌ Failed to delete local user data (\(type(of: error)))")
             // Don't throw here - we still want to proceed with Firebase deletion
         }
     }

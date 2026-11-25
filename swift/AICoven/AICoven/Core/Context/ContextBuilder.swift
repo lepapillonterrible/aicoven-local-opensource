@@ -30,6 +30,36 @@ struct ContextBuilder {
         static let mobile = Limits(maxRecentMessages: 6, maxRecentMemories: 4)
     }
 
+    /// Who answers a turn: an agent by its name, with the instructions the
+    /// person wrote for it, and the account whose agent it is. A turn is
+    /// told of it only while that account is the one signed in.
+    struct Agent: Equatable {
+        let name: String
+        let instructions: String?
+        let account: String
+
+        /// What the agent is told first, as the cloud app composes it: its
+        /// instructions, or for none that it is a helpful assistant of
+        /// that name; then, unless the instructions have such a section
+        /// already, that its name is the agent's and not the model's.
+        var systemPrompt: String {
+            let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            var prompt = instructions?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if prompt.isEmpty {
+                prompt = "You are \(name.isEmpty ? "Strix" : name), a helpful AI assistant."
+            }
+            guard !prompt.contains("## Identity") else { return prompt }
+            return """
+            \(prompt)
+
+            ## Identity
+            - When asked your name, always identify yourself using the role name "\(name.isEmpty ? "Assistant" : name)" from this system prompt, not the underlying model or provider names.
+            - Never claim that your name is Claude, Gemini, GPT-4, ChatGPT, or any other provider/model name. Those are implementation details, not your identity.
+            - If the user asks which models/providers you use, you may mention them, but your name must still be given as the role name above.
+            """
+        }
+    }
+
     /// Configuration for tool-enabled prompts.
     /// Conforms to Sendable since all properties are value types.
     struct ToolConfig {
@@ -81,9 +111,42 @@ struct ContextBuilder {
         /// Configuration that dynamically includes only tools whose backing
         /// connected app (GitHub, Google Workspace) is actually linked.
         /// Call this instead of `.allTools` so the LLM never sees tools it can't use.
-        static func connected() async -> ToolConfig {
-            let tools = await PromptTemplates.connectedToolSet()
-            let mcpServers = await ConnectedAccountsService.shared.getAllMCPServers()
+        ///
+        /// `deliversFiles` says the caller gives the files a tool makes to
+        /// its reply (a chat turn does; an agent run does not): only then
+        /// are the tools that make files for the person offered.
+        ///
+        /// `seesPictures` says the caller's model can be sent pictures and
+        /// the caller sends it those a tool makes (a chat turn of such a
+        /// model does; an agent run does not): only then are the tools
+        /// that make pictures for the model offered.
+        ///
+        /// `connections` is the choice of the thread's coven
+        /// (`CovenService.connections(forThread:)`): the connected apps'
+        /// tools and the MCP servers offered are those it allows.
+        ///
+        /// `usesAssets` says the caller is a turn in a thread, whose
+        /// agent reads the assets and the tasks of the place the thread
+        /// is in, makes assets there and changes its tasks (a chat turn
+        /// does; an agent run does not): only then are the asset tools
+        /// and the task tools offered.
+        static func connected(
+            deliversFiles: Bool = false, seesPictures: Bool = false, usesAssets: Bool = false, connections: CovenConnections? = nil
+        ) async -> ToolConfig {
+            var connectedTools = await PromptTemplates.connectedToolSet()
+            if usesAssets {
+                connectedTools.formUnion(AssetTools.all)
+                connectedTools.formUnion(TaskTools.all)
+            }
+            if deliversFiles {
+                connectedTools.formUnion(PromptTemplates.offeredImageTools())
+            }
+            connectedTools.formUnion(PromptTemplates.pictureTools(among: connectedTools, seesPictures: seesPictures))
+            let (tools, mcpServers) = await CovenConnectionRules.offered(
+                tools: connectedTools,
+                servers: ConnectedAccountsService.shared.getAllMCPServers(),
+                in: connections
+            )
 
             // Add all cached tools to the enabled list so the prompt generator includes them.
             var allTools = tools
@@ -104,8 +167,8 @@ struct ContextBuilder {
 
         /// Configuration optimized for small local models (MLX, Ollama).
         /// Uses fewer tools and no thought/scratchpad/memory instructions.
-        static func mlxTools() async -> ToolConfig {
-            let mcpServers = await ConnectedAccountsService.shared.getAllMCPServers()
+        static func mlxTools(connections: CovenConnections? = nil) async -> ToolConfig {
+            let (_, mcpServers) = await CovenConnectionRules.offered(tools: [], servers: ConnectedAccountsService.shared.getAllMCPServers(), in: connections)
             var tools = PromptTemplates.basicChatTools
                 .union(PromptTemplates.fileTools)
                 .union(PromptTemplates.shellTools)
@@ -127,19 +190,141 @@ struct ContextBuilder {
     }
 
     let limits: Limits
+    /// Who is signed in, asked each time it matters.
+    private let signedIn: () -> String
+    /// The skills an account's agents follow (`SkillRepository.followed`).
+    /// `@concurrent @Sendable`: a nonisolated async closure stored here
+    /// runs on its caller's executor otherwise, and calling it so crashed,
+    /// or gave no skills, on the macOS 15 runtime (the app's other stored
+    /// async closures outside the main actor are `@Sendable`).
+    private let followedSkills: @concurrent @Sendable (String) async throws -> [FollowedSkill]
 
     init(
         threadRepository: ThreadRepository? = nil,
         memoryRepository: MemoryRepository? = nil,
         embeddingService: EmbeddingService? = nil,
         toolService: ToolService? = nil,
-        limits: Limits = .init(maxRecentMessages: 16, maxRecentMemories: 16)
+        limits: Limits = .init(maxRecentMessages: 16, maxRecentMemories: 16),
+        signedIn: @escaping () -> String = { UserScope.currentUserID },
+        followedSkills: @escaping @concurrent @Sendable (String) async throws -> [FollowedSkill] = { try await SkillRepository.shared.followed(as: $0) }
     ) {
         self.threadRepository = threadRepository ?? .shared
         self.memoryRepository = memoryRepository ?? .shared
         self.embeddingService = embeddingService ?? .shared
         self.toolService = toolService ?? .shared
         self.limits = limits
+        self.signedIn = signedIn
+        self.followedSkills = followedSkills
+    }
+
+    /// Where a thread of `account`'s is: the coven it is stored in, or
+    /// Strix for one in none (and for no thread). Nil where the thread is
+    /// not that account's, where it cannot be read, or where the account
+    /// changes while it is: what cannot be placed is told and reads
+    /// nothing of any place. The coven itself is not read here: the stores
+    /// read and keep what is a coven's only as the account whose coven it
+    /// is, so a coven that is gone, or is not that account's, has nothing.
+    func scope(ofThread threadID: String?, for account: String) async -> ShellScope? {
+        guard signedIn() == account else { return nil }
+        guard let threadID else { return .strix }
+        do {
+            let covenID = try await threadRepository.covenID(ofThread: threadID, for: account)
+            guard signedIn() == account else { return nil }
+            return ShellScope(covenID: covenID)
+        } catch {
+            // The kind of failure only.
+            AppErrorReporter.log(message: "A thread could not be placed (\(type(of: error)))", context: "ContextBuilder.scope")
+            return nil
+        }
+    }
+
+    /// What every agent where the thread is is told ("Every agent here
+    /// knows…"), as a part of the agent's instructions under the cloud
+    /// app's heading; nil where there is none, or it cannot be read.
+    private func covenContext(in scope: ShellScope?, for account: String) async -> String? {
+        guard let scope else { return nil }
+        do {
+            let knows = try await CovenContextRepository.shared.context(ofCoven: scope.covenID, as: account)
+            return knows.isEmpty ? nil : "## Coven Context\n\(knows)"
+        } catch {
+            // The kind of failure only.
+            AppErrorReporter.log(message: "What a scope's agents are told could not be read (\(type(of: error)))", context: "ContextBuilder.covenContext")
+            return nil
+        }
+    }
+
+    /// The skills that are on, as a turn is told them, in no more than
+    /// `room` characters: the account's own, for every agent of theirs;
+    /// nil where none is on, or they cannot be read.
+    private func skillsTold(to account: String, room: Int) async -> String? {
+        do {
+            return try await SkillsTold.block(of: followedSkills(account), room: room)
+        } catch {
+            // The kind of failure only.
+            AppErrorReporter.log(message: "The skills could not be read (\(type(of: error)))", context: "ContextBuilder.skillsTold")
+            return nil
+        }
+    }
+
+    /// The memories of where a thread is that bear on a question, as a
+    /// turn is told them: a heading, then a line for each; none where
+    /// there are none, or the thread could not be placed.
+    private func memoryLines(
+        in scope: ShellScope?, about question: String, for account: String, onDeviceOnly: Bool = false
+    ) async throws -> [String] {
+        guard let scope else { return [] }
+        let memories = try await embeddingService.searchRelevantMemories(
+            query: question,
+            in: MemoryPlace.read(inCoven: scope.covenID),
+            of: account,
+            topK: limits.maxRecentMemories,
+            candidateLimit: limits.maxRecentMemories * 8,
+            onDeviceOnly: onDeviceOnly
+        )
+        guard !memories.isEmpty else { return [] }
+        return ["Relevant memories (for your reasoning; avoid reciting private details verbatim):"]
+            + memories.map { "- [scope=\($0.scope)] \($0.text)" }
+    }
+
+    /// What a turn handed to an agent of the person's own (Hermes, an
+    /// OpenClaw Gateway) is told before the conversation, as the cloud
+    /// app gives such a run its system messages: who answers and how,
+    /// what every agent where the thread is knows, the skills that are
+    /// on, and the memories that bear on the question (matched on this
+    /// device, by their words: the question goes to the agent and nowhere
+    /// else). The agent runs the
+    /// turn itself, with its own tools and loop, so nothing of this app's
+    /// tools or policies is said.
+    /// Nil where there is nothing to say, or another account is signed in
+    /// by the time it has been read.
+    func preface(threadID: String?, question: String, agent: Agent?) async throws -> String? {
+        let account = signedIn()
+        let scope = await scope(ofThread: threadID, for: account)
+        var parts: [String] = []
+        if let knows = await covenContext(in: scope, for: account) {
+            parts.append(knows)
+        }
+        if let skills = await skillsTold(to: account, room: SkillsTold.mostCharacters) {
+            parts.append(skills)
+        }
+        do {
+            // Chosen on this device, by their words: a question on its way
+            // to the person's own agent is not sent to another provider to
+            // be embedded first.
+            let memories = try await memoryLines(in: scope, about: question, for: account, onDeviceOnly: true)
+            if !memories.isEmpty {
+                parts.append(memories.joined(separator: "\n"))
+            }
+        } catch RepositoryError.accountChanged {
+            // Another account signed in while the memory was read: there
+            // is nothing of the first's to tell.
+            return nil
+        }
+        guard signedIn() == account else { return nil }
+        if let agent, agent.account == account {
+            parts.insert(agent.systemPrompt, at: 0)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
     }
 
     /// Builds a basic context sandwich for a chat turn.
@@ -149,17 +334,32 @@ struct ContextBuilder {
     ///     tool-generated context blocks (e.g. "[Web search results]" or
     ///     "[Attachment analysis]") which we treat as system context rather
     ///     than literal user text.
+    ///   - images: The pictures that go with the current user input, for a
+    ///     model that can see them.
     ///   - maxContextTokens: Optional soft limit on prompt tokens for the
     ///     assembled context. When provided, we apply truncation rules that
     ///     preserve system/policies, thread summary, top memories, and the last
     ///     few turns while dropping older context first.
     ///   - toolConfig: Configuration for which tools are enabled and what
     ///     instructions to include. Defaults to basic chat tools.
+    ///   - agent: Who answers the turn. Its instructions are what the model
+    ///     is told first; with none given (an agent run of the app's own),
+    ///     or one of another account, nothing is said of who answers.
+    ///   - turnAccount: The account the turn began as. Its context is read
+    ///     as that account, and only while it is the one signed in; with
+    ///     none given, as whoever is signed in when this is asked.
+    /// - Throws: `RepositoryError.accountChanged` if the turn's account is
+    ///   not the one signed in when this is asked, or another is signed in
+    ///   by the time the context has been read: what was read is given to
+    ///   no turn then.
     func buildContext(
         threadID: String?,
         userMessage: String,
+        images: [LLMImage] = [],
         maxContextTokens: Int? = nil,
-        toolConfig: ToolConfig? = nil
+        toolConfig: ToolConfig? = nil,
+        agent: Agent? = nil,
+        as turnAccount: String? = nil
     ) async throws -> [LLMMessage] {
         let config = toolConfig ?? .default
 
@@ -170,6 +370,14 @@ struct ContextBuilder {
         let toolContext = split.toolContext
 
         var segments = ContextSegments()
+
+        // Whose turn it is, read once: who answers, where the thread is,
+        // what its scope's agents are told and its memory are all read as
+        // the same account. A turn that began as an account is built its
+        // context as that account, and only while it is the one signed in:
+        // not as whoever has signed in since.
+        let account = turnAccount ?? signedIn()
+        guard signedIn() == account else { throw RepositoryError.accountChanged }
 
         // Layer 1: system contract (with tool documentation if tools are enabled)
         let systemPrompt: String = if !config.enabledTools.isEmpty {
@@ -201,6 +409,13 @@ struct ContextBuilder {
         }
         segments.system.append(LLMMessage(role: .system, content: systemPrompt))
 
+        // Where the thread is: what its scope's agents are told, and its
+        // memory, are read for it as that account.
+        let scope = await scope(ofThread: threadID, for: account)
+        if let knows = await covenContext(in: scope, for: account) {
+            segments.system.append(LLMMessage(role: .system, content: knows))
+        }
+
         // Layer 2: runtime info (timezone-aware via ToolService)
         let time = toolService.currentTime(timezone: .current)
         let timeInfo = "Current time: \(time.localISO8601) (timezone: \(time.timezoneIdentifier), UTC: \(time.utcISO8601))"
@@ -211,55 +426,18 @@ struct ContextBuilder {
             "When uncertain, ask clarifying questions. When you propose new memories, present them as suggestions for the user to confirm; do not assume they are persisted."
         segments.system.append(LLMMessage(role: .system, content: policies))
 
-        // Layer 4: memories – embedding-based when possible. For personal
-        // threads we combine user-scoped memories (available to all agents) and
-        // thread-scoped memories tied to this specific thread. This mirrors the
-        // "user" vs "thread" access levels in the design.
-        var allMemories: [LocalMemoryChunk] = []
-
-        if let threadID {
-            // Thread-specific scope convention: "thread:<threadId>".
-            let threadScope = "thread:\(threadID)"
-
-            let userMems = try await embeddingService.searchRelevantMemories(
-                query: question,
-                scope: "user",
-                topK: limits.maxRecentMemories / 2,
-                candidateLimit: limits.maxRecentMemories * 4
-            )
-            let threadMems = try await embeddingService.searchRelevantMemories(
-                query: question,
-                scope: threadScope,
-                topK: limits.maxRecentMemories,
-                candidateLimit: limits.maxRecentMemories * 4
-            )
-
-            // Combine with thread memories first, deduping by id.
-            var seen = Set<String>()
-            for m in threadMems + userMems {
-                if !seen.contains(m.id) {
-                    seen.insert(m.id)
-                    allMemories.append(m)
-                    if allMemories.count >= limits.maxRecentMemories { break }
-                }
-            }
-        } else {
-            // No thread context: just use user-scoped memories.
-            allMemories = try await embeddingService.searchRelevantMemories(
-                query: question,
-                scope: "user",
-                topK: limits.maxRecentMemories,
-                candidateLimit: limits.maxRecentMemories * 8
-            )
+        // The skills the person turned on, after the rest of what the
+        // system says, as the cloud app puts them. They take a part of the
+        // prompt only: the rest is the conversation's.
+        if let skills = await skillsTold(to: account, room: SkillsTold.room(promptTokens: maxContextTokens)) {
+            segments.system.append(LLMMessage(role: .system, content: skills))
         }
 
-        if !allMemories.isEmpty {
-            let header = "Relevant memories (for your reasoning; avoid reciting private details verbatim):"
-            segments.memories.append(LLMMessage(role: .system, content: header))
-            for memory in allMemories {
-                let line = "- [scope=\(memory.scope)] \(memory.text)"
-                segments.memories.append(LLMMessage(role: .system, content: line))
-            }
+        // Layer 4: memories – embedding-based when possible. A thread's
+        // turns read the memory of where the thread is: its coven's pages,
+        // or in no coven the person's own memory and Strix's pages.
+        segments.memories = try await memoryLines(in: scope, about: question, for: account).map {
+            LLMMessage(role: .system, content: $0)
         }
 
         // Layer 5: thread summary – if we have a stored summary, include it
@@ -307,12 +485,24 @@ struct ContextBuilder {
         }
 
         // Layer 7: current user message (human-authored question only)
-        segments.user.append(LLMMessage(role: .user, content: question))
+        segments.user.append(LLMMessage(role: .user, content: question, images: images))
 
         // Layer 8: response guidance – kept deliberately brief and
         // conversational so models do not echo it verbatim.
         let checklist = "Reply concisely. Ground your answer in the provided memories and conversation context—do not invent facts. If you used tools (web search, files), mention it naturally. Ask clarifying questions when details are ambiguous."
         segments.checklist.append(LLMMessage(role: .system, content: checklist))
+
+        // Everything that was waited for is in. What was read is the
+        // account's that asked: none of it is given to a turn once another
+        // is signed in.
+        guard signedIn() == account else { throw RepositoryError.accountChanged }
+
+        // Who answers, and how the person asked it to: before anything
+        // else the model is told. Not an agent of an account that is not
+        // the one this context was read as.
+        if let agent, agent.account == account {
+            segments.system.insert(LLMMessage(role: .system, content: agent.systemPrompt), at: 0)
+        }
 
         // If we have a token budget, apply truncation rules before returning.
         if let maxContextTokens {
@@ -328,7 +518,7 @@ private extension ContextBuilder {
     /// Logical segments of the context sandwich so we can apply truncation
     /// decisions (e.g. "keep last 6 turns") without guessing from raw indices.
     struct ContextSegments {
-        var system: [LLMMessage] = [] // Layers 1–3
+        var system: [LLMMessage] = [] // Layers 1–3, then the skills that are on
         var memories: [LLMMessage] = [] // Layer 4 (header + lines)
         var summary: [LLMMessage] = [] // Layer 5
         var recents: [LLMMessage] = [] // Layer 6
@@ -367,15 +557,18 @@ private extension ContextBuilder {
 
     /// Approximate token count for a list of messages. We use a very cheap
     /// heuristic (characters / 4) that is monotonic with true token count and
-    /// sufficient for truncation decisions.
+    /// sufficient for truncation decisions. A picture counts as a flat
+    /// number of tokens, as the cloud app counts it.
     static func approximateTokenCount(for messages: [LLMMessage]) -> Int {
         var total = 0
         for message in messages {
             let charCount = message.content.count
-            total += max(1, charCount / 4)
+            total += max(1, charCount / 4) + message.images.count * tokensPerImage
         }
         return total
     }
+
+    static let tokensPerImage = 560
 
     /// Assemble segments back into the final ordered message list.
     static func assemble(segments: ContextSegments) -> [LLMMessage] {

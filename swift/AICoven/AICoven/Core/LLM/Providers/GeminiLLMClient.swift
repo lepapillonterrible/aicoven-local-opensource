@@ -2,8 +2,10 @@ import Foundation
 
 /// Google Gemini implementation of LLMClient.
 ///
-/// Uses the public Generative Language API with API key passed as a
-/// query parameter. Supports native function calling when tools are provided.
+/// Uses the public Generative Language API, with the API key in the
+/// `x-goog-api-key` header (never in the address, which is logged and
+/// cached more readily than a header). Supports native function calling
+/// when tools are provided.
 /// Marked @unchecked Sendable because all stored properties are immutable
 /// after init and URLSession is thread-safe.
 final class GeminiLLMClient: LLMClient, @unchecked Sendable {
@@ -34,7 +36,23 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
 
     func completeChat(messages: [LLMMessage], model: String, options: ChatOptions) async throws -> LLMChatResponse {
         // ── Request types ──────────────────────────────────────────────────
-        struct ReqPart: Encodable { let text: String }
+        // A part of a message: its text, or a picture that goes with it.
+        struct InlineData: Encodable {
+            let mimeType: String
+            let data: String
+        }
+        struct ReqPart: Encodable {
+            var text: String?
+            var inlineData: InlineData?
+
+            init(text: String) {
+                self.text = text
+            }
+
+            init(image: LLMImage) {
+                inlineData = InlineData(mimeType: image.mimeType, data: image.data.base64EncodedString())
+            }
+        }
         struct ReqContent: Encodable { let role: String
             let parts: [ReqPart]
         }
@@ -102,29 +120,45 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
         }
 
         // ── Build request ──────────────────────────────────────────────────
-        let path = "\(model):generateContent"
-        var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "key", value: apiKey)]
-        let url = components.url!
+        guard let resource = Self.resourceName(of: model) else {
+            throw NSError(
+                domain: "GeminiLLMClient",
+                code: -3,
+                userInfo: [NSLocalizedDescriptionKey: "That is not a Gemini model's name. Choose another Gemini model."]
+            )
+        }
+        let url = baseURL.appendingPathComponent("\(resource):generateContent")
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
 
         let contents = messages.map { msg in
             ReqContent(
                 role: msg.role == .user ? "user" : "model",
-                parts: [ReqPart(text: msg.content)]
+                // A message that is only pictures has no text part.
+                parts: (msg.content.isEmpty && !msg.images.isEmpty ? [] : [ReqPart(text: msg.content)])
+                    + msg.images.map(ReqPart.init(image:))
             )
         }
 
         // Convert LLMToolDefinition → Gemini native format (functionDeclarations).
-        // Gemini doesn't allow dots in function names, so we convert
-        // "file.write" → "file_write" for outbound, and reverse on decode.
+        // A function's name is sent without its dots ("file.write" as
+        // "file_write"), and a call that comes back is given the name it
+        // was declared under. A name's own underscores are kept that way:
+        // "google_docs.update" comes back as itself, not "google.docs.update".
+        var wireToOriginalName: [String: String] = [:]
         let toolsBlock: [ToolsBlock]? = {
             guard let tools = options.tools, !tools.isEmpty else { return nil }
             let declarations = tools.map { tool in
-                let geminiName = tool.name.replacingOccurrences(of: ".", with: "_")
+                // Two names that differ only by a dot and an underscore
+                // get distinct names on the wire.
+                var geminiName = tool.name.replacingOccurrences(of: ".", with: "_")
+                while wireToOriginalName[geminiName] != nil {
+                    geminiName += "_"
+                }
+                wireToOriginalName[geminiName] = tool.name
                 var props: [String: ParamProperty] = [:]
                 var requiredParams: [String] = []
                 for param in tool.parameters {
@@ -182,7 +216,7 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
             decoded = try JSONDecoder().decode(ResponseBody.self, from: data)
         } catch {
             #if DEBUG
-            AppErrorReporter.log(message: "Gemini decode failed: \(error.localizedDescription); response body omitted", context: "GeminiLLMClient.completeChat")
+            AppErrorReporter.log(message: "Gemini decode failed (\(type(of: error))); response body omitted", context: "GeminiLLMClient.completeChat")
             #endif
             throw error
         }
@@ -215,12 +249,14 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
                 textPieces.append(t)
             }
             if let fc = part.functionCall {
-                // Convert underscores back to dots for our tool naming convention
-                let toolName = fc.name.replacingOccurrences(of: "_", with: ".")
+                // The name the function was declared under. (A name that
+                // was not declared is read the old way, dots for
+                // underscores; the tool loop refuses what it does not know.)
+                let toolName = wireToOriginalName[fc.name] ?? fc.name.replacingOccurrences(of: "_", with: ".")
                 let args = fc.args ?? [:]
                 #if DEBUG
                 AppErrorReporter.log(
-                    message: "Native Gemini function call: \(fc.name) → \(toolName)",
+                    message: "Native Gemini function call",
                     context: "GeminiLLMClient.completeChat"
                 )
                 #endif
@@ -257,6 +293,21 @@ final class GeminiLLMClient: LLMClient, @unchecked Sendable {
             usage: usage,
             toolCalls: toolCalls.isEmpty ? nil : toolCalls
         )
+    }
+
+    /// A model's resource name as the API takes it, "models/<id>": a model
+    /// picked from the list is stored with the prefix, one typed or named
+    /// in code may be stored without it, and the API answers 404 to a
+    /// bare id. Nil for what does not read as a model's id (letters,
+    /// digits, `-`, `.` and `_`), so that nothing else reaches the path.
+    nonisolated static func resourceName(of model: String) -> String? {
+        let id = model.hasPrefix("models/") ? String(model.dropFirst("models/".count)) : model
+        // Scalars, not characters: a `Character` compares canonically, so
+        // the Kelvin sign would pass as "K".
+        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._".unicodeScalars)
+        guard id.unicodeScalars.allSatisfy(allowed.contains),
+              id.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) else { return nil }
+        return "models/\(id)"
     }
 
     func embed(texts: [String], model: String) async throws -> [[Float]] {

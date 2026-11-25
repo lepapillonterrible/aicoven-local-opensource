@@ -92,35 +92,22 @@ final class ErrorReportingTests: XCTestCase {
         )
     }
 
-    func testThreadService_logsDecodeErrorOnCorruptJSON() throws {
+    func testLegacyChatHistory_logsAndSetsAsideAFileItCannotRead() throws {
         let reporter = CapturingErrorReporter()
         AppErrorReporter.use(reporter)
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("personal_threads_\(UUID().uuidString).json")
+        try Data("not-json".utf8).write(to: file)
 
-        // Arrange: write invalid JSON to the ThreadService persistence URL so
-        // that loadThreadsFromDisk() hits its decode failure path.
-        let fm = FileManager.default
-        let baseDir: URL
-        #if os(iOS) || os(tvOS) || os(watchOS)
-        baseDir = fm.urls(for: .documentDirectory, in: .userDomainMask).first ?? fm.temporaryDirectory
-        #else
-        baseDir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fm.temporaryDirectory
-        #endif
-        let appDir = baseDir.appendingPathComponent("AICoven", isDirectory: true)
-        try? fm.createDirectory(at: appDir, withIntermediateDirectories: true)
-        let persistenceURL = appDir.appendingPathComponent("personal_threads.json", isDirectory: false)
+        let threads = LegacyChatHistoryImport.read([AICoven.Thread].self, at: file)
 
-        try "not-json".data(using: .utf8)?.write(to: persistenceURL)
-
-        // Act: load threads directly via the helper so we exercise the decode
-        // error path in isolation without depending on ThreadService.shared's
-        // singleton lifecycle.
-        let threads = ThreadService.loadThreadsFromDisk(persistenceURL: persistenceURL)
-        XCTAssertTrue(threads.isEmpty, "Expected no threads to be returned for corrupt JSON file")
-
-        XCTAssertTrue(
-            reporter.errors.contains { $0.context == "ThreadService.loadThreadsFromDisk" },
-            "Expected ThreadService.loadThreadsFromDisk to be logged when personal_threads.json is corrupt"
-        )
+        XCTAssertNil(threads)
+        XCTAssertTrue(reporter.errors.contains { $0.context == "LegacyChatHistoryImport.read" })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        let setAside = try FileManager.default
+            .contentsOfDirectory(at: file.deletingLastPathComponent(), includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix(file.lastPathComponent + ".unreadable-") }
+        XCTAssertEqual(setAside.count, 1)
+        setAside.forEach { try? FileManager.default.removeItem(at: $0) }
     }
 
     func testDatabaseManager_logsErrorOnFailedMigration() {
@@ -160,6 +147,35 @@ final class ErrorReportingTests: XCTestCase {
         XCTAssertFalse(redacted.contains("sample-secret-value"))
         XCTAssertFalse(redacted.contains("firebase-user-1234567890abcdef"))
         XCTAssertTrue(redacted.contains("<redacted>"))
+    }
+
+    func testLogRedactorHidesKeysWrittenWithAHyphen() {
+        // Made-up keys in each provider's shape; none is real.
+        let keys = [
+            "sk-ant-api03-" + String(repeating: "a", count: 24),
+            "sk-proj-" + String(repeating: "b", count: 24),
+            "sk-or-v1-" + String(repeating: "c", count: 24),
+            "sk-" + String(repeating: "d", count: 32),
+            "xai-" + String(repeating: "e", count: 24),
+            "pk-" + String(repeating: "g", count: 16),
+            "rk-" + String(repeating: "h", count: 16),
+            "github_pat_" + String(repeating: "f", count: 24)
+        ]
+        for key in keys {
+            let redacted = AppLogRedactor.redact("The provider refused \(key) just now")
+            XCTAssertFalse(redacted.contains(key), "A key starting \(key.prefix(7)) is hidden")
+            XCTAssertTrue(redacted.hasPrefix("The provider refused <redacted>"))
+        }
+        for words in ["a task-list of five", "the risk-assessment-framework-quarterly review", "a disk-image-of-the-build-machine"] {
+            XCTAssertEqual(AppLogRedactor.redact(words), words, "Ordinary words with a hyphen stay")
+        }
+    }
+
+    func testAnalyticsAreToldAToolsKind_notANameAModelOrAServerWrote() {
+        XCTAssertEqual(ChatService.analyticsToolKind("github.readFile"), "GitHub")
+        XCTAssertEqual(ChatService.analyticsToolKind("web_search"), "Web Search")
+        XCTAssertEqual(ChatService.analyticsToolKind("The_persons_private_message"), "Other")
+        XCTAssertEqual(ChatService.analyticsToolKind("acme_payroll.lookup_employee"), "Other")
     }
 
     func testAppErrorReporterPassesRedactedMessagesToReporter() {

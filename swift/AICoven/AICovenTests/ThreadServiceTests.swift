@@ -1,10 +1,22 @@
 import XCTest
 @testable import AICoven
 
-/// Tests for the local-only ThreadService that manages personal threads
-/// persisted to disk as JSON.
+/// Tests for the local-only ThreadService, which keeps threads in the
+/// encrypted local database.
 @MainActor
 final class ThreadServiceTests: XCTestCase {
+    override func setUp() async throws {
+        try await super.setUp()
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
+        DatabaseManager.shared.configureIfNeeded()
+        await ThreadService.shared.reloadForCurrentUser()
+    }
+
+    override func tearDown() async throws {
+        await ThreadService.shared.reloadForCurrentUser()
+        await DataEncryptionService.shared.lock()
+        try await super.tearDown()
+    }
 
     func testCreateThreadAddsPersonalThreadAndCanBeLoaded() async throws {
         let service = ThreadService.shared
@@ -24,6 +36,29 @@ final class ThreadServiceTests: XCTestCase {
         // Sanity check that we actually added something new relative to the
         // snapshot at the start of the test.
         XCTAssertFalse(existingIDs.contains(thread.id))
+    }
+
+    func testAThreadChangedIsToldToWhatListsThreads_andAnArchivedOneIsNotAmongThoseNotArchived() async throws {
+        let service = ThreadService.shared
+        let created = try await service.createThread(title: "Told " + UUID().uuidString, covenId: nil, agentId: nil)
+        addTeardownBlock {
+            await DataEncryptionService.shared.unlockForTestingEphemeral()
+            try? await ThreadService.shared.deleteThread(threadId: created.id)
+        }
+        let before = try await service.threadsNotArchived()
+        XCTAssertTrue(before.contains { $0.id == created.id }, "Across Strix and every coven")
+
+        let archived = expectation(forNotification: ThreadService.threadChanged, object: nil)
+        _ = try await service.updateThread(threadId: created.id, isArchived: true)
+        await fulfillment(of: [archived], timeout: 10)
+        let afterArchiving = try await service.threadsNotArchived()
+        XCTAssertFalse(afterArchiving.contains { $0.id == created.id })
+
+        let renamed = expectation(forNotification: ThreadService.threadChanged, object: nil)
+        _ = try await service.updateThread(threadId: created.id, title: "Renamed", isArchived: false)
+        await fulfillment(of: [renamed], timeout: 10)
+        let afterRenaming = try await service.threadsNotArchived()
+        XCTAssertEqual(afterRenaming.first { $0.id == created.id }?.title, "Renamed")
     }
 
     func testUpdateAndDeleteThreadAffectPersonalStore() async throws {

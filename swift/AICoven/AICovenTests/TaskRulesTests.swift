@@ -1,0 +1,336 @@
+@testable import AICoven
+import XCTest
+
+/// What the Tasks list decides by itself: when a pin ends, how one stands,
+/// the order inside each part, the parts, and the words for a due day.
+final class TaskRulesTests: XCTestCase {
+    private let utc: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        calendar.firstWeekday = 2
+        return calendar
+    }()
+
+    private let british = Locale(identifier: "en_GB")
+
+    /// Wednesday 13 January 2027, 10:00 UTC.
+    private var wednesday: Date {
+        date(2027, 1, 13, 10)
+    }
+
+    private func date(_ year: Int, _ month: Int, _ day: Int, _ hour: Int = 0, in calendar: Calendar? = nil) -> Date {
+        (calendar ?? utc).date(from: DateComponents(year: year, month: month, day: day, hour: hour)) ?? .distantPast
+    }
+
+    private func task(
+        _ id: String, status: TaskStatus = .open, due: String? = nil, time: String? = nil, pin: TaskPin? = nil, made: TimeInterval = 0,
+        changed: TimeInterval = 0, stage: TaskStage = .backlog
+    ) -> TaskItem {
+        TaskItem(
+            id: id, covenID: nil, title: id, status: status, stage: stage,
+            due: due.flatMap(TaskDueDate.init).flatMap { TaskDue(date: $0, time: time) }, pin: pin,
+            createdAt: Date(timeIntervalSince1970: made), updatedAt: Date(timeIntervalSince1970: changed)
+        )
+    }
+
+    // MARK: - Pins
+
+    func testAPinEndsWithThePersonsDay_orTheirWeek() throws {
+        XCTAssertEqual(TaskRules.pinEnd(for: .today, now: wednesday, calendar: utc), date(2027, 1, 14))
+        XCTAssertEqual(TaskRules.pinEnd(for: .week, now: wednesday, calendar: utc), date(2027, 1, 18), "The week starts on Monday here")
+
+        // A week that starts on Sunday ends a day sooner; on the week's first day it is the whole week.
+        var american = utc
+        american.firstWeekday = 1
+        XCTAssertEqual(TaskRules.pinEnd(for: .week, now: wednesday, calendar: american), date(2027, 1, 17))
+        XCTAssertEqual(TaskRules.pinEnd(for: .week, now: date(2027, 1, 11, 9), calendar: utc), date(2027, 1, 18))
+        XCTAssertEqual(TaskRules.pinEnd(for: .week, now: date(2027, 1, 17, 23), calendar: utc), date(2027, 1, 18), "Its last day")
+
+        // The day the clocks go forward is an hour short: the pin still ends at midnight.
+        var berlin = Calendar(identifier: .gregorian)
+        berlin.timeZone = try XCTUnwrap(TimeZone(identifier: "Europe/Berlin"))
+        let shortDay = date(2027, 3, 28, 1, in: berlin)
+        let end = TaskRules.pinEnd(for: .today, now: shortDay, calendar: berlin)
+        XCTAssertEqual(end, date(2027, 3, 29, 0, in: berlin))
+        XCTAssertEqual(end.timeIntervalSince(berlin.startOfDay(for: shortDay)), 23 * 3600)
+
+        // Where the clocks go forward at midnight, that day starts at one o'clock:
+        // the pin still ends when the next day, or week, starts, at midnight.
+        var santiago = Calendar(identifier: .gregorian)
+        santiago.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Santiago"))
+        santiago.firstWeekday = 2
+        let lateStart = date(2027, 9, 5, 12, in: santiago)
+        XCTAssertEqual(santiago.component(.hour, from: santiago.startOfDay(for: lateStart)), 1, "The day the test is about")
+        XCTAssertEqual(TaskRules.pinEnd(for: .today, now: lateStart, calendar: santiago), santiago.startOfDay(for: date(2027, 9, 6, 12, in: santiago)))
+        XCTAssertEqual(santiago.component(.hour, from: TaskRules.pinEnd(for: .today, now: lateStart, calendar: santiago)), 0)
+        XCTAssertEqual(TaskRules.pinEnd(for: .week, now: lateStart, calendar: santiago), santiago.startOfDay(for: date(2027, 9, 6, 12, in: santiago)), "Sunday, the week's last day")
+        // And a week that ends on such a day ends at its own start, one o'clock.
+        let weekBefore = date(2027, 8, 31, 12, in: santiago)
+        var sundayFirst = santiago
+        sundayFirst.firstWeekday = 1
+        XCTAssertEqual(TaskRules.pinEnd(for: .week, now: weekBefore, calendar: sundayFirst), sundayFirst.startOfDay(for: lateStart))
+    }
+
+    func testHowAPinStands() {
+        let later = wednesday.addingTimeInterval(3600), earlier = wednesday.addingTimeInterval(-3600)
+        XCTAssertEqual(TaskRules.pinState(of: task("a"), now: wednesday), .none)
+        XCTAssertEqual(TaskRules.pinState(of: task("a", pin: TaskPin(period: .today, expiresAt: later)), now: wednesday), .today)
+        XCTAssertEqual(TaskRules.pinState(of: task("a", pin: TaskPin(period: .week, expiresAt: later)), now: wednesday), .week)
+        XCTAssertEqual(TaskRules.pinState(of: task("a", pin: TaskPin(period: .today, expiresAt: earlier)), now: wednesday), .review, "Still on today?")
+        XCTAssertEqual(TaskRules.pinState(of: task("a", pin: TaskPin(period: .week, expiresAt: earlier)), now: wednesday), .none, "A week that is over is no pin")
+        XCTAssertEqual(TaskRules.pinState(of: task("a", pin: TaskPin(period: .today, expiresAt: wednesday)), now: wednesday), .review, "At its end it has run out")
+        XCTAssertEqual(
+            TaskRules.pinState(of: task("a", status: .done, pin: TaskPin(period: .today, expiresAt: later)), now: wednesday), .none,
+            "A finished task has none"
+        )
+        XCTAssertEqual(TaskPinState.today.activePeriod, .today)
+        XCTAssertEqual(TaskPinState.week.activePeriod, .week)
+        XCTAssertNil(TaskPinState.review.activePeriod)
+        XCTAssertNil(TaskPinState.none.activePeriod)
+        XCTAssertEqual(TaskPinPeriod.today.title, "Today")
+        XCTAssertEqual(TaskPinPeriod.week.title, "This week")
+    }
+
+    func testWhatTheTasksMenuOffersATask() {
+        XCTAssertEqual(TaskCommand.offered(for: .none, isFinished: false), [.pinToday, .pinWeek, .setDueDate])
+        XCTAssertEqual(TaskCommand.offered(for: .today, isFinished: false), [.pinWeek, .unpin, .setDueDate])
+        XCTAssertEqual(TaskCommand.offered(for: .week, isFinished: false), [.pinToday, .unpin, .setDueDate])
+        XCTAssertEqual(TaskCommand.offered(for: .review, isFinished: false), [.keepToday, .notToday, .setDueDate])
+        XCTAssertEqual(TaskCommand.offered(for: .today, isFinished: true), [], "Nothing for a finished task")
+        // A row's menu, its swipe and its details offer the pin's own commands, from the same table.
+        XCTAssertEqual(TaskCommand.pins(for: .none, isFinished: false), [.pinToday, .pinWeek])
+        XCTAssertEqual(TaskCommand.pins(for: .review, isFinished: false), [.keepToday, .notToday])
+        XCTAssertEqual(TaskCommand.pins(for: .week, isFinished: true), [])
+        XCTAssertEqual(
+            [TaskCommand.pinToday, .pinWeek, .unpin, .keepToday, .notToday, .setDueDate].map(\.title),
+            ["Pin for today", "Pin for this week", "Unpin", "Keep for today", "Not today", "Set Due Date…"]
+        )
+    }
+
+    // MARK: - A task handed to an agent
+
+    func testWhereATaskHandedToAnAgentStands() {
+        func handed(_ outcome: TurnOutcome?, hasRun: Bool = false, status: TaskStatus = .open) -> TaskItem {
+            var task = task("a", status: status)
+            task.threadID = "thread"
+            task.handoff = TaskHandoff(turnID: "turn", outcome: outcome, hasRun: hasRun)
+            return task
+        }
+        let running = handed(.running)
+        // The turn the app runs in its thread now is the one it was handed over in: the task follows it.
+        XCTAssertEqual(TaskRules.handoff(of: running, live: TaskLiveTurn(turnID: "turn")), .working)
+        XCTAssertEqual(TaskRules.handoff(of: running, live: TaskLiveTurn(turnID: "turn", needsOK: true)), .needsOK)
+        XCTAssertEqual(TaskRules.handoff(of: running, live: TaskLiveTurn(turnID: "turn", needsOK: true, isStopping: true)), .working, "A Stop outranks the approval")
+        XCTAssertEqual(TaskRules.handoff(of: handed(.completed), live: TaskLiveTurn(turnID: "turn")), .working, "Running here, whatever is stored yet")
+        // Another turn runs there (the person went on talking): the hand-off stands as it is stored.
+        XCTAssertEqual(TaskRules.handoff(of: handed(.completed), live: TaskLiveTurn(turnID: "later", needsOK: true)), .finished)
+        XCTAssertEqual(TaskRules.handoff(of: handed(.completed), live: nil), .finished)
+        XCTAssertEqual(TaskRules.handoff(of: handed(.running, hasRun: true), live: nil), .paused, "An agent's own run goes on")
+        XCTAssertNil(TaskRules.handoff(of: running, live: nil), "Any other run was lost when the app closed")
+        for ended in [TurnOutcome.failed, .cancelled, .interrupted] {
+            XCTAssertNil(TaskRules.handoff(of: handed(ended), live: nil), "\(ended): the task is the person's again")
+        }
+        XCTAssertNil(TaskRules.handoff(of: handed(nil), live: nil), "A turn that is gone")
+        XCTAssertNil(TaskRules.handoff(of: handed(.completed, status: .done), live: nil), "A finished task has none")
+        XCTAssertNil(TaskRules.handoff(of: task("a"), live: TaskLiveTurn(turnID: "turn")), "Not handed over")
+
+        XCTAssertEqual(TaskHandoffState.working.words(agent: "Scout"), "Scout is on it")
+        XCTAssertEqual(TaskHandoffState.working.words(agent: nil), "An agent is on it")
+        XCTAssertEqual(TaskHandoffState.paused.words(agent: "Scout"), "Scout is paused")
+        XCTAssertEqual(TaskHandoffState.paused.words(agent: nil), "Paused")
+        XCTAssertEqual(TaskHandoffState.needsOK.words(agent: "Scout"), "Needs your OK")
+        XCTAssertEqual(TaskHandoffState.finished.words(agent: "Scout"), "Scout finished")
+        XCTAssertEqual(TaskHandoffState.finished.words(agent: nil), "An agent finished")
+        XCTAssertEqual([TaskHandoffState.working, .paused, .needsOK, .finished].map(\.waitsForThePerson), [false, false, true, true])
+    }
+
+    func testTheListsPartsForTasksHandedToAgents_andTheLineUnderThem() {
+        let later = wednesday.addingTimeInterval(3600)
+        let states: [String: TaskHandoffState] = ["working": .working, "paused": .paused, "asks": .needsOK, "finished": .finished, "pinned": .working]
+        let open = [
+            task("plain"), task("working"), task("paused"), task("asks"), task("finished"),
+            task("pinned", pin: TaskPin(period: .today, expiresAt: later)),
+        ]
+        let parts = TaskRules.parts(open: open, finished: [], sort: .recentlyUpdated, now: wednesday) { states[$0.id] }
+        XCTAssertEqual(parts.needsYou.map(\.id), ["asks", "finished"])
+        XCTAssertEqual(parts.agentsOnIt.map(\.id), ["working", "paused"])
+        XCTAssertEqual(parts.open.map(\.id), ["plain"])
+        XCTAssertEqual(parts.today.map(\.id), ["pinned"], "What is pinned is under its pin, whoever is on it")
+
+        func line(_ task: TaskItem, _ handoff: TaskHandoffState?, agent: String? = "Scout") -> [TaskRules.Context] {
+            TaskRules.context(of: task, now: wednesday, handoff: handoff, agent: agent, calendar: utc, locale: british)
+        }
+        XCTAssertEqual(line(task("a"), .working), [.agent("Scout is on it")])
+        XCTAssertEqual(line(task("a", due: "2027-01-14"), .finished), [.plain("Due tomorrow"), .plain("Scout finished")])
+        XCTAssertEqual(line(task("a"), .needsOK), [.plain("Needs your OK")])
+        var led = task("a")
+        led.leadAgentID = "scout"
+        XCTAssertEqual(line(led, nil), [.plain("Led by Scout")], "No run on it: who leads it")
+        XCTAssertEqual(line(led, nil, agent: nil), [], "An agent whose name is not known is not named")
+        XCTAssertEqual(line(led, .paused), [.plain("Scout is paused")], "A run on it says more than who leads")
+        var done = task("a", status: .done)
+        done.leadAgentID = "scout"
+        XCTAssertEqual(line(done, nil), [], "A finished task is led by nobody")
+        XCTAssertEqual(TaskRules.request(for: task("Call the bank")), "Please do this for me: Call the bank")
+        XCTAssertEqual(TaskRules.talkThrough(task("Call the bank")), "I'd like to talk this task through: Call the bank")
+    }
+
+    func testWhoATaskCanBeHandedTo() {
+        let agents = ["scout", "quill", "ember"]
+        func choices(lead: String?, last: String?) -> TaskRules.LeadChoices<String> {
+            TaskRules.leadChoices(among: agents, id: { $0 }, leadAgentID: lead, lastUsedID: last)
+        }
+        XCTAssertEqual(choices(lead: nil, last: nil), TaskRules.LeadChoices(marked: nil, reason: nil, others: agents))
+        XCTAssertEqual(choices(lead: "quill", last: "ember"), TaskRules.LeadChoices(marked: "quill", reason: .lead, others: ["scout", "ember"]), "Its lead agent first")
+        XCTAssertEqual(choices(lead: nil, last: "ember"), TaskRules.LeadChoices(marked: "ember", reason: .lastUsed, others: ["scout", "quill"]))
+        XCTAssertEqual(choices(lead: "gone", last: "ember").marked, "ember", "A lead agent that is gone gives way")
+        XCTAssertEqual(choices(lead: "gone", last: "gone-too"), TaskRules.LeadChoices(marked: nil, reason: nil, others: agents))
+        XCTAssertEqual(TaskRules.leadChoices(among: [String](), id: { $0 }, leadAgentID: "a", lastUsedID: nil).others, [])
+    }
+
+    // MARK: - Order
+
+    func testTheOrders() {
+        let tasks = [
+            task("no-day-old", made: 1, changed: 5),
+            task("late", due: "2027-02-01", made: 2, changed: 1),
+            task("soon", due: "2027-01-14", made: 3, changed: 2),
+            task("no-day-new", made: 4, changed: 9),
+            task("soon-too", due: "2027-01-14", made: 5, changed: 3),
+        ]
+        func order(_ sort: TaskSort) -> [String] {
+            TaskRules.ordered(tasks, by: sort, now: wednesday).map(\.id)
+        }
+        XCTAssertEqual(order(.dueDate), ["soon-too", "soon", "late", "no-day-new", "no-day-old"], "The soonest due; the same day, and those with none, by when they were changed")
+        XCTAssertEqual(order(.recentlyUpdated), ["no-day-new", "no-day-old", "soon-too", "soon", "late"])
+        XCTAssertEqual(order(.newest), ["soon-too", "no-day-new", "soon", "late", "no-day-old"])
+        XCTAssertEqual(order(.oldest), ["no-day-old", "late", "soon", "no-day-new", "soon-too"])
+
+        // What cannot be told apart stays in the order it came in.
+        let same = [task("first"), task("second"), task("third")]
+        for sort in TaskSort.allCases {
+            XCTAssertEqual(TaskRules.ordered(same, by: sort, now: wednesday).map(\.id), ["first", "second", "third"], sort.title)
+        }
+
+        XCTAssertEqual(TaskSort.standard, .dueDate)
+        XCTAssertEqual(TaskSort.resolve("newest"), .newest)
+        XCTAssertEqual(TaskSort.resolve("something-else"), .dueDate)
+        XCTAssertEqual(TaskSort.allCases.map(\.title), ["Recently updated", "Due date", "Newest", "Oldest"])
+        XCTAssertEqual(TaskSort.allCases.map(\.rawValue), ["recently_updated", "due_date", "newest", "oldest"], "Kept on the device: they stay")
+    }
+
+    func testTheBoardsColumns() {
+        XCTAssertEqual(TaskBoardColumn.all.map(\.title), ["To do", "In progress", "Review", "Done"], "The cloud app's words")
+        XCTAssertEqual(TaskBoardColumn.all.map(\.id), ["backlog", "in_progress", "review", "done"])
+
+        // An open task is in its stage's column; a finished one in Done, whatever stage it was at.
+        XCTAssertEqual(TaskBoardColumn.of(task("a")), .stage(.backlog))
+        XCTAssertEqual(TaskBoardColumn.of(task("b", stage: .review)), .stage(.review))
+        XCTAssertEqual(TaskBoardColumn.of(task("c", status: .done, stage: .inProgress)), .done)
+        XCTAssertEqual(TaskBoardColumn.of(task("d", status: .closed)), .done)
+
+        // A column's tasks are ordered as the List orders a part: what is pinned first, then by the sort chosen.
+        let pinned = TaskPin(period: .today, expiresAt: wednesday.addingTimeInterval(3600))
+        let open = [
+            task("old", changed: 10, stage: .inProgress), task("new", changed: 30, stage: .inProgress),
+            task("pinned", pin: pinned, changed: 5, stage: .inProgress), task("todo", changed: 20), task("checked", changed: 40, stage: .review),
+        ]
+        let finished = [task("done", status: .done, changed: 50, stage: .inProgress), task("closed", status: .closed, changed: 60)]
+        func ids(_ column: TaskBoardColumn, _ sort: TaskSort = .recentlyUpdated) -> [String] {
+            TaskRules.tasks(in: column, open: open, finished: finished, sort: sort, now: wednesday).map(\.id)
+        }
+        XCTAssertEqual(ids(.stage(.inProgress)), ["pinned", "new", "old"])
+        XCTAssertEqual(ids(.stage(.backlog)), ["todo"])
+        XCTAssertEqual(ids(.stage(.review)), ["checked"])
+        XCTAssertEqual(ids(.done), ["closed", "done"], "The finished ones, of whatever stage")
+        XCTAssertEqual(ids(.done, .oldest), ["done", "closed"])
+        XCTAssertEqual(TaskBoardColumn.all.flatMap { ids($0) }.sorted(), (open + finished).map(\.id).sorted(), "Every task is in one column")
+
+        // A task is moved to the other columns; not to Done while an agent is on it, as the List
+        // gives no way to mark such a task done over the agent's turn.
+        let inProgress = task("moving", stage: .inProgress)
+        XCTAssertEqual(TaskRules.moveTargets(for: inProgress, handoff: nil), [.stage(.backlog), .stage(.review), .done])
+        XCTAssertEqual(TaskRules.moveTargets(for: inProgress, handoff: .finished), [.stage(.backlog), .stage(.review), .done])
+        for onIt in [TaskHandoffState.working, .paused, .needsOK] {
+            XCTAssertEqual(TaskRules.moveTargets(for: inProgress, handoff: onIt), [.stage(.backlog), .stage(.review)], "\(onIt)")
+            XCTAssertFalse(TaskRules.canBeMarkedDone(onIt))
+        }
+        XCTAssertEqual(TaskRules.moveTargets(for: task("over", status: .done), handoff: nil), [.stage(.backlog), .stage(.inProgress), .stage(.review)])
+    }
+
+    func testTheListsParts() {
+        let later = wednesday.addingTimeInterval(3600), earlier = wednesday.addingTimeInterval(-3600)
+        let open = [
+            task("plain", changed: 1),
+            task("today", pin: TaskPin(period: .today, expiresAt: later)),
+            task("week", pin: TaskPin(period: .week, expiresAt: later)),
+            task("yesterdays", pin: TaskPin(period: .today, expiresAt: earlier), changed: 2),
+            task("last-weeks", pin: TaskPin(period: .week, expiresAt: earlier), changed: 3),
+            task("today-due", due: "2027-01-13", pin: TaskPin(period: .today, expiresAt: later)),
+        ]
+        let finished = [task("done", status: .done, changed: 1), task("closed", status: .closed, changed: 2)]
+        let parts = TaskRules.parts(open: open, finished: finished, sort: .recentlyUpdated, now: wednesday)
+        XCTAssertEqual(parts.review.map(\.id), ["yesterdays"])
+        XCTAssertEqual(parts.today.map(\.id), ["today", "today-due"])
+        XCTAssertEqual(parts.week.map(\.id), ["week"])
+        XCTAssertEqual(parts.open.map(\.id), ["last-weeks", "yesterdays", "plain"], "What is asked about is in Open too; a week that is over is no pin")
+        XCTAssertEqual(parts.finished.map(\.id), ["closed", "done"])
+
+        let byDue = TaskRules.parts(open: open, finished: finished, sort: .dueDate, now: wednesday)
+        XCTAssertEqual(byDue.today.map(\.id), ["today-due", "today"], "Each part in the order chosen")
+
+        // An hour on, today's pins have run out: they are asked about, and back in Open.
+        let nextDay = TaskRules.parts(open: open, finished: [], sort: .recentlyUpdated, now: later)
+        XCTAssertEqual(nextDay.today.map(\.id), [])
+        XCTAssertEqual(Set(nextDay.review.map(\.id)), ["yesterdays", "today", "today-due"])
+        XCTAssertEqual(nextDay.open.count, 6)
+    }
+
+    // MARK: - Words
+
+    func testTheWordsForADueDay() throws {
+        func words(_ due: String, time: String? = nil, status: TaskStatus = .open) -> String? {
+            TaskDueLine(task: task("a", status: status, due: due, time: time), now: wednesday, calendar: utc, locale: british)?.text
+        }
+        XCTAssertNil(TaskDueLine(task: task("a"), now: wednesday, calendar: utc, locale: british), "No day, no words")
+        XCTAssertEqual(words("2027-01-13"), "Due today")
+        XCTAssertEqual(words("2027-01-14"), "Due tomorrow")
+        XCTAssertEqual(words("2027-01-20"), "Due Wed 20 Jan")
+        XCTAssertEqual(words("2028-03-01"), "Due 1 Mar 2028", "Another year is named")
+        XCTAssertEqual(words("2027-01-12"), "Overdue · Due Tue 12 Jan")
+        XCTAssertEqual(words("2027-01-12", status: .done), "Due Tue 12 Jan", "A finished task is not overdue")
+        XCTAssertEqual(words("2027-01-13", time: "17:30"), "Due today, 17:30")
+        XCTAssertEqual(words("2027-01-14", time: "09:05"), "Due tomorrow, 09:05")
+
+        // A time the clock skips that day is said as it was set, not moved on.
+        var berlin = Calendar(identifier: .gregorian)
+        berlin.timeZone = try XCTUnwrap(TimeZone(identifier: "Europe/Berlin"))
+        let skipped = TaskDueLine(
+            task: task("a", due: "2027-03-28", time: "02:30"), now: date(2027, 3, 20, 12, in: berlin), calendar: berlin, locale: british
+        )
+        XCTAssertEqual(skipped?.text, "Due Sun 28 Mar, 02:30")
+        XCTAssertEqual(TaskDueLine.timeWords("17:05", locale: Locale(identifier: "en_US"))?.replacingOccurrences(of: "\u{202F}", with: " "), "5:05 PM")
+        XCTAssertNil(TaskDueLine.timeWords("soon", locale: british))
+
+        let overdue = try XCTUnwrap(TaskDueLine(task: task("a", due: "2027-01-12"), now: wednesday, calendar: utc, locale: british))
+        XCTAssertTrue(overdue.isOverdue)
+        let today = try XCTUnwrap(TaskDueLine(task: task("a", due: "2027-01-13", time: "08:00"), now: wednesday, calendar: utc, locale: british))
+        XCTAssertFalse(today.isOverdue, "Not overdue on its day, whatever the time")
+    }
+
+    func testTheLineUnderATasksTitle() {
+        let later = wednesday.addingTimeInterval(3600)
+        func line(_ task: TaskItem) -> [TaskRules.Context] {
+            TaskRules.context(of: task, now: wednesday, calendar: utc, locale: british)
+        }
+        XCTAssertEqual(line(task("a")), [], "Nothing to say")
+        XCTAssertEqual(line(task("a", due: "2027-01-14")), [.plain("Due tomorrow")])
+        XCTAssertEqual(line(task("a", due: "2027-01-12")), [.overdue("Overdue · Due Tue 12 Jan")])
+        XCTAssertEqual(
+            line(task("a", due: "2027-01-13", pin: TaskPin(period: .week, expiresAt: later))), [.pin("This week"), .plain("Due today")]
+        )
+        XCTAssertEqual(line(task("a", pin: TaskPin(period: .today, expiresAt: wednesday))), [], "A pin that has run out is not named")
+        XCTAssertEqual(line(task("a", status: .closed, due: "2027-01-12")), [.plain("Due Tue 12 Jan"), .plain("Closed")])
+        XCTAssertEqual(line(task("a", status: .done)), [])
+    }
+}

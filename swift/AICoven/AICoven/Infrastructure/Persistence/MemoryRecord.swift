@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import GRDB
 
@@ -8,6 +9,8 @@ struct MemoryChunkRecord: Codable, FetchableRecord, PersistableRecord {
     var id: String
     var userId: String? // Owner of this memory for data isolation
     var scope: String
+    /// The coven whose memory it is; nil for one kept in no coven.
+    var covenId: String?
     var piiFlag: Bool
     var tags: String?
     var createdAt: Date
@@ -20,6 +23,7 @@ struct MemoryChunkRecord: Codable, FetchableRecord, PersistableRecord {
         case id
         case userId = "user_id"
         case scope
+        case covenId = "coven_id"
         case piiFlag = "pii_flag"
         case tags
         case createdAt = "created_at"
@@ -34,6 +38,7 @@ struct MemoryChunkRecord: Codable, FetchableRecord, PersistableRecord {
         id: String,
         userId: String?,
         scope: String,
+        covenId: String?,
         piiFlag: Bool,
         tags: String?,
         createdAt: Date,
@@ -45,6 +50,7 @@ struct MemoryChunkRecord: Codable, FetchableRecord, PersistableRecord {
         self.id = id
         self.userId = userId
         self.scope = scope
+        self.covenId = covenId
         self.piiFlag = piiFlag
         self.tags = tags
         self.createdAt = createdAt
@@ -59,6 +65,7 @@ struct MemoryChunkRecord: Codable, FetchableRecord, PersistableRecord {
         id = row[Columns.id]
         userId = row[Columns.userId]
         scope = row[Columns.scope]
+        covenId = row[Columns.covenId]
         piiFlag = row[Columns.piiFlag]
         tags = row[Columns.tags]
         createdAt = row[Columns.createdAt]
@@ -72,6 +79,7 @@ struct MemoryChunkRecord: Codable, FetchableRecord, PersistableRecord {
         container[Columns.id] = id
         container[Columns.userId] = userId
         container[Columns.scope] = scope
+        container[Columns.covenId] = covenId
         container[Columns.piiFlag] = piiFlag
         container[Columns.tags] = tags
         container[Columns.createdAt] = createdAt
@@ -93,6 +101,17 @@ struct LocalMemoryChunk: Identifiable, Equatable {
     let createdBy: String?
     let source: String?
     let embedding: [Float]?
+    /// The coven whose memory it is; nil for one kept in no coven.
+    var covenID: String?
+    /// Its text could not be opened with the account's key: it reads as
+    /// empty, and no turn reads it.
+    var isUnreadable = false
+}
+
+/// Why a memory was not changed.
+enum MemoryStoreError: Error {
+    /// There is no such memory of the account's.
+    case noSuchMemory
 }
 
 actor MemoryRepository {
@@ -106,47 +125,67 @@ actor MemoryRepository {
 
     private init() {}
 
+    private func signedInAccount() async -> String {
+        await MainActor.run { UserScope.currentUserID }
+    }
+
+    /// The account's memories kept in one place.
+    private static func rows(of account: String, in place: MemoryPlace) -> QueryInterfaceRequest<MemoryChunkRecord> {
+        let own = MemoryChunkRecord.filter(MemoryChunkRecord.Columns.userId == account)
+        switch place {
+        case .aboutMe:
+            return own.filter(MemoryChunkRecord.Columns.covenId == nil).filter(MemoryChunkRecord.Columns.scope == "user")
+        case .strix:
+            // Not what a model once asked to keep for one conversation
+            // (scope "thread"): no turn read those, and none reads them now.
+            return own.filter(MemoryChunkRecord.Columns.covenId == nil)
+                .filter(!["user", "thread"].contains(MemoryChunkRecord.Columns.scope))
+        case let .coven(id):
+            return own.filter(MemoryChunkRecord.Columns.covenId == id)
+        }
+    }
+
+    private static func stored(_ tags: [String]) throws -> String? {
+        tags.isEmpty ? nil : try String(data: JSONEncoder().encode(tags), encoding: .utf8)
+    }
+
+    private static func stored(_ embedding: [Float]?) -> Data? {
+        embedding.map { vector in
+            vector.withUnsafeBufferPointer { Data(buffer: $0) }
+        }
+    }
+
     // MARK: - Public API
 
+    /// Stores a memory in `place` for the account that wrote it, read by
+    /// the caller before anything it waited for: it is stored as that
+    /// account's, and not at all if another is signed in, or the data key
+    /// has changed hands, by the time it is stored. A coven's memory is
+    /// stored only in a coven of that account's.
     func storeMemory(
-        scope: String,
+        in place: MemoryPlace,
         text: String,
         tags: [String],
         pii: Bool,
         createdBy: String?,
         source: String?,
-        embedding: [Float]?
+        embedding: [Float]?,
+        as account: String
     ) async throws -> LocalMemoryChunk {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
-        // Get current user ID for data isolation
-        let currentUserId = await MainActor.run { UserScope.currentUserID }
-
-        let id = UUID().uuidString
-        let now = Date()
-        let plaintext = Data(text.utf8)
-        let ciphertext = try await DataEncryptionService.shared.encrypt(plaintext, purpose: "memory_chunk")
-
-        let tagsString = tags.isEmpty ? nil : try String(data: JSONEncoder().encode(tags), encoding: .utf8)
-        let embeddingData: Data? = if let embedding {
-            embedding.withUnsafeBufferPointer { ptr in
-                Data(buffer: UnsafeBufferPointer(start: ptr.baseAddress, count: ptr.count))
-            }
-        } else {
-            nil
-        }
-
-        var record = MemoryChunkRecord(
-            id: id,
-            userId: currentUserId,
-            scope: scope,
+        let record = try await MemoryChunkRecord(
+            id: UUID().uuidString,
+            userId: account,
+            scope: place.scope,
+            covenId: place.covenID,
             piiFlag: pii,
-            tags: tagsString,
-            createdAt: now,
+            tags: Self.stored(tags),
+            createdAt: Date(),
             createdBy: createdBy,
             source: source,
-            textCiphertext: ciphertext,
-            embedding: embeddingData
+            textCiphertext: AccountSeal.seal(text, purpose: "memory_chunk", for: account),
+            embedding: Self.stored(embedding)
         )
 
         try await dbQueue.write { db in
@@ -154,166 +193,172 @@ actor MemoryRepository {
         }
 
         return LocalMemoryChunk(
-            id: id,
-            scope: scope,
+            id: record.id,
+            scope: record.scope,
             text: text,
             tags: tags,
             pii: pii,
-            createdAt: now,
+            createdAt: record.createdAt,
             createdBy: createdBy,
             source: source,
-            embedding: embedding
+            embedding: embedding,
+            covenID: record.covenId
         )
     }
 
-    /// Load memories belonging to the current user, optionally filtered by scope.
-    func loadMemories(scope: String? = nil, limit: Int = 50) async throws -> [LocalMemoryChunk] {
-        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-
-        // Get current user ID for data isolation
-        let currentUserId = await MainActor.run { UserScope.currentUserID }
-
-        let records: [MemoryChunkRecord] = try await dbQueue.read { db in
-            // Only fetch memories belonging to the current user
-            var request = MemoryChunkRecord
-                .filter(MemoryChunkRecord.Columns.userId == currentUserId)
-                .order(MemoryChunkRecord.Columns.createdAt.desc)
-                .limit(limit)
-            if let scope {
-                request = request.filter(MemoryChunkRecord.Columns.scope == scope)
-            }
-
-            return try request.fetchAll(db)
-        }
-
-        var result: [LocalMemoryChunk] = []
-        result.reserveCapacity(records.count)
-
-        for rec in records {
-            if let chunk = try await mapRecordToChunk(rec) {
-                result.append(chunk)
-            }
-        }
-
-        return result
+    /// A page of the signed-in account's memories in one place.
+    func loadMemories(in place: MemoryPlace, limit: Int, offset: Int = 0) async throws -> [LocalMemoryChunk] {
+        try await loadMemories(in: place, limit: limit, offset: offset, as: signedInAccount())
     }
 
-    /// Load a single memory chunk by ID. Only returns if it belongs to the current user.
+    /// A page of `account`'s memories in one place, newest first: `limit`
+    /// of them after the first `offset`. Throws unless `account` is the
+    /// one signed in, with its own data key in memory, from before the
+    /// page is read until after.
+    func loadMemories(in place: MemoryPlace, limit: Int, offset: Int, as account: String) async throws -> [LocalMemoryChunk] {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        return try await AccountSeal.reading(as: account) {
+            let records: [MemoryChunkRecord] = try await dbQueue.read { db in
+                try Self.rows(of: account, in: place)
+                    .order(MemoryChunkRecord.Columns.createdAt.desc, MemoryChunkRecord.Columns.id.desc)
+                    .limit(limit, offset: offset)
+                    .fetchAll(db)
+            }
+            var result: [LocalMemoryChunk] = []
+            result.reserveCapacity(records.count)
+            for record in records {
+                try await result.append(self.chunk(from: record))
+            }
+            return result
+        }
+    }
+
+    /// One memory of the signed-in account's, by its id, read as a page
+    /// is; nil if that account has none with that id.
     func loadMemory(id: String) async throws -> LocalMemoryChunk? {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-
-        // Get current user ID for data isolation
-        let currentUserId = await MainActor.run { UserScope.currentUserID }
-
-        let record: MemoryChunkRecord? = try await dbQueue.read { db in
-            // Filter by both ID and user_id to ensure user can only see their own memories
-            try MemoryChunkRecord
-                .filter(MemoryChunkRecord.Columns.id == id)
-                .filter(MemoryChunkRecord.Columns.userId == currentUserId)
-                .fetchOne(db)
+        let account = await signedInAccount()
+        return try await AccountSeal.reading(as: account) {
+            let record: MemoryChunkRecord? = try await dbQueue.read { db in
+                try MemoryChunkRecord
+                    .filter(MemoryChunkRecord.Columns.id == id)
+                    .filter(MemoryChunkRecord.Columns.userId == account)
+                    .fetchOne(db)
+            }
+            guard let record else { return nil }
+            return try await self.chunk(from: record)
         }
-
-        guard let rec = record else { return nil }
-        return try await mapRecordToChunk(rec)
     }
 
-    /// Delete a memory chunk by ID. Only deletes if it belongs to the current user.
-    func deleteMemory(id: String) async throws {
+    /// Removes a memory of `account`'s, the account signed in. One that is
+    /// not there, or is another account's, is left as it is. It needs no
+    /// key: an entry the key cannot open is removed like any other.
+    func deleteMemory(id: String, as account: String) async throws {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-
-        // Get current user ID for data isolation
-        let currentUserId = await MainActor.run { UserScope.currentUserID }
+        guard await signedInAccount() == account else { throw RepositoryError.accountChanged }
 
         try await dbQueue.write { db in
-            // Only delete if it belongs to the current user
             _ = try MemoryChunkRecord
                 .filter(MemoryChunkRecord.Columns.id == id)
-                .filter(MemoryChunkRecord.Columns.userId == currentUserId)
+                .filter(MemoryChunkRecord.Columns.userId == account)
                 .deleteAll(db)
         }
     }
 
-    /// Update an existing memory chunk's text, tags, and embedding.
-    /// Only updates if it belongs to the current user.
+    /// Gives a memory of `account`'s new text, with its embedding, and new
+    /// tags where some are given (nil keeps its tags, read in the same
+    /// write). It stays where it is kept. Throws
+    /// `MemoryStoreError.noSuchMemory` if the account has no such memory,
+    /// and, as `storeMemory` does, unless the account is signed in with its
+    /// own key while the text is encrypted.
     func updateMemory(
         id: String,
         newText: String,
-        newTags: [String],
-        newEmbedding: [Float]?
-    ) async throws -> LocalMemoryChunk? {
+        newTags: [String]?,
+        newEmbedding: [Float]?,
+        as account: String
+    ) async throws -> LocalMemoryChunk {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
-        // Get current user ID for data isolation
-        let currentUserId = await MainActor.run { UserScope.currentUserID }
+        let ciphertext = try await AccountSeal.seal(newText, purpose: "memory_chunk", for: account)
+        let tags = try newTags.map { try Self.stored($0) }
+        let embedding = Self.stored(newEmbedding)
 
-        let plaintext = Data(newText.utf8)
-        let ciphertext = try await DataEncryptionService.shared.encrypt(plaintext, purpose: "memory_chunk")
-
-        let tagsString = newTags.isEmpty ? nil : try String(data: JSONEncoder().encode(newTags), encoding: .utf8)
-        let embeddingData: Data? = if let newEmbedding {
-            newEmbedding.withUnsafeBufferPointer { ptr in
-                Data(buffer: UnsafeBufferPointer(start: ptr.baseAddress, count: ptr.count))
-            }
-        } else {
-            nil
-        }
-
-        try await dbQueue.write { db in
-            // Only update if it belongs to the current user
-            if var record = try MemoryChunkRecord
+        let updated: MemoryChunkRecord? = try await dbQueue.write { db in
+            guard var record = try MemoryChunkRecord
                 .filter(MemoryChunkRecord.Columns.id == id)
-                .filter(MemoryChunkRecord.Columns.userId == currentUserId)
-                .fetchOne(db) {
-                record.textCiphertext = ciphertext
-                record.tags = tagsString
-                record.embedding = embeddingData
-                try record.update(db)
-            }
+                .filter(MemoryChunkRecord.Columns.userId == account)
+                .fetchOne(db)
+            else { return nil }
+            record.textCiphertext = ciphertext
+            if let tags { record.tags = tags }
+            record.embedding = embedding
+            try record.update(db)
+            return record
         }
+        guard let updated else { throw MemoryStoreError.noSuchMemory }
 
-        return try await loadMemory(id: id)
+        return LocalMemoryChunk(
+            id: updated.id,
+            scope: updated.scope,
+            text: newText,
+            tags: Self.tags(of: updated),
+            pii: updated.piiFlag,
+            createdAt: updated.createdAt,
+            createdBy: updated.createdBy,
+            source: updated.source,
+            embedding: newEmbedding,
+            covenID: updated.covenId
+        )
     }
 
     // MARK: - Mapping helper
 
-    private func mapRecordToChunk(_ rec: MemoryChunkRecord) async throws -> LocalMemoryChunk? {
-        let decrypted = try await DataEncryptionService.shared.decrypt(rec.textCiphertext, purpose: "memory_chunk")
-        let text = String(decoding: decrypted, as: UTF8.self)
+    private static func tags(of record: MemoryChunkRecord) -> [String] {
+        guard let stored = record.tags, let data = stored.data(using: .utf8) else { return [] }
+        do {
+            return try JSONDecoder().decode([String].self, from: data)
+        } catch {
+            AppErrorReporter.log(error: error, context: "MemoryRepository.tags")
+            return []
+        }
+    }
 
-        let tags: [String]
-        if let tagsString = rec.tags,
-           let data = tagsString.data(using: .utf8) {
-            do {
-                tags = try JSONDecoder().decode([String].self, from: data)
-            } catch {
-                AppErrorReporter.log(error: error, context: "MemoryRepository.mapRecordToChunk.tagsDecode")
-                tags = []
-            }
-        } else {
-            tags = []
+    /// A stored memory, opened. A memory whose text the key in memory
+    /// cannot open is given as unreadable, so that the rest of its page is
+    /// still read and it can be removed. A key locked meanwhile is thrown
+    /// (`AccountSeal.reading(as:)` tells it as locked data).
+    private func chunk(from record: MemoryChunkRecord) async throws -> LocalMemoryChunk {
+        var text = ""
+        var isUnreadable = false
+        do {
+            let opened = try await DataEncryptionService.shared.decrypt(record.textCiphertext, purpose: "memory_chunk")
+            text = String(decoding: opened, as: UTF8.self)
+        } catch let error as CryptoKitError {
+            // The kind of failure only.
+            AppErrorReporter.log(message: "A memory could not be opened (\(type(of: error)))", context: "MemoryRepository.chunk")
+            isUnreadable = true
         }
 
-        let embeddingArray: [Float]?
-        if let embData = rec.embedding {
-            let count = embData.count / MemoryLayout<Float>.size
-            embeddingArray = embData.withUnsafeBytes { rawPtr in
-                let floatPtr = rawPtr.bindMemory(to: Float.self)
-                return Array(UnsafeBufferPointer(start: floatPtr.baseAddress, count: count))
+        let embedding: [Float]? = record.embedding.map { data in
+            let count = data.count / MemoryLayout<Float>.size
+            return data.withUnsafeBytes { raw in
+                Array(UnsafeBufferPointer(start: raw.bindMemory(to: Float.self).baseAddress, count: count))
             }
-        } else {
-            embeddingArray = nil
         }
 
         return LocalMemoryChunk(
-            id: rec.id,
-            scope: rec.scope,
+            id: record.id,
+            scope: record.scope,
             text: text,
-            tags: tags,
-            pii: rec.piiFlag,
-            createdAt: rec.createdAt,
-            createdBy: rec.createdBy,
-            source: rec.source,
-            embedding: embeddingArray
+            tags: Self.tags(of: record),
+            pii: record.piiFlag,
+            createdAt: record.createdAt,
+            createdBy: record.createdBy,
+            source: record.source,
+            embedding: isUnreadable ? nil : embedding,
+            covenID: record.covenId,
+            isUnreadable: isUnreadable
         )
     }
 }
@@ -323,7 +368,7 @@ actor MemoryRepository {
 extension MemoryRepository: MemoryStore {}
 
 /// Low-level GRDB representation of a memory write proposal. This backs the
-/// local-only MemoryService proposal APIs and the MemoryProposalsView UI.
+/// local-only MemoryService proposal APIs.
 struct MemoryProposalRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "memory_proposals"
 
@@ -331,6 +376,9 @@ struct MemoryProposalRecord: Codable, FetchableRecord, PersistableRecord {
     var userId: String? // Owner of this proposal for data isolation
     var eventId: String?
     var covenId: String?
+    /// What is proposed. It is stored encrypted (`contentCiphertext`), and
+    /// held here opened; a row from before proposals were encrypted holds
+    /// it as text until the account's proposals are next read.
     var proposedContent: String
     var proposedTags: String?
     var scope: String?
@@ -343,6 +391,9 @@ struct MemoryProposalRecord: Codable, FetchableRecord, PersistableRecord {
     var reviewedAt: Date?
     var title: String?
     var reviewFeedback: String?
+    var contentCiphertext: Data?
+    /// Its text could not be opened with the account's key (not stored).
+    var isUnreadable = false
 
     enum Columns: String, ColumnExpression {
         case id
@@ -361,6 +412,13 @@ struct MemoryProposalRecord: Codable, FetchableRecord, PersistableRecord {
         case reviewedAt = "reviewed_at"
         case title
         case reviewFeedback = "review_feedback"
+        case contentCiphertext = "content_ciphertext"
+    }
+
+    /// The stored columns only: `isUnreadable` is told, not kept.
+    enum CodingKeys: String, CodingKey {
+        case id, userId, eventId, covenId, proposedContent, proposedTags, scope, reason, sourceMessageId, status, proposedBy, reviewedBy
+        case createdAt, reviewedAt, title, reviewFeedback, contentCiphertext
     }
 
     /// Memberwise initializer used by repositories when inserting new rows.
@@ -380,7 +438,8 @@ struct MemoryProposalRecord: Codable, FetchableRecord, PersistableRecord {
         createdAt: Date,
         reviewedAt: Date?,
         title: String?,
-        reviewFeedback: String?
+        reviewFeedback: String?,
+        contentCiphertext: Data? = nil
     ) {
         self.id = id
         self.userId = userId
@@ -398,6 +457,7 @@ struct MemoryProposalRecord: Codable, FetchableRecord, PersistableRecord {
         self.reviewedAt = reviewedAt
         self.title = title
         self.reviewFeedback = reviewFeedback
+        self.contentCiphertext = contentCiphertext
     }
 
     /// Custom Row initializer so GRDB can decode from the snake_case schema.
@@ -418,6 +478,7 @@ struct MemoryProposalRecord: Codable, FetchableRecord, PersistableRecord {
         reviewedAt = row[Columns.reviewedAt]
         title = row[Columns.title]
         reviewFeedback = row[Columns.reviewFeedback]
+        contentCiphertext = row[Columns.contentCiphertext]
     }
 
     func encode(to container: inout PersistenceContainer) {
@@ -425,7 +486,9 @@ struct MemoryProposalRecord: Codable, FetchableRecord, PersistableRecord {
         container[Columns.userId] = userId
         container[Columns.eventId] = eventId
         container[Columns.covenId] = covenId
-        container[Columns.proposedContent] = proposedContent
+        // The text is kept only encrypted: what is held here opened is
+        // never written back as text.
+        container[Columns.proposedContent] = contentCiphertext == nil ? proposedContent : ""
         container[Columns.proposedTags] = proposedTags
         container[Columns.scope] = scope
         container[Columns.reason] = reason
@@ -437,6 +500,7 @@ struct MemoryProposalRecord: Codable, FetchableRecord, PersistableRecord {
         container[Columns.reviewedAt] = reviewedAt
         container[Columns.title] = title
         container[Columns.reviewFeedback] = reviewFeedback
+        container[Columns.contentCiphertext] = contentCiphertext
     }
 }
 
@@ -452,49 +516,126 @@ actor MemoryProposalRepository {
 
     private init() {}
 
-    /// List proposals belonging to the current user, optionally filtering by coven and status.
-    /// Results are ordered from newest to oldest.
-    func listProposals(covenId: String?, status: String?) async throws -> [MemoryProposalRecord] {
+    private static let purpose = "memory_proposal"
+
+    /// What is kept in the clear of a proposal's tags: only the page the
+    /// entry would go on (`page:<name>`, one of four), whatever words a
+    /// model chose, which can say something of what it is about. Approved,
+    /// the memory goes on the same page. Nil for no tags.
+    nonisolated static func storedTags(_ tags: [String]) -> String? {
+        guard !tags.isEmpty else { return nil }
+        return "[\"\(MemoryPage.of(tags: tags).tag)\"]"
+    }
+
+    /// A stored proposal with its text opened. One whose text the key in
+    /// memory cannot open is given as unreadable, with no text.
+    private func opened(_ record: MemoryProposalRecord) async throws -> MemoryProposalRecord {
+        guard let sealed = record.contentCiphertext else { return record }
+        var record = record
+        do {
+            record.proposedContent = try await String(decoding: DataEncryptionService.shared.decrypt(sealed, purpose: Self.purpose), as: UTF8.self)
+        } catch let error as CryptoKitError {
+            // The kind of failure only.
+            AppErrorReporter.log(message: "A memory proposal could not be opened (\(type(of: error)))", context: "MemoryProposalRepository.opened")
+            record.proposedContent = ""
+            record.isUnreadable = true
+        }
+        return record
+    }
+
+    /// Proposals stored before their text was encrypted are sealed, and
+    /// the text taken out of the row, the first time the account's
+    /// proposals are read with its key in memory.
+    private func sealPlainText(of account: String, in dbQueue: DatabaseQueue) async throws {
+        let plain: [Row] = try await dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: "SELECT id, proposed_content FROM memory_proposals WHERE user_id = ? AND content_ciphertext IS NULL AND proposed_content <> ''",
+                arguments: [account]
+            )
+        }
+        for row in plain {
+            let id: String = row["id"]
+            let sealed = try await AccountSeal.seal(row["proposed_content"], purpose: Self.purpose, for: account)
+            try await dbQueue.write { db in
+                try db.execute(
+                    sql: """
+                    UPDATE memory_proposals SET content_ciphertext = ?, proposed_content = ''
+                    WHERE id = ? AND user_id = ? AND content_ciphertext IS NULL
+                    """,
+                    arguments: [sealed, id, account]
+                )
+            }
+        }
+    }
+
+    /// The current user's proposals in one scope: a coven's, or with no
+    /// coven the person's own. Optionally of one status. Newest first.
+    /// Read with the account's own key in memory, and not at all while its
+    /// data is locked.
+    func listProposals(covenId: String?, status: String?, limit: Int? = nil) async throws -> [MemoryProposalRecord] {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
         // Get current user ID for data isolation
         let currentUserId = await MainActor.run { UserScope.currentUserID }
+        try await sealPlainText(of: currentUserId, in: dbQueue)
 
-        return try await dbQueue.read { db in
-            // Only fetch proposals belonging to the current user
-            var request = MemoryProposalRecord
-                .filter(MemoryProposalRecord.Columns.userId == currentUserId)
-                .order(MemoryProposalRecord.Columns.createdAt.desc)
+        return try await AccountSeal.reading(as: currentUserId) {
+            let records: [MemoryProposalRecord] = try await dbQueue.read { db in
+                // Only fetch proposals belonging to the current user
+                var request = MemoryProposalRecord
+                    .filter(MemoryProposalRecord.Columns.userId == currentUserId)
+                    // Those made at the same moment in a fixed order, so
+                    // that a limit always leaves the same ones out.
+                    .order(MemoryProposalRecord.Columns.createdAt.desc, MemoryProposalRecord.Columns.id)
 
-            if let covenId {
+                // One scope's proposals: a coven's, or, for none, the person's
+                // own (those made in no coven), never every coven's together.
                 request = request.filter(MemoryProposalRecord.Columns.covenId == covenId)
-            }
-            if let status {
-                request = request.filter(MemoryProposalRecord.Columns.status == status)
-            }
+                if let status {
+                    request = request.filter(MemoryProposalRecord.Columns.status == status)
+                }
+                // The latest only, where no more are wanted: the rest is
+                // not listed or opened. (What is still stored as text
+                // from before proposals were sealed was sealed above,
+                // all of it, the once.)
+                if let limit {
+                    request = request.limit(limit)
+                }
 
-            return try request.fetchAll(db)
+                return try request.fetchAll(db)
+            }
+            var result: [MemoryProposalRecord] = []
+            for record in records {
+                try await result.append(self.opened(record))
+            }
+            return result
         }
     }
 
-    /// Load a single proposal by ID. Only returns if it belongs to the current user.
-    func loadProposal(id: String) async throws -> MemoryProposalRecord? {
+    /// A proposal of `userID`'s; nil if there is none with that id. Read
+    /// as the account's proposals are listed: with its own key, and after
+    /// any of them still stored as text is sealed.
+    func loadProposal(id: String, for userID: String) async throws -> MemoryProposalRecord? {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-
-        // Get current user ID for data isolation
-        let currentUserId = await MainActor.run { UserScope.currentUserID }
-
-        return try await dbQueue.read { db in
-            // Filter by both ID and user_id to ensure user can only see their own proposals
-            try MemoryProposalRecord
-                .filter(MemoryProposalRecord.Columns.id == id)
-                .filter(MemoryProposalRecord.Columns.userId == currentUserId)
-                .fetchOne(db)
+        try await sealPlainText(of: userID, in: dbQueue)
+        return try await AccountSeal.reading(as: userID) {
+            let record = try await dbQueue.read { db in
+                try MemoryProposalRecord
+                    .filter(MemoryProposalRecord.Columns.id == id)
+                    .filter(MemoryProposalRecord.Columns.userId == userID)
+                    .fetchOne(db)
+            }
+            guard let record else { return nil }
+            return try await self.opened(record)
         }
     }
 
-    /// Insert a new proposal. This will be used by agent/chat flows when they
-    /// generate memory write suggestions.
+    /// Stores a new proposal, its text encrypted, for the account that it
+    /// was proposed to (`account`, read by the caller before anything it
+    /// waited for; the account signed in now otherwise): it is stored as
+    /// that account's, and not at all unless that account is signed in
+    /// with its own key in memory.
     func insertProposal(
         id: String = UUID().uuidString,
         eventId: String?,
@@ -502,42 +643,38 @@ actor MemoryProposalRepository {
         proposedContent: String,
         proposedTags: [String]?,
         scope: String?,
-        reason: String?,
         sourceMessageId: String?,
         proposedBy: String?,
-        title: String?
+        as account: String? = nil
     ) async throws -> MemoryProposalRecord {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
 
-        // Get current user ID for data isolation
-        let currentUserId = await MainActor.run { UserScope.currentUserID }
+        let owner = if let account { account } else { await MainActor.run { UserScope.currentUserID } }
+        let sealed = try await AccountSeal.seal(proposedContent, purpose: Self.purpose, for: owner)
 
         let now = Date()
-        let tagsString: String?
-        if let proposedTags, !proposedTags.isEmpty {
-            let data = try JSONEncoder().encode(proposedTags)
-            tagsString = String(data: data, encoding: .utf8)
-        } else {
-            tagsString = nil
-        }
+        let tagsString = Self.storedTags(proposedTags ?? [])
 
-        var record = MemoryProposalRecord(
+        let record = MemoryProposalRecord(
             id: id,
-            userId: currentUserId,
+            userId: owner,
             eventId: eventId,
             covenId: covenId,
             proposedContent: proposedContent,
             proposedTags: tagsString,
             scope: scope,
-            reason: reason,
+            // Kept in the clear, so none is given: a proposal's text is
+            // sealed, and nothing beside it says what it is about.
+            reason: nil,
             sourceMessageId: sourceMessageId,
             status: "pending",
             proposedBy: proposedBy,
             reviewedBy: nil,
             createdAt: now,
             reviewedAt: nil,
-            title: title,
-            reviewFeedback: nil
+            title: nil,
+            reviewFeedback: nil,
+            contentCiphertext: sealed
         )
 
         try await dbQueue.write { db in
@@ -547,37 +684,56 @@ actor MemoryProposalRepository {
         return record
     }
 
-    /// Update the status and review metadata for a proposal, returning the
-    /// updated record. Only updates if it belongs to the current user.
-    func updateStatus(
+    /// Settles a proposal of `userID`'s that is still pending, as
+    /// `status`, in one write: nil if it is not theirs, or is no longer
+    /// pending (it was settled already, here or in another window), and
+    /// then nothing is changed. Throws `accountChanged` unless `userID` is
+    /// the account signed in: a review is one account's, and is dropped if
+    /// another is signed in by the time it lands.
+    ///
+    /// What is returned is the row as it is stored, its text not opened
+    /// (whoever settles it read the proposal first, and has its text):
+    /// nothing is waited for once it is settled, so nothing can fail
+    /// between its being settled and its being answered for.
+    func settlePending(
         id: String,
-        status: String,
+        as status: String,
         reviewedBy: String?,
-        reviewFeedback: String?
-    ) async throws -> MemoryProposalRecord {
+        for userID: String
+    ) async throws -> MemoryProposalRecord? {
         guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
-
-        // Get current user ID for data isolation
-        let currentUserId = await MainActor.run { UserScope.currentUserID }
-
+        guard await MainActor.run(body: { UserScope.currentUserID }) == userID else { throw RepositoryError.accountChanged }
         let now = Date()
-
         return try await dbQueue.write { db in
-            // Only update if it belongs to the current user
             guard var record = try MemoryProposalRecord
                 .filter(MemoryProposalRecord.Columns.id == id)
-                .filter(MemoryProposalRecord.Columns.userId == currentUserId)
+                .filter(MemoryProposalRecord.Columns.userId == userID)
+                .filter(MemoryProposalRecord.Columns.status == "pending")
                 .fetchOne(db) else {
-                throw RepositoryError.databaseUnavailable
+                return nil
             }
-
             record.status = status
             record.reviewedBy = reviewedBy
             record.reviewedAt = now
-            record.reviewFeedback = reviewFeedback
-
+            // No review notes are kept: they would be in the clear.
+            record.reviewFeedback = nil
             try record.update(db)
             return record
+        }
+    }
+
+    /// Makes a proposal of `userID`'s pending again: it was settled a
+    /// moment ago for a memory that could then not be stored.
+    func reopen(id: String, for userID: String) async throws {
+        guard let dbQueue = await getDbQueue() else { throw RepositoryError.databaseUnavailable }
+        try await dbQueue.write { db in
+            try db.execute(
+                sql: """
+                UPDATE memory_proposals SET status = 'pending', reviewed_by = NULL, reviewed_at = NULL, review_feedback = NULL
+                WHERE id = ? AND user_id = ?
+                """,
+                arguments: [id, userID]
+            )
         }
     }
 }

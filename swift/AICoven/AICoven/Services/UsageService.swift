@@ -22,11 +22,14 @@ actor UsageService {
 
     // MARK: - Public API
 
-    /// Record a local usage entry for the given provider/model.
-    func recordLocalUsage(provider: String, model: String?, usage: TokenUsage?, threadId: String?) async {
+    /// Record a local usage entry for the given provider/model, as
+    /// `account`'s: the account whose turn it was, whoever is signed in
+    /// by the time it is recorded.
+    func recordLocalUsage(provider: String, model: String?, usage: TokenUsage?, threadId: String?, for account: String) async {
         guard let usage, let model else { return }
+        let key = UserScope.scopedKey("local_usage.entries.v1", for: account)
 
-        var entries = loadEntries()
+        var entries = loadEntries(forKey: key)
         let now = Date()
         let id = UUID().uuidString
 
@@ -53,7 +56,7 @@ actor UsageService {
         if entries.count > 500 {
             entries = Array(entries.suffix(500))
         }
-        saveEntries(entries)
+        saveEntries(entries, forKey: key)
     }
 
     /// Get usage summary for the current user over a date range.
@@ -217,8 +220,12 @@ actor UsageService {
     // MARK: - Private helpers
 
     private func loadEntries() -> [UsageEntryResponse] {
+        loadEntries(forKey: entriesKey)
+    }
+
+    private func loadEntries(forKey key: String) -> [UsageEntryResponse] {
         let defaults = UserDefaults.standard
-        guard let data = defaults.data(forKey: entriesKey) else { return [] }
+        guard let data = defaults.data(forKey: key) else { return [] }
         do {
             return try JSONDecoder().decode([UsageEntryResponse].self, from: data)
         } catch {
@@ -227,10 +234,10 @@ actor UsageService {
         }
     }
 
-    private func saveEntries(_ entries: [UsageEntryResponse]) {
+    private func saveEntries(_ entries: [UsageEntryResponse], forKey key: String) {
         do {
             let data = try JSONEncoder().encode(entries)
-            UserDefaults.standard.set(data, forKey: entriesKey)
+            UserDefaults.standard.set(data, forKey: key)
         } catch {
             AppErrorReporter.log(error: error, context: "UsageService.saveEntries.encodeEntries")
         }

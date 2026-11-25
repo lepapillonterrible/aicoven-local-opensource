@@ -3,6 +3,9 @@ import Foundation
 /// Type of workspace tab
 enum WorkspaceTabType: Equatable {
     case thread(Thread)
+    /// A thread not made yet: it is made when its first message is sent.
+    /// In a coven, or in Strix (no coven).
+    case draftThread(covenId: String?)
     case profile
     case settings
     case providerKeys
@@ -12,10 +15,15 @@ enum WorkspaceTabType: Equatable {
     case usage
     case addRole(covenId: String)
     case editRole(roleId: String)
+    /// A coven's agents.
+    case covenAgents(covenId: String)
+    /// Which of the person's connections a coven's agents may use.
+    case covenConnections(covenId: String)
     case memoryList(covenId: String?)
-    case memoryProposals(covenId: String?)
-    case addMemory(covenId: String?)
-    case editMemory(memoryId: String, covenId: String?)
+    /// A scope's assets: a coven's, or Strix's (no coven).
+    case assets(covenId: String?)
+    /// A scope's tasks: a coven's, or Strix's (no coven).
+    case tasks(covenId: String?)
     /// Personal Strix settings tab (personal default assistant)
     case personalStrixSettings
     /// In-app purchase store tab
@@ -29,18 +37,22 @@ enum WorkspaceTabType: Equatable {
         switch (lhs, rhs) {
         case let (.thread(t1), .thread(t2)):
             t1.id == t2.id
+        case let (.draftThread(c1), .draftThread(c2)):
+            c1 == c2
         case let (.addRole(c1), .addRole(c2)):
             c1 == c2
         case let (.editRole(r1), .editRole(r2)):
             r1 == r2
+        case let (.covenAgents(c1), .covenAgents(c2)):
+            c1 == c2
+        case let (.covenConnections(c1), .covenConnections(c2)):
+            c1 == c2
         case let (.memoryList(c1), .memoryList(c2)):
             c1 == c2
-        case let (.memoryProposals(c1), .memoryProposals(c2)):
+        case let (.assets(c1), .assets(c2)):
             c1 == c2
-        case let (.addMemory(c1), .addMemory(c2)):
+        case let (.tasks(c1), .tasks(c2)):
             c1 == c2
-        case let (.editMemory(m1, c1), .editMemory(m2, c2)):
-            m1 == m2 && c1 == c2
         case (.profile, .profile),
              (.settings, .settings),
              (.providerKeys, .providerKeys),
@@ -61,6 +73,7 @@ enum WorkspaceTabType: Equatable {
     var analyticsName: String {
         switch self {
         case .thread: "thread"
+        case .draftThread: "draft_thread"
         case .profile: "profile"
         case .settings: "settings"
         case .providerKeys: "provider_keys"
@@ -70,10 +83,11 @@ enum WorkspaceTabType: Equatable {
         case .usage: "usage"
         case .addRole: "add_role"
         case .editRole: "edit_role"
+        case .covenAgents: "coven_agents"
+        case .covenConnections: "coven_connections"
         case .memoryList: "memory_list"
-        case .memoryProposals: "memory_proposals"
-        case .addMemory: "add_memory"
-        case .editMemory: "edit_memory"
+        case .assets: "assets"
+        case .tasks: "tasks"
         case .personalStrixSettings: "personal_strix_settings"
         case .store: "store"
         case .terms: "terms"
@@ -101,66 +115,12 @@ struct WorkspaceTab: Identifiable, Equatable {
         )
     }
 
-    /// Create a tab for profile
-    static var profile: WorkspaceTab {
-        WorkspaceTab(
-            id: "profile",
-            type: .profile,
-            title: "Profile"
-        )
-    }
-
-    /// Create a tab for settings
-    static var settings: WorkspaceTab {
-        WorkspaceTab(
-            id: "settings",
-            type: .settings,
-            title: "Settings"
-        )
-    }
-
-    /// Create a tab for provider keys
-    static var providerKeys: WorkspaceTab {
-        WorkspaceTab(
-            id: "provider-keys",
-            type: .providerKeys,
-            title: "Provider Keys"
-        )
-    }
-
-    /// Create a tab for budgets
-    static var budget: WorkspaceTab {
-        WorkspaceTab(
-            id: "budget",
-            type: .budget,
-            title: "Budgets"
-        )
-    }
-
-    /// Create a tab for connected apps
-    static var connectedApps: WorkspaceTab {
-        WorkspaceTab(
-            id: "connected-apps",
-            type: .connectedApps,
-            title: "Connected Apps"
-        )
-    }
-
     /// Create a tab for MCP Servers
     static var mcpServers: WorkspaceTab {
         WorkspaceTab(
             id: "mcp-servers",
             type: .mcpServers,
             title: "MCP Servers"
-        )
-    }
-
-    /// Create a tab for usage dashboard
-    static var usage: WorkspaceTab {
-        WorkspaceTab(
-            id: "usage",
-            type: .usage,
-            title: "Budgets & Usage"
         )
     }
 
@@ -182,6 +142,27 @@ struct WorkspaceTab: Identifiable, Equatable {
         )
     }
 
+    /// A thread not made yet, in a coven or in Strix.
+    static func draftThread(covenId: String?) -> WorkspaceTab {
+        WorkspaceTab(id: "draft-thread-\(covenId ?? "strix")", type: .draftThread(covenId: covenId), title: "New Thread")
+    }
+
+    /// A coven's agents.
+    static func covenAgents(covenId: String) -> WorkspaceTab {
+        WorkspaceTab(id: "coven-agents-\(covenId)", type: .covenAgents(covenId: covenId), title: "Agents")
+    }
+
+    /// Which of the person's connections a coven's agents may use.
+    static func covenConnections(covenId: String) -> WorkspaceTab {
+        WorkspaceTab(id: "coven-connections-\(covenId)", type: .covenConnections(covenId: covenId), title: "Connections")
+    }
+
+    /// The thread this is the place of, if it is a thread's.
+    var threadValue: Thread? {
+        if case let .thread(thread) = type { return thread }
+        return nil
+    }
+
     /// Create a tab for viewing memory list
     static func memoryList(covenId: String?) -> WorkspaceTab {
         WorkspaceTab(
@@ -191,66 +172,23 @@ struct WorkspaceTab: Identifiable, Equatable {
         )
     }
 
-    /// Create a tab for viewing memory proposals
-    static func memoryProposals(covenId: String?) -> WorkspaceTab {
-        WorkspaceTab(
-            id: "memory-proposals-\(covenId ?? "personal")",
-            type: .memoryProposals(covenId: covenId),
-            title: "Memory Proposals"
-        )
+    /// A scope's Assets place.
+    static func assets(covenId: String?) -> WorkspaceTab {
+        WorkspaceTab(id: "assets-\(covenId ?? "personal")", type: .assets(covenId: covenId), title: "Assets")
     }
 
-    /// Create a tab for adding a new memory
-    static func addMemory(covenId: String?) -> WorkspaceTab {
-        WorkspaceTab(
-            id: "add-memory-\(covenId ?? "personal")",
-            type: .addMemory(covenId: covenId),
-            title: "New Memory"
-        )
+    /// A scope's Tasks place.
+    static func tasks(covenId: String?) -> WorkspaceTab {
+        WorkspaceTab(id: "tasks-\(covenId ?? "personal")", type: .tasks(covenId: covenId), title: "Tasks")
     }
 
-    /// Create a tab for editing a memory
-    static func editMemory(memoryId: String, memoryTitle: String, covenId: String?) -> WorkspaceTab {
-        WorkspaceTab(
-            id: "edit-memory-\(memoryId)",
-            type: .editMemory(memoryId: memoryId, covenId: covenId),
-            title: "Edit \(memoryTitle)"
-        )
-    }
-
-    /// Tab for personal Strix (default assistant) settings in the personal workspace
+    /// Strix's Agents place: Strix itself, listed as an agent is.
     static var personalStrix: WorkspaceTab {
         WorkspaceTab(
             id: "personal-strix",
             type: .personalStrixSettings,
-            title: "Strix Settings"
+            title: "Agents"
         )
     }
 
-    /// Tab for the in-app purchase store
-    static var store: WorkspaceTab {
-        WorkspaceTab(
-            id: "store",
-            type: .store,
-            title: "Upgrade"
-        )
-    }
-
-    /// Tab for Terms of Service
-    static var terms: WorkspaceTab {
-        WorkspaceTab(
-            id: "terms",
-            type: .terms,
-            title: "Terms & Conditions"
-        )
-    }
-
-    /// Tab for Privacy Policy
-    static var privacy: WorkspaceTab {
-        WorkspaceTab(
-            id: "privacy",
-            type: .privacy,
-            title: "Privacy Policy"
-        )
-    }
 }

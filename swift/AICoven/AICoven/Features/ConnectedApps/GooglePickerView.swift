@@ -281,7 +281,7 @@ class PickerCoordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate 
                     self?.onFilesPicked(files)
                 }
             } catch {
-                print("[GooglePicker] Failed to decode picked files: \(error)")
+                print("[GooglePicker] Failed to decode picked files (\(type(of: error)))")
             }
 
         case "pickerCancel":

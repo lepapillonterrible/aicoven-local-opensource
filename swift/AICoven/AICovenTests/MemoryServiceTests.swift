@@ -6,97 +6,111 @@ final class MemoryServiceTests: XCTestCase {
 
     private final class MockMemoryStore: MemoryStore {
         struct Call: Equatable {
-            let method: String
-            let scope: String?
-            let limit: Int?
+            let place: MemoryPlace
+            let limit: Int
+            let offset: Int
         }
 
         private(set) var calls: [Call] = []
+        /// The account each call reached the store as.
+        private(set) var accounts: [String] = []
         var memoriesToReturn: [LocalMemoryChunk] = []
-        var memoryByID: LocalMemoryChunk?
 
         func storeMemory(
-            scope: String,
+            in place: MemoryPlace,
             text: String,
             tags: [String],
             pii: Bool,
             createdBy: String?,
             source: String?,
-            embedding: [Float]?
+            embedding: [Float]?,
+            as account: String
         ) async throws -> LocalMemoryChunk {
-            LocalMemoryChunk(
+            accounts.append(account)
+            return LocalMemoryChunk(
                 id: UUID().uuidString,
-                scope: scope,
+                scope: place.scope,
                 text: text,
                 tags: tags,
                 pii: pii,
                 createdAt: Date(),
                 createdBy: createdBy,
                 source: source,
-                embedding: embedding
+                embedding: embedding,
+                covenID: place.covenID
             )
         }
 
-        func loadMemories(scope: String?, limit: Int) async throws -> [LocalMemoryChunk] {
-            calls.append(Call(method: "loadMemories", scope: scope, limit: limit))
+        func loadMemories(in place: MemoryPlace, limit: Int, offset: Int, as account: String) async throws -> [LocalMemoryChunk] {
+            accounts.append(account)
+            calls.append(Call(place: place, limit: limit, offset: offset))
             return memoriesToReturn
         }
 
-        func loadMemory(id: String) async throws -> LocalMemoryChunk? {
-            memoryByID
+        func loadMemory(id _: String) async throws -> LocalMemoryChunk? {
+            nil
         }
 
-        func deleteMemory(id: String) async throws {}
+        func deleteMemory(id _: String, as account: String) async throws {
+            accounts.append(account)
+        }
 
         func updateMemory(
-            id: String,
-            newText: String,
-            newTags: [String],
-            newEmbedding: [Float]?
-        ) async throws -> LocalMemoryChunk? {
-            LocalMemoryChunk(
-                id: id,
-                scope: "user",
-                text: newText,
-                tags: newTags,
-                pii: false,
-                createdAt: Date(),
-                createdBy: nil,
-                source: nil,
-                embedding: newEmbedding
-            )
+            id _: String,
+            newText _: String,
+            newTags _: [String]?,
+            newEmbedding _: [Float]?,
+            as account: String
+        ) async throws -> LocalMemoryChunk {
+            accounts.append(account)
+            throw MemoryStoreError.noSuchMemory
         }
     }
 
-    func testSearchMemory_withoutQuery_usesStoreWithUserScope() async throws {
+    private func chunk(_ id: String, _ text: String, unreadable: Bool = false) -> LocalMemoryChunk {
+        LocalMemoryChunk(
+            id: id, scope: "user", text: text, tags: [], pii: false, createdAt: Date(), createdBy: nil, source: nil, embedding: nil,
+            isUnreadable: unreadable
+        )
+    }
+
+    func testAPageOfAPlace_isAskedOfTheStoreAsItIs_andSaysWhichEntriesCannotBeOpened() async throws {
         let mockStore = MockMemoryStore()
-        mockStore.memoriesToReturn = [
-            LocalMemoryChunk(
-                id: "1",
-                scope: "user",
-                text: "Note",
-                tags: [],
-                pii: false,
-                createdAt: Date(),
-                createdBy: nil,
-                source: nil,
-                embedding: nil
-            )
-        ]
+        mockStore.memoriesToReturn = [chunk("1", "Note"), chunk("2", "", unreadable: true)]
         let service = MemoryService(memoryStore: mockStore)
 
-        let result = try await service.searchMemory(
-            covenId: nil,
-            query: nil,
-            scope: nil,
-            tags: nil,
-            limit: 10
-        )
+        let page = try await service.memories(in: .strix, limit: 100, offset: 200)
+        XCTAssertEqual(mockStore.calls.last, .init(place: .strix, limit: 100, offset: 200))
+        XCTAssertEqual(page.map(\.id), ["1", "2"])
+        XCTAssertNil(page[0].unreadable)
+        XCTAssertEqual(page[1].unreadable, true)
+    }
 
-        XCTAssertEqual(result.count, 1)
-        XCTAssertEqual(result.first?.content, "Note")
-        // Fallback scope for personal memories is "user".
-        XCTAssertEqual(mockStore.calls.last?.scope, "user")
-        XCTAssertEqual(mockStore.calls.last?.limit, 10)
+    func testWhatIsAskedAsAnAccount_reachesTheStoreAsThatAccount_andNotAsWhoeverIsSignedIn() async throws {
+        let mockStore = MockMemoryStore()
+        let service = MemoryService(memoryStore: mockStore, embed: { _ in nil }, currentAccount: { "whoever-is-signed-in" })
+
+        _ = try await service.memories(in: .strix, limit: 10, offset: 0, as: "ada")
+        _ = try await service.createMemory(in: .strix, content: "Note", tags: nil, as: "ada")
+        _ = try? await service.updateMemory(memoryId: "1", content: "Note", tags: nil, as: "ada")
+        try await service.deleteMemory(memoryId: "1", as: "ada")
+        XCTAssertEqual(mockStore.accounts, ["ada", "ada", "ada", "ada"])
+
+        // With no account given, each is done as the one signed in.
+        _ = try await service.memories(in: .strix, limit: 10)
+        try await service.deleteMemory(memoryId: "1")
+        XCTAssertEqual(mockStore.accounts.suffix(2), ["whoever-is-signed-in", "whoever-is-signed-in"])
+    }
+
+    func testWhereAMemoryIsKept_andWhatAThreadReads() {
+        XCTAssertEqual(MemoryPlace.aboutMe.scope, "user")
+        XCTAssertEqual(MemoryPlace.strix.scope, "coven")
+        XCTAssertEqual(MemoryPlace.coven("work").scope, "coven")
+        XCTAssertNil(MemoryPlace.strix.covenID)
+        XCTAssertEqual(MemoryPlace.coven("work").covenID, "work")
+
+        // A coven's threads read its pages; a thread in no coven reads the person's own and Strix's.
+        XCTAssertEqual(MemoryPlace.read(inCoven: "work"), [.coven("work")])
+        XCTAssertEqual(MemoryPlace.read(inCoven: nil), [.aboutMe, .strix])
     }
 }

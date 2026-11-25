@@ -1,24 +1,35 @@
 import Foundation
 
-/// OpenAI-compatible implementation of LLMClient.
+/// OpenAI-compatible implementation of LLMClient: OpenAI itself, and
+/// OpenRouter, which serves the same chat completions API at its own address.
 /// Marked @unchecked Sendable because all stored properties are immutable
 /// after init and URLSession is thread-safe.
 final class OpenAILLMClient: LLMClient, @unchecked Sendable {
+    static let openRouterBaseURL = URL(string: "https://openrouter.ai/api/v1")!
+
     private let apiKey: String
     private let baseURL: URL
+    private let providerID: String
+    private let providerName: String
     private let urlSession: URLSession
 
     /// - Parameters:
-    ///   - apiKey: OpenAI API key.
-    ///   - baseURL: Base URL for the API (overridable for testing).
+    ///   - apiKey: The provider's API key.
+    ///   - baseURL: Base URL for the API.
+    ///   - providerID: The provider slug reported on each response.
+    ///   - providerName: The provider's name in error messages.
     ///   - urlSession: Optional custom URLSession used primarily for tests.
     init(
         apiKey: String,
         baseURL: URL = URL(string: "https://api.openai.com/v1")!,
+        providerID: String = "openai",
+        providerName: String = "OpenAI",
         urlSession: URLSession? = nil
     ) {
         self.apiKey = apiKey
         self.baseURL = baseURL
+        self.providerID = providerID
+        self.providerName = providerName
         if let urlSession {
             self.urlSession = urlSession
         } else {
@@ -32,9 +43,41 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
     // MARK: - LLMClient
 
     func completeChat(messages: [LLMMessage], model: String, options: ChatOptions) async throws -> LLMChatResponse {
+        // A message's content is its text, or, when pictures go with it,
+        // parts: the text and then each picture as a data URL.
+        struct ImageURL: Encodable {
+            let url: String
+        }
+        struct ContentPart: Encodable {
+            let type: String
+            var text: String?
+            var image_url: ImageURL?
+        }
         struct RequestMessage: Encodable {
             let role: String
             let content: String
+            var images: [LLMImage] = []
+
+            enum CodingKeys: String, CodingKey {
+                case role
+                case content
+            }
+
+            func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(role, forKey: .role)
+                guard !images.isEmpty else {
+                    try container.encode(content, forKey: .content)
+                    return
+                }
+                let pictures = images.map {
+                    ContentPart(type: "image_url", image_url: ImageURL(url: "data:\($0.mimeType);base64,\($0.data.base64EncodedString())"))
+                }
+                // A message that is only pictures has no text part: an
+                // empty one is refused.
+                let text = content.isEmpty ? [] : [ContentPart(type: "text", text: content)]
+                try container.encode(text + pictures, forKey: .content)
+            }
         }
         // Native tool calling structures (OpenAI format)
         struct FunctionProperty: Encodable {
@@ -58,7 +101,7 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
         struct RequestBody: Encodable {
             let model: String
             let messages: [RequestMessage]
-            let temperature: Double
+            let temperature: Double?
             let tools: [ToolDef]?
         }
         // Response structures
@@ -101,10 +144,11 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
 
         let reqMessages = messages.map { msg in
-            RequestMessage(role: msg.role.rawValue, content: msg.content)
+            RequestMessage(role: msg.role.rawValue, content: msg.content, images: msg.images)
         }
 
         // Convert LLMToolDefinition → OpenAI native format
+        var wireToOriginalName: [String: String] = [:]
         let toolDefs: [ToolDef]? = options.tools?.isEmpty == false ? options.tools!.map { tool in
             var props: [String: FunctionProperty] = [:]
             var requiredParams: [String] = []
@@ -112,27 +156,33 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
                 props[param.name] = FunctionProperty(type: param.type, description: param.description)
                 if param.required { requiredParams.append(param.name) }
             }
+
+            // Function names must match ^[a-zA-Z0-9_-]{1,64}$, which excludes
+            // the dot in names such as `file.read`. Two names that differ only
+            // by a dot and an underscore get distinct wire names.
+            var wireName = tool.name.replacingOccurrences(of: ".", with: "_")
+            while wireToOriginalName[wireName] != nil {
+                wireName += "_"
+            }
+            wireToOriginalName[wireName] = tool.name
+
             return ToolDef(
                 type: "function",
                 function: FunctionDef(
-                    name: tool.name,
+                    name: wireName,
                     description: tool.description,
                     parameters: FunctionParameters(type: "object", properties: props, required: requiredParams)
                 )
             )
         } : nil
 
-        let body = RequestBody(
-            model: model,
-            messages: reqMessages,
-            temperature: options.temperature,
-            tools: toolDefs
-        )
-        request.httpBody = try JSONEncoder().encode(body)
-
-        let (data, response) = try await urlSession.data(for: request)
+        let (data, response) = try await ModelTemperature.send(
+            request, to: model, of: providerID, temperature: options.temperature, with: urlSession
+        ) { temperature in
+            try JSONEncoder().encode(RequestBody(model: model, messages: reqMessages, temperature: temperature, tools: toolDefs))
+        }
         if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-            let message = "OpenAI HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
+            let message = "\(providerName) HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
             throw NSError(
                 domain: "OpenAILLMClient",
                 code: http.statusCode,
@@ -143,12 +193,12 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
             throw NSError(
                 domain: "OpenAILLMClient",
                 code: -2,
-                userInfo: [NSLocalizedDescriptionKey: "OpenAI returned an empty response body."]
+                userInfo: [NSLocalizedDescriptionKey: "\(providerName) returned an empty response body."]
             )
         }
         let decoded = try JSONDecoder().decode(ResponseBody.self, from: data)
         guard let first = decoded.choices.first else {
-            throw NSError(domain: "OpenAILLMClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No choices in response"])
+            throw NSError(domain: "OpenAILLMClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "\(providerName) returned no choices."])
         }
 
         let msg = LLMMessage(role: .assistant, content: first.message.content ?? "")
@@ -162,17 +212,18 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
         var toolCalls: [LLMToolCall]? = nil
         if let nativeCalls = first.message.tool_calls, !nativeCalls.isEmpty {
             toolCalls = nativeCalls.compactMap { tc in
+                let name = wireToOriginalName[tc.function.name] ?? tc.function.name
                 guard let argsData = tc.function.arguments.data(using: .utf8),
                       let argsDict = try? JSONDecoder().decode([String: AnyJSONValue].self, from: argsData) else {
-                    return LLMToolCall(name: tc.function.name, arguments: [:])
+                    return LLMToolCall(name: name, arguments: [:])
                 }
-                return LLMToolCall(name: tc.function.name, arguments: argsDict)
+                return LLMToolCall(name: name, arguments: argsDict)
             }
         }
 
         return LLMChatResponse(
             message: msg,
-            providerID: "openai",
+            providerID: providerID,
             modelID: decoded.model,
             usage: usage,
             toolCalls: toolCalls
@@ -200,7 +251,7 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
 
         let (data, response) = try await urlSession.data(for: request)
         if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-            let message = "OpenAI embeddings HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
+            let message = "\(providerName) embeddings HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
             throw NSError(
                 domain: "OpenAILLMClient",
                 code: http.statusCode,
@@ -211,7 +262,7 @@ final class OpenAILLMClient: LLMClient, @unchecked Sendable {
             throw NSError(
                 domain: "OpenAILLMClient",
                 code: -2,
-                userInfo: [NSLocalizedDescriptionKey: "OpenAI returned an empty embeddings response body."]
+                userInfo: [NSLocalizedDescriptionKey: "\(providerName) returned an empty embeddings response body."]
             )
         }
         let decoded = try JSONDecoder().decode(EmbeddingResponse.self, from: data)

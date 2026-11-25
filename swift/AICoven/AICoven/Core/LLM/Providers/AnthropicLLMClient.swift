@@ -30,8 +30,26 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
     }
 
     func completeChat(messages: [LLMMessage], model: String, options: ChatOptions) async throws -> LLMChatResponse {
-        struct MessageContent: Encodable { let type = "text"
-            let text: String
+        // A part of a message: its text, or a picture that goes with it.
+        struct ImageSource: Encodable {
+            let type = "base64"
+            let media_type: String
+            let data: String
+        }
+        struct MessageContent: Encodable {
+            let type: String
+            var text: String?
+            var source: ImageSource?
+
+            init(text: String) {
+                type = "text"
+                self.text = text
+            }
+
+            init(image: LLMImage) {
+                type = "image"
+                source = ImageSource(media_type: image.mimeType, data: image.data.base64EncodedString())
+            }
         }
         struct RequestMessage: Encodable { let role: String
             let content: [MessageContent]
@@ -56,7 +74,7 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
             let max_tokens: Int
             let system: String?
             let messages: [RequestMessage]
-            let temperature: Double
+            let temperature: Double?
             let tools: [ToolDef]?
         }
         // Response structures — Anthropic returns content blocks that can be
@@ -93,7 +111,10 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
         let reqMessages = messages.filter { $0.role != .system }.map { msg in
             RequestMessage(
                 role: msg.role == .user ? "user" : "assistant",
-                content: [MessageContent(text: msg.content)]
+                // A message that is only pictures has no text part: an
+                // empty one is refused.
+                content: (msg.content.isEmpty && !msg.images.isEmpty ? [] : [MessageContent(text: msg.content)])
+                    + msg.images.map(MessageContent.init(image:))
             )
         }
 
@@ -118,17 +139,20 @@ final class AnthropicLLMClient: LLMClient, @unchecked Sendable {
             )
         } : nil
 
-        let body = RequestBody(
-            model: model,
-            max_tokens: options.maxTokens ?? 4096,
-            system: finalSystem,
-            messages: reqMessages,
-            temperature: options.temperature,
-            tools: toolDefs
-        )
-        request.httpBody = try JSONEncoder().encode(body)
-
-        let (data, response) = try await urlSession.data(for: request)
+        // Anthropic takes a temperature from 0 to 1; an agent's may be up
+        // to 2, as other providers take.
+        let (data, response) = try await ModelTemperature.send(
+            request, to: model, of: "anthropic", temperature: min(options.temperature, 1), with: urlSession
+        ) { temperature in
+            try JSONEncoder().encode(RequestBody(
+                model: model,
+                max_tokens: options.maxTokens ?? 4096,
+                system: finalSystem,
+                messages: reqMessages,
+                temperature: temperature,
+                tools: toolDefs
+            ))
+        }
         if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
             let message = "Anthropic HTTP \(http.statusCode). Response body omitted to avoid leaking provider/account metadata."
             throw NSError(

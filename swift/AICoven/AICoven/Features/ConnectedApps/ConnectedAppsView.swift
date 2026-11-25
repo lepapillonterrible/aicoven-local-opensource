@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// View for managing connected app integrations (GitHub, Google Drive).
+/// View for managing connected app integrations (GitHub, Google Drive, Figma, Linear).
 /// All OAuth tokens are stored locally in Keychain.
 struct ConnectedAppsView: View {
     @EnvironmentObject var storeService: StoreService
@@ -17,7 +17,16 @@ struct ConnectedAppsView: View {
     @State private var showingDeviceCodeSheet = false
     @State private var deviceUserCode: String = ""
     @State private var deviceVerificationUrl: String = ""
-    @State private var deviceFlowTask: Task<Void, Never>?
+    /// The sign-in with GitHub that is waiting for its code to be
+    /// authorised: closing the code's sheet calls it off.
+    @State private var deviceFlowTask: Task<OAuthTokenBundle, Error>?
+    /// The code's sheet is on screen, or on its way off it: no other
+    /// sign-in begins until it has gone, so what its closing calls off is
+    /// the sign-in whose code it showed.
+    @State private var codeSheetIsUp = false
+
+    /// The token sheet of an app that connects with one, when it is asked for.
+    @State private var tokenRequest: AppTokenRequest?
 
     // Google Picker state
     @State private var showingGooglePicker = false
@@ -33,67 +42,71 @@ struct ConnectedAppsView: View {
         Bundle.main.infoDictionary?["GOOGLE_OAUTH_CLIENT_ID"] as? String ?? "870439799161-1c7u8utd0t0kh3ote5kugh8cj9961ugb.apps.googleusercontent.com"
     }
 
+    /// A Settings pane, on the stack that shows the pane (which its MCP
+    /// servers page is pushed on): a stack of its own inside one pushed by
+    /// a path empties that path, and the pane is gone as it arrives.
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 24) {
+        ScrollView {
+            VStack(spacing: 24) {
 
-                    // Header
-                    headerSection
+                // Header
+                headerSection
 
-                    // Info banner
-                    infoBanner
+                // Info banner
+                infoBanner
 
-                    // Connected apps list
-                    VStack(spacing: 16) {
-                        ForEach(ConnectedAppProvider.allCases, id: \.rawValue) { provider in
-                            ConnectedAppRow(
-                                provider: provider,
-                                account: accounts.first { $0.provider == provider && $0.status == .connected },
-                                isConnecting: connectingProvider == provider,
-                                onConnect: { await connect(provider: provider) },
-                                onDisconnect: { await disconnect(provider: provider) },
-                                onBrowseDrive: provider == .googleDrive ? { showingGooglePicker = true } : nil
-                            )
+                // Connected apps list
+                VStack(spacing: 16) {
+                    ForEach(ConnectedAppProvider.allCases, id: \.rawValue) { provider in
+                        ConnectedAppRow(
+                            provider: provider,
+                            account: accounts.first { $0.provider == provider && $0.status == .connected },
+                            isConnecting: connectingProvider == provider,
+                            waitsForAnotherSignIn: (connectingProvider != nil || codeSheetIsUp) && !provider.connectsWithToken,
+                            onConnect: { await connect(provider: provider) },
+                            onDisconnect: { await disconnect(provider: provider) },
+                            onBrowseDrive: provider == .googleDrive ? { showingGooglePicker = true } : nil,
+                            needsToken: provider.accountWaitingForAToken(in: accounts),
+                            onReplaceToken: { replaceToken(of: $0) }
+                        )
+                    }
+                }
+                .padding(.horizontal)
+
+                // Show recently picked files if any
+                if !pickedFiles.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Recently Picked Files")
+                            .font(.aicovenH3)
+                            .foregroundColor(.aicovenTextSecondary)
+                        ForEach(pickedFiles) { file in
+                            HStack {
+                                Image(systemName: "doc.fill")
+                                    .foregroundColor(.aicovenTeal)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(file.name)
+                                        .font(.aicovenBodySmall)
+                                        .foregroundColor(.aicovenTextPrimary)
+                                    Text(file.id)
+                                        .font(.aicovenCaption)
+                                        .foregroundColor(.aicovenTextTertiary)
+                                }
+                                Spacer()
+                            }
+                            .padding(8)
+                            .background(Color.aicovenGlass)
+                            .cornerRadius(8)
                         }
                     }
                     .padding(.horizontal)
-
-                    // Show recently picked files if any
-                    if !pickedFiles.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Recently Picked Files")
-                                .font(.aicovenH3)
-                                .foregroundColor(.aicovenTextSecondary)
-                            ForEach(pickedFiles) { file in
-                                HStack {
-                                    Image(systemName: "doc.fill")
-                                        .foregroundColor(.aicovenTeal)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(file.name)
-                                            .font(.aicovenBodySmall)
-                                            .foregroundColor(.aicovenTextPrimary)
-                                        Text(file.id)
-                                            .font(.aicovenCaption)
-                                            .foregroundColor(.aicovenTextTertiary)
-                                    }
-                                    Spacer()
-                                }
-                                .padding(8)
-                                .background(Color.aicovenGlass)
-                                .cornerRadius(8)
-                            }
-                        }
-                        .padding(.horizontal)
-                    }
-
-                    mcpServersSection
-
-                    Spacer(minLength: 40)
                 }
+
+                mcpServersSection
+
+                Spacer(minLength: 40)
             }
-            .background(NebulaBackground())
         }
+        .background(NebulaBackground())
         .task { await loadAccounts() }
         .alert("Error", isPresented: Binding(
             get: { errorMessage != nil },
@@ -104,18 +117,22 @@ struct ConnectedAppsView: View {
             if let errorMessage { Text(errorMessage) }
         }
         .sheet(isPresented: $showingDeviceCodeSheet) {
-            // Called when sheet is dismissed (user cancelled)
+            // The sheet has gone, however it was closed: its sign-in is
+            // called off if it still runs.
             deviceFlowTask?.cancel()
             deviceFlowTask = nil
+            codeSheetIsUp = false
         } content: {
             GitHubDeviceCodeSheet(
                 userCode: deviceUserCode,
                 verificationUrl: deviceVerificationUrl,
                 onCancel: {
+                    // The sign-in is called off. `connect` says it is over
+                    // (`connectingProvider`) once it has ended, and not
+                    // before: no other begins while this one still runs.
                     deviceFlowTask?.cancel()
                     deviceFlowTask = nil
                     showingDeviceCodeSheet = false
-                    connectingProvider = nil
                 }
             )
         }
@@ -135,10 +152,15 @@ struct ConnectedAppsView: View {
                 )
             }
         }
+        .sheet(item: $tokenRequest) { request in
+            AppTokenSheet(request: request) {
+                Task { await loadAccounts() }
+            }
+        }
         .sheet(isPresented: $showUpsell) {
             FeatureUpsellView(
                 feature: upsellFeature,
-                featureDescription: "Connected Apps require the Tools Pack upgrade. Integrate GitHub and Google Drive to give your AI agent access to your files and repositories."
+                featureDescription: "Connected Apps require the Tools Pack upgrade. Integrate GitHub, Google Drive, Figma and Linear to give your AI agent access to your files, repositories, designs and issues."
             )
             .environmentObject(storeService)
         }
@@ -175,7 +197,7 @@ struct ConnectedAppsView: View {
                     .fontWeight(.semibold)
                     .foregroundColor(.aicovenTextPrimary)
 
-                Text("OAuth tokens are stored securely in your device's Keychain")
+                Text("Tokens are stored securely in your device's Keychain")
                     .font(.aicovenCaption)
                     .foregroundColor(.aicovenTextSecondary)
             }
@@ -197,7 +219,7 @@ struct ConnectedAppsView: View {
                 .padding(.horizontal, 16)
 
             // Navigation link to full MCP management view
-            NavigationLink(destination: MCPServerManagementView()) {
+            NavigationLink(destination: MCPServerManagementView().stoneBackButton().onAppear { AnalyticsService.shared.trackMCPServersOpened() }) {
                 GlassCard {
                     HStack(spacing: 16) {
                         // Icon badge for MCP servers
@@ -241,12 +263,35 @@ struct ConnectedAppsView: View {
     private func connect(provider: ConnectedAppProvider) async {
         // Gate connected apps behind the Tools Pack entitlement
         if !storeService.hasToolsPack {
-            upsellFeature = provider == .github ? .githubTool : .googleDriveTool
+            upsellFeature = switch provider {
+            case .github: .githubTool
+            case .googleDrive: .googleDriveTool
+            case .figma: .figmaTool
+            case .linear: .linearTool
+            }
             showUpsell = true
             return
         }
 
+        // An app connected with a token asks for it in its own sheet.
+        if provider.connectsWithToken {
+            tokenRequest = AppTokenRequest(provider: provider, replacing: nil)
+            return
+        }
+
+        // One sign-in at a time: the code on screen, and what its Cancel
+        // calls off, are then the one sign-in's.
+        guard connectingProvider == nil, !codeSheetIsUp else { return }
         connectingProvider = provider
+        // However it ends, the sign-in is over then, and not before; and
+        // its code is off the screen, an error's too.
+        defer {
+            connectingProvider = nil
+            showingDeviceCodeSheet = false
+        }
+        // Signing in waits for the person and the app: what comes of it
+        // is kept only for the account that began it.
+        let startedBy = await ConnectedAccountsService.shared.signedInAccount()
 
         do {
             let tokenBundle: OAuthTokenBundle
@@ -266,16 +311,18 @@ struct ConnectedAppsView: View {
                     deviceUserCode = userCode
                     deviceVerificationUrl = verificationUrl
                     DispatchQueue.main.async {
+                        codeSheetIsUp = true
                         showingDeviceCodeSheet = true
                     }
                 }
 
-                // Start flow in a task so we can cancel it
-                tokenBundle = try await withTaskCancellationHandler {
-                    try await flow.authenticate()
-                } onCancel: {
-                    // Task was cancelled (user dismissed sheet)
-                }
+                // The waiting is a task of its own, held so that closing
+                // the code's sheet stops it.
+                let signIn = Task { try await flow.authenticate() }
+                deviceFlowTask = signIn
+                tokenBundle = try await signIn.value
+                // Called off just as GitHub answered: still called off.
+                if signIn.isCancelled { throw CancellationError() }
 
                 // Hide device code sheet
                 showingDeviceCodeSheet = false
@@ -292,6 +339,10 @@ struct ConnectedAppsView: View {
                 // Fetch user info
                 displayName = try await fetchGoogleEmail(token: tokenBundle.accessToken)
                 metadata["email"] = displayName
+
+            case .figma, .linear:
+                // Connected in its token sheet, above.
+                return
             }
 
             // Create account
@@ -299,19 +350,24 @@ struct ConnectedAppsView: View {
                 provider: provider,
                 displayName: displayName,
                 tokenBundle: tokenBundle,
-                metadata: metadata
+                metadata: metadata,
+                startedBy: startedBy
             )
 
             // Reload accounts
             await loadAccounts()
-            connectingProvider = nil
 
         } catch is CancellationError {
             // User cancelled - not an error
-            connectingProvider = nil
+            return
+        } catch let error as URLError where error.code == .cancelled {
+            // Called off while a request was under way: the same.
+            return
+        } catch ConnectedAccountError.accountChanged {
+            // Another account's by now: nothing was kept, and nothing is
+            // said to whoever is signed in.
             return
         } catch {
-            connectingProvider = nil
             if (error as NSError).domain == "com.apple.AuthenticationServices.WebAuthenticationSession",
                (error as NSError).code == 1 {
                 // User cancelled - not an error
@@ -321,9 +377,23 @@ struct ConnectedAppsView: View {
         }
     }
 
-    /// Disconnect from a provider
+    /// Asks for a new token for a connection whose token was refused,
+    /// behind the Tools Pack as connecting is.
+    private func replaceToken(of account: ConnectedAccount) {
+        if !storeService.hasToolsPack {
+            upsellFeature = account.provider == .linear ? .linearTool : .figmaTool
+            showUpsell = true
+            return
+        }
+        tokenRequest = AppTokenRequest(provider: account.provider, replacing: account)
+    }
+
+    /// Disconnect from a provider: the connection its row shows. For an
+    /// app connected with a token that is, where none is connected, the
+    /// one that waits for a new token.
     private func disconnect(provider: ConnectedAppProvider) async {
-        guard let account = accounts.first(where: { $0.provider == provider && $0.status == .connected }) else {
+        let connected = accounts.first { $0.provider == provider && $0.status == .connected }
+        guard let account = connected ?? provider.accountWaitingForAToken(in: accounts) else {
             return
         }
 
@@ -374,12 +444,22 @@ struct ConnectedAppRow: View {
     let provider: ConnectedAppProvider
     let account: ConnectedAccount?
     let isConnecting: Bool
+    /// Another app's sign-in is under way: this one's waits for it to end.
+    var waitsForAnotherSignIn = false
     let onConnect: () async -> Void
     let onDisconnect: () async -> Void
     let onBrowseDrive: (() -> Void)?
+    /// A connection whose token was refused and waits for a new one.
+    var needsToken: ConnectedAccount?
+    var onReplaceToken: (ConnectedAccount) -> Void = { _ in }
 
     var isConnected: Bool {
         account != nil
+    }
+
+    /// What the app calls what it is connected with: a token, or a key.
+    private var tokenNoun: String {
+        AppTokenSheet.Texts.of(provider).noun
     }
 
     var body: some View {
@@ -406,6 +486,18 @@ struct ConnectedAppRow: View {
                         Text(account.displayName)
                             .font(.aicovenCaption)
                             .foregroundColor(.aicovenTextSecondary)
+                        if provider.connectsWithToken {
+                            Text("Disconnecting deletes this app's copy of the \(tokenNoun). Revoke the \(tokenNoun) in \(provider.displayName) too.")
+                                .font(.aicovenCaption)
+                                .foregroundColor(.aicovenTextTertiary)
+                        }
+                    } else if let needsToken {
+                        Text(needsToken.displayName)
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenTextSecondary)
+                        Text("\(tokenNoun.capitalized) refused. Needs a new \(tokenNoun).")
+                            .font(.aicovenCaption)
+                            .foregroundColor(.aicovenError)
                     } else {
                         Text("Not connected")
                             .font(.aicovenCaption)
@@ -433,11 +525,21 @@ struct ConnectedAppRow: View {
                             Task { await onDisconnect() }
                         }
                         .buttonStyle(DisconnectButtonStyle())
+                    } else if let needsToken {
+                        Button("Replace \(tokenNoun.capitalized)") {
+                            onReplaceToken(needsToken)
+                        }
+                        .buttonStyle(ConnectButtonStyle())
+                        Button("Disconnect") {
+                            Task { await onDisconnect() }
+                        }
+                        .buttonStyle(DisconnectButtonStyle())
                     } else {
                         Button("Connect") {
                             Task { await onConnect() }
                         }
                         .buttonStyle(ConnectButtonStyle())
+                        .disabled(waitsForAnotherSignIn)
                     }
                 }
             }
@@ -449,6 +551,8 @@ struct ConnectedAppRow: View {
         switch provider {
         case .github: .purple
         case .googleDrive: .blue
+        case .figma: .orange
+        case .linear: .indigo
         }
     }
 }
