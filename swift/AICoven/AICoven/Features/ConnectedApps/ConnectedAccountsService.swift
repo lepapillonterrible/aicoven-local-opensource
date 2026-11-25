@@ -12,6 +12,8 @@ actor ConnectedAccountsService {
 
     /// Keychain key prefix for MCP tokens (will be user-scoped)
     private let mcpKeychainPrefix = "mcp_server_token_"
+    /// Keychain key prefix for MCP servers' whole addresses (user-scoped).
+    private let mcpAddressPrefix = "mcp_server_address_"
 
     /// The signed-in account: connections are kept apart by account.
     private let currentUser: @Sendable () async -> String
@@ -84,6 +86,13 @@ actor ConnectedAccountsService {
 
     /// In-memory cache of MCP servers (nil means not yet loaded)
     private var mcpServersCache: [MCPServerAccount]?
+    /// The whole address each server has in the Keychain, as last read or
+    /// written there, by server id.
+    private var keptAddresses: [String: String] = [:]
+    /// Servers whose whole address is in the Keychain but could not be
+    /// read from it (the Keychain locked, say), as they are stored: not
+    /// given to anything, never written over, and read again later.
+    private var addressesNotRead: [String: MCPServerAccount] = [:]
 
     init(
         currentUser: @escaping @Sendable () async -> String = { await MainActor.run { UserScope.currentUserID } },
@@ -116,6 +125,8 @@ actor ConnectedAccountsService {
             loadedFor = user
             loadAccountsFromStorage()
             loadMCPServersFromStorage()
+        } else if !addressesNotRead.isEmpty {
+            readAddressesAgain()
         }
         return user
     }
@@ -450,6 +461,10 @@ actor ConnectedAccountsService {
     func deleteMCPServer(id: String) async throws {
         let owner = await ensureAccountsLoaded()
         deleteMCPToken(forServerId: id, of: owner)
+        let address = tokenName(mcpAddressPrefix + id, of: owner)
+        tokens.delete(address.key, address.service)
+        keptAddresses[id] = nil
+        addressesNotRead[id] = nil
         mcpServersCache?.removeAll { $0.id == id }
         saveMCPServersToStorage()
     }
@@ -699,6 +714,9 @@ actor ConnectedAccountsService {
 
     /// Load MCP servers from UserDefaults
     private func loadMCPServersFromStorage() {
+        // What was held for the account before is none of this one's.
+        keptAddresses = [:]
+        addressesNotRead = [:]
         guard let key = storageKey("mcp_servers"), let data = defaults.data(forKey: key) else {
             mcpServersCache = []
             return
@@ -708,10 +726,68 @@ actor ConnectedAccountsService {
         decoder.dateDecodingStrategy = .iso8601
 
         do {
-            mcpServersCache = try decoder.decode([MCPServerAccount].self, from: data)
+            let stored = try decoder.decode([MCPServerAccount].self, from: data)
+            // Each whole address is read back from the Keychain; one kept
+            // in the preferences before is moved there now. One that cannot
+            // be read is held apart as it is stored, and read again later;
+            // meanwhile it is listed with no address and as failing, so
+            // that what refers to it (a coven's choice) still sees it, and
+            // nothing can use it.
+            var keptInThePreferences = false
+            var servers: [MCPServerAccount] = []
+            for server in stored {
+                if server.addressInKeychain == true {
+                    guard let address = keptAddress(of: server.id) else {
+                        addressesNotRead[server.id] = server
+                        servers.append(Self.unusable(server))
+                        continue
+                    }
+                    var server = server
+                    server.serverUrl = address
+                    server.addressInKeychain = nil
+                    keptAddresses[server.id] = address
+                    servers.append(server)
+                } else {
+                    keptInThePreferences = true
+                    servers.append(server)
+                }
+            }
+            mcpServersCache = servers
+            if keptInThePreferences { saveMCPServersToStorage() }
         } catch {
             AppErrorReporter.log(error: error, context: "ConnectedAccountsService.loadMCPServersFromStorage")
             mcpServersCache = []
+        }
+    }
+
+    /// A server whose address cannot be read now, as it is listed meanwhile.
+    private static func unusable(_ stored: MCPServerAccount) -> MCPServerAccount {
+        var server = stored
+        server.serverUrl = ""
+        server.status = .error
+        server.addressInKeychain = nil
+        return server
+    }
+
+    /// A server's whole address as the Keychain has it, for the account in
+    /// memory; nil where it cannot be read.
+    private func keptAddress(of id: String) -> String? {
+        guard let owner = loadedFor else { return nil }
+        let name = tokenName(mcpAddressPrefix + id, of: owner)
+        return tokens.load(name.key, name.service)
+    }
+
+    /// Tries again to read the addresses that could not be read: a server
+    /// whose address is read now is given again.
+    private func readAddressesAgain() {
+        for (id, stored) in addressesNotRead {
+            guard let address = keptAddress(of: id) else { continue }
+            var server = stored
+            server.serverUrl = address
+            server.addressInKeychain = nil
+            keptAddresses[id] = address
+            addressesNotRead[id] = nil
+            mcpServersCache = (mcpServersCache ?? []).filter { $0.id != id } + [server]
         }
     }
 
@@ -720,10 +796,41 @@ actor ConnectedAccountsService {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
 
-        guard let key = storageKey("mcp_servers") else { return }
+        guard let key = storageKey("mcp_servers"), let owner = loadedFor else { return }
+
+        // The whole address goes to the Keychain, beside the server's
+        // token (only where it changed); the preferences keep only what
+        // Settings shows. Where the Keychain refuses, a server whose
+        // address it holds already keeps that one, and only one never
+        // moved there is kept whole, so that it is not lost.
+        let kept = (mcpServersCache ?? []).filter { addressesNotRead[$0.id] == nil }.map { server -> MCPServerAccount in
+            var shown = server
+            shown.serverUrl = server.shownAddress
+            shown.addressInKeychain = true
+            if keptAddresses[server.id] == server.serverUrl { return shown }
+            let name = tokenName(mcpAddressPrefix + server.id, of: owner)
+            do {
+                try tokens.save(name.key, server.serverUrl, name.service)
+                keptAddresses[server.id] = server.serverUrl
+                return shown
+            } catch {
+                AppErrorReporter.log(message: "An MCP server's address could not be kept in the Keychain (\(type(of: error)))", context: "ConnectedAccountsService.saveMCPServersToStorage")
+                // The Keychain can have taken the old address out before
+                // refusing the new one: it is put back, and kept as the
+                // server's (the change did not stick). Where it cannot be,
+                // the new address is kept whole rather than lost.
+                if let old = keptAddresses[server.id], (try? tokens.save(name.key, old, name.service)) != nil {
+                    var kept = shown
+                    kept.serverUrl = MCPServerAccount.shown(old)
+                    return kept
+                }
+                keptAddresses[server.id] = nil
+                return server
+            }
+        } + Array(addressesNotRead.values)
 
         do {
-            let data = try encoder.encode(mcpServersCache)
+            let data = try encoder.encode(kept)
             defaults.set(data, forKey: key)
         } catch {
             AppErrorReporter.log(error: error, context: "ConnectedAccountsService.saveMCPServersToStorage")
