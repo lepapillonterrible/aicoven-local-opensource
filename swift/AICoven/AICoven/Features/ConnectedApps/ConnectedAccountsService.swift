@@ -86,6 +86,13 @@ actor ConnectedAccountsService {
 
     /// In-memory cache of MCP servers (nil means not yet loaded)
     private var mcpServersCache: [MCPServerAccount]?
+    /// The whole address each server has in the Keychain, as last read or
+    /// written there, by server id.
+    private var keptAddresses: [String: String] = [:]
+    /// Servers whose whole address is in the Keychain but could not be
+    /// read from it (the Keychain locked, say), as they are stored: not
+    /// given to anything, never written over, and read again later.
+    private var addressesNotRead: [String: MCPServerAccount] = [:]
 
     init(
         currentUser: @escaping @Sendable () async -> String = { await MainActor.run { UserScope.currentUserID } },
@@ -118,6 +125,8 @@ actor ConnectedAccountsService {
             loadedFor = user
             loadAccountsFromStorage()
             loadMCPServersFromStorage()
+        } else if !addressesNotRead.isEmpty {
+            readAddressesAgain()
         }
         return user
     }
@@ -454,6 +463,8 @@ actor ConnectedAccountsService {
         deleteMCPToken(forServerId: id, of: owner)
         let address = tokenName(mcpAddressPrefix + id, of: owner)
         tokens.delete(address.key, address.service)
+        keptAddresses[id] = nil
+        addressesNotRead[id] = nil
         mcpServersCache?.removeAll { $0.id == id }
         saveMCPServersToStorage()
     }
@@ -714,23 +725,55 @@ actor ConnectedAccountsService {
         do {
             let stored = try decoder.decode([MCPServerAccount].self, from: data)
             // Each whole address is read back from the Keychain; one kept
-            // in the preferences before is moved there now.
+            // in the preferences before is moved there now. One that cannot
+            // be read is held apart as it is stored, and read again later.
+            keptAddresses = [:]
+            addressesNotRead = [:]
             var keptInThePreferences = false
-            mcpServersCache = stored.map { server in
-                var server = server
-                if server.addressInKeychain == true, let owner = loadedFor {
-                    let name = tokenName(mcpAddressPrefix + server.id, of: owner)
-                    if let address = tokens.load(name.key, name.service) { server.serverUrl = address }
+            var servers: [MCPServerAccount] = []
+            for server in stored {
+                if server.addressInKeychain == true {
+                    guard let address = keptAddress(of: server.id) else {
+                        addressesNotRead[server.id] = server
+                        continue
+                    }
+                    var server = server
+                    server.serverUrl = address
+                    server.addressInKeychain = nil
+                    keptAddresses[server.id] = address
+                    servers.append(server)
                 } else {
                     keptInThePreferences = true
+                    servers.append(server)
                 }
-                server.addressInKeychain = nil
-                return server
             }
+            mcpServersCache = servers
             if keptInThePreferences { saveMCPServersToStorage() }
         } catch {
             AppErrorReporter.log(error: error, context: "ConnectedAccountsService.loadMCPServersFromStorage")
             mcpServersCache = []
+        }
+    }
+
+    /// A server's whole address as the Keychain has it, for the account in
+    /// memory; nil where it cannot be read.
+    private func keptAddress(of id: String) -> String? {
+        guard let owner = loadedFor else { return nil }
+        let name = tokenName(mcpAddressPrefix + id, of: owner)
+        return tokens.load(name.key, name.service)
+    }
+
+    /// Tries again to read the addresses that could not be read: a server
+    /// whose address is read now is given again.
+    private func readAddressesAgain() {
+        for (id, stored) in addressesNotRead {
+            guard let address = keptAddress(of: id) else { continue }
+            var server = stored
+            server.serverUrl = address
+            server.addressInKeychain = nil
+            keptAddresses[id] = address
+            addressesNotRead[id] = nil
+            mcpServersCache = (mcpServersCache ?? []) + [server]
         }
     }
 
@@ -742,20 +785,25 @@ actor ConnectedAccountsService {
         guard let key = storageKey("mcp_servers"), let owner = loadedFor else { return }
 
         // The whole address goes to the Keychain, beside the server's
-        // token; the preferences keep only what Settings shows. One the
-        // Keychain did not take is kept as it was, so it is not lost.
+        // token (only where it changed); the preferences keep only what
+        // Settings shows. Where the Keychain refuses, a server whose
+        // address it holds already keeps that one, and only one never
+        // moved there is kept whole, so that it is not lost.
         let kept = (mcpServersCache ?? []).map { server -> MCPServerAccount in
-            var server = server
+            var shown = server
+            shown.serverUrl = server.shownAddress
+            shown.addressInKeychain = true
+            if keptAddresses[server.id] == server.serverUrl { return shown }
             let name = tokenName(mcpAddressPrefix + server.id, of: owner)
             do {
                 try tokens.save(name.key, server.serverUrl, name.service)
-                server.serverUrl = server.shownAddress
-                server.addressInKeychain = true
+                keptAddresses[server.id] = server.serverUrl
+                return shown
             } catch {
                 AppErrorReporter.log(message: "An MCP server's address could not be kept in the Keychain (\(type(of: error)))", context: "ConnectedAccountsService.saveMCPServersToStorage")
+                return keptAddresses[server.id] != nil ? shown : server
             }
-            return server
-        }
+        } + Array(addressesNotRead.values)
 
         do {
             let data = try encoder.encode(kept)

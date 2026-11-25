@@ -3,7 +3,8 @@ import Foundation
 /// Represents a configured MCP server connection.
 /// Stored locally in UserDefaults with its whole address and its token in
 /// the Keychain (an address can carry a key, in its path or its query):
-/// the preferences keep only `shownAddress`.
+/// the preferences keep only `shownAddress` (but for an address the
+/// Keychain refused before it ever held it, kept whole so it is not lost).
 /// Conforms to Sendable since all properties are value types.
 struct MCPServerAccount: Identifiable, Codable, Equatable {
     /// Unique identifier for this connection
