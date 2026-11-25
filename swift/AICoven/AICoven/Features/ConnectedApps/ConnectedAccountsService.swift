@@ -714,6 +714,9 @@ actor ConnectedAccountsService {
 
     /// Load MCP servers from UserDefaults
     private func loadMCPServersFromStorage() {
+        // What was held for the account before is none of this one's.
+        keptAddresses = [:]
+        addressesNotRead = [:]
         guard let key = storageKey("mcp_servers"), let data = defaults.data(forKey: key) else {
             mcpServersCache = []
             return
@@ -726,15 +729,17 @@ actor ConnectedAccountsService {
             let stored = try decoder.decode([MCPServerAccount].self, from: data)
             // Each whole address is read back from the Keychain; one kept
             // in the preferences before is moved there now. One that cannot
-            // be read is held apart as it is stored, and read again later.
-            keptAddresses = [:]
-            addressesNotRead = [:]
+            // be read is held apart as it is stored, and read again later;
+            // meanwhile it is listed with no address and as failing, so
+            // that what refers to it (a coven's choice) still sees it, and
+            // nothing can use it.
             var keptInThePreferences = false
             var servers: [MCPServerAccount] = []
             for server in stored {
                 if server.addressInKeychain == true {
                     guard let address = keptAddress(of: server.id) else {
                         addressesNotRead[server.id] = server
+                        servers.append(Self.unusable(server))
                         continue
                     }
                     var server = server
@@ -755,6 +760,15 @@ actor ConnectedAccountsService {
         }
     }
 
+    /// A server whose address cannot be read now, as it is listed meanwhile.
+    private static func unusable(_ stored: MCPServerAccount) -> MCPServerAccount {
+        var server = stored
+        server.serverUrl = ""
+        server.status = .error
+        server.addressInKeychain = nil
+        return server
+    }
+
     /// A server's whole address as the Keychain has it, for the account in
     /// memory; nil where it cannot be read.
     private func keptAddress(of id: String) -> String? {
@@ -773,7 +787,7 @@ actor ConnectedAccountsService {
             server.addressInKeychain = nil
             keptAddresses[id] = address
             addressesNotRead[id] = nil
-            mcpServersCache = (mcpServersCache ?? []) + [server]
+            mcpServersCache = (mcpServersCache ?? []).filter { $0.id != id } + [server]
         }
     }
 
@@ -789,7 +803,7 @@ actor ConnectedAccountsService {
         // Settings shows. Where the Keychain refuses, a server whose
         // address it holds already keeps that one, and only one never
         // moved there is kept whole, so that it is not lost.
-        let kept = (mcpServersCache ?? []).map { server -> MCPServerAccount in
+        let kept = (mcpServersCache ?? []).filter { addressesNotRead[$0.id] == nil }.map { server -> MCPServerAccount in
             var shown = server
             shown.serverUrl = server.shownAddress
             shown.addressInKeychain = true
@@ -801,7 +815,17 @@ actor ConnectedAccountsService {
                 return shown
             } catch {
                 AppErrorReporter.log(message: "An MCP server's address could not be kept in the Keychain (\(type(of: error)))", context: "ConnectedAccountsService.saveMCPServersToStorage")
-                return keptAddresses[server.id] != nil ? shown : server
+                // The Keychain can have taken the old address out before
+                // refusing the new one: it is put back, and kept as the
+                // server's (the change did not stick). Where it cannot be,
+                // the new address is kept whole rather than lost.
+                if let old = keptAddresses[server.id], (try? tokens.save(name.key, old, name.service)) != nil {
+                    var kept = shown
+                    kept.serverUrl = MCPServerAccount.shown(old)
+                    return kept
+                }
+                keptAddresses[server.id] = nil
+                return server
             }
         } + Array(addressesNotRead.values)
 

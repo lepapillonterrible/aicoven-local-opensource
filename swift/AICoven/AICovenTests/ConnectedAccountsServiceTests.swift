@@ -100,6 +100,7 @@ final class ConnectedAccountsServiceTests: XCTestCase {
         XCTAssertFalse(text.contains("secret"), "Moved out of the preferences as it is read")
         XCTAssertEqual(MCPServerAccount.shown("https://mcp.example.com"), "https://mcp.example.com")
         XCTAssertEqual(MCPServerAccount.shown("https://user:pass@mcp.example.com:8443/"), "https://mcp.example.com:8443")
+        XCTAssertEqual(MCPServerAccount.shown("http://[::1]:8080/x"), "http://[::1]:8080/…")
     }
 
     /// Tokens kept in memory that can refuse to be read or written, as a
@@ -143,7 +144,9 @@ final class ConnectedAccountsServiceTests: XCTestCase {
         tokens.refuse(reads: true, writes: false)
         let locked = ConnectedAccountsService(currentUser: { "a" }, defaults: defaults, tokens: tokens.store)
         let listed = await locked.getAllMCPServers()
-        XCTAssertFalse(listed.contains { $0.id == made.id }, "Not given with an address that is not its own")
+        let held = try XCTUnwrap(listed.first { $0.id == made.id }, "Still listed, so a coven's choice still sees it")
+        XCTAssertEqual(held.serverUrl, "", "With no address, so nothing can use it")
+        XCTAssertEqual(held.status, .error)
         _ = try await locked.createMCPServer(name: "Other", serverUrl: "https://other.example/mcp", transport: .streamableHttp, authType: .none)
         XCTAssertTrue(tokens.kept.all.values.contains { $0.values.contains(address) }, "The whole address is not written over")
 
@@ -169,8 +172,26 @@ final class ConnectedAccountsServiceTests: XCTestCase {
         // One the Keychain never held is kept whole rather than lost.
         let fresh = try await service.createMCPServer(name: "New", serverUrl: "https://new.example/k/fresh-secret", transport: .streamableHttp, authType: .none)
         XCTAssertTrue(try String(decoding: XCTUnwrap(defaults.data(forKey: key)), as: UTF8.self).contains("fresh-secret"))
-        XCTAssertEqual(MCPServerAccount.shown("http://[::1]:8080/x"), "http://[::1]:8080/…")
-        _ = fresh
+        XCTAssertEqual(fresh.name, "New")
+    }
+
+    func testAServerHeldApartForOneAccount_isNoneOfTheNextAccountsToKeep() async throws {
+        let (defaults, suite) = try defaultsOfThisTest()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let tokens = FlakyTokens()
+        let who = Who("a")
+        _ = try await ConnectedAccountsService(currentUser: { "a" }, defaults: defaults, tokens: tokens.store)
+            .createMCPServer(name: "A's", serverUrl: "https://a.example/k/secret", transport: .streamableHttp, authType: .none)
+        tokens.refuse(reads: true, writes: false)
+        let service = ConnectedAccountsService(currentUser: { who.id }, defaults: defaults, tokens: tokens.store)
+        _ = await service.getAllMCPServers()
+
+        // B, with no servers stored, signs in and adds one.
+        who.signIn("b")
+        tokens.refuse(reads: false, writes: false)
+        _ = try await service.createMCPServer(name: "B's", serverUrl: "https://b.example/mcp", transport: .streamableHttp, authType: .none)
+        let ofB = try String(decoding: XCTUnwrap(defaults.data(forKey: UserScope.scopedKey("mcp_servers", for: "b"))), as: UTF8.self)
+        XCTAssertFalse(ofB.contains("A's"), "Nothing of A's is kept as B's")
     }
 
     func testATokenIsKeptUnderItsAccountsNames_andAnotherAccountNeitherReadsNorRemovesIt() async throws {
