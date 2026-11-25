@@ -13,6 +13,8 @@ final class StrixAgentTests: XCTestCase {
 
     override func setUp() async throws {
         try await super.setUp()
+        // Strix's instructions are sealed with the account's key.
+        await DataEncryptionService.shared.unlockForTestingEphemeral()
         account = await UserScope.currentUserID
         let names = [
             "strix_settings.v1", "llm_provider", "anthropic_model", "gemini_model", "openai_model", "ollama_model", "openclaw_model",
@@ -26,6 +28,7 @@ final class StrixAgentTests: XCTestCase {
 
     override func tearDown() async throws {
         saved.forEach { defaults.set($0.1, forKey: $0.0) }
+        await DataEncryptionService.shared.lock()
         try await super.tearDown()
     }
 
@@ -51,7 +54,10 @@ final class StrixAgentTests: XCTestCase {
         XCTAssertEqual(saved.autonomousMaxSteps, 12)
         // What is stored is what was given back, and what a turn reads.
         let stored = try XCTUnwrap(StrixSettingsService.stored(of: account))
-        XCTAssertEqual([stored.systemPrompt, stored.provider, stored.model], ["You plan the week.", "anthropic", "claude-sonnet-4-6"])
+        XCTAssertEqual([stored.provider, stored.model], ["anthropic", "claude-sonnet-4-6"])
+        XCTAssertNil(stored.systemPrompt, "The instructions are kept sealed, not as text")
+        let instructions = await StrixSettingsService.shared.instructions(of: account)
+        XCTAssertEqual(instructions, "You plan the week.")
         XCTAssertEqual(AgentTurnSettings(ofStrix: stored), AgentTurnSettings(temperature: 0.4, maxTokens: 3000, mostSteps: 12))
         XCTAssertEqual(defaults.string(forKey: key("llm_provider")), "anthropic")
         XCTAssertEqual(defaults.string(forKey: key("anthropic_model")), "claude-sonnet-4-6")
@@ -258,7 +264,8 @@ final class StrixAgentTests: XCTestCase {
         signedIn.now = ada
         let calm = StrixSettingsService(signedIn: { signedIn.now }, firstConnection: { (provider: "anthropic", defaultModel: "claude-sonnet-4-6") })
         let loaded = try await calm.loadPersonalStrix()
-        XCTAssertEqual([loaded.systemPrompt, loaded.provider, loaded.model], ["Ada's own instructions.", "anthropic", "claude-sonnet-4-6"])
+        XCTAssertEqual([loaded.provider, loaded.model], ["anthropic", "claude-sonnet-4-6"])
+        XCTAssertNil(loaded.systemPrompt, "Instructions kept as text before are given only with Ada's own key in memory")
         XCTAssertEqual(StrixSettingsService.stored(of: ada)?.provider, "anthropic")
         XCTAssertEqual(defaults.string(forKey: UserScope.scopedKey("anthropic_model", for: ada)), "claude-sonnet-4-6")
         XCTAssertNil(StrixSettingsService.stored(of: grace))
@@ -272,7 +279,7 @@ final class StrixAgentTests: XCTestCase {
             return (provider: "anthropic", defaultModel: "claude-sonnet-4-6")
         })
         let afterwards = try await slow.loadPersonalStrix()
-        XCTAssertEqual([afterwards.systemPrompt, afterwards.provider, afterwards.model], ["Written meanwhile.", "anthropic", "claude-sonnet-4-6"])
+        XCTAssertEqual([afterwards.provider, afterwards.model], ["anthropic", "claude-sonnet-4-6"])
         XCTAssertEqual(StrixSettingsService.stored(of: ada)?.systemPrompt, "Written meanwhile.")
 
         // A model is looked up only for a provider that names one, and only from a connection of that provider.
@@ -312,7 +319,8 @@ final class StrixAgentTests: XCTestCase {
             XCTFail("A model's connection needs a model")
         } catch CovenRepositoryError.agentIncomplete {}
 
-        XCTAssertEqual(StrixSettingsService.stored(of: account)?.systemPrompt, "You plan the week.")
+        let kept = await StrixSettingsService.shared.instructions(of: account)
+        XCTAssertEqual(kept, "You plan the week.")
         XCTAssertNil(StrixSettingsService.stored(of: "someone-else"))
     }
 }

@@ -920,6 +920,15 @@ final class DatabaseManager {
                 try db.execute(sql: "CREATE TABLE upkeep_done (name TEXT PRIMARY KEY NOT NULL)")
             }
 
+            // v26: an agent's instructions are kept sealed with its
+            // account's key (`system_prompt_ciphertext`); those stored as
+            // text before are sealed when their account next reads them.
+            migrator.registerMigration("v26_sealed_instructions") { db in
+                try db.alter(table: "roles") { t in
+                    t.add(column: "system_prompt_ciphertext", .blob)
+                }
+            }
+
             try migrator.migrate(queue)
             dbQueue = queue
             compaction = Self.compactOnce(queue)
