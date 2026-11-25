@@ -605,7 +605,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "Resources/AICoven-macOS-Debug.entitlements";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 21;
+				CURRENT_PROJECT_VERSION = 22;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = H99A45HA22;
 				ENABLE_APP_SANDBOX = NO;
@@ -633,7 +633,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.3.0;
+				MARKETING_VERSION = 2.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.aicoven.opensource;
 				PRODUCT_MODULE_NAME = AICoven;
 				PRODUCT_NAME = "AICoven Dev";
@@ -663,7 +663,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "Resources/AICoven-iOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "Resources/AICoven-macOS.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 21;
+				CURRENT_PROJECT_VERSION = 22;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = H99A45HA22;
 				ENABLE_APP_SANDBOX = NO;
@@ -691,7 +691,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.3.0;
+				MARKETING_VERSION = 2.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.aicoven.opensource;
 				PRODUCT_NAME = AICoven;
 				REGISTER_APP_GROUPS = YES;
@@ -720,7 +720,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "Resources/AICoven-iOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "Resources/AICoven-macOS.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 21;
+				CURRENT_PROJECT_VERSION = 22;
 				GENERATE_INFOPLIST_FILE = YES;
 				"INFOPLIST_FILE[sdk=iphoneos*]" = "Resources/Info-iOS.plist";
 				"INFOPLIST_FILE[sdk=iphonesimulator*]" = "Resources/Info-iOS.plist";
@@ -732,7 +732,7 @@
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.3.0;
+				MARKETING_VERSION = 2.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.aicoven.opensource;
 				PRODUCT_NAME = AICoven;
 				SUPPORTS_MACCATALYST = YES;
