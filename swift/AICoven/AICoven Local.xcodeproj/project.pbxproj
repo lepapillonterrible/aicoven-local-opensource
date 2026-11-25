@@ -285,6 +285,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = BE1952292F1B9DA100168C79 /* Build configuration list for PBXNativeTarget "AICoven" */;
 			buildPhases = (
+				A1C0F1BE2F60000000C0F1BE /* Check Firebase Config */,
 				BE19521A2F1B9DA000168C79 /* Sources */,
 				BE19521B2F1B9DA000168C79 /* Frameworks */,
 				BE19521C2F1B9DA000168C79 /* Resources */,
@@ -393,6 +394,30 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A1C0F1BE2F60000000C0F1BE /* Check Firebase Config */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/GoogleService-Info.plist",
+			);
+			name = "Check Firebase Config";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# A Release, Staging or archive build must carry the real Firebase config:\n# with the placeholder CI writes, the app turns Firebase off and nobody can sign in.\nif [ \"${CONFIGURATION}\" = \"Debug\" ] && [ \"${ACTION}\" != \"install\" ]; then\n  exit 0\nfi\nplist=\"${SRCROOT}/GoogleService-Info.plist\"\napp_id=$(/usr/libexec/PlistBuddy -c \"Print :GOOGLE_APP_ID\" \"${plist}\" 2>/dev/null)\napi_key=$(/usr/libexec/PlistBuddy -c \"Print :API_KEY\" \"${plist}\" 2>/dev/null)\nif [ ! -f \"${plist}\" ]; then\n  bad=1\nfi\ncase \"${app_id}\" in\n  \"\" | placeholder | *000000000000*) bad=1 ;;\nesac\nif [ \"${api_key}\" = \"placeholder\" ] || [ -z \"${api_key}\" ]; then\n  bad=1\nfi\nif [ -n \"${bad}\" ]; then\n  echo \"error: GoogleService-Info.plist is missing or a placeholder, so this ${CONFIGURATION} build could not sign anyone in. Copy the real config over it: cp \\\"GoogleService-Info (1).plist\\\" GoogleService-Info.plist\"\n  exit 1\nfi\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		BE19521A2F1B9DA000168C79 /* Sources */ = {
@@ -605,7 +630,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "Resources/AICoven-macOS-Debug.entitlements";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 23;
+				CURRENT_PROJECT_VERSION = 25;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = H99A45HA22;
 				ENABLE_APP_SANDBOX = NO;
@@ -663,7 +688,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "Resources/AICoven-iOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "Resources/AICoven-macOS.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 23;
+				CURRENT_PROJECT_VERSION = 25;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = H99A45HA22;
 				ENABLE_APP_SANDBOX = NO;
@@ -720,7 +745,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "Resources/AICoven-iOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "Resources/AICoven-macOS.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 23;
+				CURRENT_PROJECT_VERSION = 25;
 				GENERATE_INFOPLIST_FILE = YES;
 				"INFOPLIST_FILE[sdk=iphoneos*]" = "Resources/Info-iOS.plist";
 				"INFOPLIST_FILE[sdk=iphonesimulator*]" = "Resources/Info-iOS.plist";
