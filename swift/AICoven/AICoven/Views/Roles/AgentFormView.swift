@@ -384,7 +384,7 @@ struct AgentFormView: View {
                 Spacer(minLength: 0)
             }
             .accessibilityElement(children: .combine)
-            Text("Unlock model customization with the Creator upgrade.")
+            Text("Unlock model customization with the \(store.name(of: StoreService.creatorID)) upgrade.")
                 .font(.aicovenBodySmall)
                 .foregroundStyle(Color.aicovenTextSecondary)
             Button("View Upgrade Options") { showStore = true }

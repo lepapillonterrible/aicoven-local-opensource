@@ -11,12 +11,12 @@
       "localizations" : [
         {
           "description" : "Covens, multiple agents & model customization",
-          "displayName" : "Creator",
+          "displayName" : "Starter Pack",
           "locale" : "en_US"
         }
       ],
       "productID" : "com.aicoven.creator",
-      "referenceName" : "Creator",
+      "referenceName" : "Starter Pack",
       "type" : "NonConsumable"
     },
     {
@@ -25,13 +25,13 @@
       "internalID" : "toolspack_001",
       "localizations" : [
         {
-          "description" : "Shell, GitHub & Google Drive tools",
-          "displayName" : "Tools Pack",
+          "description" : "Shell, GitHub, Google, Figma & Linear tools, and MCP servers",
+          "displayName" : "Connected Apps",
           "locale" : "en_US"
         }
       ],
       "productID" : "com.aicoven.toolspack",
-      "referenceName" : "Tools Pack",
+      "referenceName" : "Connected Apps",
       "type" : "NonConsumable"
     },
     {
