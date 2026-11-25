@@ -5,11 +5,11 @@ internal import Combine
 
 /// Features that can be gated behind in-app purchases.
 enum PurchasableFeature: String, CaseIterable {
-    // Creator tier
+    // Starter Pack (creator)
     case covens
     case multipleAgents
     case modelCustomization
-    // Tools Pack tier
+    // Connected Apps (toolspack)
     case shellTool
     case githubTool
     case googleDriveTool
@@ -19,10 +19,11 @@ enum PurchasableFeature: String, CaseIterable {
 
 /// Manages StoreKit 2 in-app purchases for AICoven.
 ///
-/// Three non-consumable products:
-/// - **Creator**: Unlocks covens, multiple agents, model customisation.
-/// - **Tools Pack**: Unlocks shell, GitHub, and Google Drive tools.
-/// - **Everything Forever**: Unlocks all paid features.
+/// Three non-consumable products (sold as Starter Pack, Connected Apps and
+/// Everything Forever; named creator, toolspack and everything in code):
+/// - **Starter Pack** (`creatorID`): covens, multiple agents, model customisation.
+/// - **Connected Apps** (`toolsPackID`): the shell, GitHub, Google, Figma and Linear tools, and MCP servers.
+/// - **Everything Forever**: all paid features.
 @MainActor
 class StoreService: ObservableObject {
     static let shared = StoreService()
@@ -244,6 +245,8 @@ class StoreService: ObservableObject {
         Task.detached { [weak self] in
             for await result in Transaction.updates {
                 guard let self else { return }
+                // A verified update is finished; an unverified one is left
+                // as it is (not trusted, and not done with).
                 if case let .verified(transaction) = result {
                     await transaction.finish()
                 }
@@ -288,7 +291,12 @@ class StoreService: ObservableObject {
 
         // Bought for the account signed in now: the purchase carries its
         // token, so it is given back to this account and no other.
+        // What comes of it is said, and kept, only while that account is
+        // still the one signed in.
         let account = UserScope.currentUserID
+        let said: (String) -> Void = { [weak self] words in
+            if UserScope.currentUserID == account { self?.purchaseError = words }
+        }
         do {
             let result = try await product.purchase(options: [.appAccountToken(Self.accountToken(for: account))])
 
@@ -296,28 +304,44 @@ class StoreService: ObservableObject {
             case let .success(verification):
                 if case let .verified(transaction) = verification {
                     await transaction.finish()
-                    if UserScope.currentUserID == account {
-                        purchasedProductIDs.insert(transaction.productID)
+                    // Kept only as the account's own, by the same rule as a
+                    // restore: the App Store can hand back a purchase made
+                    // earlier by another account on the same Apple ID.
+                    let mine = Self.owned(of: [Self.entitlement(of: transaction)], by: account)
+                    if UserScope.currentUserID == account, !mine.isEmpty {
+                        refreshGeneration += 1
+                        purchasedProductIDs.formUnion(mine)
                         persistPurchases()
                     }
+                    await refreshEntitlements()
                 } else {
-                    purchaseError = "Purchase could not be verified."
+                    said("Purchase could not be verified.")
                 }
 
             case .userCancelled:
                 break // No error for user-initiated cancel
 
             case .pending:
-                purchaseError = "Purchase is pending approval."
+                said("Purchase is pending approval.")
 
             @unknown default:
                 break
             }
         } catch {
-            purchaseError = error.localizedDescription
-            AppErrorReporter.log(error: error, context: "StoreService.purchase")
+            said(error.localizedDescription)
+            // The kind of failure only.
+            AppErrorReporter.log(message: "A purchase failed (\(type(of: error)))", context: "StoreService.purchase")
         }
     }
+
+    private static func entitlement(of transaction: Transaction) -> Entitlement {
+        Entitlement(productID: transaction.productID, accountToken: transaction.appAccountToken, isRevoked: transaction.revocationDate != nil)
+    }
+
+    /// Counts the readings of the entitlements and the purchases kept, so
+    /// that a reading overtaken by a later one, or by a purchase, is not
+    /// written over what came after it.
+    private var refreshGeneration = 0
 
     // MARK: - Restore purchases
 
@@ -342,15 +366,17 @@ class StoreService: ObservableObject {
     /// once another account has signed in meanwhile.
     private func refreshEntitlements() async {
         let account = UserScope.currentUserID
+        refreshGeneration += 1
+        let generation = refreshGeneration
         var entitlements: [Entitlement] = []
         for await result in Transaction.currentEntitlements {
             if case let .verified(transaction) = result {
-                entitlements.append(Entitlement(
-                    productID: transaction.productID, accountToken: transaction.appAccountToken, isRevoked: transaction.revocationDate != nil
-                ))
+                entitlements.append(Self.entitlement(of: transaction))
             }
         }
-        guard isAuthenticated, UserScope.currentUserID == account else { return }
+        // Only the latest reading is kept: one overtaken by another, or by
+        // a purchase, while it read is not written over what came after.
+        guard isAuthenticated, UserScope.currentUserID == account, generation == refreshGeneration else { return }
         let owned = Self.owned(of: entitlements, by: account)
         if owned != purchasedProductIDs {
             purchasedProductIDs = owned
