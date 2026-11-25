@@ -364,7 +364,7 @@ actor ToolExecutionService {
             if !entitled {
                 return await .error(
                     tool: toolCall.name,
-                    message: "The '\(toolCall.name)' tool requires the Tools Pack upgrade. Go to Profile → Upgrade to unlock shell, GitHub, and Google Drive tools.",
+                    message: "The '\(toolCall.name)' tool needs the \(StoreService.shownName(of: StoreService.toolsPackID)) upgrade, which unlocks the shell, GitHub, Google, Figma and Linear tools. The person can buy it in Settings › Subscription.",
                     errorType: "entitlement_required",
                     isRetryable: false
                 )

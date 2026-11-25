@@ -160,7 +160,7 @@ struct ConnectedAppsView: View {
         .sheet(isPresented: $showUpsell) {
             FeatureUpsellView(
                 feature: upsellFeature,
-                featureDescription: "Connected Apps require the Tools Pack upgrade. Integrate GitHub, Google Drive, Figma and Linear to give your AI agent access to your files, repositories, designs and issues."
+                featureDescription: "Connecting apps needs the \(storeService.name(of: StoreService.toolsPackID)) upgrade. Integrate GitHub, Google Drive, Figma and Linear to give your AI agent access to your files, repositories, designs and issues."
             )
             .environmentObject(storeService)
         }

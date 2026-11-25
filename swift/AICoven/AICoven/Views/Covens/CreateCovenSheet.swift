@@ -14,7 +14,7 @@ struct CreateCovenSheet: View {
         } else {
             FeatureUpsellView(
                 feature: .covens,
-                featureDescription: "Creating covens with multiple AI agent roles requires the Creator upgrade."
+                featureDescription: "Creating covens with multiple AI agent roles needs the \(storeService.name(of: StoreService.creatorID)) upgrade."
             )
         }
     }
