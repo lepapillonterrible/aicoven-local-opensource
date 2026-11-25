@@ -353,7 +353,7 @@ final class TurnsKeepTheirAccountTests: XCTestCase {
         XCTAssertEqual(droppedTurns, [turnID])
         XCTAssertNil(engine.endings[thread], "No ending is published")
         XCTAssertNil(engine.additions[thread], "Nothing is added to the thread")
-        let status = try await DatabaseManager.shared.dbQueue?.read { db in
+        let status: String?? = try await DatabaseManager.shared.dbQueue?.read { db in
             try String.fetchOne(db, sql: "SELECT status FROM turns WHERE id = ?", arguments: [turnID])
         }
         XCTAssertEqual(status, "running", "Nothing is stored for it: its account is told no reply was saved")

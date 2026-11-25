@@ -69,7 +69,7 @@ final class DatabaseManager {
     private nonisolated static func compactOnce(_ queue: DatabaseQueue) -> Task<Void, Never> {
         Task.detached(priority: .utility) {
             do {
-                let done = try await queue.read { db in
+                let done: Bool = try await queue.read { db in
                     try Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM upkeep_done WHERE name = ?)", arguments: [compacted]) ?? false
                 }
                 guard !done else { return }
