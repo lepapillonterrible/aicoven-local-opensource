@@ -96,7 +96,7 @@ struct RoleRecord: Codable, FetchableRecord, PersistableRecord {
     var createdAt: Date
     var updatedAt: Date
 
-    enum Columns: String, ColumnExpression {
+    enum Columns: String, ColumnExpression, CaseIterable {
         case id
         case covenId = "coven_id"
         case name
@@ -432,7 +432,8 @@ actor CovenRepository {
             settings["icon_tint"] = tint.rawValue
             record.settings = try String(data: JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys]), encoding: .utf8)
             record.updatedAt = Date()
-            try record.update(db)
+            // Only what changed: the instructions are not written back.
+            try record.update(db, columns: [RoleRecord.Columns.settings, RoleRecord.Columns.updatedAt])
         }
     }
 
@@ -712,7 +713,13 @@ actor CovenRepository {
             }
 
             record.updatedAt = Date()
-            try record.update(db)
+            if systemPrompt == nil {
+                // The instructions are not written back as they were read.
+                let others = RoleRecord.Columns.allCases.filter { $0 != .systemPrompt && $0 != .systemPromptCiphertext }
+                try record.update(db, columns: others)
+            } else {
+                try record.update(db)
+            }
         }
 
         return try await getRole(roleId: roleId)
@@ -743,8 +750,10 @@ actor CovenRepository {
         let sealedInstructions = agent.instructions.isEmpty
             ? nil : try await AccountSeal.seal(agent.instructions, purpose: Self.instructionsPurpose, for: account)
         let keepsUnreadable = agent.instructions.isEmpty ? await hasUnreadableInstructions(roleId, as: account, in: dbQueue) : false
-        // Asked again once the database is in hand, just before the write.
+        // Asked again once the database is in hand, just before the write:
+        // the account, and that its key is still in memory.
         guard await MainActor.run(body: { UserScope.currentUserID }) == account else { throw RepositoryError.accountChanged }
+        try await AccountSeal.requireKey(of: account, since: DataEncryptionService.shared.keyEpoch)
 
         let record: RoleRecord = try await dbQueue.write { db in
             guard var record = try RoleRecord.fetchOne(db, key: roleId), record.userId == account else {

@@ -180,6 +180,8 @@ actor StrixSettingsService {
         } else {
             false
         }
+        // Just before the write: the account, and that its key is still in memory.
+        try await AccountSeal.requireKey(of: account, since: DataEncryptionService.shared.keyEpoch)
         guard await signedIn() == account else { throw RepositoryError.accountChanged }
         var settings = loadLocalSettings(of: account)
         if !keepsUnreadable {
@@ -216,12 +218,15 @@ actor StrixSettingsService {
         plannerMaxSeconds: Double?
     ) async throws -> LocalStrixSettings {
         let account = await signedIn()
-        try await AccountSeal.requireKey(of: account, since: DataEncryptionService.shared.keyEpoch)
         let sealed: Data? = if let systemPrompt { try await AccountSeal.seal(systemPrompt, purpose: Self.instructionsPurpose, for: account) } else { nil }
+        try await AccountSeal.requireKey(of: account, since: DataEncryptionService.shared.keyEpoch)
         guard await signedIn() == account else { throw RepositoryError.accountChanged }
         var settings = loadLocalSettings(of: account)
-        settings.systemPrompt = nil
-        settings.systemPromptSealed = sealed
+        // None given leaves the instructions as they are stored.
+        if systemPrompt != nil {
+            settings.systemPrompt = nil
+            settings.systemPromptSealed = sealed
+        }
         settings.model = model
         settings.provider = provider
         settings.providerAccountId = providerAccountId
@@ -233,7 +238,7 @@ actor StrixSettingsService {
         saveLocalSettings(settings, for: account)
         updateLLMDefaults(from: settings, for: account)
 
-        settings.systemPrompt = systemPrompt
+        settings.systemPrompt = if systemPrompt != nil { systemPrompt } else { await opened(settings, of: account) }
         settings.systemPromptSealed = nil
         return settings
     }

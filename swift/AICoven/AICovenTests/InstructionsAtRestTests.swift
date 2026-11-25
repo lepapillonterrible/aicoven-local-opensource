@@ -103,6 +103,52 @@ final class InstructionsAtRestTests: XCTestCase {
         XCTAssertEqual(still, sealed)
     }
 
+    func testStrixsSealedInstructions_areNeitherWrittenOverWithoutTheKey_norBySavingNone() async throws {
+        let account = UserScope.currentUserID
+        let key = UserScope.scopedKey("strix_settings.v1", for: account)
+        let before = UserDefaults.standard.data(forKey: key)
+        addTeardownBlock { UserDefaults.standard.set(before, forKey: key) }
+        let strix = { (instructions: String) in
+            AgentSaving(
+                name: "Strix", iconSymbol: "sparkles", iconTint: nil, description: "", instructions: instructions,
+                provider: "", model: "", providerAccountId: nil, temperature: nil, maxTokens: nil, mostSteps: nil, needsConnection: false
+            )
+        }
+        // Sealed instructions that cannot be opened are kept by a save that gives none.
+        var settings = LocalStrixSettings()
+        settings.systemPromptSealed = Data("not this key's".utf8)
+        try UserDefaults.standard.set(JSONEncoder().encode(settings), forKey: key)
+        _ = try await StrixSettingsService.shared.save(strix(""), as: account)
+        XCTAssertEqual(StrixSettingsService.stored(of: account)?.systemPromptSealed, Data("not this key's".utf8))
+
+        // Without the key, nothing is saved.
+        await DataEncryptionService.shared.lock()
+        do {
+            _ = try await StrixSettingsService.shared.save(strix(""), as: account)
+            XCTFail("Nothing is saved without the key")
+        } catch RepositoryError.dataLocked {}
+        XCTAssertEqual(StrixSettingsService.stored(of: account)?.systemPromptSealed, Data("not this key's".utf8))
+    }
+
+    func testAnIconOrAnUpdate_doesNotWriteOlderTextBack() async throws {
+        let account = UserScope.currentUserID
+        let covenID = try await coven()
+        let id = UUID().uuidString
+        let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
+        try await queue.write { [secret] db in
+            try db.execute(
+                sql: "INSERT INTO roles (id, coven_id, name, system_prompt, user_id, created_at, updated_at) VALUES (?, ?, 'Old', ?, ?, ?, ?)",
+                arguments: [id, covenID, secret, account, Date(), Date()]
+            )
+        }
+        try await CovenRepository.shared.setIcon(symbol: "leaf", tint: .moss, forRole: id)
+        let sealedFirst = try await row(of: id)
+        XCTAssertNil(sealedFirst?["system_prompt"] as String?, "Sealed before the icon was written")
+        XCTAssertNotNil(sealedFirst?["system_prompt_ciphertext"] as Data?)
+        let read = try await RoleService.shared.getRole(roleId: id)
+        XCTAssertEqual(read.systemPrompt, secret)
+    }
+
     func testInstructionsStoredAsTextBefore_areNotGivenWithoutTheKey() async throws {
         let account = UserScope.currentUserID
         let covenID = try await coven()
