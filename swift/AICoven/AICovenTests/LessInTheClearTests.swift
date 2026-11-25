@@ -33,7 +33,7 @@ final class LessInTheClearTests: XCTestCase {
         )
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
         addTeardownBlock { try? await queue.write { db in try db.execute(sql: "DELETE FROM memory_proposals WHERE id = ?", arguments: [stored.id]) } }
-        let row = try await queue.read { db in
+        let row: Row? = try await queue.read { db in
             try Row.fetchOne(db, sql: "SELECT proposed_tags, proposed_content FROM memory_proposals WHERE id = ?", arguments: [stored.id])
         }
         XCTAssertEqual(row?["proposed_tags"], #"["page:facts"]"#)
@@ -42,11 +42,11 @@ final class LessInTheClearTests: XCTestCase {
 
     func testWhatIsDeletedIsOverwritten_andTheFileIsCompactedOnce() async throws {
         let queue = try XCTUnwrap(DatabaseManager.shared.dbQueue)
-        let on = try await queue.read { db in try Int.fetchOne(db, sql: "PRAGMA secure_delete") }
+        let on: Int? = try await queue.read { db in try Int.fetchOne(db, sql: "PRAGMA secure_delete") }
         XCTAssertEqual(on, 1)
         // The compaction is recorded once it has been done, and only then.
         await DatabaseManager.shared.compaction?.value
-        let done = try await queue.read { db in
+        let done: Bool = try await queue.read { db in
             try Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM upkeep_done WHERE name = ?)", arguments: [DatabaseManager.compacted]) ?? false
         }
         XCTAssertTrue(done)
