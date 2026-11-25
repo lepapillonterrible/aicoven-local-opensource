@@ -198,8 +198,9 @@ private struct ProductCard: View {
                 .aicovenTeal,
                 [
                     "Shell command execution",
-                    "GitHub integration",
-                    "Google Drive integration"
+                    "GitHub and Google Drive integration",
+                    "Figma and Linear integration",
+                    "MCP servers"
                 ]
             )
         case StoreService.everythingID:
@@ -207,8 +208,8 @@ private struct ProductCard: View {
                 "star.fill",
                 .aicovenPink,
                 [
-                    "All Creator features",
-                    "All Tools Pack features",
+                    "Everything in \(StoreService.shownName(of: StoreService.creatorID))",
+                    "Everything in \(StoreService.shownName(of: StoreService.toolsPackID))",
                     "All future features"
                 ]
             )
