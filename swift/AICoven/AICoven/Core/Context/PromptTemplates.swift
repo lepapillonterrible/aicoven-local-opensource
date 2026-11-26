@@ -417,7 +417,7 @@ enum PromptTemplates {
         // Google Drive tools
         ToolDefinition(
             name: "google_drive.listFiles",
-            description: "List files in Google Drive, each with its id (the other Google tools are asked by id).",
+            description: "List the Google Drive files AICoven can open, each with its id (the other Google tools are asked by id): those the person picked with Browse in Connected Apps, and those AICoven made. A file not listed can be added by the person picking it there.",
             parameters: [
                 ToolParameter(name: "query", type: "string", description: "Optional search query (Drive query syntax)", required: false),
                 ToolParameter(name: "page_size", type: "integer", description: "How many files to list (default 50, at most 100)", required: false)

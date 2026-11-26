@@ -19,6 +19,22 @@ nonisolated enum OAuthClientIDs {
         id(Bundle.main.object(forInfoDictionaryKey: "GOOGLE_OAUTH_CLIENT_ID") as? String, otherwise: googleDefault)
     }
 
+    /// The Google Picker's app ID is the Cloud project's number, the first
+    /// part of the Google client ID.
+    static let googlePickerAppIDDefault = "870439799161"
+
+    static var googlePickerAppID: String {
+        id(Bundle.main.object(forInfoDictionaryKey: "GOOGLE_PICKER_APP_ID") as? String, otherwise: googlePickerAppIDDefault)
+    }
+
+    /// The Picker's API key, made in the Cloud project and set in
+    /// `Secrets.xcconfig`; nil where the build has none, and then there is
+    /// no picking of files (Browse is not offered).
+    static var googlePickerAPIKey: String? {
+        let key = id(Bundle.main.object(forInfoDictionaryKey: "GOOGLE_PICKER_API_KEY") as? String, otherwise: "")
+        return key.isEmpty ? nil : key
+    }
+
     /// The configured value where it reads as an ID, else the default.
     static func id(_ configured: String?, otherwise fallback: String) -> String {
         guard let value = configured?.trimmingCharacters(in: .whitespacesAndNewlines),

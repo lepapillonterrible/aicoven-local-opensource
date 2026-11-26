@@ -60,7 +60,9 @@ struct ConnectedAppsView: View {
                             waitsForAnotherSignIn: (connectingProvider != nil || codeSheetIsUp) && !provider.connectsWithToken,
                             onConnect: { await connect(provider: provider) },
                             onDisconnect: { await disconnect(provider: provider) },
-                            onBrowseDrive: provider == .googleDrive ? { showingGooglePicker = true } : nil,
+                            onBrowseDrive: provider == .googleDrive && OAuthClientIDs.googlePickerAPIKey != nil
+                                && accounts.contains { $0.provider == .googleDrive && $0.status == .connected }
+                                ? { showingGooglePicker = true } : nil,
                             needsToken: provider.accountWaitingForAToken(in: accounts),
                             onReplaceToken: { replaceToken(of: $0) }
                         )
@@ -132,11 +134,12 @@ struct ConnectedAppsView: View {
             )
         }
         .sheet(isPresented: $showingGooglePicker) {
-            if let account = accounts.first(where: { $0.provider == .googleDrive && $0.status == .connected }) {
+            if let account = accounts.first(where: { $0.provider == .googleDrive && $0.status == .connected }),
+               let apiKey = OAuthClientIDs.googlePickerAPIKey {
                 GooglePickerSheet(
                     accountId: account.id,
-                    apiKey: Bundle.main.infoDictionary?["GOOGLE_PICKER_API_KEY"] as? String ?? "",
-                    appId: Bundle.main.infoDictionary?["GOOGLE_PICKER_APP_ID"] as? String ?? "",
+                    apiKey: apiKey,
+                    appId: OAuthClientIDs.googlePickerAppID,
                     onFilesPicked: { files in
                         pickedFiles = files
                         showingGooglePicker = false

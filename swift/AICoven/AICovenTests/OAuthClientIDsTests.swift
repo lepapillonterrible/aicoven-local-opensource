@@ -22,3 +22,17 @@ final class OAuthClientIDsTests: XCTestCase {
         XCTAssertTrue(OAuthClientIDs.google.hasSuffix(".apps.googleusercontent.com"))
     }
 }
+
+/// Google is asked only for `drive.file`, which it counts as non-sensitive:
+/// the sensitive Docs and Sheets scopes put an unverified-app warning in
+/// front of the sign-in.
+final class GoogleScopesTests: XCTestCase {
+    func testGoogleAsksForTheFilesThePersonPicksAndNoMore() {
+        XCTAssertEqual(ConnectedAppProvider.googleDrive.defaultScopes, ["https://www.googleapis.com/auth/drive.file"])
+    }
+
+    func testThePickerKnowsTheProject_andHasNoPlaceholderKey() {
+        XCTAssertEqual(OAuthClientIDs.googlePickerAppID, "870439799161")
+        XCTAssertFalse(OAuthClientIDs.googlePickerAPIKey?.hasPrefix("YOUR_") ?? false)
+    }
+}

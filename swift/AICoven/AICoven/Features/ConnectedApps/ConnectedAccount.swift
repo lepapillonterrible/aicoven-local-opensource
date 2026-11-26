@@ -95,11 +95,12 @@ enum ConnectedAppProvider: String, Codable, CaseIterable {
         case .github:
             ["repo", "read:user", "user:email"]
         case .googleDrive:
-            [
-                "https://www.googleapis.com/auth/drive.file",
-                "https://www.googleapis.com/auth/documents",
-                "https://www.googleapis.com/auth/spreadsheets"
-            ]
+            // Only the files the person picks (Browse) or the app makes.
+            // Google counts `drive.file` as non-sensitive, so signing in
+            // shows no unverified-app warning; the Docs, Sheets and Slides
+            // APIs take it for those files. The broader `documents` and
+            // `spreadsheets` scopes are sensitive and need Google's review.
+            ["https://www.googleapis.com/auth/drive.file"]
         case .figma, .linear:
             // A token's reach is set where it is made.
             []

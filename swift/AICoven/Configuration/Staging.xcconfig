@@ -18,7 +18,7 @@ FIREBASE_MESSAGING_SENDER_ID = YOUR_SENDER_ID
 
 // Google Drive Picker (optional – only needed for Google Drive integration)
 GOOGLE_PICKER_API_KEY = YOUR_GOOGLE_PICKER_API_KEY
-GOOGLE_PICKER_APP_ID = YOUR_GOOGLE_PICKER_APP_ID
+GOOGLE_PICKER_APP_ID = 870439799161
 
 // Connected Apps – AICoven Local's own OAuth client IDs (not secrets: they ship in the app).
 // A fork with its own GitHub and Google apps sets them in Secrets.xcconfig.

@@ -86,13 +86,19 @@ actor GoogleDriveToolService {
 
     /// Parse Google API error
     private func parseError(statusCode: Int, data: Data) -> GoogleDriveError {
+        var message = "HTTP \(statusCode). Response body omitted to avoid leaking connected-account metadata."
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let error = json["error"] as? [String: Any],
-           let message = error["message"] as? String {
-            return .apiError(statusCode: statusCode, message: message)
+           let told = error["message"] as? String {
+            message = told
         }
-        return .apiError(statusCode: statusCode, message: "HTTP \(statusCode). Response body omitted to avoid leaking connected-account metadata.")
+        if statusCode == 404 { message += " " + Self.unreachedFileNote }
+        return .apiError(statusCode: statusCode, message: message)
     }
+
+    /// The connection reaches only the files the person picked or the app
+    /// made (`drive.file`), and Google answers any other as not found.
+    static let unreachedFileNote = "AICoven can open only the Google files the person picked with Browse in Connected Apps, or that it made. If the file exists, ask them to pick it there."
 
     // MARK: - Drive Operations
 
