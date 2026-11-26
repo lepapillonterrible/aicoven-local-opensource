@@ -369,12 +369,12 @@ final class AssetThumbnailsTests: XCTestCase {
     func testWhatACardAndAReferenceSay() {
         var made = asset("6F1C", files: [])
         XCTAssertEqual(AssetLibraryRules.gridLine(made), "Draft · Image · You", "The row's line without its time, as the cloud app's card")
-        XCTAssertEqual(AssetLibraryRules.reference(to: made), "aicoven://assets/6F1C 6F1C")
+        XCTAssertEqual(AssetLibraryRules.reference(to: made), "aicoven-local://assets/6F1C 6F1C")
         made = Asset(
             id: "6F1C", covenID: nil, type: .chart, status: .approved, title: "Q3\nrevenue", details: "", madeByAgentID: TurnAssets.strix, threadID: nil,
             sourceMessageID: nil, files: [], createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
         )
-        XCTAssertEqual(AssetLibraryRules.reference(to: made), "aicoven://assets/6F1C Q3 revenue", "On one line")
+        XCTAssertEqual(AssetLibraryRules.reference(to: made), "aicoven-local://assets/6F1C Q3 revenue", "On one line")
         XCTAssertEqual(AssetLibraryRules.gridLine(made), "Approved · Chart · Strix, agent")
         XCTAssertEqual(AssetAction.copyReference.title, "Copy Reference")
         XCTAssertNil(AssetAction.copyReference.status)

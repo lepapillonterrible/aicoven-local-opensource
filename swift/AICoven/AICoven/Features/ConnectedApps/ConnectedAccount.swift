@@ -185,7 +185,7 @@ struct OAuthConfig {
             clientId: clientId,
             authorizationEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
             tokenEndpoint: "https://oauth2.googleapis.com/token",
-            redirectUri: "aicoven://oauth/google/callback",
+            redirectUri: "aicoven-local://oauth/google/callback",
             scopes: ConnectedAppProvider.googleDrive.defaultScopes
         )
     }

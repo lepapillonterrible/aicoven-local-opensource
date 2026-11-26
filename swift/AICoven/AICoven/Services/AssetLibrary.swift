@@ -103,7 +103,7 @@ nonisolated enum AssetLibraryRules {
     /// thread, it tells an agent which asset is meant: the id is what
     /// `asset.get` takes. (The address itself opens nothing here.)
     static func reference(to asset: Asset) -> String {
-        "aicoven://assets/\(asset.id) " + AttachmentContext.plainName(asset.title)
+        "aicoven-local://assets/\(asset.id) " + AttachmentContext.plainName(asset.title)
     }
 
     /// Copies an asset's reference, and tells VoiceOver whether it was

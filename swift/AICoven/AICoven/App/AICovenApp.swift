@@ -88,7 +88,7 @@ struct AICovenApp: App {
                     }
                 }
             }
-            // An `aicoven://` link, from wherever it was opened. The same
+            // An `aicoven-local://` link, from wherever it was opened. The same
             // window takes it: without this the Mac opens another for
             // each link.
             .onOpenURL { AppState.shared.handleDeepLink($0) }

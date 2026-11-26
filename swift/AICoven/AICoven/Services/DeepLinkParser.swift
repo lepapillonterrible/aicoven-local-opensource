@@ -1,6 +1,6 @@
 import Foundation
 
-/// Reads an `aicoven://` link, as the cloud app's parser does for the
+/// Reads an `aicoven-local://` link, as the cloud app's parser does for the
 /// places this app has. A link comes from outside the app (a page, a
 /// message, another app), so it is read strictly: only the shapes listed
 /// here lead anywhere, and one that carries anything more (a user, a
@@ -9,8 +9,13 @@ import Foundation
 /// click and that changes nothing by being opened: a place in Settings, or
 /// Strix's new-thread page, as the person left it. No link carries a key,
 /// a token or words to send, and none connects, approves or sends anything.
+///
+/// The scheme is this app's own, not the cloud app's `aicoven`: both apps
+/// can be installed side by side, and the system gives a scheme claimed by
+/// two apps to either of them, so the cloud app's links and sign-in
+/// callbacks opened this app and led nowhere.
 nonisolated enum DeepLinkParser {
-    static let scheme = "aicoven"
+    static let scheme = "aicoven-local"
 
     static func target(for url: URL) -> DeepLinkTarget? {
         guard url.scheme?.lowercased() == scheme,

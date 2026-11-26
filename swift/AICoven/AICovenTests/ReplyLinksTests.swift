@@ -19,7 +19,7 @@ final class ReplyLinksTests: XCTestCase {
 
         // Anything else keeps its words and is no link: this app's own scheme, a file, another app's, a number, a script, plain http.
         for address in [
-            "aicoven://settings/providers", "file:///etc/passwd", "shortcuts://run-shortcut?name=x", "tel:+15551234567",
+            "aicoven-local://settings/providers", "file:///etc/passwd", "shortcuts://run-shortcut?name=x", "tel:+15551234567",
             "javascript:alert(1)", "http://example.com", "x-apple.systempreferences:com.apple.preference.security", "relative/path",
         ] {
             let shown = MarkdownInlineText.attributedInline("Tap [here](\(address)) now.")
@@ -28,12 +28,12 @@ final class ReplyLinksTests: XCTestCase {
         }
 
         // One that does not open takes no other with it.
-        XCTAssertEqual(links(in: "[a](aicoven://settings) and [b](https://example.com)"), ["https://example.com"])
+        XCTAssertEqual(links(in: "[a](aicoven-local://settings) and [b](https://example.com)"), ["https://example.com"])
     }
 
     func testTheFileButtonsOfAReply_openOnlyWhatALinkWould() throws {
         XCTAssertTrue(try ReplyLinks.opens(XCTUnwrap(URL(string: "https://example.com/report.pdf"))))
-        for address in ["file:///Users/ada/Documents/GeneratedFiles/run.terminal", "aicoven://strix/new-thread", "http://example.com/a", "ftp://example.com/a"] {
+        for address in ["file:///Users/ada/Documents/GeneratedFiles/run.terminal", "aicoven-local://strix/new-thread", "http://example.com/a", "ftp://example.com/a"] {
             XCTAssertFalse(try ReplyLinks.opens(XCTUnwrap(URL(string: address))), address)
         }
     }

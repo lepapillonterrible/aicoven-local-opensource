@@ -29,8 +29,7 @@
 		<dict>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>aicoven</string>
-				<string>ai.aicoven.mobile.dev</string>
+				<string>aicoven-local</string>
 			</array>
 		</dict>
 		<dict>

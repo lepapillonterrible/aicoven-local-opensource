@@ -12,7 +12,7 @@ final class AppStateTests: XCTestCase {
     }
 
     func testHandleDeepLink_parsesConnectedAppsURL() throws {
-        let url = try XCTUnwrap(URL(string: "aicoven://settings/connected-apps"))
+        let url = try XCTUnwrap(URL(string: "aicoven-local://settings/connected-apps"))
         AppState.shared.handleDeepLink(url)
 
         let target = AppState.shared.consumeDeepLink()
@@ -24,20 +24,20 @@ final class AppStateTests: XCTestCase {
     func testALinkThatIsWaiting_staysThroughASignIn() throws {
         let state = AppState.shared
         // Opened before anyone is signed in: it is what the app was opened with.
-        try state.handleDeepLink(XCTUnwrap(URL(string: "aicoven://providers")))
+        try state.handleDeepLink(XCTUnwrap(URL(string: "aicoven-local://providers")))
         state.clearUserData()
         XCTAssertEqual(state.pendingDeepLink, .providerKeys, "Signing in keeps it for the main view")
         XCTAssertEqual(state.consumeDeepLink(), .providerKeys)
 
         // A link that is none of this app's is not held, and takes the place of nothing.
-        try state.handleDeepLink(XCTUnwrap(URL(string: "aicoven://usage")))
-        try state.handleDeepLink(XCTUnwrap(URL(string: "aicoven://oauth/google/callback?code=abc")))
+        try state.handleDeepLink(XCTUnwrap(URL(string: "aicoven-local://usage")))
+        try state.handleDeepLink(XCTUnwrap(URL(string: "aicoven-local://oauth/google/callback?code=abc")))
         XCTAssertEqual(state.consumeDeepLink(), .usage)
     }
 
     func testALinkThatWaitedUnderAnAccount_isNotKeptForTheNext() throws {
         let state = AppState.shared
-        let link = try XCTUnwrap(URL(string: "aicoven://connected-apps"))
+        let link = try XCTUnwrap(URL(string: "aicoven-local://connected-apps"))
         addTeardownBlock { await MainActor.run { state.accountReported(nil) } }
 
         // The app is opened with a link; the sign-in service's first report is that nobody is signed in.

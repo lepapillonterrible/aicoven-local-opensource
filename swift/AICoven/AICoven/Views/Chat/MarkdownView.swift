@@ -472,7 +472,7 @@ struct MarkdownInlineText: View {
     /// The schemes a link in message text may open: `ReplyLinks`' rule,
     /// `https` and `mailto`. The markdown parser attaches `.link` for any
     /// destination, and a tap on one goes straight to the system's open
-    /// action, so without a filter a reply could open `aicoven://`,
+    /// action, so without a filter a reply could open `aicoven-local://`,
     /// `shortcuts://`, `file://` or `tel:` in one tap. Every other
     /// destination keeps its text and loses the link.
     static var openableLinkSchemes: Set<String> {

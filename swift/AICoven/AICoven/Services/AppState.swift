@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 internal import Combine
 
-/// Where an `aicoven://` link leads (`DeepLinkParser`): a place in
+/// Where an `aicoven-local://` link leads (`DeepLinkParser`): a place in
 /// Settings, or Strix's new-thread page.
 nonisolated enum DeepLinkTarget: Equatable {
     case connectedApps
