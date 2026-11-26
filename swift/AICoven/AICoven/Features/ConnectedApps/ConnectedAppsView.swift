@@ -32,15 +32,10 @@ struct ConnectedAppsView: View {
     @State private var showingGooglePicker = false
     @State private var pickedFiles: [GooglePickerFile] = []
 
-    /// OAuth client IDs – pre-configured with AICoven's apps via Info.plist / xcconfig.
-    /// Developers who fork the repo can override these in their own xcconfig.
-    private var githubClientId: String {
-        Bundle.main.infoDictionary?["GITHUB_OAUTH_CLIENT_ID"] as? String ?? "Iv23liJu04XRFISDVMBO"
-    }
+    /// OAuth client IDs: AICoven Local's own, or a fork's from its xcconfig.
+    private var githubClientId: String { OAuthClientIDs.github }
 
-    private var googleClientId: String {
-        Bundle.main.infoDictionary?["GOOGLE_OAUTH_CLIENT_ID"] as? String ?? "870439799161-1c7u8utd0t0kh3ote5kugh8cj9961ugb.apps.googleusercontent.com"
-    }
+    private var googleClientId: String { OAuthClientIDs.google }
 
     /// A Settings pane, on the stack that shows the pane (which its MCP
     /// servers page is pushed on): a stack of its own inside one pushed by

@@ -1,7 +1,6 @@
 // Staging Configuration
 // Secrets.xcconfig overrides the YOUR_* placeholders below with real values.
 // See Secrets.xcconfig.template for setup instructions.
-#include? "Secrets.xcconfig"
 
 // API Environment
 APP_ENV = staging
@@ -21,9 +20,10 @@ FIREBASE_MESSAGING_SENDER_ID = YOUR_SENDER_ID
 GOOGLE_PICKER_API_KEY = YOUR_GOOGLE_PICKER_API_KEY
 GOOGLE_PICKER_APP_ID = YOUR_GOOGLE_PICKER_APP_ID
 
-// Connected Apps – OAuth Client IDs (optional – only needed for GitHub/Google integrations)
-GITHUB_OAUTH_CLIENT_ID = YOUR_GITHUB_OAUTH_CLIENT_ID
-GOOGLE_OAUTH_CLIENT_ID = YOUR_GOOGLE_OAUTH_CLIENT_ID
+// Connected Apps – AICoven Local's own OAuth client IDs (not secrets: they ship in the app).
+// A fork with its own GitHub and Google apps sets them in Secrets.xcconfig.
+GITHUB_OAUTH_CLIENT_ID = Iv23liJu04XRFISDVMBO
+GOOGLE_OAUTH_CLIENT_ID = 870439799161-1c7u8utd0t0kh3ote5kugh8cj9961ugb.apps.googleusercontent.com
 
 // App Identifiers
 PRODUCT_BUNDLE_IDENTIFIER_IOS = com.aicoven.com.staging
@@ -36,3 +36,5 @@ PRODUCT_NAME = AICoven Staging
 CODE_SIGN_STYLE = Automatic
 DEVELOPMENT_TEAM = // Add your team ID here
 
+// Last, so that its values take the place of the ones above.
+#include? "Secrets.xcconfig"

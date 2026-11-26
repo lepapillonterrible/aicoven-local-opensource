@@ -628,13 +628,8 @@ actor ConnectedAccountsService {
     /// ... refreshGoogleToken remains largely same but is already async ...
     /// Refresh a Google OAuth token
     private func refreshGoogleToken(refreshToken: String, currentScopes: [String]) async throws -> OAuthTokenBundle {
-        // ... implementation same as before ...
-        // Get client ID from Info.plist (set via xcconfig)
-        let clientId = await MainActor.run { Bundle.main.infoDictionary?["GOOGLE_OAUTH_CLIENT_ID"] as? String }
-            ?? "870439799161-1c7u8utd0t0kh3ote5kugh8cj9961ugb.apps.googleusercontent.com"
-        // Bundle.main access might be MainActor isolated? usually not, but safest to wrap if unsure.
-        // Actually Bundle.main is Sendable but infoDictionary reads might be MainActor in Swift 6 STRICT?
-        // Let's assume it's fine or safe.
+        // The token is refreshed by the client it was issued to.
+        let clientId = OAuthClientIDs.google
 
         guard !clientId.isEmpty else {
             throw ConnectedAccountError.missingConfiguration(key: "GOOGLE_OAUTH_CLIENT_ID")
