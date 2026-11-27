@@ -115,14 +115,15 @@
     function build() {
         try {
             var google = window.google;
+            // One view of Drive, its folders shown and chosen like files.
             var files = new google.picker.DocsView(google.picker.ViewId.DOCS)
                 .setIncludeFolders(true)
-                .setSelectFolderEnabled(true);
+                .setSelectFolderEnabled(true)
+                .setMode(google.picker.DocsViewMode.LIST);
             picker = new google.picker.PickerBuilder()
                 .setAppId(appId)
                 .setOAuthToken(token)
                 .addView(files)
-                .addView(google.picker.ViewId.RECENTLY_PICKED)
                 .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
                 .setMaxItems(MOST_FILES)
                 .setTitle("Choose files or folders for AICoven Local")
