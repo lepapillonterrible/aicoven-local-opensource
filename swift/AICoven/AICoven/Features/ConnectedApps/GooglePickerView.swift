@@ -132,6 +132,24 @@ final class GooglePickerBrowser: NSObject, ASWebAuthenticationPresentationContex
     private var session: ASWebAuthenticationSession?
     private var continuation: CheckedContinuation<URL, Error>?
 
+    /// The opening that waits for the page's answer, if any.
+    private static weak var waiting: GooglePickerBrowser?
+
+    /// Gives the page's answer to the opening that waits for it, where the
+    /// browser handed it to the system rather than to the session (Brave
+    /// does): the app is opened with it like any link. True where it was
+    /// the page's address and something waited; the sheet then reads it as
+    /// strictly as an answer the session took, its state included.
+    static func take(_ url: URL) -> Bool {
+        guard url.scheme == GooglePickerPage.callbackScheme,
+              url.host == GooglePickerPage.callbackHost,
+              let waiting, waiting.continuation != nil else { return false }
+        let session = waiting.session
+        waiting.finish(url, nil)
+        session?.cancel()
+        return true
+    }
+
     /// Opens `url` and gives the address the page answered at. Throws
     /// `CancellationError` where the person closed the browser, or the
     /// opening was called off.
@@ -151,6 +169,7 @@ final class GooglePickerBrowser: NSObject, ASWebAuthenticationPresentationContex
                 // The browser's own sign-in to Google is what the Picker needs.
                 session.prefersEphemeralWebBrowserSession = false
                 self.session = session
+                Self.waiting = self
                 if !session.start() {
                     finish(nil, URLError(.cannotOpenFile))
                 }

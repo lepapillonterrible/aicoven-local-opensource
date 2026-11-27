@@ -593,7 +593,7 @@ struct GooglePickerSheet: View {
                 Text("Choose files in your browser")
                     .font(.aicovenH3)
                     .foregroundColor(.aicovenTextPrimary)
-                Text("Google Drive opens there. Choose files as \(accountName): the Google tools can open only the files you choose, and those AICoven made.")
+                Text("Google Drive opens there. Choose files or folders \(chooserWords): the Google tools can open only what you choose, and what AICoven made. Choosing a folder doesn't open the files already in it.")
                     .font(.aicovenBodySmall)
                     .foregroundColor(.aicovenTextSecondary)
                     .multilineTextAlignment(.center)
@@ -611,6 +611,13 @@ struct GooglePickerSheet: View {
         #endif
             .task(id: attempt) { await choose() }
             .onDisappear { browser.cancel() }
+    }
+
+    /// Whom the files are chosen as: the account's email where the
+    /// connection has one, else the account connected (a connection made
+    /// without an email is named "Google User").
+    private var chooserWords: String {
+        accountName.contains("@") ? "as \(accountName)" : "with the Google account you connected"
     }
 
     private func choose() async {

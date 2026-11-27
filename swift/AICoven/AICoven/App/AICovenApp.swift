@@ -91,7 +91,12 @@ struct AICovenApp: App {
             // An `aicoven-local://` link, from wherever it was opened. The same
             // window takes it: without this the Mac opens another for
             // each link.
-            .onOpenURL { AppState.shared.handleDeepLink($0) }
+            .onOpenURL { url in
+                // The Google Picker page's answer, where the browser gave it
+                // to the system: it is for the opening that waits for it.
+                if GooglePickerBrowser.take(url) { return }
+                AppState.shared.handleDeepLink(url)
+            }
             .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
             .tint(PlatformCapabilities.current.followsSystemAccentColor ? nil : Color("AccentColor"))
             .onChange(of: authService.isAuthenticated) { _, authenticated in
