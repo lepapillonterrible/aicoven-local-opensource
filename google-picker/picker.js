@@ -105,7 +105,7 @@
                 return;
             }
             finish("status=picked&files=" + base64url(JSON.stringify(files)),
-                files.length === 1 ? "1 file chosen" : files.length + " files chosen",
+                files.length === 1 ? "1 item chosen" : files.length + " items chosen",
                 "Returning to AICoven Local…");
         } else if (data.action === google.picker.Action.CANCEL) {
             finish("status=cancel", "Nothing chosen", "You can return to AICoven Local.");
@@ -117,7 +117,7 @@
             var google = window.google;
             var files = new google.picker.DocsView(google.picker.ViewId.DOCS)
                 .setIncludeFolders(true)
-                .setSelectFolderEnabled(false);
+                .setSelectFolderEnabled(true);
             picker = new google.picker.PickerBuilder()
                 .setAppId(appId)
                 .setOAuthToken(token)
@@ -125,11 +125,11 @@
                 .addView(google.picker.ViewId.RECENTLY_PICKED)
                 .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
                 .setMaxItems(MOST_FILES)
-                .setTitle("Choose files for AICoven Local")
+                .setTitle("Choose files or folders for AICoven Local")
                 .setCallback(picked)
                 .build();
-            show("Choose files in Google Drive",
-                "AICoven Local's agents can open only the files you choose here, and the files AICoven Local made.",
+            show("Choose files or folders in Google Drive",
+                "AICoven Local's agents can open only what you choose here, and what AICoven Local made. A folder you choose is theirs to find and put files in; the files already in it are not.",
                 { again: true });
             picker.setVisible(true);
         } catch (error) {
