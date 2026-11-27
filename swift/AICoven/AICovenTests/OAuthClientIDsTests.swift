@@ -31,8 +31,7 @@ final class GoogleScopesTests: XCTestCase {
         XCTAssertEqual(ConnectedAppProvider.googleDrive.defaultScopes, ["https://www.googleapis.com/auth/drive.file"])
     }
 
-    func testThePickerKnowsTheProject_andHasNoPlaceholderKey() {
+    func testThePickerKnowsTheProject() {
         XCTAssertEqual(OAuthClientIDs.googlePickerAppID, "870439799161")
-        XCTAssertFalse(OAuthClientIDs.googlePickerAPIKey?.hasPrefix("YOUR_") ?? false)
     }
 }

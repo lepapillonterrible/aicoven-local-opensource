@@ -16,8 +16,7 @@ FIREBASE_AUTH_DOMAIN = YOUR_PROJECT_ID.firebaseapp.com
 FIREBASE_STORAGE_BUCKET = YOUR_PROJECT_ID.firebasestorage.app
 FIREBASE_MESSAGING_SENDER_ID = YOUR_SENDER_ID
 
-// Google Drive Picker (optional – only needed for Google Drive integration)
-GOOGLE_PICKER_API_KEY = YOUR_GOOGLE_PICKER_API_KEY
+// Google Drive Picker: the app ID is the Cloud project's number (the Picker page is given it).
 GOOGLE_PICKER_APP_ID = 870439799161
 
 // Connected Apps – AICoven Local's own OAuth client IDs (not secrets: they ship in the app).

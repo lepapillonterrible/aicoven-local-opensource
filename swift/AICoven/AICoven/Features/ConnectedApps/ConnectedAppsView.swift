@@ -60,7 +60,7 @@ struct ConnectedAppsView: View {
                             waitsForAnotherSignIn: (connectingProvider != nil || codeSheetIsUp) && !provider.connectsWithToken,
                             onConnect: { await connect(provider: provider) },
                             onDisconnect: { await disconnect(provider: provider) },
-                            onBrowseDrive: provider == .googleDrive && OAuthClientIDs.googlePickerAPIKey != nil
+                            onBrowseDrive: provider == .googleDrive
                                 && accounts.contains { $0.provider == .googleDrive && $0.status == .connected }
                                 ? { showingGooglePicker = true } : nil,
                             needsToken: provider.accountWaitingForAToken(in: accounts),
@@ -134,11 +134,10 @@ struct ConnectedAppsView: View {
             )
         }
         .sheet(isPresented: $showingGooglePicker) {
-            if let account = accounts.first(where: { $0.provider == .googleDrive && $0.status == .connected }),
-               let apiKey = OAuthClientIDs.googlePickerAPIKey {
+            if let account = accounts.first(where: { $0.provider == .googleDrive && $0.status == .connected }) {
                 GooglePickerSheet(
                     accountId: account.id,
-                    apiKey: apiKey,
+                    accountName: account.displayName,
                     appId: OAuthClientIDs.googlePickerAppID,
                     onFilesPicked: { files in
                         pickedFiles = files
@@ -557,66 +556,102 @@ struct ConnectedAppRow: View {
 
 // MARK: - Google Picker Sheet
 
-/// Wrapper that fetches the access token from Keychain and
-/// presents the GooglePickerView with it.
+/// Opens Google's Picker in the system's browser (`GooglePickerPage`) with
+/// the connection's token, and waits for the files chosen. The sheet says
+/// what is happening meanwhile, and closes when the browser does.
 struct GooglePickerSheet: View {
     let accountId: String
-    let apiKey: String
+    /// The Google account connected, which the person chooses files as.
+    let accountName: String
     let appId: String
     let onFilesPicked: ([GooglePickerFile]) -> Void
     let onCancel: () -> Void
 
-    @State private var accessToken: String?
-    @State private var isLoading = true
-    @State private var error: String?
+    @State private var browser = GooglePickerBrowser()
+    @State private var problem: String?
+    @State private var attempt = 0
 
     var body: some View {
-        Group {
-            if isLoading {
-                VStack(spacing: 16) {
-                    ProgressView()
-                        .tint(.aicovenTeal)
-                    Text("Preparing Drive access…")
-                        .font(.aicovenBody)
-                        .foregroundColor(.aicovenTextSecondary)
+        VStack(spacing: 16) {
+            if let problem {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.largeTitle)
+                    .foregroundColor(.orange)
+                    .accessibilityHidden(true)
+                Text(problem)
+                    .font(.aicovenBody)
+                    .foregroundColor(.aicovenTextSecondary)
+                    .multilineTextAlignment(.center)
+                Button("Try Again") {
+                    self.problem = nil
+                    attempt += 1
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(NebulaBackground())
-            } else if let error {
-                VStack(spacing: 16) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.largeTitle)
-                        .foregroundColor(.orange)
-                    Text(error)
-                        .font(.aicovenBody)
-                        .foregroundColor(.aicovenTextSecondary)
-                        .multilineTextAlignment(.center)
-                    Button("Cancel") { onCancel() }
-                        .buttonStyle(.bordered)
-                }
-                .padding()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(NebulaBackground())
-            } else if let token = accessToken {
-                GooglePickerView(
-                    accessToken: token,
-                    apiKey: apiKey,
-                    appId: appId,
-                    onFilesPicked: onFilesPicked,
-                    onCancel: onCancel
-                )
+                .buttonStyle(.borderedProminent)
+            } else {
+                ProgressView()
+                    .tint(.aicovenTeal)
+                Text("Choose files in your browser")
+                    .font(.aicovenH3)
+                    .foregroundColor(.aicovenTextPrimary)
+                Text("Google Drive opens there. Choose files as \(accountName): the Google tools can open only the files you choose, and those AICoven made.")
+                    .font(.aicovenBodySmall)
+                    .foregroundColor(.aicovenTextSecondary)
+                    .multilineTextAlignment(.center)
             }
-        }
-        .task {
-            do {
-                let token = try await ConnectedAccountsService.shared.getAccessToken(forAccountId: accountId)
-                accessToken = token
-                isLoading = false
-            } catch {
-                self.error = "Failed to get access token: \(error.localizedDescription)"
-                isLoading = false
+            Button("Cancel") {
+                browser.cancel()
+                onCancel()
             }
+            .buttonStyle(.bordered)
         }
+        .padding(24)
+        .frame(maxWidth: 420)
+        #if os(macOS)
+            .frame(minWidth: 380, minHeight: 240)
+        #endif
+            .task(id: attempt) { await choose() }
+            .onDisappear { browser.cancel() }
+    }
+
+    private func choose() async {
+        let service = ConnectedAccountsService.shared
+        let signedIn = await service.signedInAccount()
+        func stillAsked() async -> Bool {
+            guard !Task.isCancelled else { return false }
+            return await service.signedInAccount() == signedIn
+        }
+        do {
+            let token = try await service.getAccessToken(forAccountId: accountId)
+            guard await stillAsked() else { return }
+            guard let state = GooglePickerPage.newState(),
+                  let url = GooglePickerPage.url(token: token, appID: appId, state: state) else {
+                show("Google Drive couldn't be opened. Try again.")
+                return
+            }
+            let answered = try await browser.open(url)
+            guard await stillAsked() else {
+                onCancel()
+                return
+            }
+            switch GooglePickerPage.answer(of: answered, state: state) {
+            case let .picked(files):
+                onFilesPicked(files)
+            case .cancelled:
+                onCancel()
+            case .failed, nil:
+                show("Google Drive couldn't be opened. Try again.")
+            }
+        } catch is CancellationError {
+            if !Task.isCancelled { onCancel() }
+        } catch {
+            guard await stillAsked() else { return }
+            show("Google Drive couldn't be opened. Check that Google is still connected, then try again.")
+        }
+    }
+
+    private func show(_ words: String) {
+        problem = words
+        AccessibilityNotification.Announcement(words).post()
     }
 }
 
